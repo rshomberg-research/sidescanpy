@@ -1,3 +1,20 @@
+# URI research
+
+- [ ] set up basic file structure
+  - [ ] install local python package
+- [ ] set up small test data files
+- [ ] write basic test Scripts
+- [ ] start data pipeline
+- [ ] recreate previous work from JB 
+  - [ ] import SONAR data
+  - [ ] generate waterfall plots
+  - [ ] generate depth maps
+  - [ ] implement DepthAnything
+
+
+NOTE: below here is readme info that I recieved from JB. Probably do not need it
+anymore - RJS 20250731
+
 # sonar_utils
  Sonar utilities for pre-processing sidescan and optical image data
 
@@ -47,8 +64,3 @@ pip install sphinx sphinxcontrib-napoleon sphinx_rtd_theme
 ```
 make html # in windows ./make.bat html
 ```
-
-# NOTES - RJS 20250729
-
-- I just got these files from JB. I am reorganizing and refactoring
-- docs are also probably unnecessary
