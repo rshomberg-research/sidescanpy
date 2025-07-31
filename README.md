@@ -47,3 +47,8 @@ pip install sphinx sphinxcontrib-napoleon sphinx_rtd_theme
 ```
 make html # in windows ./make.bat html
 ```
+
+# NOTES - RJS 20250729
+
+- I just got these files from JB. I am reorganizing and refactoring
+- docs are also probably unnecessary
