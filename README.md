@@ -10,7 +10,8 @@
   - [ ] generate waterfall plots
   - [ ] generate depth maps
   - [ ] implement DepthAnything
-
+- [ ] try edgetech software on windows
+  - [ ] https://www.edgetech.com/resource-center/
 
 NOTE: below here is readme info that I recieved from JB. Probably do not need it
 anymore - RJS 20250731
