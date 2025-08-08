@@ -1,8 +1,12 @@
 {
     "cSpell.words": [
         "imread",
+        "libpy",
         "ndarray",
-        "ndimage"
+        "ndimage",
+        "NMEA",
+        "NMEARMC",
+        "pynmea"
     ],
     "defaultInterpreterPath": "${workspaceFolder}/.venv",
 }
