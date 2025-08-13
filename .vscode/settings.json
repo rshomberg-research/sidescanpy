@@ -6,7 +6,8 @@
         "ndimage",
         "NMEA",
         "NMEARMC",
-        "pynmea"
+        "pynmea",
+        "scienceplots"
     ],
     "defaultInterpreterPath": "${workspaceFolder}/.venv",
 }
