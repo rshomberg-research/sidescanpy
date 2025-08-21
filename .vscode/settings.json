@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "cartopy",
         "imread",
         "libpy",
         "ndarray",
@@ -7,7 +8,8 @@
         "NMEA",
         "NMEARMC",
         "pynmea",
-        "scienceplots"
+        "scienceplots",
+        "stbd"
     ],
     "defaultInterpreterPath": "${workspaceFolder}/.venv",
 }
