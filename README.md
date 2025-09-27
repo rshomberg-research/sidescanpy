@@ -1,7 +1,16 @@
 # URI research
 
-- [ ] set up basic file structure
-  - [ ] install local python package
+## TODO
+
+- [ ] refactor all code 
+- [ ] organize data & outputs
+- [ ] rewrite this readme
+- [ ] change name 
+
+TODO: evaluate below todo items
+
+- [X] ~~*set up basic file structure*~~ [2025-09-27]
+  - [X] ~~*install local python package*~~ [2025-09-27]
 - [ ] set up small test data files
 - [ ] write basic test Scripts
 - [ ] start data pipeline
@@ -10,8 +19,8 @@
   - [ ] generate waterfall plots
   - [ ] generate depth maps
   - [ ] implement DepthAnything
-- [ ] try edgetech software on windows
-  - [ ] https://www.edgetech.com/resource-center/
+- [X] ~~*try edgetech software on windows*~~ [2025-09-27]
+  - https://www.edgetech.com/resource-center/
 
 NOTE: below here is readme info that I recieved from JB. Probably do not need it
 anymore - RJS 20250731
