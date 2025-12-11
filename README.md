@@ -60,7 +60,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 5. Make sure custom modules are included in project folder
-- sonar_utils
+- sonar_utilsgit
 
 ## Documentation
 
