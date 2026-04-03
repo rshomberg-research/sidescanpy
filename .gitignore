@@ -1,12 +1,13 @@
-data/
-tmp/
+data
+tmp
 _archive/
 config/ 
 .vsconfig/
 package-lock.json
 checkpoints/
 tests/
-pub/
+pub
+ref
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,visualstudiocode
