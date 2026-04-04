@@ -1,0 +1,15 @@
+"""
+netCDF I/O utilities.
+
+2026 rshomberg@uri.edu
+"""
+
+import xarray as xr
+
+def load_netcdf(filepath):
+    """Load netCDF dataset."""
+    return xr.open_dataset(filepath)
+
+def save_netcdf(dataset, filepath):
+    """Save dataset to netCDF."""
+    dataset.to_netcdf(filepath)
