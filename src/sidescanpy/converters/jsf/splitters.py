@@ -2,8 +2,8 @@
 
 import logging
 
-from .messages import JSFMessageBody
-from .messages import *
+from ...io.jsf.messages import JSFMessageBody
+from ...io.jsf.messages import *
 
 def split_messages(messages: list[JSFMessageBody]) -> dict[str, list[JSFMessageBody]]:
     """Stub: classify messages by type."""

@@ -1,10 +1,10 @@
 from pathlib import Path
 import logging
 
-from .messages import JSFMessageBody
-from .messages import JSFMessageHeader
+from ...io.jsf.messages import JSFMessageBody
+from ...io.jsf.messages import JSFMessageHeader
 
-from .messages import parse_jsf_file as read_jsf_file
+from ...io.jsf.messages import parse_jsf_file as read_jsf_file
 
 # FIXME: this is not used at all
 

@@ -10,7 +10,8 @@ import xarray as xr
 import numpy as np 
 
 from sidescanpy.converters.base import SonarConverter 
-from sidescanpy.converters.jsf import reader, messages 
+from sidescanpy.converters.jsf import reader
+from sidescanpy.io.jsf import messages 
 
 class JSFConverter(SonarConverter):
     '''Convert JSF file to standardized netCDF format'''

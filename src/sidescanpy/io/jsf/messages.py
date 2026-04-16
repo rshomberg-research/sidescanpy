@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''jsf - handle jsf files
+'''jsf messages - define message types for jsf files
 
 JSF files are from EdgeTech Side Scan Sonars. They are binary formatted and
 contain a series of messages. Each message starts with a header that contains
@@ -50,7 +50,8 @@ from typing import ClassVar, Type, Dict
 @dataclass
 class JSFMessageBody:
     _registry: ClassVar[Dict[int, Type['JSFMessageBody']]] = {}
-    
+    MESSAGE_TYPE: int   # FIXME: this should be abstract and implemented later
+
     # Automatically register subclasses
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -62,7 +63,7 @@ class JSFMessageBody:
         msg_cls = cls._registry.get(message_type)
         if not msg_cls:
             raise ValueError(f"Unsupported message type: {message_type}")
-        return msg_cls.from_bytes(data)
+        return msg_cls.from_bytes(data) # FIXME: fix the cause of the warning here
     
     def set_context(self, header: JSFMessageHeader):
         pass  # default: do nothing    
@@ -270,7 +271,7 @@ class SonarDataMessage(JSFMessageBody):
 
     annotation_string:  Optional[str] = field(init=False, repr=False)
 
-    sonar_trace:    list[float] = field(init=False, repr=False) # Sonar trace data # ???: dB?
+    samples:    list[float] = field(init=False, repr=False) # Sonar trace data # ???: dB?
     N_samples:              int = field(init=False)
 
     @staticmethod
@@ -284,7 +285,7 @@ class SonarDataMessage(JSFMessageBody):
             "pressure":           bool(flags & (1 << 4)),
             "pitch_roll":         bool(flags & (1 << 5)),
             "altitude":           bool(flags & (1 << 6)),
-            "reserved":                 bool(flags & (1 << 7)),
+            "reserved":           bool(flags & (1 << 7)),
             "water_temp":         bool(flags & (1 << 8)),
             "depth":              bool(flags & (1 << 9)),
             "annotation":         bool(flags & (1 << 10)),
@@ -520,8 +521,8 @@ class SonarDataMessage(JSFMessageBody):
         self.cable_out = self._raw_cable_out / 1e3      # TODO: check validity flags
 
         # Handle trace data
-        self.sonar_trace = [float(val)*2**(-self._weighting_factor) for val in self._raw_trace_data]  # TODO: do some math on the trace data samples
-        self.N_samples = len(self.sonar_trace)
+        self.samples = [float(val)*2**(-self._weighting_factor) for val in self._raw_trace_data]  # TODO: do some math on the trace data samples
+        self.N_samples = len(self.samples)
         # TODO: error checking
 
     @classmethod
@@ -623,7 +624,7 @@ class SystemInformationMessage(JSFMessageBody):
     num_serial_devices: int
     tow_vehicle_serial: int
     # _reserved
-    # TODO: changes size based on unknown values
+    # FIXME: changes size based on unknown values
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "SystemInformationMessage":
@@ -857,7 +858,7 @@ class PitchRollDataMessage(JSFMessageBody):
 @dataclass
 class PressureSensorReadingMessage(JSFMessageBody):
     MESSAGE_TYPE: ClassVar[int] = 2060
-    STRUCT: ClassVar[struct.Struct] = struct.Struct('<iiBBBBiiiiiiiiiiiiiiii')
+    STRUCT: ClassVar[struct.Struct] = struct.Struct('<iiBBBB'+'iiiiiiiiiiiiiiii')
 
     _raw_time_seconds:  int = field(repr=False)
     _raw_offset_ms:     int = field(repr=False)
@@ -911,7 +912,7 @@ class PressureSensorReadingMessage(JSFMessageBody):
 @dataclass
 class DopplerVelocityLogDataMessage(JSFMessageBody):
     MESSAGE_TYPE: ClassVar[int] = 2080
-    STRUCT: ClassVar[struct.Struct] = struct.Struct('<iiBBBBIiiiihhhhhhHhhHHhhhhhhhhh')
+    STRUCT: ClassVar[struct.Struct] = struct.Struct('<iiBBBB'+'I'+'iiii'+'hhhhhhHhhHHhhhhhhhhh')
 
     _raw_time_seconds:  int = field(repr=False)
     _raw_offset_ms:     int = field(repr=False)
@@ -1174,7 +1175,7 @@ class UnknownMessage2040(JSFMessageBody):
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "UnknownMessage2040":
-        logging.warning("Unknown message type 2040 ignored!")
+        logging.debug("Unknown message type 2040 ignored!")
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
         return cls(*values)
     
@@ -1190,7 +1191,7 @@ class UnknownMessage2040(JSFMessageBody):
 @dataclass
 class SonarMessageStatusMessage(JSFMessageBody):
     MESSAGE_TYPE: ClassVar[int] = 40
-    STRUCT: ClassVar[struct.Struct] = struct.Struct('<IIhhhhhhhhhhIIBBBBBBHiiihhhhBBBBBBBBiiiiii')
+    STRUCT: ClassVar[struct.Struct] = struct.Struct('<II'+'hhhhhhhhhh'+'II'+'BBBBBB'+'H'+'iii'+'hhhhBBBBBBBB'+'iiiiii')
 
     overflow_count: int                 # UINT32
     error_count: int                    # UINT32
@@ -1215,13 +1216,14 @@ class SonarMessageStatusMessage(JSFMessageBody):
     storage_flags: int                      # UINT8, bitmap
     temperature_status: int                 # UINT8, bitmap
     time_status: int                        # UINT8, bitmap
+
     reserved_42_43: int = field(repr=False) # UINT16
     
     bottle_temperature: int             # INT32, Degrees C * 1000
     ambient_temperature: int            # INT32, Degrees C * 1000
     power_48_volts: int                 # INT32, millivolts
-    reserved_56_59: int = field(repr=False)
     
+    reserved_56_59: int = field(repr=False)   
     low_rate_io_0: int = field(repr=False)
     low_rate_io_1: int = field(repr=False)
     low_rate_io_2: int = field(repr=False)
@@ -1247,77 +1249,30 @@ class SonarMessageStatusMessage(JSFMessageBody):
     def from_bytes(cls, data: bytes) -> "SonarMessageStatusMessage":
         return cls(*cls.STRUCT.unpack(data[:cls.STRUCT.size]))
     
-def parse_jsf_file(fpath: Path) -> list[JSFMessageBody]:
-    if not fpath.exists():
-        raise FileNotFoundError(f"{fpath} does not exist!")
+    if __name__ == '__main__':
+        logging.basicConfig(level=logging.DEBUG)
+        
+        # Simple message instantiation tests
+        print("Testing JSF Message Classes...")
+        
+        # Test SonarDataMessage
+        test_data = b'\x00' * 100  # Placeholder data
+        try:
+            msg = SonarDataMessage.from_bytes(test_data)
+            print(f"✓ SonarDataMessage: {type(msg)}")
+        except Exception as e:
+            print(f"✗ SonarDataMessage: {e}")
+        
+        # Test SystemInformationMessage
+        test_sys_data = struct.pack('<iiiiii', 1, 0, 100, 2, 1, 12345)
+        try:
+            msg = SystemInformationMessage.from_bytes(test_sys_data)
+            print(f"✓ SystemInformationMessage: system_type={msg.system_type}")
+        except Exception as e:
+            print(f"✗ SystemInformationMessage: {e}")
+        
+        # TODO: test other messages?
+        
+        # ???: is this test correct without real data?
 
-    # Parse all the messages
-    with open(fpath, 'rb') as f:
-        logging.info(f"Opening: {fpath}")
-        all_messages = []
-        while True: # TODO: provide progress bar
-            header_bytes = f.read(JSFMessageHeader.STRUCT.size)
-            if len(header_bytes) < JSFMessageHeader.STRUCT.size:
-                break  # EOF or truncated message
-            header = JSFMessageHeader.from_bytes(header_bytes)
-            logging.debug(f"{len(all_messages)+1} - {header}")
-
-            message_bytes = f.read(header.message_size)
-            try:
-                message = JSFMessageBody.from_bytes(header.message_type, message_bytes)
-                message.set_context(header) # TODO: I may want to include the header
-                all_messages.append(message)
-                logging.debug(f"{len(all_messages)} - {message}")
-            except ValueError as e:
-                logging.debug(e)
-                return all_messages
-            
-    return all_messages 
-
-def split_messages(messages: list[JSFMessageBody]) -> dict[str, list[JSFMessageBody]]:
-    """Stub: classify messages by type."""
-    groups = {  # FIXME: autogenerate these
-        "SonarDataMessages":                [], 
-        "LegacySideScanDataMessages":       [], 
-        "SystemInformationMessages":        [], 
-        "FileTimeStampMessages":            [],
-        "FilePaddingMessages":              [],
-        "NMEAStringMessages":               [],
-        "NMEADBTMessages":                  [],
-        "NMEARMCMessages":                  [],
-        "NMEADPTMessages":                  [],
-        "PitchRollDataMessages":            [],
-        "PressureSensorReadingMessage":     [],
-        "DopplerVelocityLogDataMessages":   [],
-        "SituationMessages":                [],
-        "SituationComprehensiveMessages":   [],
-        "CableCounterDataMessages":         [],
-        "KilometerOfPipeDataMessages":      [],
-        "ContainerTimeStampMessages":       [],
-        "SonarMessageStatusMessages":       [],
-        "PressureSensorReadingMessages":    [],
-        "NavigationOffsetsMessages":        [],
-        "UnknownMessage2040s":              [],
-        }
-    
-    for m in messages:
-        cls = str(type(m)).split('.')[-1][:-2]+'s'  # NOTE: this line adds an s
-        groups[cls].append(m)
-
-    return groups
-
-if __name__=='__main__':
-    logging.basicConfig(level=logging.DEBUG)    # TODO: set logging message to include date
-
-    # TODO: argparser
-
-    fpath = Path('./data/survey-a/raw/20251015171550.jsf')
-    messages = parse_jsf_file(fpath)
-
-    groups = split_messages(messages)
-
-    for grp in groups:
-        print(grp)
-
-    for msg in groups['SonarDataMessages'][:10]:
-        print(msg)
+        print("Message class verification complete!")
