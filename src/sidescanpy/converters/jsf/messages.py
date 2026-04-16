@@ -5,15 +5,6 @@ JSF files are from EdgeTech Side Scan Sonars. They are binary formatted and
 contain a series of messages. Each message starts with a header that contains
 basic information about the message. 
 
-- [ ] open file
-- [ ] parse message headers
-- [ ] parse messages
-    - Need to figure out what to do with these messages. I think I want to move
-      each message type into some kind of file format. For now I should just
-      choose one because it will be easier to extend functionality later
-    - Start by parsing each to a dict/json
-    - maybe use geotiff and hd5f for sonar data, and probably csv for navigation
-
     
 2025 rshomberg@uri.edu
 '''
@@ -30,9 +21,6 @@ from typing import ClassVar, Tuple, Optional
 
 from datetime import datetime, timezone, timedelta
 import numpy as np
-
-# FIXME: this import is not done well
-from .utils import calculate_dvl_altitude_plane_fit
 
 @dataclass
 class JSFMessageHeader:
@@ -593,6 +581,35 @@ class LegacySideScanDataMessage(JSFMessageBody):    # TODO: low priority
         return cls(*cls.STRUCT.unpack(data[:cls.STRUCT.size]))
 
 # Other Messages
+
+# TODO:NavigationOffsetsMessage (181)
+@dataclass
+class NavigationOffsetsMessage(JSFMessageBody):
+    MESSAGE_TYPE: ClassVar[int] = 181
+    STRUCT: ClassVar[struct.Struct] = struct.Struct('<ffffffffffffffff')  # 16 floats
+
+    x_offset: float                      # meters
+    y_offset: float                      # meters
+    latitude_offset: float               # degrees
+    longitude_offset: float              # degrees
+    aft_offset: float                    # meters (forward is negative)
+    starboard_offset: float              # meters (port is negative)
+    depth_offset: float                  # meters (up is negative)
+    altitude_offset: float               # meters (down is negative)
+    heading_offset: float                # degrees
+    pitch_offset: float                  # degrees (nose up is positive)
+    roll_offset: float                   # degrees (port side up is positive)
+    yaw_offset: float                    # degrees (toward port is negative)
+    tow_point_elevation_offset: float    # meters (up is positive)
+    reserved_1: float
+    reserved_2: float
+    reserved_3: float
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "NavigationOffsetsMessage":
+        values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
+        return cls(*values)
+    
 # TODO: SystemInformationMessage (182)
 @dataclass
 class SystemInformationMessage(JSFMessageBody):
@@ -850,11 +867,14 @@ class PressureSensorReadingMessage(JSFMessageBody):
     _reserved03: int = field(repr=False)
     _reserved04: int = field(repr=False)
 
-    _data_flags: int = field(repr=False) #TODO: break out flags
+    _raw_pressure:      int = field(repr=False)      # 1/1000th PSI
+    _raw_temperature:   int = field(repr=False)      # 1/1000th °C
+    _raw_salinity:      int = field(repr=False)      # PPM
+    _data_flags:        int = field(repr=False)      # TODO: break out flags
 
-    _raw_conductivity:  int = field(repr=False) # micro-Siemens/cm
-    _raw_sound_vel:     int = field(repr=False) # mm/s
-    _raw_depth:         int = field(repr=False) # meters
+    _raw_conductivity:  int = field(repr=False)      # micro-Siemens/cm
+    _raw_sound_vel:     int = field(repr=False)      # mm/s
+    _raw_depth:         int = field(repr=False)      # meters
 
     _reserved05: int = field(repr=False)
     _reserved06: int = field(repr=False)
@@ -867,18 +887,22 @@ class PressureSensorReadingMessage(JSFMessageBody):
     _reserved13: int = field(repr=False)
 
     # Derived fields
-    timestamp:  float = field(init=False)
-    conductivity:   float = field(init=False)   # ???: units
-    sound_speed:    float = field(init=False)   # m/s
-    depth:          float = field(init=False)   # meters
+    timestamp:      float = field(init=False)
+    pressure:       float = field(init=False)        # PSI
+    temperature:    float = field(init=False)        # °C
+    salinity:       float = field(init=False)        # PPM
+    conductivity:   float = field(init=False)        # micro-Siemens/cm
+    sound_speed:    float = field(init=False)        # m/s
+    depth:          float = field(init=False)        # meters
 
     def __post_init__(self) -> None:
-        self.timestamp = self._raw_time_seconds + self._raw_offset_ms/1e3
-        
-        # TODO: handle data flags
-        self.conductivity   = self._raw_conductivity
-        self.sound_speed    = self._raw_sound_vel / 1e3    # mm/s -> m/s
-        self.depth          = self._raw_depth    # meters -> meters
+        self.timestamp = self._raw_time_seconds + self._raw_offset_ms / 1e3
+        self.pressure = self._raw_pressure / 1e3
+        self.temperature = self._raw_temperature / 1e3
+        self.salinity = self._raw_salinity
+        self.conductivity = self._raw_conductivity
+        self.sound_speed = self._raw_sound_vel / 1e3      # mm/s -> m/s
+        self.depth = self._raw_depth
 
     @classmethod
     def from_bytes(cls, data: bytes) -> "PressureSensorReadingMessage":
@@ -1002,15 +1026,16 @@ class DopplerVelocityLogDataMessage(JSFMessageBody):
                 self._raw_bottom_dist4,                
             ]) / 1e2}'))
         logging.debug(f'Bottom Dist (mean) = {self.bottom_dist}')
-            
-        beam_results = calculate_dvl_altitude_plane_fit(
-            np.array([
-                self._raw_bottom_dist1,
-                self._raw_bottom_dist2,
-                self._raw_bottom_dist3,
-                self._raw_bottom_dist4,                
-            ]) / 1e2 # cm -> m
-        )
+        
+        # FIXME: this is in utils but not used
+        # beam_results = calculate_dvl_altitude_plane_fit(
+        #     np.array([
+        #         self._raw_bottom_dist1,
+        #         self._raw_bottom_dist2,
+        #         self._raw_bottom_dist3,
+        #         self._raw_bottom_dist4,                
+        #     ]) / 1e2 # cm -> m
+        # )
 
 
         # if validity_flags['bottom_dist']:
@@ -1127,7 +1152,101 @@ class ContainerTimeStampMessage(JSFMessageBody):
     def from_bytes(cls, data: bytes) -> "ContainerTimeStampMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
         return cls(*values)
+    
 
+@dataclass
+class UnknownMessage2040(JSFMessageBody):
+    # HACK: I cannot find any references to this message type in any
+    # documentation. I do not know what it references, but I am assuming it is
+    # not critical. This placeholder assure the does not pop an error.
+    MESSAGE_TYPE: ClassVar[int] = 2040
+    STRUCT: ClassVar[struct.Struct] = struct.Struct('<iiiiiiiii')
+
+    raw_0: int = field(repr=False)
+    raw_1: int = field(repr=False)
+    raw_2: int = field(repr=False)
+    raw_3: int = field(repr=False)
+    raw_4: int = field(repr=False)
+    raw_5: int = field(repr=False)
+    raw_6: int = field(repr=False)
+    raw_7: int = field(repr=False)
+    raw_8: int = field(repr=False)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "UnknownMessage2040":
+        logging.warning("Unknown message type 2040 ignored!")
+        values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
+        return cls(*values)
+    
+    def __repr__(self) -> str:
+        """Print raw values in hex and decimal for manual inspection"""
+        values = [self.raw_0, self.raw_1, self.raw_2, self.raw_3, self.raw_4, 
+                  self.raw_5, self.raw_6, self.raw_7, self.raw_8]
+        hex_str = ' '.join(f'0x{v:08x}' for v in values)
+        dec_str = ' '.join(f'{v:12d}' for v in values)
+        return f"UnknownMessage2040(\n  HEX: {hex_str}\n  DEC: {dec_str}\n)"
+    
+
+@dataclass
+class SonarMessageStatusMessage(JSFMessageBody):
+    MESSAGE_TYPE: ClassVar[int] = 40
+    STRUCT: ClassVar[struct.Struct] = struct.Struct('<IIhhhhhhhhhhIIBBBBBBHiiihhhhBBBBBBBBiiiiii')
+
+    overflow_count: int                 # UINT32
+    error_count: int                    # UINT32
+    
+    last_error_0: int = field(repr=False)
+    last_error_1: int = field(repr=False)
+    last_error_2: int = field(repr=False)
+    last_error_3: int = field(repr=False)
+    last_error_4: int = field(repr=False)
+    last_error_5: int = field(repr=False)
+    last_error_6: int = field(repr=False)
+    last_error_7: int = field(repr=False)
+    last_error_8: int = field(repr=False)
+    last_error_9: int = field(repr=False)
+    
+    free_disk_space: int                    # UINT32, kilobytes
+    data_acquisition_indicator: int         # UINT32
+    
+    service_needed: int                     # UINT8, bitmap
+    reserved_37: int = field(repr=False)    # UINT8
+    reserved_38: int = field(repr=False)    # UINT8
+    storage_flags: int                      # UINT8, bitmap
+    temperature_status: int                 # UINT8, bitmap
+    time_status: int                        # UINT8, bitmap
+    reserved_42_43: int = field(repr=False) # UINT16
+    
+    bottle_temperature: int             # INT32, Degrees C * 1000
+    ambient_temperature: int            # INT32, Degrees C * 1000
+    power_48_volts: int                 # INT32, millivolts
+    reserved_56_59: int = field(repr=False)
+    
+    low_rate_io_0: int = field(repr=False)
+    low_rate_io_1: int = field(repr=False)
+    low_rate_io_2: int = field(repr=False)
+    low_rate_io_3: int = field(repr=False)
+    
+    serial_port_state_0: int = field(repr=False)
+    serial_port_state_1: int = field(repr=False)
+    serial_port_state_2: int = field(repr=False)
+    serial_port_state_3: int = field(repr=False)
+    serial_port_state_4: int = field(repr=False)
+    serial_port_state_5: int = field(repr=False)
+    serial_port_state_6: int = field(repr=False)
+    serial_port_state_7: int = field(repr=False)
+    
+    runtime_alerts: int                 # INT32, bitmap
+    reserved_80: int = field(repr=False)
+    reserved_84: int = field(repr=False)
+    reserved_88: int = field(repr=False)
+    reserved_92: int = field(repr=False)
+    # reserved_96: int = field(repr=False)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "SonarMessageStatusMessage":
+        return cls(*cls.STRUCT.unpack(data[:cls.STRUCT.size]))
+    
 def parse_jsf_file(fpath: Path) -> list[JSFMessageBody]:
     if not fpath.exists():
         raise FileNotFoundError(f"{fpath} does not exist!")
@@ -1144,16 +1263,61 @@ def parse_jsf_file(fpath: Path) -> list[JSFMessageBody]:
             logging.debug(f"{len(all_messages)+1} - {header}")
 
             message_bytes = f.read(header.message_size)
-            message = JSFMessageBody.from_bytes(header.message_type, message_bytes)
-            message.set_context(header) # TODO: I may want to include the header
-            all_messages.append(message)
-            logging.debug(f"{len(all_messages)} - {message}")
+            try:
+                message = JSFMessageBody.from_bytes(header.message_type, message_bytes)
+                message.set_context(header) # TODO: I may want to include the header
+                all_messages.append(message)
+                logging.debug(f"{len(all_messages)} - {message}")
+            except ValueError as e:
+                logging.debug(e)
+                return all_messages
+            
     return all_messages 
+
+def split_messages(messages: list[JSFMessageBody]) -> dict[str, list[JSFMessageBody]]:
+    """Stub: classify messages by type."""
+    groups = {  # FIXME: autogenerate these
+        "SonarDataMessages":                [], 
+        "LegacySideScanDataMessages":       [], 
+        "SystemInformationMessages":        [], 
+        "FileTimeStampMessages":            [],
+        "FilePaddingMessages":              [],
+        "NMEAStringMessages":               [],
+        "NMEADBTMessages":                  [],
+        "NMEARMCMessages":                  [],
+        "NMEADPTMessages":                  [],
+        "PitchRollDataMessages":            [],
+        "PressureSensorReadingMessage":     [],
+        "DopplerVelocityLogDataMessages":   [],
+        "SituationMessages":                [],
+        "SituationComprehensiveMessages":   [],
+        "CableCounterDataMessages":         [],
+        "KilometerOfPipeDataMessages":      [],
+        "ContainerTimeStampMessages":       [],
+        "SonarMessageStatusMessages":       [],
+        "PressureSensorReadingMessages":    [],
+        "NavigationOffsetsMessages":        [],
+        "UnknownMessage2040s":              [],
+        }
+    
+    for m in messages:
+        cls = str(type(m)).split('.')[-1][:-2]+'s'  # NOTE: this line adds an s
+        groups[cls].append(m)
+
+    return groups
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.DEBUG)    # TODO: set logging message to include date
 
     # TODO: argparser
 
-    fpath = Path('data/survey/raw/Other-non-mp4-data/SIDESCAN/DATA0000010.jsf')
+    fpath = Path('./data/survey-a/raw/20251015171550.jsf')
     messages = parse_jsf_file(fpath)
+
+    groups = split_messages(messages)
+
+    for grp in groups:
+        print(grp)
+
+    for msg in groups['SonarDataMessages'][:10]:
+        print(msg)

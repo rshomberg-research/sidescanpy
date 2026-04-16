@@ -25,6 +25,9 @@ def split_messages(messages: list[JSFMessageBody]) -> dict[str, list[JSFMessageB
         "CableCounterDataMessages":         [],
         "KilometerOfPipeDataMessages":      [],
         "ContainerTimeStampMessages":       [],
+        "SonarMessageStatusMessages":        [],
+        "PressureSensorReadingMessages":     [],
+        "NavigationOffsetsMessages":        [],
         }
     
     for m in messages:
