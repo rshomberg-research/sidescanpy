@@ -55,6 +55,7 @@ class SonarPlotter:
         fig, ax = plt.subplots(figsize=(12, 6))
         im = ax.imshow(waterfall.T, aspect='auto', origin='upper', cmap='gray')
         
+from typing import ClassVar, Type, Dict
         ax.set_xlabel('Ping Number')
         ax.set_ylabel('Slant Range Sample')
         ax.set_title(f'Waterfall: {int(frequency)} Hz, Channel {channel}')

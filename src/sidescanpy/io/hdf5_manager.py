@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 import logging
 
-logger = logging.getLogger(__name__)
-
-
+# TODO: modify to match existing data
 class JSFtoHDF5Manager:
     """Convert JSF messages to HDF5 format"""
     
@@ -18,7 +16,7 @@ class JSFtoHDF5Manager:
     
     def save_messages(self, messages: List) -> None:
         """Save all messages to HDF5"""
-        logger.info(f"Saving {len(messages)} messages to {self.output_file}")
+        logging.info(f"Saving {len(messages)} messages to {self.output_file}")
         
         with h5py.File(self.output_file, 'w') as f:
             # Separate message types
@@ -30,18 +28,18 @@ class JSFtoHDF5Manager:
             # Save primary data
             if sonar_msgs:
                 self._save_sonar_data(f, sonar_msgs)
-                logger.info(f"  Saved {len(sonar_msgs)} sonar pings")
+                logging.info(f"  Saved {len(sonar_msgs)} sonar pings")
             
             if legacy_msgs:
                 self._save_legacy_sonar(f, legacy_msgs)
-                logger.info(f"  Saved {len(legacy_msgs)} legacy sonar pings")
+                logging.info(f"  Saved {len(legacy_msgs)} legacy sonar pings")
             
             # Save metadata (all other messages)
             metadata_msgs = [m for m in messages 
                             if type(m).__name__ not in ['SonarDataMessage', 'LegacySideScanDataMessage']]
             if metadata_msgs:
                 self._save_metadata(f, metadata_msgs)
-                logger.info(f"  Saved {len(metadata_msgs)} metadata messages")
+                logging.info(f"  Saved {len(metadata_msgs)} metadata messages")
     
     def _save_sonar_data(self, hdf5_file: h5py.File, messages: List) -> None:
         """Save SonarDataMessages with ragged arrays by frequency/channel"""
@@ -59,7 +57,7 @@ class JSFtoHDF5Manager:
             group_name = f'freq_{int(freq)}_ch_{channel}'
             grp = sonar_grp.create_group(group_name)
             
-            logger.debug(f"  Saving {len(msgs)} pings: {group_name}")
+            logging.debug(f"  Saving {len(msgs)} pings: {group_name}")
             
             # Core arrays
             ping_numbers = np.array([m.ping_number for m in msgs], dtype=np.int32)
@@ -88,6 +86,7 @@ class JSFtoHDF5Manager:
             grp.create_dataset('altitude', data=np.array([m.altitude for m in msgs], dtype=np.float32))
             grp.create_dataset('course', data=np.array([m.course for m in msgs], dtype=np.float32))
             grp.create_dataset('speed', data=np.array([m.speed for m in msgs], dtype=np.float32))
+            # TODO: add sound speed here
             
             # Attributes
             grp.attrs['transmit_freq_start'] = msgs[0].transmit_freq_start

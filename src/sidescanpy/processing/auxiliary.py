@@ -1,4 +1,13 @@
-"""Apply auxiliary corrections to sonar data"""
+"""
+Apply auxiliary corrections to sonar data
+
+Auxiliary information is included in the sonar data messages. It is also
+included in additional messages. The information in the sonar data messages is
+more frequent, but not up to date. The information in the aux messages is less
+frequent but more accurate. The goal is to 
+
+2025 rshomberg@uri.edu
+"""
 
 import h5py
 import numpy as np
@@ -7,25 +16,18 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 
-logger = logging.getLogger(__name__)
+# TODO: include more functions for managing auxilary messages
+# - [ ] export to csv?
 
-
-class AuxiliaryProcessor:
+class AuxiliaryProcessor:   # FIXME: make this a function
     """Apply auxiliary messages to refine sonar data"""
     
-    def __init__(self, hdf5_file: str):
+    def __init__(self, hdf5_file: Path | str):
         self.hdf5_file = Path(hdf5_file)
         self.file = None
     
     def process(self, output_file: Optional[str] = None) -> str:
-        """
-        Apply all available auxiliary corrections to sonar data.
-        
-        Args:
-            output_file: Path to save refined data. If None, overwrites input.
-            
-        Returns:
-            Path to output file
+        """Apply all available auxiliary corrections to sonar data.
         """
         if output_file is None:
             output_file = str(self.hdf5_file)
@@ -36,37 +38,37 @@ class AuxiliaryProcessor:
                 import shutil
                 shutil.copy(str(self.hdf5_file), output_file)
         
-        logger.info(f"Refining sonar data from {self.hdf5_file}")
+        logging.info(f"Refining sonar data from {self.hdf5_file}")
         
         with h5py.File(output_file, 'r+') as f:
             if 'sonar' not in f:
-                logger.warning("No sonar data found in file")
+                logging.warning("No sonar data found in file")
                 return output_file
             
             # Get all sonar groups
-            sonar_grp = f['sonar']
+            sonar_group = f['sonar']
             
-            for group_name in sonar_grp.keys():
-                logger.info(f"Processing: {group_name}")
-                sonar_data_grp = sonar_grp[group_name]
+            for group_name in sonar_group.keys():
+                logging.info(f"Processing: {group_name}")
+                sonar_data_group = sonar_group[group_name]
                 
                 # Get sonar timestamps
-                sonar_times = sonar_data_grp['timestamp'][:]
+                sonar_times = sonar_data_group['timestamp'][:]
                 
                 # Get available auxiliary data and interpolate
-                refinements = self._get_interpolated_auxiliary(f, sonar_times)
+                refined_data = self._get_interpolated_auxiliary(f, sonar_times)
                 
                 # Apply refinements
-                for field_name, values in refinements.items():
-                    if field_name in sonar_data_grp:
-                        logger.debug(f"  Updating {field_name}")
-                        del sonar_data_grp[field_name]
-                    sonar_data_grp.create_dataset(field_name, data=values, compression='gzip')
+                for field_name, values in refined_data.items():
+                    if field_name in sonar_data_group:
+                        logging.debug(f"  Updating {field_name}")
+                        del sonar_data_group[field_name]
+                    sonar_data_group.create_dataset(field_name, data=values, compression='gzip')
                 
-                if refinements:
-                    logger.info(f"  Applied {len(refinements)} refinements")
+                if refined_data:
+                    logging.info(f"  Applied {len(refined_data)} refinements")
         
-        logger.info(f"Saved refined data to {output_file}")
+        logging.info(f"Saved refined data to {output_file}")
         return output_file
     
     def _get_interpolated_auxiliary(self, hdf5_file: h5py.File, sonar_times: np.ndarray) -> Dict[str, np.ndarray]:
@@ -75,56 +77,56 @@ class AuxiliaryProcessor:
         
         Returns dict mapping field names to interpolated arrays
         """
-        refinements = {}
+        refined_data = {}
         
         if 'metadata' not in hdf5_file:
-            logger.warning("No metadata found in HDF5 file")
-            return refinements
+            logging.warning("No metadata found in HDF5 file")
+            return refined_data
         
-        metadata_grp = hdf5_file['metadata']
+        metadata_group = hdf5_file['metadata']
         
         # Priority order for different message types
         # GPS/Navigation data
-        if 'NMEARMCMessages' in metadata_grp:
-            logger.debug("Interpolating NMEA RMC (GPS) data")
+        if 'NMEARMCMessages' in metadata_group:
+            logging.debug("Interpolating NMEA RMC (GPS) data")
             gps_interp = self._interpolate_table(
-                metadata_grp['NMEARMCMessages'],
+                metadata_group['NMEARMCMessages'],
                 sonar_times,
                 fields=['latitude', 'longitude', 'course', 'speed']
             )
-            refinements.update(gps_interp)
+            refined_data.update(gps_interp)
         
         # DVL data (altitude, attitude, sound speed)
-        if 'DopplerVelocityLogDataMessages' in metadata_grp:
-            logger.debug("Interpolating DVL data")
+        if 'DopplerVelocityLogDataMessages' in metadata_group:
+            logging.debug("Interpolating DVL data")
             dvl_interp = self._interpolate_table(
-                metadata_grp['DopplerVelocityLogDataMessages'],
+                metadata_group['DopplerVelocityLogDataMessages'],
                 sonar_times,
                 fields=['altitude', 'pitch', 'roll', 'heading', 'sound_speed']
             )
-            refinements.update(dvl_interp)
+            refined_data.update(dvl_interp)
         
         # Pitch/Roll data (often more accurate than DVL)
-        if 'PitchRollDataMessages' in metadata_grp:
-            logger.debug("Interpolating Pitch/Roll data")
+        if 'PitchRollDataMessages' in metadata_group:
+            logging.debug("Interpolating Pitch/Roll data")
             pitch_roll_interp = self._interpolate_table(
-                metadata_grp['PitchRollDataMessages'],
+                metadata_group['PitchRollDataMessages'],
                 sonar_times,
                 fields=['pitch', 'roll', 'heading']
             )
-            refinements.update(pitch_roll_interp)
+            refined_data.update(pitch_roll_interp)
         
         # Pressure data (for depth correction)
-        if 'PressureSensorReadingMessages' in metadata_grp:
-            logger.debug("Interpolating Pressure data")
+        if 'PressureSensorReadingMessages' in metadata_group:
+            logging.debug("Interpolating Pressure data")
             pressure_interp = self._interpolate_table(
-                metadata_grp['PressureSensorReadingMessages'],
+                metadata_group['PressureSensorReadingMessages'],
                 sonar_times,
                 fields=['depth', 'pressure_psi', 'temperature_c', 'sound_speed_m_s']
             )
-            refinements.update(pressure_interp)
+            refined_data.update(pressure_interp)
         
-        return refinements
+        return refined_data
     
     def _interpolate_table(self, table_grp: h5py.Group, sonar_times: np.ndarray, 
                           fields: List[str]) -> Dict[str, np.ndarray]:
@@ -140,22 +142,22 @@ class AuxiliaryProcessor:
             Dict mapping field names to interpolated arrays
         """
         if 'timestamp' not in table_grp:
-            logger.warning(f"No timestamp in {table_grp.name}")
+            logging.warning(f"No timestamp in {table_grp.name}")
             return {}
         
         aux_times = table_grp['timestamp'][:]
         
         # Handle duplicate timestamps
         if len(aux_times) != len(np.unique(aux_times)):
-            logger.warning(f"Duplicate timestamps in {table_grp.name}, using last value")
+            logging.warning(f"Duplicate timestamps in {table_grp.name}, using last value")
             _, unique_idx = np.unique(aux_times, return_index=True)
             aux_times = aux_times[sorted(unique_idx)]
         
-        refinements = {}
+        refined_data = {}
         
         for field_name in fields:
             if field_name not in table_grp:
-                logger.debug(f"  Field '{field_name}' not in {table_grp.name}")
+                logging.debug(f"  Field '{field_name}' not in {table_grp.name}")
                 continue
             
             aux_values = table_grp[field_name][:]
@@ -174,12 +176,12 @@ class AuxiliaryProcessor:
                     left=np.nan,
                     right=np.nan
                 )
-                refinements[field_name] = interp_values.astype(aux_values.dtype)
-                logger.debug(f"  Interpolated {field_name}: {np.sum(~np.isnan(interp_values))}/{len(interp_values)} valid")
+                refined_data[field_name] = interp_values.astype(aux_values.dtype)
+                logging.debug(f"  Interpolated {field_name}: {np.sum(~np.isnan(interp_values))}/{len(interp_values)} valid")
             except Exception as e:
-                logger.warning(f"  Failed to interpolate {field_name}: {e}")
+                logging.warning(f"  Failed to interpolate {field_name}: {e}")
         
-        return refinements
+        return refined_data
 
 
 if __name__ == '__main__':

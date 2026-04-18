@@ -11,16 +11,3 @@ Main modules:
 __version__ = "0.1.0"
 __author__ = "Russ Shomberg"
 
-# Import key classes/functions for convenient access
-try:
-    from sidescanpy.converters import convert_to_netcdf, get_converter
-    from sidescanpy.io import load_netcdf, save_netcdf
-except ImportError:
-    pass  # Optional dependencies
-
-__all__ = [
-    'convert_to_netcdf',
-    'get_converter',
-    'load_netcdf',
-    'save_netcdf',
-]

@@ -76,3 +76,13 @@ pip install sphinx sphinxcontrib-napoleon sphinx_rtd_theme
 ```
 make html # in windows ./make.bat html
 ```
+
+# Useful commands
+
+``` .bash
+h5ls data/processed/sonar.h5              # List structure
+h5ls -r data/processed/sonar.h5           # List recursively
+h5stat data/processed/sonar.h5            # Show stats
+h5dump -A data/processed/sonar.h5         # Dump attributes only
+h5dump -H data/processed/sonar.h5/sonar   # Dump specific group
+```
