@@ -1,4 +1,8 @@
-"""Convert HDF5 to CF-compliant NetCDF"""
+"""
+Convert HDF5 to CF-compliant NetCDF
+
+2026 rshomberg@uri.edu
+"""
 
 import netCDF4 as nc
 import numpy as np
@@ -6,18 +10,16 @@ from pathlib import Path
 from datetime import datetime
 import logging
 
-from .hdf5_manager import HDF5Loader
-
-logger = logging.getLogger(__name__)
-
+from .hdf5_manager import HDF5Loader    # FIXME: improve modularity
 
 class HDF5toCFNetCDF:
     """Convert HDF5 sonar data to CF-compliant NetCDF"""
+    # TODO: convert to functions
     
     def __init__(self, hdf5_file: str):
         self.hdf5_file = Path(hdf5_file)
     
-    def export_all_frequencies(self, output_dir: str = None) -> dict:
+    def export_all_frequencies(self, output_dir: Path | None = None) -> dict:
         """
         Export to separate NetCDF files for each frequency.
         
@@ -34,7 +36,7 @@ class HDF5toCFNetCDF:
             freq_channels = loader.get_sonar_frequencies()
         
         if not freq_channels:
-            logger.warning("No sonar data found")
+            logging.warning("No sonar data found")
             return {}
         
         # Get unique frequencies
@@ -46,7 +48,7 @@ class HDF5toCFNetCDF:
             output_file = output_dir / f"{self.hdf5_file.stem}_freq{int(freq)}.nc"
             self._export_frequency(freq, str(output_file))
             output_files[freq] = str(output_file)
-            logger.info(f"Exported {int(freq)} Hz to {output_file.name}")
+            logging.info(f"Exported {int(freq)} Hz to {output_file.name}")
         
         return output_files
     
@@ -58,7 +60,7 @@ class HDF5toCFNetCDF:
             freq_channels = [(f, ch) for f, ch in loader.get_sonar_frequencies() if f == frequency]
             
             if not freq_channels:
-                logger.warning(f"No data found for {frequency} Hz")
+                logging.warning(f"No data found for {frequency} Hz")
                 return
             
             # Create output file
@@ -128,16 +130,20 @@ class HDF5toCFNetCDF:
             # Create sonar parameters as global attributes
             sonar_params = self._get_sonar_params(frequency)
             if sonar_params:
+                # print(sonar_params.keys())
                 # ds.transmit_freq_start = sonar_params['transmit_freq_start']
                 # ds.transmit_freq_end = sonar_params['transmit_freq_end']
                 # ds.sample_rate = sonar_params['sample_freq']
-                ds.sample_interval = sonar_params['sample_interval']
-                ds.sweep_length = sonar_params['sweep_length']
+                # ds.sample_interval = sonar_params['sample_interval']
+                # ds.sweep_length = sonar_params['sweep_length']
+                pass    # FIXME: these are stored separately in the hdf5
             
             # Acoustic data (with padding for ragged arrays)
             acoustic = ds.createVariable('acoustic_intensity', 'f4', 
                                         ('channel', 'time', 'sample'),
-                                        fill_value=np.nan, compression='gzip')
+                                        fill_value=np.nan, 
+                                        # compression='gzip'
+                                        )
             acoustic.units = 'raw_counts'
             acoustic.long_name = 'Acoustic backscatter intensity'
             acoustic.coordinates = 'latitude longitude'
@@ -148,40 +154,54 @@ class HDF5toCFNetCDF:
                     acoustic[ch_idx, t_idx, :n_samples] = sample_array
             
             # Metadata variables
-            heading_var = ds.createVariable('heading', 'f4', ('time',), compression='gzip')
+            heading_var = ds.createVariable('heading', 'f4', ('time',), 
+                                            # compression='gzip',
+                                            )
             heading_var.units = 'degrees'
             heading_var.long_name = 'Vessel heading'
             heading_var.standard_name = 'platform_orientation'
             heading_var[:] = all_pings[0]['data']['heading']
             
-            pitch_var = ds.createVariable('pitch', 'f4', ('time',), compression='gzip')
+            pitch_var = ds.createVariable('pitch', 'f4', ('time',), 
+                                        #   compression='gzip',
+                                          )
             pitch_var.units = 'degrees'
             pitch_var.long_name = 'Vessel pitch'
             pitch_var[:] = all_pings[0]['data']['pitch']
             
-            roll_var = ds.createVariable('roll', 'f4', ('time',), compression='gzip')
+            roll_var = ds.createVariable('roll', 'f4', ('time',), 
+                                        #  compression='gzip',
+                                         )
             roll_var.units = 'degrees'
             roll_var.long_name = 'Vessel roll'
             roll_var[:] = all_pings[0]['data']['roll']
             
-            depth_var = ds.createVariable('depth', 'f4', ('time',), compression='gzip')
+            depth_var = ds.createVariable('depth', 'f4', ('time',), 
+                                        #   compression='gzip',
+                                          )
             depth_var.units = 'meters'
             depth_var.long_name = 'Water depth'
             depth_var.standard_name = 'sea_water_depth'
             depth_var[:] = all_pings[0]['data']['depth']
             
-            altitude_var = ds.createVariable('altitude', 'f4', ('time',), compression='gzip')
+            altitude_var = ds.createVariable('altitude', 'f4', ('time',),
+                                            #   compression='gzip',
+                                              )
             altitude_var.units = 'meters'
             altitude_var.long_name = 'Altitude above seafloor'
             altitude_var.standard_name = 'height_above_sea_floor'
             altitude_var[:] = all_pings[0]['data']['altitude']
             
-            course_var = ds.createVariable('course', 'f4', ('time',), compression='gzip')
+            course_var = ds.createVariable('course', 'f4', ('time',), 
+                                        #    compression='gzip',
+                                           )
             course_var.units = 'degrees'
             course_var.long_name = 'Vessel course'
             course_var[:] = all_pings[0]['data']['course']
             
-            speed_var = ds.createVariable('speed', 'f4', ('time',), compression='gzip')
+            speed_var = ds.createVariable('speed', 'f4', ('time',), 
+                                        #   compression='gzip',
+                                          )
             speed_var.units = 'meters per second'
             speed_var.long_name = 'Vessel speed'
             speed_var[:] = all_pings[0]['data']['speed']

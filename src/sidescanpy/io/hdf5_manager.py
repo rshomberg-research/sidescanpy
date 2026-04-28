@@ -1,4 +1,8 @@
-"""HDF5 file I/O for sonar data"""
+"""
+HDF5 file I/O for sonar data
+
+2026 rshomberg@uri.edu
+"""
 
 import h5py
 import numpy as np
@@ -9,6 +13,7 @@ import logging
 # TODO: modify to match existing data
 class JSFtoHDF5Manager:
     """Convert JSF messages to HDF5 format"""
+    # TODO: convert to functions
     
     def __init__(self, output_file: str):
         self.output_file = Path(output_file)
@@ -86,9 +91,9 @@ class JSFtoHDF5Manager:
             grp.create_dataset('altitude', data=np.array([m.altitude for m in msgs], dtype=np.float32))
             grp.create_dataset('course', data=np.array([m.course for m in msgs], dtype=np.float32))
             grp.create_dataset('speed', data=np.array([m.speed for m in msgs], dtype=np.float32))
-            # TODO: add sound speed here
+            # TODO: add sound speed here and other useful datatypes
             
-            # Attributes
+            # Attributes (one per group)
             grp.attrs['transmit_freq_start'] = msgs[0].transmit_freq_start
             grp.attrs['transmit_freq_end'] = msgs[0].transmit_freq_end
             grp.attrs['sample_freq'] = msgs[0].sample_freq
