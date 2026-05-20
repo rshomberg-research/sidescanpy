@@ -5,7 +5,6 @@ config/
 .vsconfig/
 package-lock.json
 checkpoints/
-tests/
 pub
 ref
 .vscode
