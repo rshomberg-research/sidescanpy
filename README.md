@@ -2,6 +2,8 @@
 
 ## TODO
 
+- [ ] totally rewrite readme
+
 - [ ] work out separating anything proprietary from open source information
 
 - [ ] refactor all code 

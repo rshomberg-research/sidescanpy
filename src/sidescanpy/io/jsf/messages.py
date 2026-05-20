@@ -67,7 +67,7 @@ class JSFMessageBody:
         msg_cls = cls._registry.get(message_type)
         if not msg_cls:
             raise ValueError(f"Unsupported message type: {message_type}")
-        return msg_cls.from_bytes(data) # FIXME: fix the cause of the warning here
+        return msg_cls.from_bytes(data) # FIXME: fix the cause of the ide warning here
     
     def set_context(self, header: JSFMessageHeader):
         pass  # default: do nothing    

@@ -8,6 +8,8 @@ checkpoints/
 tests/
 pub
 ref
+.vscode
+.DS_Store
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,visualstudiocode
@@ -205,3 +207,7 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
 
+.DS_Store
+.vscode/settings.json
+.DS_Store
+src/.DS_Store

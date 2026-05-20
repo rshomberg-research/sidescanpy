@@ -1,23 +1,7 @@
 {
     "cSpell.words": [
-        "cartopy",
-        "degs",
-        "imread",
-        "interp",
-        "libpy",
-        "lons",
-        "mfdataset",
-        "ndarray",
-        "ndimage",
-        "NMEA",
-        "NMEARMC",
+        "nmea",
         "pynmea",
-        "samp",
-        "scienceplots",
-        "sidescan",
-        "sidescanpy",
-        "slerp",
-        "stbd"
-    ],
-    "defaultInterpreterPath": "${workspaceFolder}/.venv",
+        "sidescanpy"
+    ]
 }
