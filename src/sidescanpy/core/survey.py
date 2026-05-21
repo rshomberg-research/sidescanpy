@@ -19,8 +19,11 @@ from dataclasses import dataclass, field
 from typing import Optional, Any
 from datetime import datetime 
 
-class SideScanSurvey:
+class SideScanFrequencyChannel:
     '''Wrapper for single frequency xr.Dataset'''
+
+    _dataset: xr.Dataset
+    freq_key: str
 
     def __init__(self, dataset: xr.Dataset, freq_key: str):
         
@@ -86,11 +89,13 @@ class MultiFrequencySideScanSurvey:
     for survey path. I would like to confirm that is the same though. It may be
     possible to store per ping data in this class and per (ping,sample) data in
     the SideScanSurvey class (renamed to FrequencyChannel?)
+
+    I would like to modify this so that 
     '''
 
     def __init__(
             self,
-            source_file     : str, 
+            source_file     : str,  # ???: do I actually call about source file/format? 
             source_format   : str,
             survey_name     : str,
     ):
@@ -99,7 +104,7 @@ class MultiFrequencySideScanSurvey:
         self.source_file    = source_file
         self.source_format  = source_format
         self.survey_name    = survey_name
-        self._freq_channels : dict[str, SideScanSurvey] = {}
+        self._freq_channels : dict[str, SideScanFrequencyChannel] = {}
 
     def add_frequency(self, freq_key: str, dataset: xr.Dataset) -> None:
         '''Add a frequency dataset to the survey'''
@@ -107,9 +112,9 @@ class MultiFrequencySideScanSurvey:
         if freq_key in self._freq_channels:
             raise ValueError(f"Frequency ({freq_key}) already in survey")
         
-        self._freq_channels[freq_key] = SideScanSurvey(dataset, freq_key)
+        self._freq_channels[freq_key] = SideScanFrequencyChannel(dataset, freq_key)
 
-    def get_frequency(self, freq_key: str) -> SideScanSurvey:
+    def get_frequency(self, freq_key: str) -> SideScanFrequencyChannel:
         '''Get SideScanSurvey for a specific frequency'''
         if freq_key not in self._freq_channels:
             raise KeyError(f"Frequency ({freq_key}) not found. Available: {self.frequencies}")
@@ -120,7 +125,7 @@ class MultiFrequencySideScanSurvey:
         return sorted(self._freq_channels.keys())
     
     @property
-    def freq_channels(self) -> dict[str, SideScanSurvey]:
+    def freq_channels(self) -> dict[str, SideScanFrequencyChannel]:
         return dict(self._freq_channels)
     
     @property
@@ -153,7 +158,7 @@ if __name__=='__main__':
     }, attrs={'transmit_freq_start': 1495000})
 
     # Test single frequency
-    single = SideScanSurvey(ds, 'freq_14950_hz')
+    single = SideScanFrequencyChannel(ds, 'freq_14950_hz')
     print(single)
     print(f"Frequency: {single.frequency:,.0f} Hz")
 

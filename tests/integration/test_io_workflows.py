@@ -7,6 +7,7 @@ from pathlib import Path
 from sidescanpy.io.hdf5 import reader as hdf5_reader, writer as hdf5_writer
 from sidescanpy.io.netcdf import reader as netcdf_reader, writer as netcdf_writer
 
+# TODO: test that HDF5 and netCDF match
 
 @pytest.mark.integration
 class TestHDF5ReadWriteWorkflow:

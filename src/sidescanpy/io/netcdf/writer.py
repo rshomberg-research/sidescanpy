@@ -5,10 +5,26 @@
 import logging 
 from pathlib import Path 
 
-from sidescanpy.core.survey import MultiFrequencySideScanSurvey 
+import xarray as xr 
+from sidescanpy.core.survey import MultiFrequencySideScanSurvey, SideScanFrequencyChannel
+
+# FIXME: the way this needs to work is that a single frequency channel is
+# outputted to as a netcdf
+
+def _frequency_channel_to_netcdf(survey: SideScanFrequencyChannel, output_file: Path) -> Path:
+    '''Convert a single frequency channel to a netcdf file'''
+
+    # output_file.parent.mkdir(parents=False, exist_ok=True)
+    ds: xr.Dataset = survey.dataset # FIXME: figure out this ide warning
+    ds.to_netcdf(output_file, engine='netcdf4')
+    logging.debug(f"Saved: {output_file} ({ds.sizes['ping']}) pings")
+    
+    return output_file
 
 def to_netcdf(survey: MultiFrequencySideScanSurvey, output_dir: Path) -> list[Path]:
-    '''Write sruvey to netCDF (one per frequency)'''
+    '''Write survey to netCDF (one per frequency)'''
+
+    fname_base: str = survey.survey_name
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -17,13 +33,14 @@ def to_netcdf(survey: MultiFrequencySideScanSurvey, output_dir: Path) -> list[Pa
 
     output_files = []
     for freq_key in survey.frequencies:
+        freq_dir = output_dir / freq_key
+        freq_dir.mkdir(exist_ok=True, parents=True)
         freq_survey = survey.get_frequency(freq_key)    # FIXME: fix naming convention (from get_frequency)
-        ds = freq_survey.dataset
 
-        output_file = output_dir / f'{freq_key}.nc'
-        ds.to_netcdf(output_file, engine='netcdf4')
+        output_file = output_dir / f'{freq_key}/{fname_base}.nc'
+        _frequency_channel_to_netcdf(freq_survey, output_file)
 
-        logging.debug(f"Wrote {freq_key}: {output_file} ({ds.sizes['ping']} pings)")
+        # logging.debug(f"Wrote {freq_key}: {output_file} ({ds.sizes['ping']} pings)")
         output_files.append(output_file)
 
     logging.debug(f"netCDF export ({len(output_files)} files)")

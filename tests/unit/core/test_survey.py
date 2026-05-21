@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 from pathlib import Path
 
-from sidescanpy.core.survey import SideScanSurvey, MultiFrequencySideScanSurvey
+from sidescanpy.core.survey import SideScanFrequencyChannel, MultiFrequencySideScanSurvey
 
 
 @pytest.mark.unit
@@ -18,7 +18,7 @@ class TestSideScanSurvey:
     
     def test_initialization_valid(self, sample_dataset):
         """Test initialization with valid dataset."""
-        survey = SideScanSurvey(sample_dataset, freq_key='freq_547500')
+        survey = SideScanFrequencyChannel(sample_dataset, freq_key='freq_547500')
         assert survey.freq_key == 'freq_547500'
         assert survey.dataset is sample_dataset
     
@@ -28,7 +28,7 @@ class TestSideScanSurvey:
         invalid_dataset = sample_dataset.drop_dims('channel')
         
         with pytest.raises(ValueError, match="Missing dimensions"):
-            SideScanSurvey(invalid_dataset, freq_key='freq_547500')
+            SideScanFrequencyChannel(invalid_dataset, freq_key='freq_547500')
     
     def test_validation_missing_variables(self, sample_dataset):
         """Test that initialization fails without required variables."""
@@ -36,7 +36,7 @@ class TestSideScanSurvey:
         invalid_dataset = sample_dataset.drop_vars('latitude')
         
         with pytest.raises(ValueError, match="Missing variables"):
-            SideScanSurvey(invalid_dataset, freq_key='freq_547500')
+            SideScanFrequencyChannel(invalid_dataset, freq_key='freq_547500')
     
     def test_frequency_property(self, sample_survey_object):
         """Test frequency property extraction."""
@@ -68,7 +68,7 @@ class TestSideScanSurvey:
     
     def test_dataset_property_immutability(self, sample_dataset):
         """Test that accessing dataset property returns original data."""
-        survey = SideScanSurvey(sample_dataset, freq_key='test')
+        survey = SideScanFrequencyChannel(sample_dataset, freq_key='test')
         assert survey.dataset is sample_dataset
         # Verify we can access data through the property
         assert 'ping' in survey.dataset.dims
@@ -120,7 +120,7 @@ class TestDatasetValidation:
         invalid_ds = xr.Dataset(data, coords=coords)
         
         with pytest.raises(ValueError):
-            SideScanSurvey(invalid_ds, freq_key='test')
+            SideScanFrequencyChannel(invalid_ds, freq_key='test')
     
     def test_missing_channel_dimension(self):
         """Test validation catches missing 'channel' dimension."""
@@ -137,7 +137,7 @@ class TestDatasetValidation:
         invalid_ds = xr.Dataset(data, coords=coords)
         
         with pytest.raises(ValueError):
-            SideScanSurvey(invalid_ds, freq_key='test')
+            SideScanFrequencyChannel(invalid_ds, freq_key='test')
     
     @pytest.mark.parametrize("missing_var", [
         'ping_number', 'timestamp', 'latitude', 
@@ -148,4 +148,4 @@ class TestDatasetValidation:
         invalid_ds = sample_dataset.drop_vars(missing_var)
         
         with pytest.raises(ValueError, match="Missing variables"):
-            SideScanSurvey(invalid_ds, freq_key='test')
+            SideScanFrequencyChannel(invalid_ds, freq_key='test')

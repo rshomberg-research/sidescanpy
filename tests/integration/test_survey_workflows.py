@@ -10,7 +10,7 @@ import xarray as xr
 from pathlib import Path
 import tempfile
 
-from sidescanpy.core.survey import SideScanSurvey, MultiFrequencySideScanSurvey
+from sidescanpy.core.survey import SideScanFrequencyChannel, MultiFrequencySideScanSurvey
 
 
 @pytest.mark.integration
@@ -49,7 +49,7 @@ class TestSurveyCreationWorkflow:
         dataset = xr.Dataset(data, coords=coords, attrs=attrs)
         
         # Create survey
-        survey = SideScanSurvey(dataset, freq_key='freq_547500')
+        survey = SideScanFrequencyChannel(dataset, freq_key='freq_547500')
         
         # Verify all properties work
         assert survey.n_pings == n_ping
@@ -80,7 +80,7 @@ class TestDatasetConsistency:
     
     def test_survey_preserves_data(self, sample_dataset):
         """Test that creating a survey preserves dataset integrity."""
-        survey = SideScanSurvey(sample_dataset, freq_key='test')
+        survey = SideScanFrequencyChannel(sample_dataset, freq_key='test')
         
         # Verify original data is preserved
         original_samples = sample_dataset['samples'].values
@@ -90,7 +90,7 @@ class TestDatasetConsistency:
     
     def test_survey_coordinate_access(self, sample_dataset):
         """Test that survey can access all coordinates."""
-        survey = SideScanSurvey(sample_dataset, freq_key='test')
+        survey = SideScanFrequencyChannel(sample_dataset, freq_key='test')
         
         # Verify all coordinates are accessible
         assert 'ping' in survey.dataset.coords
@@ -99,7 +99,7 @@ class TestDatasetConsistency:
     
     def test_survey_attributes_preserved(self, sample_dataset):
         """Test that dataset attributes are preserved."""
-        survey = SideScanSurvey(sample_dataset, freq_key='test')
+        survey = SideScanFrequencyChannel(sample_dataset, freq_key='test')
         
         assert survey.dataset.attrs['transmit_freq_start'] == 547500
         assert survey.dataset.attrs['survey_name'] == 'test_survey'
@@ -112,7 +112,7 @@ class TestWorkflowSimulation:
     def test_create_analyze_save_workflow(self, tmp_dir, sample_dataset):
         """Test a typical workflow: create, analyze, prepare for save."""
         # Step 1: Create survey
-        survey = SideScanSurvey(sample_dataset, freq_key='freq_547500')
+        survey = SideScanFrequencyChannel(sample_dataset, freq_key='freq_547500')
         
         # Step 2: Validate properties
         assert survey.n_pings > 0
@@ -130,12 +130,12 @@ class TestWorkflowSimulation:
     
     def test_multi_survey_workflow(self, tmp_dir):
         """Test workflow with multiple surveys at different frequencies."""
-        survey1 = SideScanSurvey(
+        survey1 = SideScanFrequencyChannel(
             self._create_test_dataset(freq=547500),
             freq_key='freq_547500'
         )
         
-        survey2 = SideScanSurvey(
+        survey2 = SideScanFrequencyChannel(
             self._create_test_dataset(freq=1495000),
             freq_key='freq_1495000'
         )

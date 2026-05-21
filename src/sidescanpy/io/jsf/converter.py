@@ -43,8 +43,8 @@ def to_survey(messages: List, source_file: str) -> MultiFrequencySideScanSurvey:
     # Create survey
     survey = MultiFrequencySideScanSurvey(
         source_file=source_file,
-        source_format='jsf',
-        survey_name=''
+        source_format='JSF',
+        survey_name=Path(source_file).stem
     )
     
     # Convert each frequency

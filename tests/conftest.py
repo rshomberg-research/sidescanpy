@@ -68,8 +68,8 @@ def sample_dataset() -> xr.Dataset:
 @pytest.fixture
 def sample_survey_object(sample_dataset):
     """Create a SideScanSurvey object for testing."""
-    from sidescanpy.core.survey import SideScanSurvey
-    return SideScanSurvey(sample_dataset, freq_key='freq_547500_hz')
+    from sidescanpy.core.survey import SideScanFrequencyChannel
+    return SideScanFrequencyChannel(sample_dataset, freq_key='freq_547500_hz')
 
 
 @pytest.fixture

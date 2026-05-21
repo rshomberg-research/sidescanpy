@@ -13,7 +13,7 @@ import xarray as xr
 from pathlib import Path 
 import h5py 
 
-from sidescanpy.core.survey import MultiFrequencySideScanSurvey, SideScanSurvey 
+from sidescanpy.core.survey import MultiFrequencySideScanSurvey, SideScanFrequencyChannel 
 
 def from_hdf5(input_file: Path) -> MultiFrequencySideScanSurvey:
     '''Read survey from HDF5 file with multiple frequencies'''

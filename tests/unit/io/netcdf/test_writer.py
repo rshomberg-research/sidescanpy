@@ -38,8 +38,9 @@ class TestNetCDFWriter:
         # Check naming convention
         for output_file in output_files:
             assert output_file.suffix == '.nc'
-            assert output_file.name.startswith('freq_')
-            assert output_file.name.endswith('_hz.nc')
+            assert output_file.parent.name.startswith('freq_')
+            assert output_file.parent.name.endswith('_hz')
+            assert output_file.name.endswith('.nc')
     
     def test_to_netcdf_file_content(self, sample_multi_frequency_survey, tmp_dir):
         """Test that netCDF files contain correct data."""
@@ -91,7 +92,7 @@ class TestNetCDFWriter:
         
         assert nested_dir.exists()
         assert len(output_files) == sample_multi_frequency_survey.n_frequencies
-        assert all(f.parent == nested_dir for f in output_files)
+        assert all(f.parent.parent == nested_dir for f in output_files)
     
     def test_to_netcdf_attributes_preserved(self, sample_multi_frequency_survey, tmp_dir):
         """Test that dataset attributes are preserved in netCDF files."""

@@ -102,10 +102,10 @@ class TestNetCDFReader:
     
     def test_from_netcdf_frequency_key_from_filename(self, netcdf_directory_with_data):
         """Test that frequency keys match the filename stems."""
-        nc_files = sorted(netcdf_directory_with_data.glob('freq_*.nc'))
+        nc_files = sorted(netcdf_directory_with_data.glob('freq_*/*.nc'))
         survey = reader.from_netcdf(netcdf_directory_with_data)
         
-        expected_keys = {f.stem for f in nc_files}
+        expected_keys = {f.parent.name for f in nc_files}
         actual_keys = set(survey.frequencies)
         
         print(f"\n✓ Frequency keys:")
@@ -127,9 +127,10 @@ class TestNetCDFReader:
             ds = sample_dataset.copy()
             ds.attrs['transmit_freq_start'] = freq
             ds.attrs['transmit_freq_end'] = freq
-            
+                        
             freq_key = f"freq_{freq}_hz"
-            output_file = netcdf_dir / f"{freq_key}.nc"
+            output_file = netcdf_dir / f"{freq_key}" / f"{ds.attrs['survey_name']}.nc"
+            output_file.parent.mkdir(exist_ok=True, parents=True)
             ds.to_netcdf(output_file, engine='netcdf4')
         
         print(f"\n✓ Created {len(frequencies)} frequency files")
