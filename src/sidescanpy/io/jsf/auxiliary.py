@@ -10,6 +10,8 @@ sonar ping timestamps for data enrichment.
 
 # TODO: fix this file. Currently this is just some old broken code
 
+raise NotImplementedError("io/jsf/auxiliary.py does not use any working code to my knowledge")
+
 import logging
 import numpy as np
 from typing import List, Dict
