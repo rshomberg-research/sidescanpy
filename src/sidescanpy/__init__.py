@@ -11,3 +11,4 @@ Main modules:
 __version__ = "0.1.0"
 __author__ = "Russ Shomberg"
 
+from sidescanpy.core.schema import SideScanAccessor  # noqa: F401

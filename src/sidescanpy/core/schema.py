@@ -65,7 +65,7 @@ HDF5_COMPRESSION_LEVEL  : int = 4
 # ???: currently arbitrary choices. Consider changing
 
 @xr.register_dataset_accessor("sidescan")
-class SidescanAccessor:
+class SideScanAccessor:
     """
     xarray.Dataset accessor for sidescan specific validation and utilities 
 
