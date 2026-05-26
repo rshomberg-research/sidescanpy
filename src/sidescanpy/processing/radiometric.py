@@ -87,6 +87,7 @@ def absorption_for_frequency(freq_hz: float) -> float:
         - 547.5 kHz: ~0.10 dB/m
         - 1495 kHz: ~0.20 dB/m
     """
+    # TODO: replace with more accurate function
     if freq_hz >= 1_000_000:
         # ~1.5 MHz and above
         return 0.20
@@ -98,7 +99,7 @@ def absorption_for_frequency(freq_hz: float) -> float:
         return 0.05
 
 
-def apply_tvg(ds: xr.Dataset, params: TVGParams = None) -> xr.Dataset:
+def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     """
     Apply time-varying gain (TVG) correction to raw backscatter_intensity.
 
@@ -215,6 +216,9 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams = None) -> xr.Dataset:
     sample_rate = ds.attrs["sample_rate_hz"]
     n_samples = ds.sizes["sample"]
     sound_velocity = ds["sound_vel_ms"].mean().item()  # scalar, m/s
+    # FIXME: sound_velocity should change at each ping
+    if np.isnan(sound_velocity):
+        sound_velocity = 1500.0
 
     sample_interval_m = sound_velocity / (2.0 * sample_rate)
     slant_range = np.arange(n_samples, dtype=np.float32) * sample_interval_m
@@ -249,6 +253,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams = None) -> xr.Dataset:
     # corrected = backscatter_db + tvg_db
     # tvg_db has shape (n_samples,) and broadcasts over (ping, channel, sample)
     corrected_db = backscatter_db + xr.DataArray(tvg_db, dims=["sample"])
+    corrected_db = np.clip(corrected_db, 0, None)   # FIXME: fix the clipping
 
     logger.debug(
         "After TVG: min=%.2f dB, max=%.2f dB, mean=%.2f dB",

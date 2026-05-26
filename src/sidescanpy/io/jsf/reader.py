@@ -26,6 +26,21 @@ from sidescanpy.io.jsf.messages import JSFMessageHeader, JSFMessageBody
 
 logger = logging.getLogger(__name__)
 
+"""
+FIXME: re-write this module. I want at least the option to iteratively read the
+JSF message by message and handle each message pushing it to the open HDF5 file.
+Right now the saving functions are not operating correctly - it would likely
+help with unit testing since it could run faster and just skip until it reaches
+the message type it is looking for.
+
+Or I could make a script to generate fake short jsf file which contains all the
+message types. Or generate them manually.
+
+BUG: port and starboard channels are not being written separately currently. -
+Downstream it shows up on the visualization. I have a test for these files now,
+but they are slow to run
+"""
+
 
 # =============================================================================
 # SECTION 1: JSF Binary File Reading

@@ -181,7 +181,7 @@ def _read_frequency_to_dataset(
 
         n_pings = len(archive_data["ping_number"])
         logger.debug(f"  Found {n_pings} pings")
-
+    
         # Process backscatter data (stored as JSON strings)
         backscatter_raw = archive_data.get("backscatter_intensity")
         if backscatter_raw is not None:
@@ -226,6 +226,7 @@ def _read_frequency_to_dataset(
         backscatter_3d = np.full((n_pings, n_channels, n_samples), np.nan, dtype=np.float32)
         backscatter_3d[:, 0, :] = bs_array_2d  # Port channel
         backscatter_3d[:, 1, :] = bs_array_2d  # Starboard channel
+        # FIXME: port and star channels are the same
 
         # Build data variables with field name mapping
         data_vars = {}
