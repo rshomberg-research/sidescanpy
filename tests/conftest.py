@@ -72,8 +72,37 @@ def sample_jsf_messages():
     
     return messages
 
+def pytest_addoption(parser):
+    """Add custom command line options."""
+    parser.addoption(
+        "--slow",
+        action="store_true",
+        default=False,
+        help="Run slow tests (integration, etc.)"
+    )
+
 
 def pytest_configure(config):
-    """Register custom test markers."""
-    config.addinivalue_line("markers", "unit: unit test")
-    config.addinivalue_line("markers", "integration: integration test")
+    """Configure pytest."""
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+    )
+    config.addinivalue_line(
+        "markers", "integration: marks tests as integration tests"
+    )
+    config.addinivalue_line(
+        "markers", "unit: marks tests as unit tests"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Modify test collection."""
+    if config.getoption("--slow"):
+        # Include slow tests
+        return
+    
+    # By default, skip slow tests
+    skip_slow = pytest.mark.skip(reason="Slow test - use --slow to run")
+    for item in items:
+        if "slow" in item.keywords or "integration" in item.keywords:
+            item.add_marker(skip_slow)

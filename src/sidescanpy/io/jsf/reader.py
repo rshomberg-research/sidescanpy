@@ -357,6 +357,7 @@ def _store_field_as_dataset(
     - Datetime: Stored as int64 nanoseconds with dtype metadata
     - Ragged arrays: Object dtype HDF5 dataset
     - Lists: Converted to numpy arrays or stored as JSON
+    - None values: Skipped (not stored)
 
     Parameters
     ----------
@@ -368,6 +369,12 @@ def _store_field_as_dataset(
         Values from all messages.
     """
     if not values:
+        return
+
+    # Skip if all values are None
+    non_none_values = [v for v in values if v is not None]
+    if not non_none_values:
+        logger.debug(f"Skipping {field_name} - all values are None")
         return
 
     first_val = values[0]
