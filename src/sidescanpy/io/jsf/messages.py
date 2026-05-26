@@ -275,7 +275,7 @@ class SonarDataMessage(JSFMessageBody):
 
     annotation_string:  Optional[str] = field(init=False, repr=False)
 
-    samples:    list[float] = field(init=False, repr=False) # Sonar trace data # ???: dB?
+    backscatter_intensity:  list[float] = field(init=False, repr=False) # Sonar trace data # ???: dB?
     N_samples:              int = field(init=False)
 
     @staticmethod
@@ -525,8 +525,8 @@ class SonarDataMessage(JSFMessageBody):
         self.cable_out = self._raw_cable_out / 1e3      # TODO: check validity flags
 
         # Handle trace data
-        self.samples = [float(val)*2**(-self._weighting_factor) for val in self._raw_trace_data]  # TODO: do some math on the trace data samples
-        self.N_samples = len(self.samples)
+        self.backscatter_intensity = [float(val)*2**(-self._weighting_factor) for val in self._raw_trace_data]  # TODO: do some math on the trace data samples
+        self.N_samples = len(self.backscatter_intensity)
         # TODO: error checking
 
     @classmethod
