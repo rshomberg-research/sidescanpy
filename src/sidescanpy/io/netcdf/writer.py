@@ -58,7 +58,7 @@ if __name__ == '__main__':
     from pathlib import Path 
     import pickle 
 
-    from sidescanpy.io.jsf import converter as jsf_converter
+    from sidescanpy.io.jsf import converter_old as jsf_converter
 
     # Load test data
     pkl_file = Path("./tests/data/temp_jsf_data.pkl") 

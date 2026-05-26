@@ -44,7 +44,7 @@ if __name__=='__main__':
 
     import pickle
 
-    from sidescanpy.io.jsf import converter 
+    from sidescanpy.io.jsf import converter_old 
 
     # Load test data
     pkl_file = Path('./tests/data/temp_jsf_data.pkl')
@@ -52,7 +52,7 @@ if __name__=='__main__':
     with open(pkl_file, 'rb') as f:
         messages = pickle.load(f)
 
-    survey = converter.to_survey(messages, str(pkl_file))
+    survey = converter_old.to_survey(messages, str(pkl_file))
 
     output_file = Path('./tests/output/survey.h5')
     output_file = to_hdf5(survey, output_file)
