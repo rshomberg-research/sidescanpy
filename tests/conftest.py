@@ -11,14 +11,36 @@ import xarray as xr
 import pickle
 
 @pytest.fixture
-def sample_dataset():
-    """Valid frequency channel dataset matching .ss.h5 schema with dask arrays."""
-    n_pings = 1000
+def sample_dataset(request):
+    """
+    Valid frequency channel dataset matching .ss.h5 schema.
+    
+    Parameters can be passed via `request.param` as a dict:
+        {"n_pings": 10, "n_samples": 100, "backscatter_val": 1.0, "freq_hz": 1495000}
+    
+    Default: large dataset (1000 pings, 2000 samples) with random backscatter.
+    """
+    import pandas as pd
+    
+    # Check if parameterized
+    params = getattr(request, "param", {})
+    n_pings = params.get("n_pings", 1000)
+    n_samples = params.get("n_samples", 2000)
+    backscatter_val = params.get("backscatter_val", None)  # None = random
+    freq_hz = params.get("freq_hz", 1495000)
+    
     n_channels = 2
-    n_samples = 2000
 
+    # Backscatter data
+    if backscatter_val is not None:
+        # Constant value (for unit tests)
+        backscatter_data = np.full((n_pings, n_channels, n_samples), backscatter_val, dtype=np.float32)
+    else:
+        # Random (for integration tests)
+        backscatter_data = np.random.rand(n_pings, n_channels, n_samples).astype(np.float32)
+    
     backscatter_raw = xr.DataArray(
-        np.random.rand(n_pings, n_channels, n_samples).astype(np.float32),
+        backscatter_data,
         dims=["ping", "channel", "sample"],
     ).chunk({"ping": 256})
 
@@ -37,13 +59,16 @@ def sample_dataset():
             "sound_vel_ms": (["ping"], np.full(n_pings, 1500.0)),
         },
         coords={
+            "ping": np.arange(n_pings),
+            "channel": np.arange(n_channels),
+            "sample": np.arange(n_samples),
             "ping_number": (["ping"], np.arange(1, n_pings + 1, dtype=np.int32)),
-            "time": (["ping"], np.linspace(0, 1000, n_pings)),
+            "time": (["ping"], pd.date_range("2026-01-01", periods=n_pings, freq="1s").values),
             "channel_id": (["channel"], ["port", "starboard"]),
         },
         attrs={
-            "freq_hz_start": 1495000,
-            "freq_hz_end": 1495000,
+            "freq_hz_start": freq_hz,
+            "freq_hz_end": freq_hz,
             "pulse_length_us": 0.5,
             "sample_rate_hz": 400000,
             "range_m": 200.0,
