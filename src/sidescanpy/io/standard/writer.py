@@ -43,7 +43,7 @@ def write_ss_hdf5(
         Frequency in Hz. If None, extracted from ds.attrs["freq_hz_start"].
     overwrite : bool
         If False (default), raise if file exists. If True, overwrite.
-
+        
     Raises
     ------
     ValueError
@@ -98,7 +98,7 @@ def write_ss_hdf5(
         mode=mode,
         engine='h5netcdf',
         group=group,
-        encoding=encoding
+        unlimited_dims=[],
     )
 
     logger.info(f"Successfully wrote {output_path}")

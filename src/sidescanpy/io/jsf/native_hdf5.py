@@ -8,6 +8,8 @@ and to provide a bridge to standard conversion.
 2026 rshomberg@uri.edu
 """
 
+# FIXME: change name to reader
+
 import logging
 from pathlib import Path
 from typing import Optional
