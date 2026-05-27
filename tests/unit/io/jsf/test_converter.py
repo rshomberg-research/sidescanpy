@@ -86,6 +86,46 @@ class TestReadFrequencyToDataset:
         assert len(bs.shape) == 3
         assert bs.shape[1] == 2  # 2 channels
 
+    def test_backscatter_channels_are_different(self, native_hdf5_file):
+        """Backscatter channels should hold different data"""
+        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
+        ds = _read_frequency_to_dataset(native_hdf5_file, freqs[0])
+
+        bs = ds["backscatter_intensity"]
+        port_ping = bs[0,0,:].values
+        stbd_ping = bs[0,1,:].values
+        print("\nComparing pings")
+        print(f"Port: {port_ping[-5:]}")
+        print(f"Stbd: {stbd_ping[-5:]}")
+        assert not np.all(port_ping == stbd_ping)
+        # assert np.all(bs[:,0,:] != bs[:,1,:])
+
+    def test_inspect_native_hdf5_structure(self, native_hdf5_file):
+        """Inspect how channels are actually stored in native HDF5"""
+        import h5py
+        
+        with h5py.File(native_hdf5_file, "r") as f:
+            freqs = list(f["message_types/SonarDataMessage"].keys())
+            group = f[f"message_types/SonarDataMessage/{freqs[0]}"]
+            
+            print("\n=== Native HDF5 Structure ===")
+            print(f"Fields: {list(group.keys())}")
+            print(f"Shape of backscatter_intensity: {group['backscatter_intensity'].shape}")
+            print(f"Shape of ping_number: {group['ping_number'].shape}")
+            
+            # Check for channel information
+            if "channel" in group:
+                print(f"Shape of channel: {group['channel'].shape}")
+                print(f"Unique channels: {np.unique(group['channel'][:])}")
+            else:
+                print("No 'channel' field found")
+                
+            # Print sample data
+            print(f"\nFirst 20 ping_numbers: {group['ping_number'][:20]}")
+            if "channel" in group:
+                print(f"First 20 channels: {group['channel'][:20]}")
+
+
 
 @pytest.mark.unit
 class TestConversion:

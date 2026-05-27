@@ -5,6 +5,8 @@ This module tests each stage of the JSF→Standard pipeline to identify where
 channel separation is lost (if at all).
 """
 
+# FIXME: reorganize, some of these are unit tests and some are integration
+
 import json
 import logging
 import numpy as np
@@ -21,6 +23,7 @@ class TestChannelSeparationInRawData:
     @pytest.mark.integration
     def test_real_data_has_different_channels(self):
         """Load real converted data and verify channels differ."""
+        # FIXME: need stable test files
         ss_file = Path("data/survey-a/sshf/20251015170335.ss.h5")
         
         if not ss_file.exists():
@@ -55,6 +58,8 @@ class TestChannelSeparationInRawData:
     @pytest.mark.integration
     def test_channels_differ_by_more_than_noise(self):
         """Channels should differ significantly, not just by numerical precision."""
+
+        # FIXME: use fixture
         ss_file = Path("data/survey-a/sshf/20251015170335.ss.h5")
         
         if not ss_file.exists():

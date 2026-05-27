@@ -1,28 +1,56 @@
 """
 JSF file reading, parsing, and archiving to native HDF5 format.
 
-This module provides utilities to:
-1. Parse JSF binary files into message objects
-2. Archive messages to native HDF5 format (preserving all fields)
-3. Cache/pickle message objects for testing
+This module provides utilities to: 1. Parse JSF binary files into message
+objects 2. Archive messages to native HDF5 format (preserving all fields) 3.
+Cache/pickle message objects for testing
 
 The native HDF5 format is an intermediate format that stores all JSF messages
 organized by type and frequency, with full fidelity to the original binary data.
 For analysis, use the converter module to transform to standard schema.
+
+TODO: the current native output is not really as raw as I would actually like
+which makes me want to just find a way to directly save to the ss.h5 file to
+save space and time. However, I also need a very raw way of pulling open and
+inspecting the jsf files. Maybe the right answer is to dump to json? Maybe it
+also makes sense to iteratively open messsages and append to ss.h5 for the same
+reason?
 
 2026 rshomberg@uri.edu
 """
 
 import logging
 from pathlib import Path
-from typing import Optional, List
-from collections import defaultdict
+from typing import Optional
 import json
-
 import numpy as np
+from collections import defaultdict
+
 import h5py
 
-from sidescanpy.io.jsf.messages import JSFMessageHeader, JSFMessageBody
+from sidescanpy.io.jsf.messages import (
+    JSFMessageHeader,
+    JSFMessage,
+    SonarDataMessage,
+    NavigationOffsetsMessage,
+    SystemInformationMessage,
+    FilePaddingMessage,
+    NMEAStringMessage,
+    NMEADBTMessage,
+    NMEARMCMessage,
+    NMEADPTMessage,
+    PitchRollDataMessage,
+    PressureSensorReadingMessage,
+    DopplerVelocityLogDataMessage,
+    SituationMessage,
+    SituationComprehensiveMessage,
+    CableCounterDataMessage,
+    KilometerOfPipeDataMessage,
+    ContainerTimeStampMessage,
+    UnknownMessage2040,
+    SonarMessageStatusMessage
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +64,13 @@ the message type it is looking for.
 Or I could make a script to generate fake short jsf file which contains all the
 message types. Or generate them manually.
 
+FIXME: I also do not like that we only import Header and Body. JSFMessageBase
+should be an abstract class which is instatiated as one of the many other
+classes. Each should have a header and a from_bytes method, but 
+
 BUG: port and starboard channels are not being written separately currently. -
 Downstream it shows up on the visualization. I have a test for these files now,
-but they are slow to run
+but they are slow to run because it requires reading an entire file.
 """
 
 
@@ -102,9 +134,13 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
 
             # Read message body
             message_bytes = f.read(header.message_size)
+            
             try:
-                message = JSFMessageBody.from_bytes(header.message_type, message_bytes)
-                message.set_context(header)
+                if header.message_type == SonarDataMessage.MESSAGE_TYPE:
+                    message = SonarDataMessage.from_bytes(header, message_bytes)
+                else:
+                    message = JSFMessage.from_bytes(header, message_bytes)
+                # message.set_context(header)
                 all_messages.append(message)
                 logger.debug(f"Parsed: {type(message).__name__}")
             except ValueError as e:
@@ -160,7 +196,7 @@ def read_jsf_iter(fpath: Path):
             message_bytes = f.read(header.message_size)
 
             try:
-                message = JSFMessageBody.from_bytes(header.message_type, message_bytes)
+                message = JSFMessage.from_bytes(header.message_type, message_bytes)
                 message.set_context(header)
                 yield message
             except ValueError as e:
@@ -440,6 +476,7 @@ def _store_field_as_dataset(
         values_array = np.array(values)
         group.create_dataset(field_name, data=values_array)
     except Exception as e:
+        # FIXME: more specific exceptions
         logger.warning(f"Could not store {field_name} (type: {type(first_val)}): {e}")
 
 # =============================================================================

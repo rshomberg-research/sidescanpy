@@ -247,6 +247,8 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
         float(slant_range[-1]),
     )
 
+    # FIXME: I am not 100% sure that the backscatter values are in intensity. They could be in -db. The range is about 0-80, while db expectations would be -80 to 0
+
     # ========================================================================
     # Step 4: Apply TVG correction
     # ========================================================================

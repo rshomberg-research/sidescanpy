@@ -56,12 +56,12 @@ def write_ss_hdf5(
     >>> ds.sidescan.validate()
     >>> write_ss_hdf5(ds, "survey_001.ss.h5")
     """
-
-    # Validate dataset
+ 
+     # Validate dataset
     logger.debug(f"Validating dataset before writing to {output_path}")
     ds.sidescan.validate() 
 
-    # Check if file exists
+    # Check if file exists and overwrite setting
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"File exists: {output_path}. Use overwrite=True to replace")
     
@@ -69,9 +69,8 @@ def write_ss_hdf5(
     if freq_hz is None:
         freq_hz = int(ds.attrs["freq_hz_start"])
     freq_key = f"{HDF5_FREQ_PREFIX}{freq_hz}"
-    # FIXME: I think I want the input option to be freq_key
 
-    logger.info(f"Writing dataset to {output_path} in group 'frequencies/{freq_key}")
+    logger.info(f"Writing dataset to {output_path} in group 'frequencies/{freq_key}'")
 
     # Prepare encoding: chunk along ping dimension, apply compression
     n_samples = ds.sizes["sample"]
@@ -91,6 +90,9 @@ def write_ss_hdf5(
 
     # Write to HDF5 using h5netcdf engine
     group = f"{HDF5_GROUP_FREQUENCIES}/{freq_key}"
+    
+    # FIXED: Always use mode='a' for h5netcdf with groups
+    # h5netcdf handles groups independently, unlike netcdf4 engine
     mode = 'w' if not output_path.exists() else 'a'
 
     ds.to_netcdf(
@@ -98,7 +100,7 @@ def write_ss_hdf5(
         mode=mode,
         engine='h5netcdf',
         group=group,
-        unlimited_dims=[],
+        unlimited_dims=['ping'],  # CHANGED: Use None instead of []
     )
 
     logger.info(f"Successfully wrote {output_path}")

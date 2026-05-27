@@ -21,8 +21,7 @@ from sidescanpy.io.standard.writer import write_ss_hdf5
 
 logger = logging.getLogger(__name__)
 
-# TODO: change name to convert.py
-
+# BUG: sonar channels are not handled separately - fixed?
 
 def native_hdf5_to_standard(
     native_hdf5_path: Path,
@@ -90,13 +89,37 @@ def native_hdf5_to_standard(
 
     logger.info(f"Converting {len(freqs_to_convert)} frequency(ies)")
 
+    datasets_by_freq = []
+
     # Convert each frequency
     ping_times = None
     for idx, freq in enumerate(freqs_to_convert, 1):
         logger.info(f"Converting frequency {freq} Hz ({idx}/{len(freqs_to_convert)})")
+        
 
         # Read directly from native HDF5 to xarray
         ds = _read_frequency_to_dataset(native_hdf5_path, freq)
+
+        # ===== DIAGNOSTIC INFO =====
+        n_pings = ds.sizes['ping']
+        n_channels = ds.sizes.get('channel', 0)
+        n_samples = ds.sizes.get('sample', 0)
+        
+        logger.info(f"  ✓ Loaded: {n_pings} pings × {n_channels} channels × {n_samples} samples")
+        
+        # Check for duplicates
+        bs_shape = ds['backscatter_intensity'].shape
+        logger.debug(f"    Backscatter shape: {bs_shape}")
+        
+        # Verify channels are different
+        if n_channels == 2:
+            port = ds['backscatter_intensity'].values[:, 0, :]
+            stbd = ds['backscatter_intensity'].values[:, 1, :]
+            are_same = np.allclose(port, stbd, equal_nan=True)
+            logger.info(f"    Port == Starboard? {are_same}")
+        
+        datasets_by_freq.append((freq_hz, ds))
+        
 
         # Save ping times from first frequency for auxiliary interpolation
         if ping_times is None:
@@ -110,6 +133,21 @@ def native_hdf5_to_standard(
         for coord_name in ds.coords:
             encoding[coord_name] = {"zlib": True, "complevel": 4}
 
+        # Check consistency BEFORE writing
+        logger.info("\nValidating dataset consistency...")
+        first_n_pings = datasets_by_freq[0][1].sizes['ping']
+        
+        for freq_hz, ds in datasets_by_freq:
+            n_pings = ds.sizes['ping']
+            if n_pings != first_n_pings:
+                logger.error(f"MISMATCH: {freq_hz} Hz has {n_pings} pings, but first was {first_n_pings}")
+                logger.error(f"This suggests inconsistent channel separation between frequencies!")
+                raise ValueError(
+                    f"Frequency {freq_hz} has {n_pings} pings but expected {first_n_pings}. "
+                    "Channel separation may be inconsistent."
+                )
+            logger.info(f"  ✓ {freq_hz} Hz: {n_pings} pings")
+            
         # Validate and write to standard HDF5
         ds.sidescan.validate()
         write_ss_hdf5(
@@ -179,8 +217,24 @@ def _read_frequency_to_dataset(
             ds = sonar_group[field_name]  # type: ignore
             archive_data[field_name] = ds[:]
 
-        n_pings = len(archive_data["ping_number"])
-        logger.debug(f"  Found {n_pings} pings")
+        # ========== CRITICAL FIX ==========
+        # Data is interleaved: [ping0_port, ping0_stbd, ping1_port, ping1_stbd, ...]
+        channels = archive_data.get("channel")
+        if channels is not None:
+            # Get actual number of unique pings
+            unique_pings = np.unique(archive_data["ping_number"])
+            n_pings = len(unique_pings)
+            
+            logger.debug(f"Found {len(archive_data['ping_number'])} records ({n_pings} pings × 2 channels)")
+            
+            # Separate port and starboard
+            port_mask = channels == 0
+            stbd_mask = channels == 1
+            
+            port_indices = np.where(port_mask)[0]
+            stbd_indices = np.where(stbd_mask)[0]
+        else:
+            raise ValueError("No 'channel' field in HDF5 data - cannot separate port/starboard")
     
         # Process backscatter data (stored as JSON strings)
         backscatter_raw = archive_data.get("backscatter_intensity")
@@ -188,8 +242,10 @@ def _read_frequency_to_dataset(
             # Convert JSON strings to arrays
             try:
                 import json
-                sample_lengths = []
+                
+                # Process ALL backscatter records first
                 bs_arrays = []
+                sample_lengths = []
                 
                 for bs_json in backscatter_raw:
                     if isinstance(bs_json, bytes):
@@ -208,36 +264,40 @@ def _read_frequency_to_dataset(
                 n_samples = int(np.max(sample_lengths))
                 
                 # Pad ragged arrays to consistent size
-                bs_array_2d = np.full((n_pings, n_samples), np.nan, dtype=np.float32)
+                bs_array_padded = np.full((len(bs_arrays), n_samples), np.nan, dtype=np.float32)
                 for i, bs in enumerate(bs_arrays):
-                    bs_array_2d[i, :len(bs)] = bs
+                    bs_array_padded[i, :len(bs)] = bs
                 
-                logger.debug(f"  Backscatter: {n_pings} pings × {n_samples} samples")
+                logger.debug(f"  Backscatter: {n_pings} pings × 2 channels × {n_samples} samples")
+                print(f"  Backscatter: {n_pings} pings × 2 channels × {n_samples} samples")
+                
+                # NOW separate into port and starboard
+                backscatter_3d = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
+                backscatter_3d[:, 0, :] = bs_array_padded[port_indices, :]  # Port
+                backscatter_3d[:, 1, :] = bs_array_padded[stbd_indices, :]  # Starboard
+
             except Exception as e:
                 logger.warning(f"Failed to process backscatter: {e}")
                 n_samples = int(archive_data.get("N_samples", [2000])[0])
-                bs_array_2d = np.full((n_pings, n_samples), np.nan, dtype=np.float32)
+                backscatter_3d = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
         else:
             n_samples = int(archive_data.get("N_samples", [2000])[0])
-            bs_array_2d = np.full((n_pings, n_samples), np.nan, dtype=np.float32)
-
-        # Add channel dimension (port/starboard)
-        n_channels = 2
-        backscatter_3d = np.full((n_pings, n_channels, n_samples), np.nan, dtype=np.float32)
-        backscatter_3d[:, 0, :] = bs_array_2d  # Port channel
-        backscatter_3d[:, 1, :] = bs_array_2d  # Starboard channel
-        # FIXME: port and star channels are the same
+            backscatter_3d = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
 
         # Build data variables with field name mapping
         data_vars = {}
         coords = {}
 
-        # Direct mappings (name stays same)
+        # For scalar fields, we need to handle interleaved data
+        # Take only the port channel data (first occurrence of each ping)
+        port_data_indices = port_indices
+        
+        # Direct mappings (name stays same) - use port channel only
         for field_name in ["latitude", "longitude"]:
             if field_name in archive_data:
-                data_vars[field_name] = (["ping"], archive_data[field_name].astype(np.float32))
+                data_vars[field_name] = (["ping"], archive_data[field_name][port_data_indices].astype(np.float32))
 
-        # Mapped field names
+        # Mapped field names - use port channel only
         field_mapping = {
             "heading": "heading_deg",
             "pitch": "pitch_deg",
@@ -248,15 +308,15 @@ def _read_frequency_to_dataset(
 
         for archive_name, schema_name in field_mapping.items():
             if archive_name in archive_data:
-                data_vars[schema_name] = (["ping"], archive_data[archive_name].astype(np.float32))
+                data_vars[schema_name] = (["ping"], archive_data[archive_name][port_data_indices].astype(np.float32))
 
         # Backscatter data
         data_vars["backscatter_intensity"] = (["ping", "channel", "sample"], backscatter_3d)
         data_vars["backscatter_raw"] = (["ping", "channel", "sample"], backscatter_3d.copy())
 
-        # Convert timestamp to datetime64
+        # Convert timestamp to datetime64 - use port channel only
         if "timestamp" in archive_data:
-            timestamps = archive_data["timestamp"]
+            timestamps = archive_data["timestamp"][port_data_indices]
             try:
                 time_ns = np.asarray(timestamps, dtype=np.int64)
                 time_dt64 = time_ns.astype("datetime64[ns]")
@@ -267,9 +327,9 @@ def _read_frequency_to_dataset(
         else:
             coords["time"] = (["ping"], np.arange(n_pings, dtype=np.int64))
 
-        # Ping number as coordinate
+        # Ping number as coordinate - use port channel only
         if "ping_number" in archive_data:
-            coords["ping_number"] = (["ping"], archive_data["ping_number"].astype(np.int32))
+            coords["ping_number"] = (["ping"], archive_data["ping_number"][port_data_indices].astype(np.int32))
 
         # Dimension coordinates
         coords["ping"] = np.arange(n_pings)
@@ -287,7 +347,7 @@ def _read_frequency_to_dataset(
                 logger.debug(f"Filling missing variable {var_name} with NaN")
                 data_vars[var_name] = (["ping"], np.full(n_pings, np.nan, dtype=np.float32))
 
-        # Calculate required attributes from archive data
+        # Calculate required attributes from archive data (use port data)
         attrs = {
             "freq_hz_start": freq_hz,
             "freq_hz_end": freq_hz,
@@ -297,36 +357,34 @@ def _read_frequency_to_dataset(
 
         # Sample rate in Hz
         if "sample_freq" in archive_data:
-            sample_rate = float(archive_data["sample_freq"][0])
+            sample_rate = float(archive_data["sample_freq"][port_data_indices[0]])
             attrs["sample_rate_hz"] = sample_rate
         else:
             attrs["sample_rate_hz"] = 1000.0  # Default
 
         # Pulse length in microseconds
         if "transmit_freq_start" in archive_data:
-            # Estimate from sweep length and transmit frequency
-            sweep_len = float(archive_data.get("sweep_length", [1.0])[0])
+            sweep_len = float(archive_data.get("sweep_length", [1.0])[port_data_indices[0]])
             if sweep_len > 0:
-                pulse_length_us = (sweep_len * 1e6)  # Convert to microseconds
+                pulse_length_us = (sweep_len * 1e6)
                 attrs["pulse_length_us"] = pulse_length_us
             else:
-                attrs["pulse_length_us"] = 100.0  # Default
+                attrs["pulse_length_us"] = 100.0
         else:
-            attrs["pulse_length_us"] = 100.0  # Default
+            attrs["pulse_length_us"] = 100.0
 
-        # Range in meters (max range based on samples and sound velocity)
+        # Range in meters
         if "sound_speed" in archive_data:
-            sound_speed = float(archive_data["sound_speed"][0])
+            sound_speed = float(archive_data["sound_speed"][port_data_indices[0]])
         else:
-            sound_speed = 1500.0  # Default seawater
+            sound_speed = 1500.0
         
         if "sample_interval" in archive_data:
-            sample_interval_us = float(archive_data["sample_interval"][0])
-            # Range = (sound_speed * time) / 2 (two-way travel)
+            sample_interval_us = float(archive_data["sample_interval"][port_data_indices[0]])
             max_range_m = (sound_speed * sample_interval_us * n_samples / 2) / 1e6
             attrs["range_m"] = max_range_m
         else:
-            attrs["range_m"] = 100.0  # Default
+            attrs["range_m"] = 100.0
 
         # Create dataset
         ds = xr.Dataset(

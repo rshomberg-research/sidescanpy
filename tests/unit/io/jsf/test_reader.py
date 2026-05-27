@@ -23,7 +23,7 @@ class TestArchiveCreation:
         """Should create output .jsf.h5 file"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         assert output_path.exists()
@@ -32,7 +32,7 @@ class TestArchiveCreation:
         """Archive should have 'message_types' root group"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         with h5py.File(output_path, "r") as f:
@@ -47,7 +47,7 @@ class TestSonarMessageStorage:
         """SonarDataMessages should be in message_types/SonarDataMessage/hz_XXXXX/"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         sonar_msgs = [m for m in sample_jsf_messages if isinstance(m, SonarDataMessage)]
@@ -63,7 +63,7 @@ class TestSonarMessageStorage:
         """Frequency groups should be named hz_XXXXX"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         sonar_msgs = [m for m in sample_jsf_messages if isinstance(m, SonarDataMessage)]
@@ -81,7 +81,7 @@ class TestSonarMessageStorage:
         """Each field should be a dataset in frequency group"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         sonar_msgs = [m for m in sample_jsf_messages if isinstance(m, SonarDataMessage)]
@@ -97,6 +97,35 @@ class TestSonarMessageStorage:
             fields = list(freq_group.keys())  # type: ignore
             assert len(fields) > 5
 
+    def test_sonar_channels_are_different(self, sample_jsf_messages, tmp_dir):
+        """Each channel should contain different information"""
+
+        output_path = tmp_dir / "archive.jsf.h5"
+
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
+        _archive_messages_to_hdf5(sample_jsf_messages, output_path)
+
+        with h5py.File(output_path, 'r') as f:
+            sonar_group = f["message_types/SonarDataMessage"]
+
+            freq_key = list(sonar_group.keys())[0]
+            print(f"\nFrequency key: {freq_key}")
+            freq_group = sonar_group[freq_key]
+            print(f"Freq Group Keys: {freq_group.keys()}")
+            backscatter = freq_group['backscatter_intensity'][:]
+            bs_port = backscatter[0].decode()[4]
+            print(bs_port)
+
+            channels = freq_group['channel'][:]
+            print(channels)
+
+            # It looks like the channels are not even addressed at this stage,
+            # though they tend to get stored as every other
+
+
+        assert False, "Still figuring this out"
+                
+
 
 @pytest.mark.unit
 class TestMessageTypeStorage:
@@ -106,7 +135,7 @@ class TestMessageTypeStorage:
         """Non-sonar messages should be grouped by type"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         with h5py.File(output_path, "r") as f:
@@ -119,7 +148,7 @@ class TestMessageTypeStorage:
         """Message type groups should contain field datasets"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         with h5py.File(output_path, "r") as f:
@@ -224,7 +253,7 @@ class TestFileHandling:
         """Should overwrite when flag is set"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         assert output_path.exists()
@@ -241,7 +270,7 @@ class TestDataFidelity:
         """Number of messages should be preserved"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         sonar_msgs = [m for m in sample_jsf_messages if isinstance(m, SonarDataMessage)]
@@ -265,7 +294,7 @@ class TestDataFidelity:
         """Ping numbers should be preserved exactly per frequency"""
         output_path = tmp_dir / "archive.jsf.h5"
         
-        from sidescanpy.io.jsf.native_hdf5 import _archive_messages_to_hdf5
+        from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
         _archive_messages_to_hdf5(sample_jsf_messages, output_path)
         
         sonar_msgs = [m for m in sample_jsf_messages if isinstance(m, SonarDataMessage)]

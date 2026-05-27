@@ -36,19 +36,22 @@ from sidescanpy.io.jsf.converter import (
 
 logger = logging.getLogger(__name__)
 
+
 # Mark all tests as slow and integration
 pytestmark = [pytest.mark.slow, pytest.mark.integration]
-
 
 @pytest.fixture
 def jsf_file() -> Path:
     """Fixture providing path to test JSF file."""
     jsf_path = Path("data/survey-a/jsf").glob("*.jsf").__next__()
+    # FIXME: choose more consistent and shorter test file.
+    # Also can I re-use it while testing?
     if not jsf_path.exists():
         pytest.skip("Test JSF file not found")
     return jsf_path
 
 
+# ???: is there already a tmp_dr standard fixture?
 @pytest.fixture
 def temp_dir() -> Path:
     """Fixture providing temporary directory for test files."""
