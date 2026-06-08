@@ -10,11 +10,22 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 ### Added
 - `docs/core.md` — schema, validation model, survey container reference.
 - `docs/io_jsf.md` — JSF reader, message hierarchy, conventions.
-- `CHANGELOG.md` (this file) using Keep a Changelog format.
+- `docs/io_netcdf.md` — single-channel NetCDF IO reference.
+- `docs/io_hdf5.md` — full-survey HDF5 IO with group layout.
+- `docs/processing.md` — interpolate and radiometric reference, including
+  per-field source decision matrix cross-linked from
+  `jsf_aux_source_selection.md`.
+- `CHANGELOG.md` (Keep a Changelog format).
 - `LICENSE` (MIT).
 - README rewrite focused on package purpose and quick-start example.
-- Brief module-level docstrings in `sidescanpy.io.jsf.__init__` and
-  `sidescanpy.core.__init__` cross-linking to the doc files.
+- Module-level docstrings in `__init__.py` for `sidescanpy.core`,
+  `sidescanpy.io.jsf`, `sidescanpy.io.netcdf`, `sidescanpy.io.hdf5`,
+  and `sidescanpy.processing`. Each cross-links to its `docs/*.md` file.
+
+### Changed
+- Documentation pattern established: short `__init__.py` blurb (purpose,
+  entry points, conventions, cross-link) plus focused `docs/*.md`
+  reference (entry points, conventions, known issues, future work).
 
 ## [0.3.0] - 2026-06-03
 
