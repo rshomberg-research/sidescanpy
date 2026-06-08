@@ -1,11 +1,75 @@
-'''Core domain models
+"""
+Core schema, validation, and survey container types.
 
-2026 rshomberg@uri.edu'''
+This module defines the contract that every dataset in SideScanPy must
+satisfy and provides the top-level objects that user code interacts with.
 
-from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
+Public types
+------------
+- :class:`SideScanFrequencyChannel` — single-frequency wrapper around a
+  validated ``xr.Dataset``.
+- :class:`SideScanSurvey` — multi-frequency container with optional
+  navigation, attitude, DVL, and sensor auxiliary records.
 
+Validation is provided through xarray accessors:
+
+- ``ds.sidescan`` — validates a single-frequency sonar dataset.
+- ``ds.navigation_record``, ``ds.attitude_record``, ``ds.dvl_record``,
+  ``ds.sensor_record`` — validate the corresponding aux stream datasets.
+
+Conventions
+-----------
+- All time coordinates are ``datetime64[ns]``.
+- The ``channel`` dimension is always size 2 (port + starboard).
+- ``ds.attrs["processing_history"]`` is a JSON-encoded list of step records.
+- Empty-but-valid aux records (zero observations) are first-class — they
+  validate cleanly and report ``is_empty() == True``.
+
+See ``docs/core.md`` for full reference.
+
+2026 rshomberg@uri.edu
+"""
+
+from sidescanpy.core.schema import (
+    # Accessors — registered for side effects on import.
+    SideScanAccessor,
+    NavigationRecordAccessor,
+    AttitudeRecordAccessor,
+    DVLRecordAccessor,
+    SensorRecordAccessor,
+    # Empty-record builders.
+    make_empty_navigation_record,
+    make_empty_attitude_record,
+    make_empty_dvl_record,
+    make_empty_sensor_record,
+    # Schema constants (exposed for IO modules and external users).
+    REQUIRED_DIMS,
+    REQUIRED_COORDS,
+    REQUIRED_VARS,
+    REQUIRED_ATTRS,
+    KNOWN_PROCESSING_LEVELS,
+    HDF5_GROUP_AUX_STREAMS,
+    HDF5_GROUP_NAVIGATION,
+    HDF5_GROUP_ATTITUDE,
+    HDF5_GROUP_DVL,
+    HDF5_GROUP_SENSORS,
+    HDF5_GROUP_FREQUENCIES,
+    HDF5_FREQ_PREFIX,
+    HDF5_CHUNK_PING,
+    HDF5_COMPRESSION,
+    HDF5_COMPRESSION_LEVEL,
+)
+
+from sidescanpy.core.survey import (
+    SideScanFrequencyChannel,
+    SideScanSurvey,
+)
 
 __all__ = [
-    'SideScanFrequencyChannel',
-    'SideScanSurvey'
+    "SideScanFrequencyChannel",
+    "SideScanSurvey",
+    "make_empty_navigation_record",
+    "make_empty_attitude_record",
+    "make_empty_dvl_record",
+    "make_empty_sensor_record",
 ]

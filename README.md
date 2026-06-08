@@ -1,90 +1,72 @@
-# URI research
+# SideScanPy
 
-## TODO
+Python tools for ingesting, processing, and analyzing sidescan sonar data.
 
-- [ ] totally rewrite readme
+> **Status:** Early development. APIs may change without notice.
+> ~310 unit tests + ~27 integration tests passing.
 
-- [ ] work out separating anything proprietary from open source information
+## What it does
 
-- [ ] refactor all code 
-- [ ] organize data & outputs
-- [ ] rewrite this readme
-- [ ] change name 
+- **Read** multiple raw data formats into validated survey objects
+- **Standardize** sonar data into an `xarray`-based schema with explicit
+  per-ping coordinates, time axes, and aux streams
+- **Persist** surveys to chunked HDF5 (full survey) or NetCDF (single frequency
+  channel) with lazy/dask-backed loading
+- **Interpolate** auxiliary navigation, attitude, and DVL records onto
+  per-ping timestamps
+- **Apply** radiometric corrections (time-varying gain) on raw
+  backscatter
 
-TODO: evaluate below todo items
+## Install
 
-- [X] ~~*set up basic file structure*~~ [2025-09-27]
-  - [X] ~~*install local python package*~~ [2025-09-27]
-- [ ] set up small test data files
-- [ ] write basic test Scripts
-- [ ] start data pipeline
-- [ ] recreate previous work from JB 
-  - [ ] import SONAR data
-  - [ ] generate waterfall plots
-  - [ ] generate depth maps
-  - [ ] implement DepthAnything
-- [X] ~~*try edgetech software on windows*~~ [2025-09-27]
-  - https://www.edgetech.com/resource-center/
-
-NOTE: below here is readme info that I recieved from JB. Probably do not need it
-anymore - RJS 20250731
-
-# sonar_utils
- Sonar utilities for pre-processing sidescan and optical image data
-
-## Project Setup
-
-### Prerequisities
-Make sure you have Python 3.8 or later installed on your system.
-
-### Installation
-
-1. Clone the Repository
-```
-git clone sonar_utils
-cd sonar_utils
-```
-2. Create a virtual env
-```
-python -m venv venv
-```
-3. Activate the virtual env
-- on windows
-```
-venv\Scripts\activate
+```bash
+git clone https://github.com/<your-username>/sidescanpy
+cd sidescanpy
+pip install -e .
 ```
 
-- on Linux or Mac
-```
-source venv/bin/activate
-```
+Requires Python ≥ 3.11.
 
-4. Install the required packages
+## Quick example
+
+```python
+from sidescanpy.io.jsf import read_jsf, convert
+from sidescanpy.processing import interpolate_aux_onto_pings, apply_tvg
+from sidescanpy.io.hdf5 import write_survey
+
+# Parse a JSF file into a survey
+messages = read_jsf("survey.jsf")
+survey = convert(messages, source_files=["survey.jsf"])
+
+# Interpolate aux records onto ping times
+survey = interpolate_aux_onto_pings(survey)
+
+# Apply TVG correction to each frequency channel
+for fk, channel in survey.freq_channels.items():
+    corrected = apply_tvg(channel.dataset)
+    survey.add_frequency(fk, corrected)
+
+# Save as a single HDF5 file
+write_survey(survey, "survey.ss.h5")
 ```
-pip install -r requirements.txt
-```
-5. Make sure custom modules are included in project folder
-- sonar_utilsgit
 
 ## Documentation
 
-This project uses sphinx for documentation. The project uses the sphinx napolean extension for google docstring formatting. 
+- [`docs/io_jsf.md`](docs/io_jsf.md) — JSF reader, converter, message types
+- [`docs/jsf_aux_source_selection.md`](docs/jsf_aux_source_selection.md) — auxiliary stream comparison and per-field source decisions
+- [`CHANGELOG.md`](CHANGELOG.md) — version history
 
-1. Install sphinx and napolean ext
-```
-pip install sphinx sphinxcontrib-napoleon sphinx_rtd_theme
-```
-2. build the documentation
-```
-make html # in windows ./make.bat html
-```
+More module docs (`core`, `io_netcdf`, `io_hdf5`, `processing`) are forthcoming.
 
-# Useful commands
+## License
 
-``` .bash
-h5ls data/processed/sonar.h5              # List structure
-h5ls -r data/processed/sonar.h5           # List recursively
-h5stat data/processed/sonar.h5            # Show stats
-h5dump -A data/processed/sonar.h5         # Dump attributes only
-h5dump -H data/processed/sonar.h5/sonar   # Dump specific group
+MIT. See [`LICENSE`](LICENSE).
+
+## Citation
+
+If you use this package in academic work, please cite:
+
+```
+Shomberg, R. (2026). SideScanPy: Python tools for sidescan sonar processing.
+University of Rhode Island.
 ```
