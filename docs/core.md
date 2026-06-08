@@ -46,8 +46,7 @@ message naming the missing piece.
 
 Required dims, coords, and attrs are listed in `schema.py`. The
 sidescan schema enforces `channel` size 2 (port + starboard) and a
-known `processing_level` value (`raw`, `radiometric`, `geometric`,
-`georeferenced`).
+known `processing_level` value (`raw`, `radiometric`).
 
 ### Validation is eager
 

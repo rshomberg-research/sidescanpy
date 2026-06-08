@@ -21,12 +21,24 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - Module-level docstrings in `__init__.py` for `sidescanpy.core`,
   `sidescanpy.io.jsf`, `sidescanpy.io.netcdf`, `sidescanpy.io.hdf5`,
   and `sidescanpy.processing`. Each cross-links to its `docs/*.md` file.
+- `sidescanpy.processing.geometric.compute_geometric_ranges` — attaches
+  per-sample `slant_range_m` and `ground_range_m` data variables to a
+  validated dataset. Lossless: backscatter is preserved at original
+  sample positions; ranges are derived from per-ping altitude and
+  sound velocity. Handles nadir gap (water-column samples) and NaN
+  altitude/sound velocity gracefully. ~24 unit tests.
 
 ### Changed
 - Documentation pattern established: short `__init__.py` blurb (purpose,
   entry points, conventions, cross-link) plus focused `docs/*.md`
   reference (entry points, conventions, known issues, future work).
-
+- `KNOWN_PROCESSING_LEVELS` trimmed to ``{"raw", "radiometric"}``.
+  Geometric and georeferencing operations are now treated as additive
+  (they attach new variables) rather than backscatter-transforming
+  (which would advance processing_level).
+- `docs/core.md`, `docs/processing.md` updated to reflect the
+  additive geometric/georeferencing model.
+  
 ## [0.3.0] - 2026-06-03
 
 ### Added

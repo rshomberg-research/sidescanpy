@@ -78,7 +78,7 @@ class TestConstants:
 
     def test_known_processing_levels_correct(self):
         assert isinstance(KNOWN_PROCESSING_LEVELS, set)
-        assert KNOWN_PROCESSING_LEVELS == {"raw", "radiometric", "geometric", "georeferenced"}
+        assert KNOWN_PROCESSING_LEVELS == {"raw", "radiometric"}
 
     def test_hdf5_constants_correct(self):
         assert isinstance(HDF5_GROUP_AUX_STREAMS, str)

@@ -45,8 +45,6 @@ REQUIRED_ATTRS  : set = {
 KNOWN_PROCESSING_LEVELS : set = {
     "raw", 
     "radiometric", 
-    "geometric", 
-    "georeferenced",
 }
 
 
@@ -171,7 +169,7 @@ class SideScanAccessor:
         -------
         str
             Value of `ds.attrs['processing_level']`, or 'unknown' if missing.
-            One of: 'raw', 'radiometric', 'geometric', 'georeferenced'.
+            One of: 'raw', 'radiometric'.
 
         Examples
         --------

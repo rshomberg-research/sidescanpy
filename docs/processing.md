@@ -123,9 +123,9 @@ values, compute using full F-G with CTD data and pass via
 
 ## Future work
 
-- **Geometric correction.** Slant-range to ground-range remapping using per-ping
+- **Geometric correction.** Slant-range to ground-range calculation using per-ping
   altitude. The next major processing step. Will land as
-  `processing/geometric.py::apply_slant_to_ground_range`.
+  `processing/geometric.py::calculate_slant_to_ground_range`.
 - **Per-ping sound velocity in TVG.** Currently `apply_tvg` uses the mean across
   all pings for the slant-range calculation. Per-ping is more accurate when
   crossing thermoclines. Defer until geometric correction needs the same
