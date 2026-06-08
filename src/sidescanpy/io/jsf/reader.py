@@ -1,81 +1,37 @@
 """
-JSF file reading, parsing, and archiving to native HDF5 format.
+JSF file reading, parsing, and inspection utilities.
 
-This module provides utilities to: 1. Parse JSF binary files into message
-objects 2. Archive messages to native HDF5 format (preserving all fields) 3.
-Cache/pickle message objects for testing
+This module provides:
+1. Parse JSF binary files into message objects (streaming or bulk)
+2. Inspect and debug JSF messages (slice, filter, export)
+3. Export messages to JSON or other formats for inspection
 
-The native HDF5 format is an intermediate format that stores all JSF messages
-organized by type and frequency, with full fidelity to the original binary data.
-For analysis, use the converter module to transform to standard schema.
-
-TODO: the current native output is not really as raw as I would actually like
-which makes me want to just find a way to directly save to the ss.h5 file to
-save space and time. However, I also need a very raw way of pulling open and
-inspecting the jsf files. Maybe the right answer is to dump to json? Maybe it
-also makes sense to iteratively open messsages and append to ss.h5 for the same
-reason?
+The module focuses on raw message access without intermediate formats.
+For analysis/conversion, use the converter module to transform to standard schema.
 
 2026 rshomberg@uri.edu
 """
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator, List, Dict, Any
 import json
-import numpy as np
+from dataclasses import asdict, fields as dataclass_fields
 from collections import defaultdict
 
-import h5py
+import numpy as np
 
 from sidescanpy.io.jsf.messages import (
     JSFMessageHeader,
     JSFMessage,
     SonarDataMessage,
-    NavigationOffsetsMessage,
-    SystemInformationMessage,
-    FilePaddingMessage,
-    NMEAStringMessage,
-    NMEADBTMessage,
-    NMEARMCMessage,
-    NMEADPTMessage,
-    PitchRollDataMessage,
-    PressureSensorReadingMessage,
-    DopplerVelocityLogDataMessage,
-    SituationMessage,
-    SituationComprehensiveMessage,
-    CableCounterDataMessage,
-    KilometerOfPipeDataMessage,
-    ContainerTimeStampMessage,
-    UnknownMessage2040,
-    SonarMessageStatusMessage
 )
-
 
 logger = logging.getLogger(__name__)
 
-"""
-FIXME: re-write this module. I want at least the option to iteratively read the
-JSF message by message and handle each message pushing it to the open HDF5 file.
-Right now the saving functions are not operating correctly - it would likely
-help with unit testing since it could run faster and just skip until it reaches
-the message type it is looking for.
-
-Or I could make a script to generate fake short jsf file which contains all the
-message types. Or generate them manually.
-
-FIXME: I also do not like that we only import Header and Body. JSFMessageBase
-should be an abstract class which is instatiated as one of the many other
-classes. Each should have a header and a from_bytes method, but 
-
-BUG: port and starboard channels are not being written separately currently. -
-Downstream it shows up on the visualization. I have a test for these files now,
-but they are slow to run because it requires reading an entire file.
-"""
-
 
 # =============================================================================
-# SECTION 1: JSF Binary File Reading
+# SECTION 1: Core JSF Reading
 # =============================================================================
 
 def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
@@ -83,8 +39,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
     Parse all messages from a JSF binary file.
 
     Reads JSF binary format and deserializes messages sequentially until
-    end-of-file or limit reached. Each message is validated and context
-    is set from the message header.
+    end-of-file or limit reached. Each message is validated and deserialized.
 
     Parameters
     ----------
@@ -95,15 +50,13 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
 
     Returns
     -------
-    list[JSFMessageBody]
+    list[JSFMessage]
         List of parsed message objects in order.
 
     Raises
     ------
     FileNotFoundError
         If JSF file does not exist.
-    ValueError
-        If message deserialization fails (logged but continues).
 
     Examples
     --------
@@ -127,25 +80,30 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
             header_bytes = f.read(JSFMessageHeader.STRUCT.size)
             if len(header_bytes) < JSFMessageHeader.STRUCT.size:
                 logger.debug("End of file reached")
-                break  # EOF or truncated message
+                break
 
-            header = JSFMessageHeader.from_bytes(header_bytes)
-            logger.debug(f"Message {len(all_messages)+1}: {header}")
+            try:
+                header = JSFMessageHeader.from_bytes(header_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to parse header at offset {f.tell()}: {e}")
+                break
 
             # Read message body
             message_bytes = f.read(header.message_size)
-            
+            if len(message_bytes) < header.message_size:
+                logger.warning(f"Truncated message at record {cnt}")
+                break
+
             try:
                 if header.message_type == SonarDataMessage.MESSAGE_TYPE:
                     message = SonarDataMessage.from_bytes(header, message_bytes)
                 else:
                     message = JSFMessage.from_bytes(header, message_bytes)
-                # message.set_context(header)
+                
                 all_messages.append(message)
-                logger.debug(f"Parsed: {type(message).__name__}")
-            except ValueError as e:
-                logger.warning(f"Failed to parse message: {e}")
-                break
+                logger.debug(f"Message {cnt}: {type(message).__name__}")
+            except Exception as e:
+                logger.warning(f"Failed to parse message at record {cnt}: {e}")
 
             cnt += 1
 
@@ -153,12 +111,12 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
     return all_messages
 
 
-def read_jsf_iter(fpath: Path):
+def read_jsf_iter(fpath: Path) -> Generator[JSFMessage, None, None]:
     """
     Parse messages from JSF file as generator (memory efficient).
 
     Yields messages one at a time instead of loading entire file into memory.
-    Useful for processing large JSF files.
+    Useful for processing large JSF files or streaming to HDF5.
 
     Parameters
     ----------
@@ -167,7 +125,7 @@ def read_jsf_iter(fpath: Path):
 
     Yields
     ------
-    JSFMessageBody
+    JSFMessage
         Next parsed message object.
 
     Raises
@@ -179,12 +137,15 @@ def read_jsf_iter(fpath: Path):
     --------
     >>> for message in read_jsf_iter(Path("survey.jsf")):
     ...     print(type(message).__name__)
+    ...     if isinstance(message, SonarDataMessage):
+    ...         process_sonar(message)
     """
     fpath = Path(fpath)
     if not fpath.exists():
         raise FileNotFoundError(f"{fpath} does not exist!")
 
     logger.info(f"Opening JSF file (streaming): {fpath}")
+    record_count = 0
 
     with open(fpath, 'rb') as f:
         while True:
@@ -192,342 +153,398 @@ def read_jsf_iter(fpath: Path):
             if len(header_bytes) < JSFMessageHeader.STRUCT.size:
                 break
 
-            header = JSFMessageHeader.from_bytes(header_bytes)
+            try:
+                header = JSFMessageHeader.from_bytes(header_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to parse header at record {record_count}: {e}")
+                break
+
             message_bytes = f.read(header.message_size)
+            if len(message_bytes) < header.message_size:
+                logger.warning(f"Truncated message at record {record_count}")
+                break
 
             try:
-                message = JSFMessage.from_bytes(header.message_type, message_bytes)
-                message.set_context(header)
+                message = JSFMessage.from_bytes(header, message_bytes)
+                record_count += 1
                 yield message
-            except ValueError as e:
-                logger.warning(f"Failed to parse message: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to parse message at record {record_count}: {e}")
                 continue
 
 
 # =============================================================================
-# SECTION 2: Native HDF5 Archiving (Phase 4a)
+# SECTION 2: Message Inspection & Slicing
 # =============================================================================
 
-def jsf_to_native_hdf5(
-    jsf_file_path: Path,
-    output_path: Path,
-    overwrite: bool = False,
-    skip_private: bool = True,
-) -> None:
+def get_messages_by_index(
+    fpath: Path,
+    start_idx: int = 0,
+    end_idx: Optional[int] = None,
+) -> List[JSFMessage]:
     """
-    Archive JSF messages to native HDF5 with full fidelity.
+    Retrieve JSF messages by index range (slicing).
 
-    Reads JSF binary file and stores all messages organized by type,
-    preserving all vendor fields as-is. SonarDataMessages are split by
-    frequency for efficient access.
-
-    The native HDF5 format is an intermediate archive format. It maintains
-    the complete structure of JSF messages without interpretation, making
-    it suitable for long-term storage and later conversion to analysis formats.
+    Efficiently reads a specific range of messages from JSF file without
+    loading entire file. Useful for debugging or inspecting specific regions.
 
     Parameters
     ----------
-    jsf_file_path : Path
-        Input JSF binary file path.
-    output_path : Path
-        Output .jsf.h5 HDF5 file path.
-    overwrite : bool
-        If False (default), raise if file exists. If True, overwrite.
-    skip_private : bool
-        If True (default), skip fields starting with '_' (internal implementation).
-        If False, include all fields including private ones.
+    fpath : Path
+        Path to JSF binary file.
+    start_idx : int
+        Starting message index (0-indexed). Default: 0
+    end_idx : int, optional
+        Ending message index (exclusive). If None, read to end of file.
 
-    Raises
-    ------
-    FileNotFoundError
-        If JSF file does not exist.
-    FileExistsError
-        If output file exists and overwrite=False.
+    Returns
+    -------
+    list[JSFMessage]
+        Messages in the specified range.
 
     Examples
     --------
-    >>> jsf_to_native_hdf5(
-    ...     Path("survey.jsf"),
-    ...     Path("survey.jsf.h5")
-    ... )
-
-    >>> # Include private fields
-    >>> jsf_to_native_hdf5(
-    ...     Path("survey.jsf"),
-    ...     Path("survey.jsf.h5"),
-    ...     skip_private=False
-    ... )
+    >>> # Get messages 100-150
+    >>> messages = get_messages_by_index(Path("survey.jsf"), 100, 150)
+    
+    >>> # Get first 50 messages
+    >>> messages = get_messages_by_index(Path("survey.jsf"), 0, 50)
     """
-    jsf_file_path = Path(jsf_file_path)
-    output_path = Path(output_path)
-
-    if not jsf_file_path.exists():
-        raise FileNotFoundError(f"JSF file not found: {jsf_file_path}")
-
-    if output_path.exists() and not overwrite:
-        raise FileExistsError(
-            f"Output file exists: {output_path}. Use overwrite=True to replace."
-        )
-
-    logger.info(f"Reading JSF file: {jsf_file_path}")
-    messages = read_jsf(jsf_file_path)
-
-    logger.info(f"Read {len(messages)} messages")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    logger.info(f"Archiving to HDF5: {output_path}")
-    _archive_messages_to_hdf5(messages, output_path, skip_private=skip_private)
-
-    logger.info(f"Successfully archived {jsf_file_path} to {output_path}")
+    messages = []
+    
+    for idx, message in enumerate(read_jsf_iter(fpath)):
+        if idx < start_idx:
+            continue
+        if end_idx is not None and idx >= end_idx:
+            break
+        messages.append(message)
+    
+    logger.info(f"Retrieved messages [{start_idx}:{end_idx}] = {len(messages)} messages")
+    return messages
 
 
-def _archive_messages_to_hdf5(
-    messages: list,
-    output_path: Path,
-    skip_private: bool = True,
-) -> None:
+def filter_messages_by_type(
+    messages: List[JSFMessage],
+    message_type: str,
+) -> List[JSFMessage]:
     """
-    Archive JSF messages to HDF5 organized by type and frequency.
-
-    Internal function that performs the actual HDF5 writing. Messages are
-    organized hierarchically:
-    - Root: /message_types
-      - By type: /message_types/SonarDataMessage, /PitchRollDataMessage, etc.
-      - For sonar: /message_types/SonarDataMessage/hz_FREQ for each frequency
-
-    Each message field becomes a dataset indexed by message number.
+    Filter messages by type name.
 
     Parameters
     ----------
-    messages : list
-        List of JSF message objects.
-    output_path : Path
-        Output HDF5 file path.
-    skip_private : bool
-        If True, skip fields starting with '_'.
+    messages : list[JSFMessage]
+        Input messages.
+    message_type : str
+        Message type name (e.g., 'SonarDataMessage', 'PitchRollDataMessage').
+
+    Returns
+    -------
+    list[JSFMessage]
+        Filtered messages matching the type.
+
+    Examples
+    --------
+    >>> sonar_msgs = filter_messages_by_type(messages, 'SonarDataMessage')
+    >>> pitch_msgs = filter_messages_by_type(messages, 'PitchRollDataMessage')
     """
-    with h5py.File(output_path, "w") as f:
-        # Organize messages by type
-        messages_by_type = defaultdict(list)
-        sonar_by_freq = defaultdict(list)
-
-        for msg in messages:
-            # Import here to avoid circular imports
-            from sidescanpy.io.jsf.messages import SonarDataMessage
-
-            if isinstance(msg, SonarDataMessage):
-                freq_hz = int(msg.transmit_freq_start)
-                sonar_by_freq[freq_hz].append(msg)
-            else:
-                msg_type = type(msg).__name__
-                messages_by_type[msg_type].append(msg)
-
-        # Create root group
-        root = f.create_group("message_types")
-
-        # Store sonar messages by frequency
-        if sonar_by_freq:
-            sonar_group = root.create_group("SonarDataMessage")
-            for freq_hz, msgs in sorted(sonar_by_freq.items()):
-                freq_key = f"hz_{freq_hz}"
-                freq_group = sonar_group.create_group(freq_key)
-                _store_messages(freq_group, msgs, skip_private=skip_private)
-                logger.debug(f"Stored {len(msgs)} SonarDataMessages at {freq_hz} Hz")
-
-        # Store other messages by type
-        for msg_type, msgs in messages_by_type.items():
-            if msgs:
-                type_group = root.create_group(msg_type)
-                _store_messages(type_group, msgs, skip_private=skip_private)
-                logger.debug(f"Stored {len(msgs)} {msg_type} messages")
+    filtered = [m for m in messages if type(m).__name__ == message_type]
+    logger.debug(f"Filtered {len(filtered)} {message_type} messages from {len(messages)} total")
+    return filtered
 
 
-def _store_messages(
-    group: h5py.Group,
-    messages: list,
-    skip_private: bool = True,
-) -> None:
+def filter_messages_by_frequency(
+    messages: List[SonarDataMessage],
+    freq_hz: int,
+) -> List[SonarDataMessage]:
     """
-    Store a list of dataclass messages as indexed HDF5 datasets.
-
-    Each field of each message becomes a dataset indexed by message number.
-    This preserves the complete message structure in HDF5 format.
+    Filter SonarDataMessages by transmit frequency.
 
     Parameters
     ----------
-    group : h5py.Group
-        HDF5 group to store datasets in.
-    messages : list
-        List of message dataclass instances.
-    skip_private : bool
-        If True (default), skip fields starting with '_'.
+    messages : list[SonarDataMessage]
+        Input sonar messages.
+    freq_hz : int
+        Frequency in Hz to filter by.
 
-    Notes
-    -----
-    - Fields are sorted alphabetically for consistent organization
-    - Ragged arrays (variable length) stored as object dtype
-    - Datetime fields marked with metadata for reconstruction
+    Returns
+    -------
+    list[SonarDataMessage]
+        Messages matching the frequency.
+
+    Examples
+    --------
+    >>> sonar_msgs = filter_messages_by_type(messages, 'SonarDataMessage')
+    >>> freq_1495 = filter_messages_by_frequency(sonar_msgs, 1495000)
     """
-    if not messages:
-        return
+    filtered = [
+        m for m in messages
+        if isinstance(m, SonarDataMessage)
+        and int(m.transmit_freq_start) == freq_hz
+    ]
+    logger.debug(f"Filtered {len(filtered)} messages at {freq_hz} Hz")
+    return filtered
 
-    msg_type = type(messages[0]).__name__
-    n_messages = len(messages)
 
-    logger.debug(f"Storing {n_messages} {msg_type} messages")
-
-    # Get all field names from first message
-    import dataclasses
-    fields = {f.name for f in dataclasses.fields(messages[0])}
-
-    # Filter out private fields if requested
-    if skip_private:
-        fields = {f for f in fields if not f.startswith("_")}
-
-    # Store each field as a dataset
-    for field_name in sorted(fields):
-        field_values = [getattr(msg, field_name) for msg in messages]
-
-        try:
-            _store_field_as_dataset(group, field_name, field_values)
-        except Exception as e:
-            logger.warning(f"Could not store field {field_name}: {e}")
-
-def _store_field_as_dataset(
-    group: h5py.Group,
-    field_name: str,
-    values: list,
-) -> None:
+def get_message_statistics(messages: List[JSFMessage]) -> Dict[str, Any]:
     """
-    Store a field's values as an HDF5 dataset.
-
-    Intelligently handles different data types:
-    - Scalar types: Direct numpy array
-    - Strings: UTF-8 encoded HDF5 string dtype
-    - Datetime: Stored as int64 nanoseconds with dtype metadata
-    - Ragged arrays: Object dtype HDF5 dataset
-    - Lists: Converted to numpy arrays or stored as JSON
-    - None values: Skipped (not stored)
+    Get statistics about a collection of messages.
 
     Parameters
     ----------
-    group : h5py.Group
-        HDF5 group to store in.
-    field_name : str
-        Name of field (becomes dataset name).
-    values : list
-        Values from all messages.
-    """
-    if not values:
-        return
+    messages : list[JSFMessage]
+        Input messages.
 
-    # Skip if all values are None
-    non_none_values = [v for v in values if v is not None]
-    if not non_none_values:
-        logger.debug(f"Skipping {field_name} - all values are None")
-        return
-
-    first_val = values[0]
-
-    # Handle strings
-    if isinstance(first_val, str):
-        str_array = np.array(values, dtype=object)
-        ds = group.create_dataset(
-            field_name,
-            data=str_array,
-            dtype=h5py.string_dtype(encoding='utf-8')
-        )
-        return
-
-    # Handle datetime
-    if hasattr(first_val, '__class__') and 'datetime64' in str(type(first_val)):
-        values_array = np.array(values, dtype='datetime64[ns]').astype(np.int64)
-        ds = group.create_dataset(field_name, data=values_array)
-        ds.attrs['dtype'] = 'datetime64[ns]'
-        return
-
-    # Handle numpy arrays (including ragged)
-    if isinstance(first_val, np.ndarray):
-        try:
-            # Try to create regular array
-            values_array = np.array(values)
-            group.create_dataset(field_name, data=values_array)
-        except (ValueError, TypeError):
-            # Fall back to object array for ragged
-            values_array = np.array(values, dtype=object)
-            ds = group.create_dataset(field_name, data=values_array)
-            logger.debug(f"Stored {field_name} as ragged object array")
-        return
-
-    # Handle lists (convert to JSON strings for HDF5 compatibility)
-    if isinstance(first_val, list):
-        json_values = [json.dumps(v) for v in values]
-        ds = group.create_dataset(
-            field_name,
-            data=json_values,
-            dtype=h5py.string_dtype(encoding='utf-8')
-        )
-        ds.attrs['format'] = 'json'
-        return
-
-    # Handle scalars (int, float, bool, etc.)
-    try:
-        values_array = np.array(values)
-        group.create_dataset(field_name, data=values_array)
-    except Exception as e:
-        # FIXME: more specific exceptions
-        logger.warning(f"Could not store {field_name} (type: {type(first_val)}): {e}")
-
-# =============================================================================
-# SECTION 3: Pickle Utilities (for testing)
-# =============================================================================
-
-def save_temp_file(
-    data: list,
-    filepath: Path = Path("temp_data.pkl"),
-) -> None:
-    """
-    Save parsed messages to pickle file for testing.
-
-    Allows caching parsed JSF messages to avoid re-parsing large files
-    during repeated test runs. Useful for testing and development.
-
-    Parameters
-    ----------
-    data : list
-        List of message objects to save.
-    filepath : Path
-        Output pickle file path. Default: temp_data.pkl
+    Returns
+    -------
+    dict
+        Statistics including type breakdown, frequency distribution, etc.
 
     Examples
     --------
     >>> messages = read_jsf(Path("survey.jsf"))
-    >>> save_temp_file(messages, Path("cached_messages.pkl"))
+    >>> stats = get_message_statistics(messages)
+    >>> print(f"Total messages: {stats['total']}")
+    >>> print(f"By type: {stats['by_type']}")
+    """
+    stats = {
+        'total': len(messages),
+        'by_type': defaultdict(int),
+        'frequencies': defaultdict(int),
+    }
+    
+    for msg in messages:
+        msg_type = type(msg).__name__
+        stats['by_type'][msg_type] += 1
+        
+        if isinstance(msg, SonarDataMessage):
+            freq = int(msg.transmit_freq_start)
+            stats['frequencies'][freq] += 1
+    
+    return dict(stats)
+
+
+# =============================================================================
+# SECTION 3: JSON Export (for inspection/debugging)
+# =============================================================================
+
+def _serialize_message(message: JSFMessage) -> Dict[str, Any]:
+    """
+    Serialize a single JSFMessage to JSON-compatible dict.
+
+    Handles special types (numpy, datetime, etc.) that aren't JSON serializable.
+
+    Parameters
+    ----------
+    message : JSFMessage
+        Message to serialize.
+
+    Returns
+    -------
+    dict
+        JSON-compatible dictionary.
+    """
+    msg_dict = {}
+    
+    for field in dataclass_fields(message):
+        field_name = field.name
+        field_value = getattr(message, field_name)
+        
+        # Skip private fields
+        if field_name.startswith('_'):
+            continue
+        
+        # Handle special types
+        if field_value is None:
+            msg_dict[field_name] = None
+        elif isinstance(field_value, np.ndarray):
+            # Convert numpy arrays to lists, but truncate large ones
+            if field_value.size > 1000:
+                msg_dict[field_name] = {
+                    "_type": "numpy.ndarray",
+                    "shape": list(field_value.shape),
+                    "dtype": str(field_value.dtype),
+                    "size": field_value.size,
+                    "first_10": field_value.flat[:10].tolist(),
+                    "last_10": field_value.flat[-10:].tolist(),
+                }
+            else:
+                msg_dict[field_name] = field_value.tolist()
+        elif isinstance(field_value, (np.integer, np.floating)):
+            msg_dict[field_name] = field_value.item()
+        elif isinstance(field_value, np.datetime64):
+            msg_dict[field_name] = str(field_value)
+        elif isinstance(field_value, (list, tuple)):
+            msg_dict[field_name] = [
+                x.item() if isinstance(x, (np.integer, np.floating)) else x
+                for x in field_value
+            ]
+        else:
+            msg_dict[field_name] = field_value
+    
+    msg_dict['_message_type'] = type(message).__name__
+    return msg_dict
+
+
+def export_messages_to_json(
+    messages: List[JSFMessage],
+    output_path: Path,
+    pretty: bool = True,
+    max_messages: Optional[int] = None,
+) -> None:
+    """
+    Export messages to JSON for inspection/debugging.
+
+    Creates a JSON file with all messages. Large numpy arrays are summarized
+    to keep file size reasonable. Useful for inspecting message structure
+    and debugging conversion issues.
+
+    Parameters
+    ----------
+    messages : list[JSFMessage]
+        Messages to export.
+    output_path : Path
+        Output JSON file path.
+    pretty : bool
+        If True (default), use indentation for readability.
+    max_messages : int, optional
+        Maximum messages to export. If None, export all.
+
+    Examples
+    --------
+    >>> messages = read_jsf(Path("survey.jsf"), N=100)
+    >>> export_messages_to_json(messages, Path("debug.json"))
+    
+    >>> # Export only sonar messages
+    >>> sonar_msgs = filter_messages_by_type(messages, 'SonarDataMessage')
+    >>> export_messages_to_json(sonar_msgs, Path("sonar_debug.json"), max_messages=50)
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if max_messages is not None:
+        messages = messages[:max_messages]
+    
+    # Serialize all messages
+    serialized = []
+    for i, msg in enumerate(messages):
+        try:
+            msg_dict = _serialize_message(msg)
+            msg_dict['_index'] = i
+            serialized.append(msg_dict)
+        except Exception as e:
+            logger.warning(f"Failed to serialize message {i}: {e}")
+    
+    # Write to JSON
+    with open(output_path, 'w') as f:
+        if pretty:
+            json.dump(serialized, f, indent=2, default=str)
+        else:
+            json.dump(serialized, f, default=str)
+    
+    logger.info(f"Exported {len(serialized)} messages to {output_path}")
+    logger.info(f"  File size: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
+
+
+def export_messages_by_type_to_json(
+    messages: List[JSFMessage],
+    output_dir: Path,
+) -> None:
+    """
+    Export messages to separate JSON files organized by type.
+
+    Creates one JSON file per message type for easier inspection.
+
+    Parameters
+    ----------
+    messages : list[JSFMessage]
+        Messages to export.
+    output_dir : Path
+        Output directory for JSON files.
+
+    Examples
+    --------
+    >>> messages = read_jsf(Path("survey.jsf"), N=1000)
+    >>> export_messages_by_type_to_json(messages, Path("debug_output"))
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Group by type
+    by_type = defaultdict(list)
+    for msg in messages:
+        msg_type = type(msg).__name__
+        by_type[msg_type].append(msg)
+    
+    # Write each type to its own file
+    for msg_type, msgs in sorted(by_type.items()):
+        output_file = output_dir / f"{msg_type}.json"
+        
+        serialized = []
+        for i, msg in enumerate(msgs):
+            try:
+                msg_dict = _serialize_message(msg)
+                msg_dict['_index'] = i
+                serialized.append(msg_dict)
+            except Exception as e:
+                logger.warning(f"Failed to serialize {msg_type} message {i}: {e}")
+        
+        with open(output_file, 'w') as f:
+            json.dump(serialized, f, indent=2, default=str)
+        
+        logger.info(f"  {msg_type}: {len(serialized)} messages → {output_file}")
+
+
+# =============================================================================
+# SECTION 4: Pickle Utilities (for testing)
+# =============================================================================
+
+def save_messages_to_pickle(
+    messages: List[JSFMessage],
+    filepath: Path,
+) -> None:
+    """
+    Save parsed messages to pickle file for caching during testing.
+
+    Allows caching parsed JSF messages to avoid re-parsing large files
+    during repeated test runs.
+
+    Parameters
+    ----------
+    messages : list[JSFMessage]
+        Messages to save.
+    filepath : Path
+        Output pickle file path.
+
+    Examples
+    --------
+    >>> messages = read_jsf(Path("survey.jsf"))
+    >>> save_messages_to_pickle(messages, Path("cached_messages.pkl"))
     """
     from pickle import dump
 
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
     with open(filepath, 'wb') as f:
-        logger.debug(f"Saving {len(data)} messages to {filepath}")
-        dump(data, f)
+        dump(messages, f)
 
-    logger.info(f"Saved {len(data)} messages to {filepath}")
+    logger.info(f"Saved {len(messages)} messages to {filepath}")
 
 
-def load_temp_file(filepath: Path = Path("temp_data.pkl")) -> list:
+def load_messages_from_pickle(filepath: Path) -> List[JSFMessage]:
     """
     Load parsed messages from pickle file.
 
-    Retrieves previously cached messages saved with save_temp_file().
+    Retrieves previously cached messages saved with save_messages_to_pickle().
 
     Parameters
     ----------
     filepath : Path
-        Pickle file path to load. Default: temp_data.pkl
+        Pickle file path to load.
 
     Returns
     -------
-    list
+    list[JSFMessage]
         List of message objects.
 
     Raises
@@ -537,41 +554,57 @@ def load_temp_file(filepath: Path = Path("temp_data.pkl")) -> list:
 
     Examples
     --------
-    >>> messages = load_temp_file(Path("cached_messages.pkl"))
-    >>> print(f"Loaded {len(messages)} messages")
+    >>> messages = load_messages_from_pickle(Path("cached_messages.pkl"))
     """
     from pickle import load
 
+    filepath = Path(filepath)
     if not filepath.exists():
         raise FileNotFoundError(f"Pickle file not found: {filepath}")
 
     with open(filepath, 'rb') as f:
-        logger.debug(f"Loading messages from {filepath}")
-        data = load(f)
+        messages = load(f)
 
-    logger.info(f"Loaded {len(data)} messages from {filepath}")
-    return data
+    logger.info(f"Loaded {len(messages)} messages from {filepath}")
+    return messages
 
+
+# =============================================================================
+# SECTION 5: Example Usage
+# =============================================================================
 
 if __name__ == '__main__':
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-    # Example usage
     jsf_file = Path('data/survey-a/jsf/20251015170335.jsf')
-    head = 1000  # Limit for speed during tests
-
-    # Parse file
-    messages = read_jsf(jsf_file, N=head)
-    logging.info(f"Parsed {len(messages)} total messages")
-
-    # Cache to pickle
-    fpath = Path("temp_jsf_data.pkl")
-    save_temp_file(messages, filepath=fpath)
-    logging.info(f"Saved to: {fpath}")
-
-    # Load from pickle
-    messages = load_temp_file(fpath)
-    logging.info(f"Loaded from: {fpath}")
+    
+    # Example 1: Read first 1000 messages
+    print("\n1️⃣  Reading first 1000 messages...")
+    messages = read_jsf(jsf_file, N=1000)
+    stats = get_message_statistics(messages)
+    print(f"   Total: {stats['total']}")
+    print(f"   By type: {dict(stats['by_type'])}")
+    print(f"   Frequencies: {dict(stats['frequencies'])}")
+    
+    # Example 2: Export to JSON for inspection
+    print("\n2️⃣  Exporting to JSON...")
+    export_messages_to_json(messages, Path("debug_messages.json"), max_messages=100)
+    export_messages_by_type_to_json(messages, Path("debug_by_type"))
+    
+    # Example 3: Filter and inspect specific types
+    print("\n3️⃣  Filtering messages...")
+    sonar_msgs = filter_messages_by_type(messages, 'SonarDataMessage')
+    print(f"   Found {len(sonar_msgs)} sonar messages")
+    
+    if sonar_msgs:
+        freq_1495 = filter_messages_by_frequency(sonar_msgs, 1495000)
+        print(f"   {len(freq_1495)} messages at 1495000 Hz")
+    
+    # Example 4: Cache to pickle
+    print("\n4️⃣  Caching to pickle...")
+    save_messages_to_pickle(messages, Path("temp_jsf_messages.pkl"))
+    loaded = load_messages_from_pickle(Path("temp_jsf_messages.pkl"))
+    print(f"   Loaded {len(loaded)} messages from cache")

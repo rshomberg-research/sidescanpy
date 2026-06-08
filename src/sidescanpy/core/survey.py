@@ -1,169 +1,329 @@
-'''
-Core Utilities for Side Scan Sonar Surveys
+"""
+Core utilities for SideScan sonar surveys.
 
-Two class levels
-- SideScanSurvey: Single frequency wrapper around. xr.Dataset
-- MultiFrequencySideScanSurvey: container for multiple frequency channels
+Two class levels:
+- SideScanFrequencyChannel: single-frequency wrapper around an xr.Dataset
+- SideScanSurvey: container for multiple frequency channels and aux streams
+
+Aux streams (navigation, attitude, dvl, sensors) live at the survey level
+because they come from the same platform regardless of which sonar frequency
+was pinging. They are stored as separate xr.Datasets and can be re-interpolated
+onto ping times by downstream processing steps.
 
 2026 rshomberg@uri.edu
-'''
+"""
 
 import logging
-
-import xarray as xr 
-import numpy as np 
-
 from pathlib import Path
 
-from dataclasses import dataclass, field 
-from typing import Optional, Any
-from datetime import datetime 
+import numpy as np
+import xarray as xr
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# SINGLE-FREQUENCY CHANNEL
+# ============================================================
 
 class SideScanFrequencyChannel:
-    '''Wrapper for single frequency xr.Dataset'''
+    """
+    Wrapper for a single-frequency xr.Dataset.
+
+    Validates the dataset against the SideScan schema on construction.
+    """
 
     _dataset: xr.Dataset
     freq_key: str
 
-    def __init__(self, dataset: xr.Dataset, freq_key: str):
-        
-        self._validate_schema(dataset)
-        self._dataset = dataset 
+    def __init__(self, dataset: xr.Dataset, freq_key: str | None = None) -> None:
+        dataset.sidescan.validate()
+        self._dataset = dataset
+        if freq_key is None:
+            freq_key = f"hz_{dataset.attrs['freq_hz_start']}"
         self.freq_key = freq_key
 
-    
-    @staticmethod
-    def _validate_schema(ds: xr.Dataset) -> None:
-        '''Validates that a dataset has the correct structure'''
-        # TODO: use xr.Accessor?
-
-        required_dims = {'ping', 'channel'}
-        if not required_dims.issubset(set(ds.dims)):
-            raise ValueError(f"Missing dimensions: {required_dims}")
-        
-        required_vars = {'samples', 'ping_number', 'timestamp', 'latitude', 'longitude', 'heading', 'depth'}
-        if not required_vars.issubset(set(ds.data_vars)):
-            raise ValueError(f"Missing variables: {required_vars}")
-        
     @property
     def dataset(self) -> xr.Dataset:
-        return self._dataset 
-    
+        return self._dataset
+
     @property
     def frequency(self) -> float:
-        '''Base frequency in Hz'''
-        # TODO: check
-        return float(self._dataset.attrs.get('transmit_freq_start', 0))
-    
+        """Base frequency in Hz (freq_hz_start)."""
+        return float(self._dataset.attrs.get("freq_hz_start", 0))
+
     @property
     def n_pings(self) -> int:
-        '''Number of pings'''
-        return int(self._dataset.sizes['ping']) # TODO: check
-    
+        return int(self._dataset.sizes["ping"])
+
     @property
     def n_channels(self) -> int:
-        '''Number of channels (generally 0=port, 1=starboard)'''
-        return int(self._dataset.sizes['channel'])
-    
+        return int(self._dataset.sizes["channel"])
+
     @property
     def n_samples(self) -> int:
-        ''''Number of samples per ping per channel'''
-        return int(self._dataset.sizes.get('sample',0))
-    
+        return int(self._dataset.sizes.get("sample", 0))
+
     def __repr__(self) -> str:
-        return f"SideScanSurvey(freq_key='{self.freq_key}', pings={self.n_pings}, channels={self.n_channels})"
+        return (
+            f"SideScanFrequencyChannel(freq_key='{self.freq_key}', "
+            f"pings={self.n_pings}, channels={self.n_channels}, "
+            f"samples={self.n_samples})"
+        )
 
 
-class MultiFrequencySideScanSurvey:
-    '''
-    Container for multi-frequency survey
-    
-    This is currently contained as a dict of surveys. In this case the surveys
-    should share a platform and path. However, the frequency channels cannot be
-    stored in the same xr.Dataset because the n_samples is not the same for the
-    different frequencies. There will be a few downstream effects that will be
-    different on a per sample basis as well. The ping numbers also do not match,
-    but the timestamps do. 
+# ============================================================
+# MULTI-FREQUENCY SURVEY (with aux streams)
+# ============================================================
 
-    As far as I can tell the only solution appears to be a replication of data
-    for survey path. I would like to confirm that is the same though. It may be
-    possible to store per ping data in this class and per (ping,sample) data in
-    the SideScanSurvey class (renamed to FrequencyChannel?)
+class SideScanSurvey:
+    """
+    Container for a sidescan sonar survey.
 
-    I would like to modify this so that 
-    '''
+    Holds:
+    - One or more SideScanFrequencyChannel datasets (different freqs cannot
+      share a single xr.Dataset because n_samples may differ).
+    - Optional navigation, attitude, and DVL auxiliary streams (one each).
+    - Optional sensor auxiliary streams keyed by sensor_type.
+
+    Aux streams are stored as separate xr.Datasets that pass their respective
+    accessor's validate() method (navigation_record, attitude_record,
+    dvl_record, sensor_record).
+    """
 
     def __init__(
-            self,
-            source_file     : str,  # ???: do I actually call about source file/format? 
-            source_format   : str,
-            survey_name     : str,
-    ):
-        '''Initialize an empty survey'''
+        self,
+        source_files: list[Path],
+        source_format: str,
+        survey_name: str,
+    ) -> None:
+        self.source_files = source_files
+        self.source_format = source_format
+        self.survey_name = survey_name
 
-        self.source_file    = source_file
-        self.source_format  = source_format
-        self.survey_name    = survey_name
-        self._freq_channels : dict[str, SideScanFrequencyChannel] = {}
+        self._freq_channels: dict[str, SideScanFrequencyChannel] = {}
+
+        self._navigation: xr.Dataset | None = None
+        self._attitude:   xr.Dataset | None = None
+        self._dvl:        xr.Dataset | None = None
+        self._sensors:    dict[str, xr.Dataset] = {}
+
+    # ----- frequency channels -----
 
     def add_frequency(self, freq_key: str, dataset: xr.Dataset) -> None:
-        '''Add a frequency dataset to the survey'''
-
+        """Add (or replace) a frequency channel. Warns on overwrite."""
         if freq_key in self._freq_channels:
-            raise ValueError(f"Frequency ({freq_key}) already in survey")
-        
+            logger.warning(f"Overwriting existing frequency channel: {freq_key}")
         self._freq_channels[freq_key] = SideScanFrequencyChannel(dataset, freq_key)
 
     def get_frequency(self, freq_key: str) -> SideScanFrequencyChannel:
-        '''Get SideScanSurvey for a specific frequency'''
         if freq_key not in self._freq_channels:
-            raise KeyError(f"Frequency ({freq_key}) not found. Available: {self.frequencies}")
+            raise KeyError(
+                f"Frequency '{freq_key}' not found. Available: {self.frequencies}"
+            )
         return self._freq_channels[freq_key]
-    
+
     @property
     def frequencies(self) -> list[str]:
         return sorted(self._freq_channels.keys())
-    
+
     @property
     def freq_channels(self) -> dict[str, SideScanFrequencyChannel]:
         return dict(self._freq_channels)
-    
+
     @property
     def n_frequencies(self) -> int:
         return len(self._freq_channels)
-    
+
     @property
     def frequency_hz_list(self) -> list[float]:
-        return sorted([s.frequency for s in self._freq_channels.values()])
-    
+        return sorted(ch.frequency for ch in self._freq_channels.values())
+
+    # ----- navigation -----
+
+    @property
+    def navigation(self) -> xr.Dataset | None:
+        return self._navigation
+
+    @navigation.setter
+    def navigation(self, ds: xr.Dataset | None) -> None:
+        if ds is None:
+            self._navigation = None
+            return
+        ds.navigation_record.validate()
+        if self._navigation is not None:
+            logger.warning("Overwriting existing navigation record")
+        self._navigation = ds
+
+    @property
+    def has_navigation(self) -> bool:
+        """True if navigation is set AND has at least one observation."""
+        if self._navigation is None:
+            return False
+        return not self._navigation.navigation_record.is_empty()
+
+    # ----- attitude -----
+
+    @property
+    def attitude(self) -> xr.Dataset | None:
+        return self._attitude
+
+    @attitude.setter
+    def attitude(self, ds: xr.Dataset | None) -> None:
+        if ds is None:
+            self._attitude = None
+            return
+        ds.attitude_record.validate()
+        if self._attitude is not None:
+            logger.warning("Overwriting existing attitude record")
+        self._attitude = ds
+
+    @property
+    def has_attitude(self) -> bool:
+        if self._attitude is None:
+            return False
+        return not self._attitude.attitude_record.is_empty()
+
+    # ----- dvl -----
+
+    @property
+    def dvl(self) -> xr.Dataset | None:
+        return self._dvl
+
+    @dvl.setter
+    def dvl(self, ds: xr.Dataset | None) -> None:
+        if ds is None:
+            self._dvl = None
+            return
+        ds.dvl_record.validate()
+        if self._dvl is not None:
+            logger.warning("Overwriting existing DVL record")
+        self._dvl = ds
+
+    @property
+    def has_dvl(self) -> bool:
+        if self._dvl is None:
+            return False
+        return not self._dvl.dvl_record.is_empty()
+
+    # ----- sensors -----
+
+    def add_sensor(self, sensor_type: str, dataset: xr.Dataset) -> None:
+        """Add (or replace) a sensor record. Warns on overwrite."""
+        dataset.sensor_record.validate()
+        if sensor_type in self._sensors:
+            logger.warning(f"Overwriting existing sensor record: {sensor_type}")
+        self._sensors[sensor_type] = dataset
+
+    def get_sensor(self, sensor_type: str) -> xr.Dataset:
+        if sensor_type not in self._sensors:
+            raise KeyError(
+                f"Sensor '{sensor_type}' not found. Available: {self.sensor_types}"
+            )
+        return self._sensors[sensor_type]
+
+    @property
+    def sensors(self) -> dict[str, xr.Dataset]:
+        """Read-only copy of the sensors dict."""
+        return dict(self._sensors)
+
+    @property
+    def sensor_types(self) -> list[str]:
+        return sorted(self._sensors.keys())
+
+    @property
+    def n_sensors(self) -> int:
+        return len(self._sensors)
+
+    # ----- derived survey-wide properties -----
+
+    @property
+    def time_range(self) -> tuple[np.datetime64, np.datetime64] | None:
+        """
+        (min, max) timestamp across all frequency channels and aux streams.
+        Returns None if the survey is completely empty.
+        """
+        mins: list[np.datetime64] = []
+        maxs: list[np.datetime64] = []
+
+        for ch in self._freq_channels.values():
+            t = ch.dataset["time"].values
+            if t.size > 0:
+                mins.append(t.min())
+                maxs.append(t.max())
+
+        for ds in (self._navigation, self._attitude, self._dvl):
+            if ds is not None and ds.sizes.get("obs", 0) > 0:
+                t = ds["time"].values
+                mins.append(t.min())
+                maxs.append(t.max())
+
+        for ds in self._sensors.values():
+            if ds.sizes.get("obs", 0) > 0:
+                t = ds["time"].values
+                mins.append(t.min())
+                maxs.append(t.max())
+
+        if not mins:
+            return None
+        return (min(mins), max(maxs))
+
+    @property
+    def bounding_box(self) -> tuple[float, float, float, float] | None:
+        """
+        (lat_min, lat_max, lon_min, lon_max).
+
+        Prefers navigation aux stream when present and non-empty; otherwise
+        falls back to per-ping latitude/longitude across all frequency channels.
+        Returns None if no positional data is available.
+        """
+        lats: list[np.ndarray] = []
+        lons: list[np.ndarray] = []
+
+        if self.has_navigation:
+            lats.append(self._navigation["latitude"].values)
+            lons.append(self._navigation["longitude"].values)
+        else:
+            for ch in self._freq_channels.values():
+                lat = ch.dataset["latitude"].values
+                lon = ch.dataset["longitude"].values
+                if lat.size > 0:
+                    lats.append(lat)
+                    lons.append(lon)
+
+        if not lats:
+            return None
+
+        lat_all = np.concatenate(lats)
+        lon_all = np.concatenate(lons)
+
+        # Drop NaN (per-ping nav can have unflagged fixes)
+        lat_valid = lat_all[~np.isnan(lat_all)]
+        lon_valid = lon_all[~np.isnan(lon_all)]
+
+        if lat_valid.size == 0:
+            return None
+
+        return (
+            float(lat_valid.min()),
+            float(lat_valid.max()),
+            float(lon_valid.min()),
+            float(lon_valid.max()),
+        )
+
+    # ----- repr -----
+
     def __repr__(self) -> str:
-        return f"MultiFrequencySideScanSurvey(n_frequencies={self.n_frequencies}, source='{self.source_file}')"
-    
+        def _aux_count(ds: xr.Dataset | None) -> str:
+            if ds is None:
+                return "-"
+            return str(ds.sizes.get("obs", 0))
 
-if __name__=='__main__':
-
-    logging.basicConfig(
-        level=logging.DEBUG
-    )
-
-    # Create dummy dataset
-    ds = xr.Dataset({
-        'samples': (['ping', 'channel', 'sample'], np.random.randn(10, 2, 100)),
-        'ping_number': (['ping', 'channel'], np.tile(np.arange(10)[:, None], (1, 2))),
-        'timestamp': (['ping', 'channel'], np.tile(np.arange(10)[:, None], (1, 2)) * 0.1),
-        'latitude': (['ping', 'channel'], np.full((10, 2), 41.55)),
-        'longitude': (['ping', 'channel'], np.full((10, 2), -71.42)),
-        'heading': (['ping', 'channel'], np.full((10, 2), 180.0)),
-        'depth': (['ping', 'channel'], np.full((10, 2), 25.0)),
-    }, attrs={'transmit_freq_start': 1495000})
-
-    # Test single frequency
-    single = SideScanFrequencyChannel(ds, 'freq_14950_hz')
-    print(single)
-    print(f"Frequency: {single.frequency:,.0f} Hz")
-
-    # Test multi-frequency
-    survey = MultiFrequencySideScanSurvey(source_file='test.jsf', source_format='jsf', survey_name='test')
-    survey.add_frequency('freq_1495000_hz', ds)
-    print(survey)
-    print(f"Frequencies: {survey.frequency_hz_list}")
+        return (
+            f"SideScanSurvey(name='{self.survey_name}', "
+            f"n_frequencies={self.n_frequencies}, "
+            f"nav={_aux_count(self._navigation)}, "
+            f"att={_aux_count(self._attitude)}, "
+            f"dvl={_aux_count(self._dvl)}, "
+            f"sensors={self.n_sensors})"
+        )

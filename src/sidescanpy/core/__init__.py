@@ -2,12 +2,10 @@
 
 2026 rshomberg@uri.edu'''
 
-from sidescanpy.core.survey import (
-    SideScanFrequencyChannel,
-    MultiFrequencySideScanSurvey
-)
+from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
+
 
 __all__ = [
     'SideScanFrequencyChannel',
-    'MultiFrequencySideScanSurvey'
+    'SideScanSurvey'
 ]

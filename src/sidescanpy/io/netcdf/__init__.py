@@ -1,6 +1,6 @@
-"""netCDF I/O for sidescan surveys."""
+"""NetCDF IO for individual SideScanFrequencyChannel datasets."""
 
-from .reader import from_netcdf
-from .writer import to_netcdf
+from sidescanpy.io.netcdf.reader import read_frequency_channel
+from sidescanpy.io.netcdf.writer import write_frequency_channel
 
-__all__ = ['from_netcdf', 'to_netcdf']
+__all__ = ["read_frequency_channel", "write_frequency_channel"]

@@ -1,611 +1,505 @@
 """
-Convert native JSF HDF5 archives to standard sonar schema HDF5.
+Convert JSFMessage objects into a SideScanSurvey.
 
-Reads `.jsf.h5` archives (from Phase 4a), converts to standard `.ss.h5` format,
-and stores auxiliary sensor streams in the same file.
+The converter takes a flat list of mixed JSFMessages, dispatches by type
+internally, groups sonar messages by frequency, and produces a fully
+populated SideScanSurvey with one frequency channel per (start, end) pair
+plus aux records (navigation, attitude, dvl, sensors).
+
+This module performs no I/O. The reader is responsible for parsing JSF
+bytes into JSFMessage instances and for any cross-file message ordering.
 
 2026 rshomberg@uri.edu
 """
 
-import logging
-from pathlib import Path
-from typing import Optional
 import json
+import logging
+from collections import defaultdict
+from pathlib import Path
+from typing import Literal
 
-import xarray as xr
 import numpy as np
-import h5py
-from scipy.interpolate import interp1d
+import xarray as xr
 
-from sidescanpy.io.standard.writer import write_ss_hdf5
+from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.io.jsf.messages import (
+    JSFMessage,
+    SonarDataMessage,
+    PitchRollDataMessage,
+    DopplerVelocityLogDataMessage,
+    PressureSensorReadingMessage,
+    NMEAStringMessage,
+    NMEARMCMessage,
+    NMEAGGAMessage,
+    NMEAGLLMessage,
+)
+
+from sidescanpy.core.schema import (
+    make_empty_navigation_record,
+    make_empty_attitude_record,
+    make_empty_dvl_record,
+    make_empty_sensor_record,
+)
 
 logger = logging.getLogger(__name__)
 
-# BUG: sonar channels are not handled separately - fixed?
+# NOTE: repair is needed when pings do not align for a single channel for a
+# single JSF file
+RepairMode = Literal["drop", "nan_pad", "abort"]
 
-def native_hdf5_to_standard(
-    native_hdf5_path: Path,
-    output_path: Path,
-    freq_hz: Optional[int] = None,
-    overwrite: bool = False,
-) -> None:
+
+# ============================================================
+# PUBLIC API
+# ============================================================
+
+def convert(
+    messages: list[JSFMessage],
+    *,
+    source_files: list[Path],
+    survey_name: str | None = None,
+    repair_mode: RepairMode = "nan_pad",
+) -> SideScanSurvey:
     """
-    Convert native JSF HDF5 to standard sonar schema HDF5.
-
-    Reads all frequencies from `.jsf.h5`, converts each to standard schema,
-    writes to `.ss.h5`, and stores auxiliary streams in the same file.
+    Convert a list of JSFMessages into a SideScanSurvey.
 
     Parameters
     ----------
-    native_hdf5_path : Path
-        Input native `.jsf.h5` file path.
-    output_path : Path
-        Output standard `.ss.h5` file path.
-    freq_hz : int, optional
-        If specified, convert only this frequency. If None, convert all.
-    overwrite : bool
-        If False (default), raise if output exists. If True, overwrite.
+    messages : list of JSFMessage
+        Mixed list of all message types from one or more JSF files.
+    source_files : list of Path
+        File(s) the messages were parsed from. Stored on the survey.
+    survey_name : str, optional
+        Survey name. Defaults to ``source_files[0].stem``.
+    repair_mode : {"drop", "nan_pad", "abort"}, default "nan_pad"
+        How to handle unmatched port/starboard pings within a frequency:
+        - "drop"    : silently drop orphans
+        - "nan_pad" : keep ping, fill missing channel with NaN
+        - "abort"   : raise ValueError on first orphan
+
+    Returns
+    -------
+    SideScanSurvey
+        Populated survey with one frequency channel per distinct
+        (transmit_freq_start, transmit_freq_end) pair, plus aux records.
 
     Raises
     ------
-    FileNotFoundError
-        If input file does not exist.
-    FileExistsError
-        If output file exists and overwrite=False.
     ValueError
-        If specified frequency not found or validation fails.
-
-    Examples
-    --------
-    >>> native_hdf5_to_standard("survey.jsf.h5", "survey.ss.h5")
-    >>> native_hdf5_to_standard("survey.jsf.h5", "survey.ss.h5", freq_hz=1495000)
+        If ``messages`` is empty.
+        If file-level attrs (transmit_freq_start/end, sweep_length,
+        sample_freq) are not constant within a frequency group.
+        If port and starboard sample counts disagree for a paired ping.
+        If ``repair_mode == "abort"`` and an orphan ping is found.
     """
-    native_hdf5_path = Path(native_hdf5_path)
-    output_path = Path(output_path)
+    if not messages:
+        raise ValueError("Cannot convert empty message list")
 
-    if not native_hdf5_path.exists():
-        raise FileNotFoundError(f"Native HDF5 file not found: {native_hdf5_path}")
+    if survey_name is None:
+        survey_name = source_files[0].stem
 
-    if output_path.exists() and not overwrite:
-        raise FileExistsError(
-            f"Output file exists: {output_path}. Use overwrite=True to replace."
-        )
+    grouped = _group_by_type(messages)
 
-    logger.info(f"Converting {native_hdf5_path} to {output_path}")
+    survey = SideScanSurvey(
+        source_files=source_files,
+        source_format="JSF",
+        survey_name=survey_name,
+    )
 
-    # Get list of frequencies
-    available_freqs = list_frequencies_in_native_hdf5(native_hdf5_path)
-    logger.info(f"Found frequencies: {available_freqs}")
+    # Frequency channels (one per distinct freq pair)
+    by_freq = _group_sonar_by_frequency(grouped["sonar"])
+    for freq_key, sonar_msgs in by_freq.items():
+        ds = _build_frequency_channel(sonar_msgs, repair_mode=repair_mode)
+        survey.add_frequency(freq_key, ds)
 
-    # Determine which frequencies to convert
-    if freq_hz is not None:
-        if freq_hz not in available_freqs:
-            raise ValueError(
-                f"Frequency {freq_hz} not found. Available: {available_freqs}"
-            )
-        freqs_to_convert = [freq_hz]
-    else:
-        freqs_to_convert = available_freqs
+    # Aux records (always set, even if empty — caller can check has_*)
+    survey.navigation = _build_navigation_record(grouped["nmea"])
+    survey.attitude   = _build_attitude_record(grouped["pitch_roll"])
+    survey.dvl        = _build_dvl_record(grouped["dvl"])
 
-    logger.info(f"Converting {len(freqs_to_convert)} frequency(ies)")
+    if grouped["pressure"]:
+        survey.add_sensor("pressure", _build_sensor_record("pressure", grouped["pressure"]))
 
-    datasets_by_freq = []
-
-    # Convert each frequency
-    ping_times = None
-    for idx, freq in enumerate(freqs_to_convert, 1):
-        logger.info(f"Converting frequency {freq} Hz ({idx}/{len(freqs_to_convert)})")
-        
-
-        # Read directly from native HDF5 to xarray
-        ds = _read_frequency_to_dataset(native_hdf5_path, freq)
-
-        # ===== DIAGNOSTIC INFO =====
-        n_pings = ds.sizes['ping']
-        n_channels = ds.sizes.get('channel', 0)
-        n_samples = ds.sizes.get('sample', 0)
-        
-        logger.info(f"  ✓ Loaded: {n_pings} pings × {n_channels} channels × {n_samples} samples")
-        
-        # Check for duplicates
-        bs_shape = ds['backscatter_intensity'].shape
-        logger.debug(f"    Backscatter shape: {bs_shape}")
-        
-        # Verify channels are different
-        if n_channels == 2:
-            port = ds['backscatter_intensity'].values[:, 0, :]
-            stbd = ds['backscatter_intensity'].values[:, 1, :]
-            are_same = np.allclose(port, stbd, equal_nan=True)
-            logger.info(f"    Port == Starboard? {are_same}")
-        
-        datasets_by_freq.append((freq_hz, ds))
-        
-
-        # Save ping times from first frequency for auxiliary interpolation
-        if ping_times is None:
-            ping_times = ds.coords["time"].values
-
-        # Add encoding to avoid chunking issues with small datasets
-        encoding = {}
-        for var_name in ds.data_vars:
-            encoding[var_name] = {"zlib": True, "complevel": 4}
-        
-        for coord_name in ds.coords:
-            encoding[coord_name] = {"zlib": True, "complevel": 4}
-
-        # Check consistency BEFORE writing
-        logger.info("\nValidating dataset consistency...")
-        first_n_pings = datasets_by_freq[0][1].sizes['ping']
-        
-        for freq_hz, ds in datasets_by_freq:
-            n_pings = ds.sizes['ping']
-            if n_pings != first_n_pings:
-                logger.error(f"MISMATCH: {freq_hz} Hz has {n_pings} pings, but first was {first_n_pings}")
-                logger.error(f"This suggests inconsistent channel separation between frequencies!")
-                raise ValueError(
-                    f"Frequency {freq_hz} has {n_pings} pings but expected {first_n_pings}. "
-                    "Channel separation may be inconsistent."
-                )
-            logger.info(f"  ✓ {freq_hz} Hz: {n_pings} pings")
-            
-        # Validate and write to standard HDF5
-        ds.sidescan.validate()
-        write_ss_hdf5(
-            ds,
-            output_path,
-            freq_hz=freq,
-            overwrite=(idx > 0 or overwrite),
-        )
-
-    # Extract and store auxiliary streams in the same file
-    logger.info("Extracting auxiliary streams...")
-    if ping_times is not None:
-        _extract_and_store_auxiliaries_infile(native_hdf5_path, output_path, ping_times)
-
-    logger.info(f"Successfully converted to {output_path}")
+    return survey
 
 
-def list_frequencies_in_native_hdf5(native_hdf5_path: Path) -> list[int]:
-    """
-    List all frequency groups in native HDF5 archive.
+# ============================================================
+# DISPATCH BY TYPE
+# ============================================================
 
-    Returns
-    -------
-    list[int]
-        Frequency values in Hz, sorted descending.
-    """
-    native_hdf5_path = Path(native_hdf5_path)
+def _group_by_type(messages: list[JSFMessage]) -> dict[str, list]:
+    """Split the mixed message list into typed buckets."""
+    grouped: dict[str, list] = {
+        "sonar":      [],
+        "nmea":       [],
+        "pitch_roll": [],
+        "dvl":        [],
+        "pressure":   [],
+        "other":      [],
+    }
+    for m in messages:
+        if isinstance(m, SonarDataMessage):
+            grouped["sonar"].append(m)
+        elif isinstance(m, NMEAStringMessage):
+            grouped["nmea"].append(m)
+        elif isinstance(m, PitchRollDataMessage):
+            grouped["pitch_roll"].append(m)
+        elif isinstance(m, DopplerVelocityLogDataMessage):
+            grouped["dvl"].append(m)
+        elif isinstance(m, PressureSensorReadingMessage):
+            grouped["pressure"].append(m)
+        else:
+            grouped["other"].append(m)
 
-    with h5py.File(native_hdf5_path, "r") as f:
-        if "message_types/SonarDataMessage" not in f:  # type: ignore
-            return []
+    if grouped["other"]:
+        logger.debug(f"Ignoring {len(grouped['other'])} messages of unhandled types")
 
-        sonar_group = f["message_types/SonarDataMessage"]  # type: ignore
-        freq_groups = list(sonar_group.keys())  # type: ignore
+    return grouped
 
-        freqs = []
-        for group_name in freq_groups:
-            if group_name.startswith("hz_"):
-                freq_str = group_name[3:]
-                try:
-                    freq = int(freq_str)
-                    freqs.append(freq)
-                except ValueError:
-                    logger.warning(f"Could not parse frequency: {group_name}")
 
-    return sorted(freqs, reverse=True)
+def _group_sonar_by_frequency(
+    sonar_msgs: list[SonarDataMessage],
+) -> dict[str, list[SonarDataMessage]]:
+    """Group sonar messages by (transmit_freq_start, transmit_freq_end)."""
+    groups: dict[str, list[SonarDataMessage]] = defaultdict(list)
+    for m in sonar_msgs:
+        # freq_hz_start labels the channel even when start != end (chirp)
+        freq_key = f"freq_{int(m.transmit_freq_start)}_hz"
+        groups[freq_key].append(m)
+    return dict(groups)
 
-def _read_frequency_to_dataset(
-    native_hdf5_path: Path,
-    freq_hz: int,
+
+# ============================================================
+# FREQUENCY CHANNEL BUILDER
+# ============================================================
+
+def _build_frequency_channel(
+    sonar_msgs: list[SonarDataMessage],
+    *,
+    repair_mode: RepairMode,
 ) -> xr.Dataset:
-    """
-    Read and convert single frequency from native HDF5 to standard schema Dataset.
-    """
-    native_hdf5_path = Path(native_hdf5_path)
-    freq_key = f"hz_{freq_hz}"
-    group_path = f"message_types/SonarDataMessage/{freq_key}"
+    """Build a schema-valid sidescan dataset from a list of single-frequency
+    sonar messages (mixed port + starboard, possibly out of order)."""
+    if not sonar_msgs:
+        raise ValueError("_build_frequency_channel called with no messages")
 
-    logger.debug(f"Reading {group_path} from {native_hdf5_path}")
+    _validate_file_level_attrs(sonar_msgs)
 
-    with h5py.File(native_hdf5_path, "r") as f:
-        sonar_group = f[group_path]  # type: ignore
+    port_by_ping = {m.ping_number: m for m in sonar_msgs if m.channel == 0}
+    stbd_by_ping = {m.ping_number: m for m in sonar_msgs if m.channel == 1}
 
-        # Read all fields from HDF5
-        archive_data = {}
-        for field_name in sonar_group.keys():  # type: ignore
-            ds = sonar_group[field_name]  # type: ignore
-            archive_data[field_name] = ds[:]
+    paired_pings: list[tuple[SonarDataMessage | None, SonarDataMessage | None]] = _pair_pings_by_number(
+        port_by_ping, stbd_by_ping, repair_mode=repair_mode
+    )
 
-        # ========== CRITICAL FIX ==========
-        # Data is interleaved: [ping0_port, ping0_stbd, ping1_port, ping1_stbd, ...]
-        channels = archive_data.get("channel")
-        if channels is not None:
-            # Get actual number of unique pings
-            unique_pings = np.unique(archive_data["ping_number"])
-            n_pings = len(unique_pings)
-            
-            logger.debug(f"Found {len(archive_data['ping_number'])} records ({n_pings} pings × 2 channels)")
-            
-            # Separate port and starboard
-            port_mask = channels == 0
-            stbd_mask = channels == 1
-            
-            port_indices = np.where(port_mask)[0]
-            stbd_indices = np.where(stbd_mask)[0]
-        else:
-            raise ValueError("No 'channel' field in HDF5 data - cannot separate port/starboard")
-    
-        # Process backscatter data (stored as JSON strings)
-        backscatter_raw = archive_data.get("backscatter_intensity")
-        if backscatter_raw is not None:
-            # Convert JSON strings to arrays
-            try:
-                import json
-                
-                # Process ALL backscatter records first
-                bs_arrays = []
-                sample_lengths = []
-                
-                for bs_json in backscatter_raw:
-                    if isinstance(bs_json, bytes):
-                        bs_json = bs_json.decode('utf-8')
-                    
-                    if isinstance(bs_json, str):
-                        # Parse JSON string to list
-                        bs_list = json.loads(bs_json)
-                        bs_array = np.array(bs_list, dtype=np.float32)
-                    else:
-                        bs_array = np.asarray(bs_json, dtype=np.float32)
-                    
-                    bs_arrays.append(bs_array)
-                    sample_lengths.append(len(bs_array))
-                
-                n_samples = int(np.max(sample_lengths))
-                
-                # Pad ragged arrays to consistent size
-                bs_array_padded = np.full((len(bs_arrays), n_samples), np.nan, dtype=np.float32)
-                for i, bs in enumerate(bs_arrays):
-                    bs_array_padded[i, :len(bs)] = bs
-                
-                logger.debug(f"  Backscatter: {n_pings} pings × 2 channels × {n_samples} samples")
-                print(f"  Backscatter: {n_pings} pings × 2 channels × {n_samples} samples")
-                
-                # NOW separate into port and starboard
-                backscatter_3d = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
-                backscatter_3d[:, 0, :] = bs_array_padded[port_indices, :]  # Port
-                backscatter_3d[:, 1, :] = bs_array_padded[stbd_indices, :]  # Starboard
+    # Determine n_samples — must be constant; verified per pair below
+    n_samples = _determine_n_samples(paired_pings)
 
-            except Exception as e:
-                logger.warning(f"Failed to process backscatter: {e}")
-                n_samples = int(archive_data.get("N_samples", [2000])[0])
-                backscatter_3d = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
-        else:
-            n_samples = int(archive_data.get("N_samples", [2000])[0])
-            backscatter_3d = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
+    n_pings = len(paired_pings)
+    backscatter = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
 
-        # Build data variables with field name mapping
-        data_vars = {}
-        coords = {}
+    ping_numbers = np.zeros(n_pings, dtype=np.int32)
+    timestamps   = np.zeros(n_pings, dtype="int64")  # ns since epoch
 
-        # For scalar fields, we need to handle interleaved data
-        # Take only the port channel data (first occurrence of each ping)
-        port_data_indices = port_indices
-        
-        # Direct mappings (name stays same) - use port channel only
-        for field_name in ["latitude", "longitude"]:
-            if field_name in archive_data:
-                data_vars[field_name] = (["ping"], archive_data[field_name][port_data_indices].astype(np.float32))
+    # Per-ping scalars (NaN by default; populated from whichever side is present)
+    lat        = np.full(n_pings, np.nan, dtype=np.float64)
+    lon        = np.full(n_pings, np.nan, dtype=np.float64)
+    heading    = np.full(n_pings, np.nan, dtype=np.float32)
+    depth      = np.full(n_pings, np.nan, dtype=np.float32)
+    roll       = np.full(n_pings, np.nan, dtype=np.float32)
+    pitch      = np.full(n_pings, np.nan, dtype=np.float32)
+    altitude   = np.full(n_pings, np.nan, dtype=np.float32)
+    sound_vel  = np.full(n_pings, np.nan, dtype=np.float32)
+    # heave is not in SonarDataMessage; stays NaN. Real values come later
+    # from interpolation against the attitude aux stream.
+    heave      = np.full(n_pings, np.nan, dtype=np.float32)
 
-        # Mapped field names - use port channel only
-        field_mapping = {
-            "heading": "heading_deg",
-            "pitch": "pitch_deg",
-            "roll": "roll_deg",
-            "depth": "depth_m",
-            "altitude": "altitude_m",
-        }
+    for i, (port, stbd) in enumerate(paired_pings):
+        anchor: SonarDataMessage = port if port is not None else stbd 
+        # Both port and stbd carry the same ping_number/timestamp by JSF
+        # convention, so taking from either is equivalent.
+        ping_numbers[i] = anchor.ping_number
+        timestamps[i]   = anchor.timestamp_ns
 
-        for archive_name, schema_name in field_mapping.items():
-            if archive_name in archive_data:
-                data_vars[schema_name] = (["ping"], archive_data[archive_name][port_data_indices].astype(np.float32))
+        if port is not None:
+            assert port.N_samples == n_samples, "n_samples mismatch (port)"
+            backscatter[i, 0, :] = port.backscatter_intensity
+        if stbd is not None:
+            assert stbd.N_samples == n_samples, "n_samples mismatch (stbd)"
+            backscatter[i, 1, :] = stbd.backscatter_intensity
 
-        # Backscatter data
-        data_vars["backscatter_intensity"] = (["ping", "channel", "sample"], backscatter_3d)
-        data_vars["backscatter_raw"] = (["ping", "channel", "sample"], backscatter_3d.copy())
+        # Per-ping scalars — prefer port, fall back to starboard.
+        # NOTE: when nan_pad'd (only one side present), the missing side's nav
+        # would be near-identical to the present side's nav for the same ping.
+        # Currently we just use whichever side exists. If only port exists with
+        # NaN nav, the value stays NaN (no fallback-to-stbd nav swap). Revisit
+        # if real data shows this loses information.
+        scalar_src : SonarDataMessage = port if port is not None else stbd
+        lat[i]       = _coerce(scalar_src.latitude)
+        lon[i]       = _coerce(scalar_src.longitude)
+        heading[i]   = _coerce(scalar_src.heading_deg)
+        depth[i]     = _coerce(scalar_src.depth_m)
+        roll[i]      = _coerce(scalar_src.roll_deg)
+        pitch[i]     = _coerce(scalar_src.pitch_deg)
+        altitude[i]  = _coerce(scalar_src.altitude_m)
+        sound_vel[i] = _coerce(scalar_src.sound_speed_ms)
 
-        # Convert timestamp to datetime64 - use port channel only
-        if "timestamp" in archive_data:
-            timestamps = archive_data["timestamp"][port_data_indices]
-            try:
-                time_ns = np.asarray(timestamps, dtype=np.int64)
-                time_dt64 = time_ns.astype("datetime64[ns]")
-                coords["time"] = (["ping"], time_dt64)
-            except Exception as e:
-                logger.warning(f"Failed to convert timestamps: {e}")
-                coords["time"] = (["ping"], np.arange(n_pings, dtype=np.int64))
-        else:
-            coords["time"] = (["ping"], np.arange(n_pings, dtype=np.int64))
+    # File-level attrs taken from the first message (already verified constant)
+    first = sonar_msgs[0]
+    attrs = {
+        "freq_hz_start":      int(first.transmit_freq_start),
+        "freq_hz_end":        int(first.transmit_freq_end),
+        "pulse_length_us":    float(first.sweep_length) * 1e6,
+        "sample_rate_hz":     float(first.sample_freq),
+        "processing_level":   "raw",
+        "processing_history": json.dumps([]),
+    }
 
-        # Ping number as coordinate - use port channel only
-        if "ping_number" in archive_data:
-            coords["ping_number"] = (["ping"], archive_data["ping_number"][port_data_indices].astype(np.int32))
-
-        # Dimension coordinates
-        coords["ping"] = np.arange(n_pings)
-        coords["channel_id"] = (["channel"], np.array(["port", "starboard"]))
-        coords["sample"] = np.arange(n_samples)
-
-        # Add all required variables from schema
-        required_vars = [
-            "latitude", "longitude", "heading_deg", "pitch_deg", "roll_deg",
-            "depth_m", "altitude_m", "heave_m", "sound_vel_ms"
-        ]
-
-        for var_name in required_vars:
-            if var_name not in data_vars:
-                logger.debug(f"Filling missing variable {var_name} with NaN")
-                data_vars[var_name] = (["ping"], np.full(n_pings, np.nan, dtype=np.float32))
-
-        # Calculate required attributes from archive data (use port data)
-        attrs = {
-            "freq_hz_start": freq_hz,
-            "freq_hz_end": freq_hz,
-            "processing_level": "raw",
-            "processing_history": json.dumps([]),
-        }
-
-        # Sample rate in Hz
-        if "sample_freq" in archive_data:
-            sample_rate = float(archive_data["sample_freq"][port_data_indices[0]])
-            attrs["sample_rate_hz"] = sample_rate
-        else:
-            attrs["sample_rate_hz"] = 1000.0  # Default
-
-        # Pulse length in microseconds
-        if "transmit_freq_start" in archive_data:
-            sweep_len = float(archive_data.get("sweep_length", [1.0])[port_data_indices[0]])
-            if sweep_len > 0:
-                pulse_length_us = (sweep_len * 1e6)
-                attrs["pulse_length_us"] = pulse_length_us
-            else:
-                attrs["pulse_length_us"] = 100.0
-        else:
-            attrs["pulse_length_us"] = 100.0
-
-        # Range in meters
-        if "sound_speed" in archive_data:
-            sound_speed = float(archive_data["sound_speed"][port_data_indices[0]])
-        else:
-            sound_speed = 1500.0
-        
-        if "sample_interval" in archive_data:
-            sample_interval_us = float(archive_data["sample_interval"][port_data_indices[0]])
-            max_range_m = (sound_speed * sample_interval_us * n_samples / 2) / 1e6
-            attrs["range_m"] = max_range_m
-        else:
-            attrs["range_m"] = 100.0
-
-        # Create dataset
-        ds = xr.Dataset(
-            data_vars=data_vars,
-            coords=coords,
-            attrs=attrs,
-        )
-
-    logger.debug(f"Loaded dataset: {dict(ds.sizes)}")
+    ds = xr.Dataset(
+        data_vars={
+            "backscatter_raw":       (["ping", "channel", "sample"], backscatter),
+            "backscatter_intensity": (["ping", "channel", "sample"], backscatter.copy()),
+            "latitude":     (["ping"], lat),
+            "longitude":    (["ping"], lon),
+            "heading_deg":  (["ping"], heading),
+            "depth_m":      (["ping"], depth),
+            "roll_deg":     (["ping"], roll),
+            "pitch_deg":    (["ping"], pitch),
+            "heave_m":      (["ping"], heave),
+            "altitude_m":   (["ping"], altitude),
+            "sound_vel_ms": (["ping"], sound_vel),
+        },
+        coords={
+            "ping_number": (["ping"], ping_numbers),
+            "time":        (["ping"], timestamps.astype("datetime64[ns]")),
+            "channel_id":  (["channel"], np.array(["port", "starboard"])),
+        },
+        attrs=attrs,
+    )
     return ds
 
-def _extract_and_store_auxiliaries_infile(
-    native_hdf5_path: Path,
-    output_path: Path,
-    ping_times: np.ndarray,
-) -> None:
+
+# ============================================================
+# FREQUENCY CHANNEL HELPERS
+# ============================================================
+
+_FILE_LEVEL_FIELDS = (
+    "transmit_freq_start",
+    "transmit_freq_end",
+    "sweep_length",
+    "sample_freq",
+)
+
+
+def _validate_file_level_attrs(sonar_msgs: list[SonarDataMessage]) -> None:
+    """Each file-level attr must be constant across all messages in the group."""
+    for field in _FILE_LEVEL_FIELDS:
+        values = {getattr(m, field) for m in sonar_msgs}
+        if len(values) > 1:
+            raise ValueError(
+                f"Inconsistent {field} across messages in same frequency group: "
+                f"{sorted(values)}. All messages in one frequency channel must "
+                f"share file-level acoustic settings."
+            )
+
+
+def _pair_pings_by_number(
+    port_by_ping: dict[int, SonarDataMessage],
+    stbd_by_ping: dict[int, SonarDataMessage],
+    *,
+    repair_mode: RepairMode,
+) -> list[tuple[SonarDataMessage | None, SonarDataMessage | None]]:
     """
-    Extract auxiliary sensor data from native HDF5 and store in output file.
+    Match port and starboard messages by ping_number.
 
-    Writes to auxiliary stream groups within the same .ss.h5 file.
-
-    Parameters
-    ----------
-    native_hdf5_path : Path
-        Input native archive file.
-    output_path : Path
-        Output standard file (appends to this file).
-    ping_times : np.ndarray
-        Ping times for interpolation reference.
+    Returns a sorted list of (port_msg|None, stbd_msg|None) tuples. Behaviour
+    on orphans depends on repair_mode.
     """
-    native_hdf5_path = Path(native_hdf5_path)
-    output_path = Path(output_path)
+    all_pings = sorted(set(port_by_ping) | set(stbd_by_ping))
 
-    with h5py.File(native_hdf5_path, "r") as f_in:
-        if "message_types" not in f_in:  # type: ignore
-            logger.debug("No auxiliary data in native HDF5")
-            return
+    n_orphan = sum(
+        1 for p in all_pings
+        if (p in port_by_ping) ^ (p in stbd_by_ping)
+    )
 
-        # Extract each auxiliary message type
-        _extract_attitude(f_in, output_path, ping_times)
-        _extract_environmental(f_in, output_path, ping_times)
-        _extract_dvl(f_in, output_path, ping_times)
-
-
-def _extract_attitude(
-    f_in: h5py.File,
-    output_path: Path,
-    ping_times: np.ndarray,
-) -> None:
-    """Extract pitch/roll/heading data"""
-    if "message_types/PitchRollDataMessage" not in f_in:  # type: ignore
-        logger.debug("No PitchRollDataMessage found")
-        return
-
-    logger.debug("Extracting pitch/roll data...")
-    pr_group = f_in["message_types/PitchRollDataMessage"]  # type: ignore
-
-    # Read data
-    fields = {}
-    for field_name in ["pitch", "roll", "heading", "timestamp"]:
-        if field_name in pr_group:  # type: ignore
-            fields[field_name] = pr_group[field_name][:]  # type: ignore
-
-    if not fields or "timestamp" not in fields:
-        logger.debug("Insufficient attitude data to interpolate")
-        return
-
-    # Interpolate to ping times
-    with h5py.File(output_path, "a") as f_out:
-        if "auxiliary" not in f_out:  # type: ignore
-            f_out.create_group("auxiliary")  # type: ignore
-
-        aux = f_out["auxiliary"]  # type: ignore
-
-        for field_name in ["pitch", "roll", "heading"]:
-            if field_name in fields:
-                try:
-                    interp_data = _interpolate_to_ping_times(
-                        fields["timestamp"],
-                        fields[field_name],
-                        ping_times,
-                    )
-                    aux.create_dataset(f"attitude/{field_name}", data=interp_data)  # type: ignore
-                except Exception as e:
-                    logger.warning(f"Could not interpolate {field_name}: {e}")
-
-
-def _extract_environmental(
-    f_in: h5py.File,
-    output_path: Path,
-    ping_times: np.ndarray,
-) -> None:
-    """Extract pressure/temperature/salinity data"""
-    if "message_types/PressureSensorReadingMessage" not in f_in:  # type: ignore
-        logger.debug("No PressureSensorReadingMessage found")
-        return
-
-    logger.debug("Extracting environmental data...")
-    psr_group = f_in["message_types/PressureSensorReadingMessage"]  # type: ignore
-
-    fields = {}
-    for field_name in ["pressure", "temperature", "salinity", "sound_speed", "depth", "timestamp"]:
-        if field_name in psr_group:  # type: ignore
-            fields[field_name] = psr_group[field_name][:]  # type: ignore
-
-    if not fields or "timestamp" not in fields:
-        logger.debug("Insufficient environmental data")
-        return
-
-    with h5py.File(output_path, "a") as f_out:
-        if "auxiliary" not in f_out:  # type: ignore
-            f_out.create_group("auxiliary")  # type: ignore
-
-        aux = f_out["auxiliary"]  # type: ignore
-
-        for field_name in ["pressure", "temperature", "salinity", "sound_speed", "depth"]:
-            if field_name in fields:
-                try:
-                    interp_data = _interpolate_to_ping_times(
-                        fields["timestamp"],
-                        fields[field_name],
-                        ping_times,
-                    )
-                    aux.create_dataset(f"environmental/{field_name}", data=interp_data)  # type: ignore
-                except Exception as e:
-                    logger.warning(f"Could not interpolate {field_name}: {e}")
-
-
-def _extract_dvl(
-    f_in: h5py.File,
-    output_path: Path,
-    ping_times: np.ndarray,
-) -> None:
-    """Extract DVL velocity and altitude data"""
-    if "message_types/DopplerVelocityLogDataMessage" not in f_in:  # type: ignore
-        logger.debug("No DopplerVelocityLogDataMessage found")
-        return
-
-    logger.debug("Extracting DVL data...")
-    dvl_group = f_in["message_types/DopplerVelocityLogDataMessage"]  # type: ignore
-
-    fields = {}
-    for field_name in [
-        "bottom_dist", "bottom_vel_x", "bottom_vel_y", "bottom_vel_z",
-        "water_vel_x", "water_vel_y", "water_vel_z",
-        "pitch", "roll", "heading", "timestamp"
-    ]:
-        if field_name in dvl_group:  # type: ignore
-            fields[field_name] = dvl_group[field_name][:]  # type: ignore
-
-    if not fields or "timestamp" not in fields:
-        logger.debug("Insufficient DVL data")
-        return
-
-    with h5py.File(output_path, "a") as f_out:
-        if "auxiliary" not in f_out:  # type: ignore
-            f_out.create_group("auxiliary")  # type: ignore
-
-        aux = f_out["auxiliary"]  # type: ignore
-
-        for field_name in ["bottom_dist", "bottom_vel_x", "bottom_vel_y", "bottom_vel_z",
-                          "water_vel_x", "water_vel_y", "water_vel_z"]:
-            if field_name in fields:
-                try:
-                    interp_data = _interpolate_to_ping_times(
-                        fields["timestamp"],
-                        fields[field_name],
-                        ping_times,
-                    )
-                    aux.create_dataset(f"dvl/{field_name}", data=interp_data)  # type: ignore
-                except Exception as e:
-                    logger.warning(f"Could not interpolate {field_name}: {e}")
-
-
-def _interpolate_to_ping_times(
-    aux_times: np.ndarray,
-    aux_values: np.ndarray,
-    ping_times: np.ndarray,
-) -> np.ndarray:
-    """
-    Interpolate auxiliary data to ping times.
-
-    Parameters
-    ----------
-    aux_times : np.ndarray
-        Timestamps of auxiliary measurements.
-    aux_values : np.ndarray
-        Values of auxiliary measurements.
-    ping_times : np.ndarray
-        Target ping times for interpolation.
-
-    Returns
-    -------
-    np.ndarray
-        Interpolated values at ping times.
-    """
-    # Remove NaN values
-    valid = ~(np.isnan(aux_times) | np.isnan(aux_values))
-    if np.sum(valid) < 2:
-        logger.warning("Insufficient valid data for interpolation")
-        return np.full_like(ping_times, np.nan, dtype=np.float64)
-
-    aux_times_clean = aux_times[valid]
-    aux_values_clean = aux_values[valid]
-
-    # Sort by time
-    sort_idx = np.argsort(aux_times_clean)
-    aux_times_clean = aux_times_clean[sort_idx]
-    aux_values_clean = aux_values_clean[sort_idx]
-
-    # Interpolate
-    try:
-        f = interp1d(
-            aux_times_clean,
-            aux_values_clean,
-            kind='linear',
-            bounds_error=False,
-            fill_value='extrapolate',
+    if n_orphan > 0:
+        if repair_mode == "abort":
+            raise ValueError(
+                f"Found {n_orphan} incomplete (orphan) ping(s) and repair_mode "
+                f"is 'abort'. Use 'drop' or 'nan_pad' to tolerate."
+            )
+        logger.warning(
+            f"{n_orphan} incomplete ping(s) detected; repair_mode='{repair_mode}'"
         )
-        interpolated = f(ping_times)
-        return interpolated
-    except Exception as e:
-        logger.warning(f"Interpolation failed: {e}")
-        return np.full_like(ping_times, np.nan, dtype=np.float64)
+
+    paired: list[tuple[SonarDataMessage | None, SonarDataMessage | None]] = []
+    for p in all_pings:
+        port = port_by_ping.get(p)
+        stbd = stbd_by_ping.get(p)
+        if port is None or stbd is None:
+            if repair_mode == "drop":
+                continue
+            # nan_pad: keep the pair with one side None
+        paired.append((port, stbd))
+
+    return paired
+
+
+def _determine_n_samples(
+    paired_pings: list[tuple[SonarDataMessage | None, SonarDataMessage | None]],
+) -> int:
+    """Verify n_samples is constant across all messages and return it."""
+    sample_lengths: set[int] = set()
+    for port, stbd in paired_pings:
+        if port is not None:
+            sample_lengths.add(int(port.N_samples))
+        if stbd is not None:
+            sample_lengths.add(int(stbd.N_samples))
+
+    if not sample_lengths:
+        raise ValueError("No sonar messages survived pairing")
+    if len(sample_lengths) > 1:
+        raise ValueError(
+            f"Inconsistent sample counts across messages: {sorted(sample_lengths)}. "
+            f"Port and starboard must produce the same number of samples per ping."
+        )
+    return sample_lengths.pop()
+
+
+def _coerce(value) -> float:    # TODO: remove need for this functions
+    """Coerce None to NaN; pass through floats. Once messages.py emits
+    NaN directly for invalid fields, this helper becomes a no-op."""
+    if value is None:
+        return np.nan
+    return float(value)
+
+
+# ============================================================
+# AUXILIARY RECORD BUILDERS
+# ============================================================
+
+
+def _build_navigation_record(nmea_msgs: list[NMEAStringMessage]) -> xr.Dataset:
+    """Build a navigation record from positional NMEA messages.
+
+    Reads RMC, GGA, GLL — sentence types that carry latitude/longitude.
+    Other NMEA types are ignored. Output observations are sorted by time.
+    """
+    positional: list[tuple[int, float, float]] = []
+    for m in nmea_msgs:
+        if not isinstance(m, (NMEARMCMessage, NMEAGGAMessage, NMEAGLLMessage)):
+            continue
+        lat = _coerce(getattr(m, "latitude", None))
+        lon = _coerce(getattr(m, "longitude", None))
+        ts  = int(m.timestamp) if hasattr(m, "timestamp") else \
+              int(np.datetime64(int(m.timestamp * 1e9), "ns").astype("int64"))
+        positional.append((ts, lat, lon))
+
+    if not positional:
+        return make_empty_navigation_record(source="extracted_from_nmea_messages")
+    
+    positional.sort(key=lambda t: t[0])
+    times = np.array([t[0] for t in positional], dtype="int64").astype("datetime64[ns]")
+    lats  = np.array([t[1] for t in positional], dtype=np.float64)
+    lons  = np.array([t[2] for t in positional], dtype=np.float64)
+
+    return xr.Dataset(
+        data_vars={
+            "latitude":  (("obs",), lats),
+            "longitude": (("obs",), lons),
+        },
+        coords={"time": (("obs",), times)},
+        attrs={"source": "extracted_from_nmea_messages"},
+    )
+
+
+def _build_attitude_record(att_msgs: list[PitchRollDataMessage]) -> xr.Dataset:
+    """Build an attitude_record from PitchRollDataMessage instances.
+
+    SOURCE SELECTION RATIONALE:
+    Attitude is the only direct source for roll/pitch/heave. Sonar embedded
+    roll/pitch fields are mirrors of attitude data (1-message lag), so they
+    contain no independent information.
+
+    NOTE: validity flags on attitude messages may reject all data even when
+    the underlying values are valid (see messages.py TODO). When that
+    happens, this record is empty-but-valid, and downstream interpolation
+    should fall back to sonar_embedded values for roll/pitch.
+    """
+    if not att_msgs:
+        return make_empty_attitude_record(source="pitch_roll_data_message")
+    
+    sorted_msgs = sorted(att_msgs, key=lambda m: int(m.timestamp))
+    n = len(sorted_msgs)
+    times = np.fromiter(
+        (int(m.timestamp) for m in sorted_msgs), dtype="int64", count=n
+    ).astype("datetime64[ns]")
+
+    return xr.Dataset(
+        data_vars={
+            "roll_deg":  (("obs",), np.array([_coerce(m.roll_deg)  for m in sorted_msgs], dtype=np.float32)),
+            "pitch_deg": (("obs",), np.array([_coerce(m.pitch_deg) for m in sorted_msgs], dtype=np.float32)),
+            "heave_m":   (("obs",), np.array([_coerce(m.heave_m)   for m in sorted_msgs], dtype=np.float32)),
+        },
+        coords={"time": (("obs",), times)},
+        attrs={"source": "pitch_roll_data_message"},
+    )
+
+
+
+
+def _build_dvl_record(dvl_msgs: list[DopplerVelocityLogDataMessage]) -> xr.Dataset:
+
+    if not dvl_msgs:
+        return make_empty_dvl_record(source="doppler_velocity_log_data_message")
+    
+    sorted_msgs = sorted(dvl_msgs, key=lambda m: int(m.timestamp))
+    n = len(sorted_msgs)
+    times = np.fromiter(
+        (int(m.timestamp) for m in sorted_msgs), dtype="int64", count=n
+    ).astype("datetime64[ns]")
+
+    return xr.Dataset(
+        data_vars={
+            "altitude_m": (("obs",), np.array([_coerce(m.altitude_m) for m in sorted_msgs], dtype=np.float32)),
+        },
+        coords={"time": (("obs",), times)},
+        attrs={"source": "doppler_velocity_log_data_message"},
+    )
+
+
+def _build_sensor_record(
+    sensor_type: str,
+    sensor_msgs: list,
+) -> xr.Dataset:
+    """Build a generic sensor record. Currently specialised for pressure
+    sensor messages (depth_m). Extend with type dispatch as more sensor
+    types come online."""
+    if not sensor_msgs:
+        return make_empty_sensor_record(sensor_type, source="empty")
+    
+    if sensor_type == "pressure":
+        sorted_msgs = sorted(sensor_msgs, key=lambda m: int(m.timestamp))
+        n = len(sorted_msgs)
+        times = np.fromiter(
+            (int(m.timestamp) for m in sorted_msgs), dtype="int64", count=n
+        ).astype("datetime64[ns]")
+
+        depth = np.array(
+            [_coerce(getattr(m, "depth_m", None)) for m in sorted_msgs],
+            dtype=np.float32,
+        )
+
+        return xr.Dataset(
+            data_vars={
+                "depth_m": (("obs",), depth),
+            },
+            coords={"time": (("obs",), times)},
+            attrs={
+                "source": "pressure_sensor_reading_message",
+                "sensor_type": "pressure",
+            },
+        )
+    
+    raise NotImplementedError(
+        f"Sensor type '{sensor_type}' is not yet supported by the converter"
+    )

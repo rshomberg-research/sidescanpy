@@ -255,7 +255,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     # corrected = backscatter_db + tvg_db
     # tvg_db has shape (n_samples,) and broadcasts over (ping, channel, sample)
     corrected_db = backscatter_db + xr.DataArray(tvg_db, dims=["sample"])
-    corrected_db = np.clip(corrected_db, 0, None)   # FIXME: fix the clipping
+    # corrected_db = np.clip(corrected_db, 0, None)   # FIXME: fix the clipping
 
     logger.debug(
         "After TVG: min=%.2f dB, max=%.2f dB, mean=%.2f dB",
@@ -267,9 +267,13 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     # ========================================================================
     # Step 5: Build output dataset
     # ========================================================================
-    ds_out = ds.copy(deep=True)
-    ds_out["backscatter_intensity"] = corrected_db
-    ds_out["backscatter_raw"] = backscatter_db  # Store dB version for reference
+    ds_out = ds.copy(deep=False)             # shallow — share refs
+    ds_out.attrs = dict(ds.attrs)             # shallow but with our own attrs dict
+    ds_out = ds_out.assign(
+        backscatter_intensity=corrected_db,    # replaces ref to old array
+    )    
+    # ds_out["backscatter_intensity"] = corrected_db
+    # ds_out["backscatter_raw"] = backscatter_db  # Store dB version for reference
 
     # ========================================================================
     # Step 6: Update processing provenance

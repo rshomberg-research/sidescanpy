@@ -1,148 +1,177 @@
-"""Tests for HDF5 reader module."""
+"""
+Unit tests for sidescanpy.io.hdf5.reader.
 
-import pytest
-import logging
-import numpy as np
+Tests focus on reader-side behavior: returns SideScanSurvey, handles missing
+files, lazy loading via chunks param.
+
+Round-trip identity is tested in test_round_trip.py.
+
+2026 rshomberg@uri.edu
+"""
+
 from pathlib import Path
 
-from sidescanpy.io.hdf5 import reader, writer
-from sidescanpy.core.survey import MultiFrequencySideScanSurvey
+import numpy as np
+import pytest
 
-logging.basicConfig(level=logging.DEBUG)
+from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.io.hdf5.reader import read_survey
+from sidescanpy.io.hdf5.writer import write_survey
 
+
+# ============================================================
+# RETURN TYPE
+# ============================================================
 
 @pytest.mark.unit
-class TestHDF5Reader:
-    """Tests for HDF5 reader."""
-    
-    @pytest.fixture
-    def hdf5_file_with_data(self, sample_multi_frequency_survey, tmp_dir):
-        """Fixture: Create an HDF5 file with test data."""
-        output_file = tmp_dir / "survey.h5"
-        writer.to_hdf5(sample_multi_frequency_survey, output_file)
-        
-        print(f"\n✓ Created test HDF5 file: {output_file}")
-        
-        return output_file
-    
-    def test_from_hdf5_reads_file(self, hdf5_file_with_data):
-        """Test that from_hdf5 successfully reads an HDF5 file."""
-        survey = reader.from_hdf5(hdf5_file_with_data)
-        
-        print(f"\n✓ Read survey from HDF5")
-        print(f"  Type: {type(survey)}")
-        print(f"  n_frequencies: {survey.n_frequencies}")
-        
-        assert survey is not None
-        assert isinstance(survey, MultiFrequencySideScanSurvey)
-    
-    def test_from_hdf5_preserves_frequencies(self, hdf5_file_with_data, sample_multi_frequency_survey):
-        """Test that all frequencies are read from HDF5."""
-        survey = reader.from_hdf5(hdf5_file_with_data)
-        
-        print(f"\n✓ Frequencies read: {list(survey.frequencies)}")
-        print(f"  Original: {list(sample_multi_frequency_survey.frequencies)}")
-        
-        assert survey.n_frequencies == sample_multi_frequency_survey.n_frequencies
-        assert set(survey.frequencies) == set(sample_multi_frequency_survey.frequencies)
-    
-    def test_from_hdf5_preserves_data(self, hdf5_file_with_data):
-        """Test that data is correctly preserved when reading."""
-        survey = reader.from_hdf5(hdf5_file_with_data)
-        
-        freq_key = 'freq_547500_hz'
-        freq_survey = survey.get_frequency(freq_key)
-        ds = freq_survey.dataset
-        
-        print(f"\n✓ Dataset from {freq_key}:")
-        print(f"  Dimensions: {dict(ds.sizes)}")
-        print(f"  Variables: {list(ds.data_vars)}")
-        
-        # Check dimensions
-        assert 'ping' in ds.sizes
-        assert 'channel' in ds.sizes
-        assert 'sample' in ds.sizes
-        assert ds.sizes['channel'] == 2
-        
-        # Check data variables
-        required_vars = {'samples', 'ping_number', 'timestamp', 
-                        'latitude', 'longitude', 'heading', 'depth'}
-        assert required_vars.issubset(set(ds.data_vars))
-    
-    def test_from_hdf5_file_not_found_raises_error(self):
-        """Test that FileNotFoundError is raised for missing file."""
+class TestReadReturnType:
+    def test_returns_sidescan_survey(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        assert isinstance(loaded, SideScanSurvey)
+
+    def test_loaded_frequency_channels_validate(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        for fk in loaded.frequencies:
+            loaded.get_frequency(fk).dataset.sidescan.validate()
+
+    def test_loaded_aux_records_validate(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        if loaded.has_navigation:
+            loaded.navigation.navigation_record.validate()
+        if loaded.has_attitude:
+            loaded.attitude.attitude_record.validate()
+        if loaded.has_dvl:
+            loaded.dvl.dvl_record.validate()
+        for sensor_type in loaded.sensor_types:
+            loaded.get_sensor(sensor_type).sensor_record.validate()
+
+
+# ============================================================
+# ERROR HANDLING
+# ============================================================
+
+@pytest.mark.unit
+class TestReadErrors:
+    def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
-            reader.from_hdf5(Path('/nonexistent/path/survey.h5'))
-    
-    def test_from_hdf5_empty_file_raises_error(self, tmp_dir):
-        """Test that error is raised for empty HDF5 file."""
-        empty_file = tmp_dir / "empty.h5"
-        
-        # Create an empty HDF5 file with no freq_* groups
-        import h5py
-        with h5py.File(str(empty_file), 'w') as f:
-            f.create_group('dummy')
-        
-        print(f"\n✓ Created empty HDF5 file: {empty_file}")
-        
-        with pytest.raises(FileNotFoundError, match="freq_"):
-            reader.from_hdf5(empty_file)
-    
-    def test_from_hdf5_attributes_preserved(self, hdf5_file_with_data):
-        """Test that dataset attributes are preserved."""
-        survey = reader.from_hdf5(hdf5_file_with_data)
-        
-        freq_key = 'freq_547500_hz'
-        freq_survey = survey.get_frequency(freq_key)
-        ds = freq_survey.dataset
-        
-        print(f"\n✓ Attributes: {dict(ds.attrs)}")
-        
-        assert 'transmit_freq_start' in ds.attrs
-        assert 'transmit_freq_end' in ds.attrs
+            read_survey(tmp_path / "does_not_exist.ss.h5")
+
+    def test_accepts_path_object(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        assert loaded is not None
+
+    def test_accepts_string_path(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(str(p))
+        assert loaded is not None
 
 
-@pytest.mark.integration
-class TestHDF5ReadWriteWorkflow:
-    """Integration tests for HDF5 read/write workflows."""
-    
-    def test_roundtrip_write_read(self, sample_multi_frequency_survey, tmp_dir):
-        """Test write → read roundtrip preserves data integrity."""
-        hdf5_file = tmp_dir / "roundtrip.h5"
-        
-        # Write to HDF5
-        writer.to_hdf5(sample_multi_frequency_survey, hdf5_file)
-        
-        # Read back
-        restored_survey = reader.from_hdf5(hdf5_file)
-        
-        print(f"\n✓ Roundtrip test:")
-        print(f"  Original frequencies: {list(sample_multi_frequency_survey.frequencies)}")
-        print(f"  Restored frequencies: {list(restored_survey.frequencies)}")
-        
-        # Verify structure matches
-        assert sample_multi_frequency_survey.n_frequencies == restored_survey.n_frequencies
-        
-        for freq_key in sample_multi_frequency_survey.frequencies:
-            original_ds = sample_multi_frequency_survey.get_frequency(freq_key).dataset
-            restored_ds = restored_survey.get_frequency(freq_key).dataset
-            
-            # Check dimensions match
-            assert original_ds.sizes == restored_ds.sizes
-            
-            # Check variables exist
-            assert set(original_ds.data_vars) == set(restored_ds.data_vars)
-            
-            print(f"  ✓ {freq_key} matches")
-    
-    def test_read_write_preserves_survey_metadata(self, sample_multi_frequency_survey, tmp_dir):
-        """Test that survey metadata is preserved through write/read cycle."""
-        hdf5_file = tmp_dir / "metadata.h5"
-        
-        writer.to_hdf5(sample_multi_frequency_survey, hdf5_file)
-        restored_survey = reader.from_hdf5(hdf5_file)
-        
-        assert restored_survey.source_format == 'hdf5'
-        assert list(sample_multi_frequency_survey.frequencies) == list(restored_survey.frequencies)
-        
-        print(f"✓ Metadata preserved")
+# ============================================================
+# LAZY LOADING (chunks parameter)
+# ============================================================
+
+@pytest.mark.unit
+@pytest.mark.filterwarnings("ignore:The specified chunks separate the stored chunks")
+class TestReadLazyLoading:
+    def test_default_load_is_eager(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+
+        fk = loaded.frequencies[0]
+        backscatter = loaded.get_frequency(fk).dataset["backscatter_raw"].variable.data
+        assert isinstance(backscatter, np.ndarray)
+
+    def test_chunks_param_returns_dask(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p, chunks={"ping": 5})
+
+        import dask.array as da
+        for fk in loaded.frequencies:
+            backscatter = loaded.get_frequency(fk).dataset["backscatter_raw"].variable.data
+            assert isinstance(backscatter, da.Array), (
+                f"Frequency {fk} backscatter should be dask-backed under chunks"
+            )
+
+    def test_lazy_data_equals_eager(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        eager = read_survey(p)
+        lazy  = read_survey(p, chunks={"ping": 5})
+        for fk in eager.frequencies:
+            np.testing.assert_array_equal(
+                lazy.get_frequency(fk).dataset["backscatter_raw"].values,
+                eager.get_frequency(fk).dataset["backscatter_raw"].values,
+            )
+
+    def test_aux_records_loaded_eagerly_even_with_chunks(
+        self, sample_full_survey, tmp_path
+    ):
+        """Aux records are tiny; they should not be dask-wrapped even when
+        chunks= is specified for the sonar data."""
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p, chunks={"ping": 5})
+
+        if loaded.has_navigation:
+            data = loaded.navigation["latitude"].variable.data
+            assert isinstance(data, np.ndarray), (
+                "Navigation record should not be dask-backed"
+            )
+
+
+# ============================================================
+# READ-ONLY PROPERTIES (no write needed if pre-written file exists)
+# ============================================================
+
+@pytest.mark.unit
+class TestReadProperties:
+    def test_frequencies_match(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        # Use sorted comparison; HDF5 group ordering isn't guaranteed semantic
+        assert sorted(loaded.frequencies) == sorted(sample_full_survey.frequencies)
+
+    def test_sensor_types_match(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        assert sorted(loaded.sensor_types) == sorted(sample_full_survey.sensor_types)
+
+    def test_n_frequencies_match(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        assert loaded.n_frequencies == sample_full_survey.n_frequencies
+
+    def test_survey_name_match(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        assert loaded.survey_name == sample_full_survey.survey_name
+
+    def test_source_format_match(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        assert loaded.source_format == sample_full_survey.source_format
+
+    def test_source_files_match(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        loaded = read_survey(p)
+        # source_files is list[Path]; serialization round-trips as strings
+        # converted back to Path. Compare as Path objects.
+        assert [Path(x) for x in loaded.source_files] == \
+               [Path(x) for x in sample_full_survey.source_files]

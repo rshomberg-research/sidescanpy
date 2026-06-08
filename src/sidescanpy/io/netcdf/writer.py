@@ -1,80 +1,86 @@
-'''Write MultiFrequencySideScanSurvey to netCDF (one file per frequency)
+"""
+Write a SideScanFrequencyChannel to a NetCDF (.nc) file.
 
-2026 rshomberg@uri.edu'''
+Uses h5netcdf engine. Compression (gzip level 4) is applied to the large
+backscatter arrays only; small per-ping scalars are stored uncompressed.
 
-import logging 
-from pathlib import Path 
+2026 rshomberg@uri.edu
+"""
 
-import xarray as xr 
-from sidescanpy.core.survey import MultiFrequencySideScanSurvey, SideScanFrequencyChannel
+import logging
+from pathlib import Path
 
-# FIXME: the way this needs to work is that a single frequency channel is
-# outputted to as a netcdf
+from sidescanpy.core.schema import (
+    HDF5_COMPRESSION,
+    HDF5_COMPRESSION_LEVEL,
+    HDF5_CHUNK_PING,
+)
+from sidescanpy.core.survey import SideScanFrequencyChannel
 
-def _frequency_channel_to_netcdf(survey: SideScanFrequencyChannel, output_file: Path) -> Path:
-    '''Convert a single frequency channel to a netcdf file'''
+logger = logging.getLogger(__name__)
 
-    # output_file.parent.mkdir(parents=False, exist_ok=True)
-    ds: xr.Dataset = survey.dataset # FIXME: figure out this ide warning
-    ds.to_netcdf(output_file, engine='netcdf4')
-    logging.debug(f"Saved: {output_file} ({ds.sizes['ping']}) pings")
-    
-    return output_file
 
-def to_netcdf(survey: MultiFrequencySideScanSurvey, output_dir: Path) -> list[Path]:
-    '''Write survey to netCDF (one per frequency)'''
+_NETCDF_ENGINE = "h5netcdf"
+_COMPRESSED_VARS = ("backscatter_raw", "backscatter_intensity")
 
-    fname_base: str = survey.survey_name
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+def write_frequency_channel(
+    channel: SideScanFrequencyChannel,
+    path: Path | str,
+    *,
+    overwrite: bool = False,
+) -> None:
+    """
+    Write a single SideScanFrequencyChannel to a .nc file.
 
-    logging.debug(f"Writing survey to netCDFs: {output_dir}")
-    logging.debug(f"  {survey.n_frequencies} frequencies")
+    Parameters
+    ----------
+    channel : SideScanFrequencyChannel
+        The channel to serialize. Its underlying dataset must already pass
+        SideScanAccessor.validate().
+    path : Path or str
+        Destination file path.
+    overwrite : bool, default False
+        If False (default) and ``path`` exists, raise FileExistsError.
+        If True, replace the existing file.
 
-    output_files = []
-    for freq_key in survey.frequencies:
-        freq_dir = output_dir / freq_key
-        freq_dir.mkdir(exist_ok=True, parents=True)
-        freq_survey = survey.get_frequency(freq_key)    # FIXME: fix naming convention (from get_frequency)
+    Raises
+    ------
+    FileExistsError
+        If ``path`` exists and ``overwrite`` is False.
+    """
+    p = Path(path)
 
-        output_file = output_dir / f'{freq_key}/{fname_base}.nc'
-        _frequency_channel_to_netcdf(freq_survey, output_file)
+    if p.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"NetCDF file already exists: {p}. Pass overwrite=True to replace."
+            )
+        p.unlink()
 
-        # logging.debug(f"Wrote {freq_key}: {output_file} ({ds.sizes['ping']} pings)")
-        output_files.append(output_file)
+    encoding = _build_encoding(channel)
 
-    logging.debug(f"netCDF export ({len(output_files)} files)")
-    return output_files
-
-if __name__ == '__main__':
-
-    logging.basicConfig(
-        level=logging.INFO, 
-        format='%(asctime)s [%(levelname)8s] %(filename)<path>)s'
+    channel.dataset.to_netcdf(
+        path=p,
+        engine=_NETCDF_ENGINE,
+        encoding=encoding,
     )
 
-    logging.info(f"Testing sidescanpy/io/netcdf/writer.py")
 
-    from pathlib import Path 
-    import pickle 
+def _build_encoding(channel: SideScanFrequencyChannel) -> dict[str, dict]:
+    """Compression and chunking encoding for backscatter variables."""
+    n_pings    = channel.n_pings
+    n_channels = channel.n_channels
+    n_samples  = channel.n_samples
 
-    from sidescanpy.io.jsf import converter_old as jsf_converter
+    chunk_ping = min(HDF5_CHUNK_PING, n_pings) if n_pings > 0 else 1
 
-    # Load test data
-    pkl_file = Path("./tests/data/temp_jsf_data.pkl") 
-
-    if not pkl_file.exists():
-        logging.error(f"File not found: {pkl_file}")
-        exit(1)
-
-    with open(pkl_file, 'rb') as f:
-        messages = pickle.load(f)
-
-    survey = jsf_converter.to_survey(messages, pkl_file)
-
-    output_dir = Path("./tests/output/netcdf")
-    output_files = to_netcdf(survey, output_dir)
-
-    logging.info(f"Done! Output files:")
-    for f in output_files:
-        logging.info(f"  {f}")
+    encoding: dict[str, dict] = {}
+    for var in _COMPRESSED_VARS:
+        if var in channel.dataset.data_vars:
+            encoding[var] = {
+                "compression":       HDF5_COMPRESSION,
+                "compression_opts":  HDF5_COMPRESSION_LEVEL,
+                "chunksizes":        (chunk_ping, n_channels, n_samples),
+            }
+    return encoding

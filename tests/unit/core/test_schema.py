@@ -19,12 +19,26 @@ from sidescanpy.core.schema import (
     HDF5_GROUP_AUX_STREAMS,
     HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_ATTITUDE,
-    HDF5_GROUP_ENVIRONMENTAL,
     HDF5_GROUP_FREQUENCIES,
     HDF5_FREQ_PREFIX,
     HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
     HDF5_COMPRESSION_LEVEL,    
+    REQUIRED_NAV_DIMS,
+    REQUIRED_NAV_COORDS,
+    REQUIRED_NAV_VARS,
+    REQUIRED_NAV_ATTRS,
+    REQUIRED_ATT_DIMS,
+    REQUIRED_ATT_COORDS,
+    REQUIRED_ATT_VARS,
+    REQUIRED_ATT_ATTRS,
+    REQUIRED_DVL_DIMS,
+    REQUIRED_DVL_COORDS,
+    REQUIRED_DVL_VARS,
+    REQUIRED_DVL_ATTRS,
+    REQUIRED_GEN_DIMS,
+    REQUIRED_GEN_COORDS,
+    REQUIRED_GEN_ATTRS,
 )
 
 @pytest.mark.unit 
@@ -59,7 +73,6 @@ class TestConstants:
         assert "freq_hz_end" in REQUIRED_ATTRS
         assert "pulse_length_us" in REQUIRED_ATTRS
         assert "sample_rate_hz" in REQUIRED_ATTRS
-        assert "range_m" in REQUIRED_ATTRS
         assert "processing_level" in REQUIRED_ATTRS
         assert "processing_history" in REQUIRED_ATTRS
 
@@ -71,7 +84,7 @@ class TestConstants:
         assert isinstance(HDF5_GROUP_AUX_STREAMS, str)
         assert isinstance(HDF5_GROUP_NAVIGATION, str)
         assert isinstance(HDF5_GROUP_ATTITUDE, str)
-        assert isinstance(HDF5_GROUP_ENVIRONMENTAL, str)
+        # assert isinstance(HDF5_GROUP_ENVIRONMENTAL, str)
         assert isinstance(HDF5_GROUP_FREQUENCIES, str)
         assert isinstance(HDF5_FREQ_PREFIX, str)
         assert isinstance(HDF5_CHUNK_PING, int)
@@ -327,3 +340,341 @@ class TestAppendToHistory:
         history = sample_dataset.sidescan.processing_history
         timestamp_str = history[0]["timestamp_utc"]
         datetime.fromisoformat(timestamp_str)  # Should not raise
+
+
+
+# ============================================================
+# FIXTURES
+# ============================================================
+
+def _make_time_array(n: int) -> np.ndarray:
+    """Build n-element datetime64[ns] array, 1 sec apart."""
+    base = np.datetime64("2025-01-01T00:00:00", "ns")
+    return base + np.arange(n) * np.timedelta64(1_000_000_000, "ns")
+
+
+@pytest.fixture
+def sample_navigation():
+    n = 10
+    return xr.Dataset(
+        data_vars={
+            "latitude":  (("obs",), np.linspace(41.0, 41.001, n)),
+            "longitude": (("obs",), np.linspace(-71.0, -71.001, n)),
+        },
+        coords={"time": (("obs",), _make_time_array(n))},
+        attrs={"source": "nmea_rmc"},
+    )
+
+
+@pytest.fixture
+def sample_attitude():
+    n = 10
+    return xr.Dataset(
+        data_vars={
+            "roll_deg":  (("obs",), np.zeros(n, dtype=np.float32)),
+            "pitch_deg": (("obs",), np.zeros(n, dtype=np.float32)),
+            "heave_m":   (("obs",), np.zeros(n, dtype=np.float32)),
+        },
+        coords={"time": (("obs",), _make_time_array(n))},
+        attrs={"source": "pitch_roll_data_message"},
+    )
+
+
+@pytest.fixture
+def sample_dvl():
+    n = 10
+    return xr.Dataset(
+        data_vars={
+            "altitude_m": (("obs",), np.full(n, 5.0, dtype=np.float32)),
+        },
+        coords={"time": (("obs",), _make_time_array(n))},
+        attrs={"source": "doppler_velocity_log_data_message"},
+    )
+
+
+@pytest.fixture
+def sample_sensor():
+    n = 10
+    return xr.Dataset(
+        data_vars={
+            "depth_m": (("obs",), np.linspace(10.0, 12.0, n, dtype=np.float32)),
+        },
+        coords={"time": (("obs",), _make_time_array(n))},
+        attrs={"source": "pressure_sensor_reading_message", "sensor_type": "pressure"},
+    )
+
+
+@pytest.fixture
+def empty_navigation():
+    return xr.Dataset(
+        data_vars={
+            "latitude":  (("obs",), np.array([], dtype=np.float64)),
+            "longitude": (("obs",), np.array([], dtype=np.float64)),
+        },
+        coords={"time": (("obs",), np.array([], dtype="datetime64[ns]"))},
+        attrs={"source": "nmea_rmc"},
+    )
+
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+@pytest.mark.unit
+class TestAuxConstants:
+    def test_nav_constants(self):
+        assert REQUIRED_NAV_DIMS == {"obs"}
+        assert REQUIRED_NAV_COORDS == {"time"}
+        assert "latitude" in REQUIRED_NAV_VARS
+        assert "longitude" in REQUIRED_NAV_VARS
+        assert "source" in REQUIRED_NAV_ATTRS
+
+    def test_att_constants(self):
+        assert REQUIRED_ATT_DIMS == {"obs"}
+        assert REQUIRED_ATT_COORDS == {"time"}
+        assert "roll_deg"  in REQUIRED_ATT_VARS
+        assert "pitch_deg" in REQUIRED_ATT_VARS
+        assert "heave_m"   in REQUIRED_ATT_VARS
+        assert "source"    in REQUIRED_ATT_ATTRS
+
+    def test_dvl_constants(self):
+        assert REQUIRED_DVL_DIMS == {"obs"}
+        assert REQUIRED_DVL_COORDS == {"time"}
+        assert "altitude_m" in REQUIRED_DVL_VARS
+        assert "source" in REQUIRED_DVL_ATTRS
+
+    def test_gen_constants(self):
+        assert REQUIRED_GEN_DIMS == {"obs"}
+        assert REQUIRED_GEN_COORDS == {"time"}
+        assert "source" in REQUIRED_GEN_ATTRS
+        assert "sensor_type" in REQUIRED_GEN_ATTRS
+
+
+# ============================================================
+# ACCESSOR REGISTRATION
+# ============================================================
+
+@pytest.mark.unit
+class TestAuxAccessorRegistration:
+    def test_navigation_accessor_exists(self, sample_navigation):
+        assert hasattr(sample_navigation, "navigation_record")
+
+    def test_attitude_accessor_exists(self, sample_attitude):
+        assert hasattr(sample_attitude, "attitude_record")
+
+    def test_dvl_accessor_exists(self, sample_dvl):
+        assert hasattr(sample_dvl, "dvl_record")
+
+    def test_sensor_accessor_exists(self, sample_sensor):
+        assert hasattr(sample_sensor, "sensor_record")
+
+    def test_navigation_methods_exist(self, sample_navigation):
+        for method in ("validate", "is_valid", "is_empty"):
+            assert callable(getattr(sample_navigation.navigation_record, method))
+
+    def test_attitude_methods_exist(self, sample_attitude):
+        for method in ("validate", "is_valid", "is_empty"):
+            assert callable(getattr(sample_attitude.attitude_record, method))
+
+    def test_dvl_methods_exist(self, sample_dvl):
+        for method in ("validate", "is_valid", "is_empty"):
+            assert callable(getattr(sample_dvl.dvl_record, method))
+
+    def test_sensor_methods_exist(self, sample_sensor):
+        for method in ("validate", "is_valid", "is_empty"):
+            assert callable(getattr(sample_sensor.sensor_record, method))
+
+
+# ============================================================
+# NAVIGATION
+# ============================================================
+
+@pytest.mark.unit
+class TestNavigationValid:
+    def test_valid_passes(self, sample_navigation):
+        sample_navigation.navigation_record.validate()
+
+    def test_valid_is_valid(self, sample_navigation):
+        assert sample_navigation.navigation_record.is_valid() is True
+
+    def test_valid_not_empty(self, sample_navigation):
+        assert sample_navigation.navigation_record.is_empty() is False
+
+
+@pytest.mark.unit
+class TestNavigationEmpty:
+    def test_empty_passes_validation(self, empty_navigation):
+        empty_navigation.navigation_record.validate()
+
+    def test_empty_is_empty(self, empty_navigation):
+        assert empty_navigation.navigation_record.is_empty() is True
+
+
+@pytest.mark.unit
+class TestNavigationMissing:
+    @pytest.mark.parametrize("var", REQUIRED_NAV_VARS)
+    def test_missing_var_raises(self, sample_navigation, var):
+        bad = sample_navigation.drop_vars(var)
+        with pytest.raises(ValueError, match="Navigation"):
+            bad.navigation_record.validate()
+
+    @pytest.mark.parametrize("coord", REQUIRED_NAV_COORDS)
+    def test_missing_coord_raises(self, sample_navigation, coord):
+        bad = sample_navigation.drop_vars(coord)
+        with pytest.raises(ValueError, match="Navigation"):
+            bad.navigation_record.validate()
+
+    @pytest.mark.parametrize("attr", REQUIRED_NAV_ATTRS)
+    def test_missing_attr_raises(self, sample_navigation, attr):
+        bad = sample_navigation.copy()
+        del bad.attrs[attr]
+        with pytest.raises(ValueError, match="Navigation"):
+            bad.navigation_record.validate()
+
+
+@pytest.mark.unit
+class TestNavigationTimeDtype:
+    def test_wrong_time_dtype_raises(self, sample_navigation):
+        bad = sample_navigation.assign_coords(
+            time=("obs", np.arange(sample_navigation.sizes["obs"], dtype=np.float64))
+        )
+        with pytest.raises(ValueError, match="datetime64"):
+            bad.navigation_record.validate()
+
+
+# ============================================================
+# ATTITUDE
+# ============================================================
+
+@pytest.mark.unit
+class TestAttitudeValid:
+    def test_valid_passes(self, sample_attitude):
+        sample_attitude.attitude_record.validate()
+
+    def test_valid_is_valid(self, sample_attitude):
+        assert sample_attitude.attitude_record.is_valid() is True
+
+    def test_valid_not_empty(self, sample_attitude):
+        assert sample_attitude.attitude_record.is_empty() is False
+
+
+@pytest.mark.unit
+class TestAttitudeMissing:
+    @pytest.mark.parametrize("var", REQUIRED_ATT_VARS)
+    def test_missing_var_raises(self, sample_attitude, var):
+        bad = sample_attitude.drop_vars(var)
+        with pytest.raises(ValueError, match="Attitude"):
+            bad.attitude_record.validate()
+
+    @pytest.mark.parametrize("coord", REQUIRED_ATT_COORDS)
+    def test_missing_coord_raises(self, sample_attitude, coord):
+        bad = sample_attitude.drop_vars(coord)
+        with pytest.raises(ValueError, match="Attitude"):
+            bad.attitude_record.validate()
+
+    @pytest.mark.parametrize("attr", REQUIRED_ATT_ATTRS)
+    def test_missing_attr_raises(self, sample_attitude, attr):
+        bad = sample_attitude.copy()
+        del bad.attrs[attr]
+        with pytest.raises(ValueError, match="Attitude"):
+            bad.attitude_record.validate()
+
+
+@pytest.mark.unit
+class TestAttitudeTimeDtype:
+    def test_wrong_time_dtype_raises(self, sample_attitude):
+        bad = sample_attitude.assign_coords(
+            time=("obs", np.arange(sample_attitude.sizes["obs"], dtype=np.float64))
+        )
+        with pytest.raises(ValueError, match="datetime64"):
+            bad.attitude_record.validate()
+
+
+# ============================================================
+# DVL
+# ============================================================
+
+@pytest.mark.unit
+class TestDVLValid:
+    def test_valid_passes(self, sample_dvl):
+        sample_dvl.dvl_record.validate()
+
+    def test_valid_is_valid(self, sample_dvl):
+        assert sample_dvl.dvl_record.is_valid() is True
+
+    def test_valid_not_empty(self, sample_dvl):
+        assert sample_dvl.dvl_record.is_empty() is False
+
+
+@pytest.mark.unit
+class TestDVLMissing:
+    @pytest.mark.parametrize("var", REQUIRED_DVL_VARS)
+    def test_missing_var_raises(self, sample_dvl, var):
+        bad = sample_dvl.drop_vars(var)
+        with pytest.raises(ValueError, match="DVL"):
+            bad.dvl_record.validate()
+
+    @pytest.mark.parametrize("coord", REQUIRED_DVL_COORDS)
+    def test_missing_coord_raises(self, sample_dvl, coord):
+        bad = sample_dvl.drop_vars(coord)
+        with pytest.raises(ValueError, match="DVL"):
+            bad.dvl_record.validate()
+
+    @pytest.mark.parametrize("attr", REQUIRED_DVL_ATTRS)
+    def test_missing_attr_raises(self, sample_dvl, attr):
+        bad = sample_dvl.copy()
+        del bad.attrs[attr]
+        with pytest.raises(ValueError, match="DVL"):
+            bad.dvl_record.validate()
+
+
+@pytest.mark.unit
+class TestDVLTimeDtype:
+    def test_wrong_time_dtype_raises(self, sample_dvl):
+        bad = sample_dvl.assign_coords(
+            time=("obs", np.arange(sample_dvl.sizes["obs"], dtype=np.float64))
+        )
+        with pytest.raises(ValueError, match="datetime64"):
+            bad.dvl_record.validate()
+
+
+# ============================================================
+# SENSOR (generic)
+# ============================================================
+
+@pytest.mark.unit
+class TestSensorValid:
+    def test_valid_passes(self, sample_sensor):
+        sample_sensor.sensor_record.validate()
+
+    def test_valid_is_valid(self, sample_sensor):
+        assert sample_sensor.sensor_record.is_valid() is True
+
+    def test_valid_not_empty(self, sample_sensor):
+        assert sample_sensor.sensor_record.is_empty() is False
+
+
+@pytest.mark.unit
+class TestSensorMissing:
+    @pytest.mark.parametrize("coord", REQUIRED_GEN_COORDS)
+    def test_missing_coord_raises(self, sample_sensor, coord):
+        bad = sample_sensor.drop_vars(coord)
+        with pytest.raises(ValueError, match="Sensor"):
+            bad.sensor_record.validate()
+
+    @pytest.mark.parametrize("attr", REQUIRED_GEN_ATTRS)
+    def test_missing_attr_raises(self, sample_sensor, attr):
+        bad = sample_sensor.copy()
+        del bad.attrs[attr]
+        with pytest.raises(ValueError, match="Sensor"):
+            bad.sensor_record.validate()
+
+
+@pytest.mark.unit
+class TestSensorTimeDtype:
+    def test_wrong_time_dtype_raises(self, sample_sensor):
+        bad = sample_sensor.assign_coords(
+            time=("obs", np.arange(sample_sensor.sizes["obs"], dtype=np.float64))
+        )
+        with pytest.raises(ValueError, match="Sensor"):
+            bad.sensor_record.validate()

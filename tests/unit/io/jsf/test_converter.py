@@ -1,228 +1,576 @@
 """
 Unit tests for native HDF5 to standard schema conversion
 
+Uses mocks for JSFMessage instances — the converter only reads attributes off
+messages, so Mock(spec=...) with attribute assignments is sufficient.
+
+Real binary parsing is tested separately against actual JSF byte fixtures.
+
+
 2026 rshomberg@uri.edu
 """
 
 import pytest
-import h5py
-import numpy as np
+from unittest.mock import Mock
+
+import logging
 from pathlib import Path
 
-from sidescanpy.io.jsf.converter import (
-    native_hdf5_to_standard,
-    list_frequencies_in_native_hdf5,
-    _read_frequency_to_dataset,
-)
-from sidescanpy.io.jsf.reader import _archive_messages_to_hdf5
+import numpy as np
 import xarray as xr
 
+from sidescanpy.core.survey import SideScanSurvey, SideScanFrequencyChannel
+from sidescanpy.io.jsf.converter import (
+    convert,
+    _build_frequency_channel,
+    _build_navigation_record,
+    _build_attitude_record,
+    _build_dvl_record,
+    _build_sensor_record,
+)
 
-@pytest.fixture
-def native_hdf5_file(sample_jsf_messages, tmp_dir):
-    """Create a native HDF5 file from sample messages"""
-    native_path = tmp_dir / "sample.jsf.h5"
-    _archive_messages_to_hdf5(sample_jsf_messages, native_path)
-    return native_path
+# ============================================================
+# CONVERT — top-level API
+# ============================================================
+
+@pytest.mark.unit 
+class TestConvertEmpty:
+    def test_empty_message_list_raises(self):
+        with pytest.raises(ValueError, match="empty"):
+            convert([], source_files=[Path("dummy.jsf")])
+
+
+@pytest.mark.unit 
+class TestConversionSingleFrequency:
+    
+    def test_returns_sidescan_survey(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
+        assert isinstance(result, SideScanSurvey)
+
+    def test_one_frequency_channel(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
+        assert result.n_frequencies==1
+
+    def test_frequency_channel_validates(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
+        ch = result.get_frequency(result.frequencies[0])
+        ch.dataset.sidescan.validate()
+
+    def test_aux_records_empty_when_no_aux_messages(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
+        assert result.has_navigation    is False 
+        assert result.has_attitude      is False 
+        assert result.has_dvl           is False 
+        assert result.n_sensors         == 0
 
 
 @pytest.mark.unit
-class TestListFrequencies:
-    """Test listing frequencies in native HDF5"""
+class TestConvertMultiFrequency:
 
-    def test_list_frequencies_returns_list(self, native_hdf5_file):
-        """Should return list of frequencies"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        assert isinstance(freqs, list)
-        assert len(freqs) > 0
+    def test_two_frequencies_yield_two_channels(self, make_sonar_msg):
+        msgs = []
 
-    def test_list_frequencies_are_integers(self, native_hdf5_file):
-        """Frequencies should be positive integers"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        for freq in freqs:
-            assert isinstance(freq, int)
-            assert freq > 0
+        # Frequency A: 1495 MHz, 5 paired pings
+        for i in range(5):
+            msgs.append(
+                make_sonar_msg(
+                    ping_number=i, channel=0,
+                    transmit_freq_start=1_495_000,
+                    transmit_freq_end=1_495_000,
+                )
+            )
+            msgs.append(
+                make_sonar_msg(
+                    ping_number=i, channel=1,
+                    transmit_freq_start=1_495_000,
+                    transmit_freq_end=1_495_000,
+                )
+            )
 
-    def test_list_frequencies_sorted_descending(self, native_hdf5_file):
-        """Frequencies should be sorted descending"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        assert freqs == sorted(freqs, reverse=True)
-
-
-@pytest.mark.unit
-class TestReadFrequencyToDataset:
-    """Test reading frequency data to xarray Dataset"""
-
-    def test_read_returns_dataset(self, native_hdf5_file):
-        """Should return xarray.Dataset"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        assert len(freqs) > 0
+        # Frequency A: 547.5 KHz, 5 paired pings
+        for i in range(5):
+            msgs.append(
+                make_sonar_msg(
+                    ping_number=i, channel=0,
+                    transmit_freq_start=547_500,
+                    transmit_freq_end=547_500,
+                )
+            )
+            msgs.append(
+                make_sonar_msg(
+                    ping_number=i, channel=1,
+                    transmit_freq_start=547_500,
+                    transmit_freq_end=547_500,
+                )
+            )
         
-        ds = _read_frequency_to_dataset(native_hdf5_file, freqs[0])
+        result = convert(msgs, source_files=[Path("test.jsf")])
+        assert result.n_frequencies == 2
+        assert 547_500      in result.frequency_hz_list
+        assert 1_495_000    in result.frequency_hz_list
+
+
+
+# ============================================================
+# CONVERT — auxiliary streams
+# ============================================================
+
+@pytest.mark.unit 
+class TestConvertWithNavigation:
+
+    def test_navigation_populated_from_nmea(self, paired_sonar_msgs, nmea_rmc_msgs):
+        result = convert(paired_sonar_msgs + nmea_rmc_msgs,
+                         source_files=[Path("test.jsf")])
+        assert result.has_navigation
+        assert result.navigation.sizes["obs"] == len(nmea_rmc_msgs)
+
+    def test_navigation_validates(self, paired_sonar_msgs, nmea_rmc_msgs):
+        result = convert(paired_sonar_msgs + nmea_rmc_msgs, source_files=[Path("test.jsf")])
+        result.navigation.navigation_record.validate()
+
+
+@pytest.mark.unit
+class TestConvertWithAttitude:
+    def test_attitude_populated_from_pitch_roll(self, paired_sonar_msgs, pitch_roll_msgs):
+        result = convert(paired_sonar_msgs + pitch_roll_msgs,
+                         source_files=[Path("test.jsf")])
+        assert result.has_attitude
+        assert result.attitude.sizes["obs"] == len(pitch_roll_msgs)
+
+    def test_attitude_validates(self, paired_sonar_msgs, pitch_roll_msgs):
+        result = convert(paired_sonar_msgs + pitch_roll_msgs,
+                         source_files=[Path("test.jsf")])
+        result.attitude.attitude_record.validate()
+
+
+@pytest.mark.unit
+class TestConvertWithDVL:
+    def test_dvl_populated_from_dvl_messages(self, paired_sonar_msgs, dvl_msgs):
+        result = convert(paired_sonar_msgs + dvl_msgs,
+                         source_files=[Path("test.jsf")])
+        assert result.has_dvl
+        assert result.dvl.sizes["obs"] == len(dvl_msgs)
+
+    def test_dvl_validates(self, paired_sonar_msgs, dvl_msgs):
+        result = convert(paired_sonar_msgs + dvl_msgs,
+                         source_files=[Path("test.jsf")])
+        result.dvl.dvl_record.validate()
+
+
+@pytest.mark.unit
+class TestConvertWithSensor:
+    def test_pressure_messages_become_sensor(self, paired_sonar_msgs, pressure_msgs):
+        result = convert(paired_sonar_msgs + pressure_msgs,
+                         source_files=[Path("test.jsf")])
+        assert "pressure" in result.sensor_types
+        assert result.get_sensor("pressure").sizes["obs"] == len(pressure_msgs)
+
+    def test_sensor_validates(self, paired_sonar_msgs, pressure_msgs):
+        result = convert(paired_sonar_msgs + pressure_msgs,
+                         source_files=[Path("test.jsf")])
+        result.get_sensor("pressure").sensor_record.validate()
+
+
+# ============================================================
+# CONVERT — repair modes
+# ============================================================
+
+@pytest.mark.unit 
+class TestConvertRepairDrop:
+    def test_orphan_port_dropped(self, make_sonar_msg, paired_sonar_msgs, caplog):
+        # Add one extra port record with no matching starboard
+        msgs = paired_sonar_msgs + [make_sonar_msg(ping_number=99, channel=0)]
+        with caplog.at_level(logging.WARNING):
+            result = convert(msgs, source_files=[Path("test.jsf")], repair_mode="drop")
+        ch = result.get_frequency(result.frequencies[0])
+        assert ch.n_pings == 5
+
+    def test_orphan_starboard_dropped(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = [make_sonar_msg(ping_number=99, channel=1)] + paired_sonar_msgs
+        result = convert(msgs, source_files=[Path("test.jsf")],
+                         repair_mode="drop")
+        ch = result.get_frequency(result.frequencies[0])
+        assert ch.n_pings == 5
+
+
+@pytest.mark.unit 
+class TestConvertRepairNanPad:
+    def test_orphan_port_nan_padded(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = paired_sonar_msgs + [
+            make_sonar_msg(ping_number=99, channel=0, backscatter_val=500.0)
+        ]
+        result = convert(msgs, source_files=[Path("test.jsf")],
+                         repair_mode="nan_pad")
+        ch = result.get_frequency(result.frequencies[0])
+        # 5 pairs + 1 padded = 6
+        assert ch.n_pings == 6
+
+        # Find the padded ping (ping_number == 99)
+        ds = ch.dataset
+        idx = int(np.where(ds["ping_number"].values == 99)[0][0])
+        padded = ds.isel(ping=idx)
+
+        # Starboard channel should be all NaN
+        stbd = padded["backscatter_intensity"].sel(channel_id="starboard").values
+        assert np.all(np.isnan(stbd))
+
+        # Port channel should have the real data
+        port = padded["backscatter_intensity"].sel(channel_id="port").values
+        assert np.allclose(port, 500.0)
+
+    def test_orphan_starboard_nan_padded(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = paired_sonar_msgs + [
+            make_sonar_msg(ping_number=99, channel=1, backscatter_val=700.0)
+        ]
+        result = convert(msgs, source_files=[Path("test.jsf")],
+                         repair_mode="nan_pad")
+        ch = result.get_frequency(result.frequencies[0])
+        ds = ch.dataset
+        idx = int(np.where(ds["ping_number"].values == 99)[0][0])
+        padded = ds.isel(ping=idx)
+        port = padded["backscatter_intensity"].sel(channel_id="port").values
+        assert np.all(np.isnan(port))
+
+    def test_default_is_nan_pad(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = paired_sonar_msgs + [make_sonar_msg(ping_number=99, channel=0)]
+        # No repair_mode arg → should default to "nan_pad"
+        result = convert(msgs, source_files=[Path("test.jsf")])
+        ch = result.get_frequency(result.frequencies[0])
+        assert ch.n_pings == 6  # padded, not dropped
+
+    def test_padded_ping_per_ping_nav_is_nan(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = paired_sonar_msgs + [
+            make_sonar_msg(ping_number=99, channel=0, latitude=41.234)
+        ]
+        result = convert(msgs, source_files=[Path("test.jsf")],
+                         repair_mode="nan_pad")
+        ch = result.get_frequency(result.frequencies[0])
+        ds = ch.dataset
+        idx = int(np.where(ds["ping_number"].values == 99)[0][0])
+        # Per decision 9: nan-fill, do not fall back to other side
+        # (port has the real data; this is a port-only ping so its lat IS valid)
+        # Test the inverse case below
+        assert ds["latitude"].isel(ping=idx).item() == pytest.approx(41.234)
+
+@pytest.mark.unit
+class TestConvertRepairAbort:
+    def test_orphan_port_raises(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = paired_sonar_msgs + [make_sonar_msg(ping_number=99, channel=0)]
+        with pytest.raises(ValueError, match="incomplete|orphan|unmatched"):
+            convert(msgs, source_files=[Path("test.jsf")], repair_mode="abort")
+
+    def test_orphan_starboard_raises(self, make_sonar_msg, paired_sonar_msgs):
+        msgs = paired_sonar_msgs + [make_sonar_msg(ping_number=99, channel=1)]
+        with pytest.raises(ValueError, match="incomplete|orphan|unmatched"):
+            convert(msgs, source_files=[Path("test.jsf")], repair_mode="abort")
+
+
+# ============================================================
+# CONVERT — error cases
+# ============================================================
+
+@pytest.mark.unit
+class TestConvertInconsistentAttrs:
+    @pytest.mark.parametrize("varying_field,values", [
+    ("transmit_freq_end", [1_495_000, 1_500_000]),
+    ("sweep_length",      [0.020, 0.025]),
+    ("sample_freq",       [400_000, 500_000])
+    ])
+    def test_inconsistent_file_attr_raises(self, make_sonar_msg, varying_field, values):
+        msgs = [
+            make_sonar_msg(ping_number=0, channel=0, **{varying_field: values[0]}),
+            make_sonar_msg(ping_number=0, channel=1, **{varying_field: values[0]}),
+            make_sonar_msg(ping_number=1, channel=0, **{varying_field: values[1]}),
+            make_sonar_msg(ping_number=1, channel=1, **{varying_field: values[1]}),
+        ]
+        with pytest.raises(ValueError, match=varying_field):
+            convert(msgs, source_files=[Path("test.jsf")])
+
+
+    def test_varying_freq_start_creates_multiple_channels(self, make_sonar_msg):
+        """transmit_freq_start variation is the *defining* feature of multi-freq
+        JSF data — it must split into separate channels, not raise."""
+        msgs = [
+            make_sonar_msg(ping_number=0, channel=0, transmit_freq_start=1_495_000),
+            make_sonar_msg(ping_number=0, channel=1, transmit_freq_start=1_495_000),
+            make_sonar_msg(ping_number=0, channel=0, transmit_freq_start=547_500),
+            make_sonar_msg(ping_number=0, channel=1, transmit_freq_start=547_500),
+        ]
+        result = convert(msgs, source_files=[Path("test.jsf")])
+        assert result.n_frequencies == 2
+
+@pytest.mark.unit
+class TestConvertInconsistentSamples:
+    def test_port_starboard_n_samples_mismatch_raises(self, make_sonar_msg):
+        msgs = [
+            make_sonar_msg(ping_number=0, channel=0, n_samples=100),
+            make_sonar_msg(ping_number=0, channel=1, n_samples=200),
+        ]
+        with pytest.raises(ValueError, match="sample"):
+            convert(msgs, source_files=[Path("test.jsf")])
+
+
+# ============================================================
+# CONVERT — survey metadata + edge cases
+# ============================================================
+
+@pytest.mark.unit
+class TestConvertSurveyMetadata:
+    def test_source_files_passed_through(self, paired_sonar_msgs):
+        files = [Path("a.jsf"), Path("b.jsf")]
+        result = convert(paired_sonar_msgs, source_files=files)
+        assert result.source_files == files
+
+    def test_survey_name_explicit(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs,
+                         source_files=[Path("test.jsf")],
+                         survey_name="my_survey")
+        assert result.survey_name == "my_survey"
+
+    def test_survey_name_default_from_first_file(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs,
+                         source_files=[Path("/tmp/dive_42.jsf")])
+        assert result.survey_name == "dive_42"
+
+    def test_source_format_is_jsf(self, paired_sonar_msgs):
+        result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
+        assert result.source_format == "JSF"
+
+
+@pytest.mark.unit
+class TestConvertAuxOnly:
+    """A file with no sonar messages but valid aux messages produces a
+    zero-frequency survey with populated aux records."""
+
+    def test_only_nmea_messages(self, nmea_rmc_msgs):
+        result = convert(nmea_rmc_msgs, source_files=[Path("test.jsf")])
+        assert result.n_frequencies == 0
+        assert result.has_navigation
+
+    def test_only_attitude_messages(self, pitch_roll_msgs):
+        result = convert(pitch_roll_msgs, source_files=[Path("test.jsf")])
+        assert result.n_frequencies == 0
+        assert result.has_attitude
+
+
+# ============================================================
+# _build_frequency_channel — focused unit tests
+# ============================================================
+
+@pytest.mark.unit
+class TestBuildFrequencyChannel:
+    def test_returns_dataset(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
         assert isinstance(ds, xr.Dataset)
 
-    def test_dataset_has_required_variables(self, native_hdf5_file):
-        """Dataset should have backscatter variables"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        ds = _read_frequency_to_dataset(native_hdf5_file, freqs[0])
-        
-        assert "backscatter_intensity" in ds.data_vars
-        assert "backscatter_raw" in ds.data_vars
+    def test_dataset_validates(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        ds.sidescan.validate()
 
-    def test_dataset_has_required_coordinates(self, native_hdf5_file):
-        """Dataset should have ping and channel coordinates"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        ds = _read_frequency_to_dataset(native_hdf5_file, freqs[0])
-        
-        assert "ping" in ds.coords or "ping_number" in ds.coords
-        assert "channel_id" in ds.coords
+    def test_dimensions_correct(self, make_sonar_msg):
+        msgs = []
+        for i in range(7):
+            msgs.append(make_sonar_msg(ping_number=i, channel=0, n_samples=50))
+            msgs.append(make_sonar_msg(ping_number=i, channel=1, n_samples=50))
+        ds = _build_frequency_channel(msgs, repair_mode="nan_pad")
+        assert ds.sizes["ping"]    == 7
+        assert ds.sizes["channel"] == 2
+        assert ds.sizes["sample"]  == 50
 
-    def test_backscatter_has_3d_shape(self, native_hdf5_file):
-        """Backscatter should be 3D (ping, channel, sample)"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        ds = _read_frequency_to_dataset(native_hdf5_file, freqs[0])
-        
-        bs = ds["backscatter_intensity"]
-        assert len(bs.shape) == 3
-        assert bs.shape[1] == 2  # 2 channels
+    def test_channel_id_named_coord(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        assert list(ds.coords["channel_id"].values) == ["port", "starboard"]
 
-    def test_backscatter_channels_are_different(self, native_hdf5_file):
-        """Backscatter channels should hold different data"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        ds = _read_frequency_to_dataset(native_hdf5_file, freqs[0])
+    def test_port_and_starboard_data_separated(self, make_sonar_msg):
+        msgs = []
+        for i in range(3):
+            msgs.append(make_sonar_msg(ping_number=i, channel=0,
+                                       backscatter_val=111.0))
+            msgs.append(make_sonar_msg(ping_number=i, channel=1,
+                                       backscatter_val=999.0))
+        ds = _build_frequency_channel(msgs, repair_mode="nan_pad")
+        port = ds["backscatter_intensity"].sel(channel_id="port").values
+        stbd = ds["backscatter_intensity"].sel(channel_id="starboard").values
+        assert np.allclose(port, 111.0)
+        assert np.allclose(stbd, 999.0)
 
-        bs = ds["backscatter_intensity"]
-        port_ping = bs[0,0,:].values
-        stbd_ping = bs[0,1,:].values
-        print("\nComparing pings")
-        print(f"Port: {port_ping[-5:]}")
-        print(f"Stbd: {stbd_ping[-5:]}")
-        assert not np.all(port_ping == stbd_ping)
-        # assert np.all(bs[:,0,:] != bs[:,1,:])
+    def test_messages_need_not_be_port_first(self, make_sonar_msg):
+        port_first = []
+        stbd_first = []
+        for i in range(4):
+            port_first.append(make_sonar_msg(ping_number=i, channel=0,
+                                             backscatter_val=1.0))
+            port_first.append(make_sonar_msg(ping_number=i, channel=1,
+                                             backscatter_val=2.0))
+            stbd_first.append(make_sonar_msg(ping_number=i, channel=1,
+                                             backscatter_val=2.0))
+            stbd_first.append(make_sonar_msg(ping_number=i, channel=0,
+                                             backscatter_val=1.0))
 
-    def test_inspect_native_hdf5_structure(self, native_hdf5_file):
-        """Inspect how channels are actually stored in native HDF5"""
-        import h5py
-        
-        with h5py.File(native_hdf5_file, "r") as f:
-            freqs = list(f["message_types/SonarDataMessage"].keys())
-            group = f[f"message_types/SonarDataMessage/{freqs[0]}"]
-            
-            print("\n=== Native HDF5 Structure ===")
-            print(f"Fields: {list(group.keys())}")
-            print(f"Shape of backscatter_intensity: {group['backscatter_intensity'].shape}")
-            print(f"Shape of ping_number: {group['ping_number'].shape}")
-            
-            # Check for channel information
-            if "channel" in group:
-                print(f"Shape of channel: {group['channel'].shape}")
-                print(f"Unique channels: {np.unique(group['channel'][:])}")
-            else:
-                print("No 'channel' field found")
-                
-            # Print sample data
-            print(f"\nFirst 20 ping_numbers: {group['ping_number'][:20]}")
-            if "channel" in group:
-                print(f"First 20 channels: {group['channel'][:20]}")
+        ds1 = _build_frequency_channel(port_first, repair_mode="nan_pad")
+        ds2 = _build_frequency_channel(stbd_first, repair_mode="nan_pad")
+        np.testing.assert_array_equal(
+            ds1["backscatter_intensity"].values,
+            ds2["backscatter_intensity"].values,
+        )
 
+    def test_backscatter_raw_equals_intensity_at_raw_level(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        np.testing.assert_array_equal(
+            ds["backscatter_raw"].values,
+            ds["backscatter_intensity"].values,
+        )
 
+    def test_processing_level_is_raw(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        assert ds.attrs["processing_level"] == "raw"
 
-@pytest.mark.unit
-class TestConversion:
-    """Test native to standard conversion"""
+    def test_processing_history_is_empty_json_list(self, paired_sonar_msgs):
+        import json
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        assert json.loads(ds.attrs["processing_history"]) == []
 
-    def test_conversion_creates_output_file(self, native_hdf5_file, tmp_dir):
-        """Should create output .ss.h5 file"""
-        output_path = tmp_dir / "output.ss.h5"
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path)
-        
-        assert output_path.exists()
+    def test_per_ping_lat_from_port(self, make_sonar_msg):
+        msgs = []
+        for i in range(4):
+            msgs.append(make_sonar_msg(ping_number=i, channel=0,
+                                       latitude=41.0 + i * 0.001))
+            msgs.append(make_sonar_msg(ping_number=i, channel=1,
+                                       latitude=99.0))  # ignored
+        ds = _build_frequency_channel(msgs, repair_mode="nan_pad")
+        for i in range(4):
+            assert ds["latitude"].isel(ping=i).item() == pytest.approx(41.0 + i * 0.001)
 
-    def test_output_is_valid_hdf5(self, native_hdf5_file, tmp_dir):
-        """Output should be readable HDF5"""
-        output_path = tmp_dir / "output.ss.h5"
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path)
-        
-        with h5py.File(output_path, "r") as f:
-            assert "frequencies" in f  # type: ignore
+    def test_ping_number_coordinate(self, make_sonar_msg):
+        msgs = []
+        for i in range(4):
+            msgs.append(make_sonar_msg(ping_number=i, channel=0))
+            msgs.append(make_sonar_msg(ping_number=i, channel=1))
+        ds = _build_frequency_channel(msgs, repair_mode="nan_pad")
+        np.testing.assert_array_equal(
+            ds.coords["ping_number"].values, [0, 1, 2, 3]
+        )
 
-    def test_output_has_sonar_data(self, native_hdf5_file, tmp_dir):
-        """Output should contain sonar data"""
-        output_path = tmp_dir / "output.ss.h5"
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path)
-        
-        with h5py.File(output_path, "r") as f:
-            freqs = list(f["frequencies"].keys())  # type: ignore
-            assert len(freqs) > 0
+    def test_time_coord_is_datetime64_ns(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        assert ds["time"].dtype == np.dtype("datetime64[ns]")
 
-    def test_conversion_specific_frequency(self, native_hdf5_file, tmp_dir):
-        """Should convert specific frequency when requested"""
-        freqs = list_frequencies_in_native_hdf5(native_hdf5_file)
-        output_path = tmp_dir / "output.ss.h5"
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path, freq_hz=freqs[0])
-        
-        assert output_path.exists()
+    def test_time_monotonic(self, paired_sonar_msgs):
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        times = ds["time"].values.astype("int64")
+        assert np.all(np.diff(times) > 0)
+
+    def test_heave_m_is_nan(self, paired_sonar_msgs):
+        """heave is not in SonarDataMessage; should be NaN-filled."""
+        ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
+        assert np.all(np.isnan(ds["heave_m"].values))
 
 
-@pytest.mark.unit
-class TestAuxiliaryExtraction:
-    """Test auxiliary stream extraction"""
-
-    def test_conversion_creates_auxiliary_group(self, native_hdf5_file, tmp_dir):
-        """Output should have auxiliary group if data exists"""
-        output_path = tmp_dir / "output.ss.h5"
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path)
-        
-        with h5py.File(output_path, "r") as f:
-            # Auxiliary group might or might not exist depending on input
-            # Just verify file is readable
-            assert "frequencies" in f  # type: ignore
-
+# ============================================================
+# _build_navigation_record
+# ============================================================
 
 @pytest.mark.unit
-class TestFileHandling:
-    """Test file I/O and error handling"""
+class TestBuildNavigationRecord:
+    def test_empty_input_returns_empty_valid_record(self):
+        ds = _build_navigation_record([])
+        ds.navigation_record.validate()
+        assert ds.navigation_record.is_empty()
 
-    def test_input_file_not_found_raises(self, tmp_dir):
-        """Should raise FileNotFoundError if input doesn't exist"""
-        with pytest.raises(FileNotFoundError):
-            native_hdf5_to_standard(
-                tmp_dir / "nonexistent.jsf.h5",
-                tmp_dir / "output.ss.h5"
-            )
+    def test_rmc_messages_populate_lat_lon(self, nmea_rmc_msgs):
+        ds = _build_navigation_record(nmea_rmc_msgs)
+        assert ds.sizes["obs"] == len(nmea_rmc_msgs)
+        assert "latitude"  in ds.data_vars
+        assert "longitude" in ds.data_vars
 
-    def test_output_exists_raises(self, native_hdf5_file, tmp_dir):
-        """Should raise FileExistsError if output exists and overwrite=False"""
-        output_path = tmp_dir / "output.ss.h5"
-        output_path.touch()
-        
-        with pytest.raises(FileExistsError):
-            native_hdf5_to_standard(native_hdf5_file, output_path, overwrite=False)
+    def test_validates(self, nmea_rmc_msgs):
+        ds = _build_navigation_record(nmea_rmc_msgs)
+        ds.navigation_record.validate()
 
-    def test_overwrite_succeeds(self, native_hdf5_file, tmp_dir):
-        """Should overwrite when flag is set"""
-        output_path = tmp_dir / "output.ss.h5"
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path)
-        stat1 = output_path.stat()
-        
-        native_hdf5_to_standard(native_hdf5_file, output_path, overwrite=True)
-        stat2 = output_path.stat()
-        
-        assert output_path.exists()
+    def test_time_is_datetime64_ns(self, nmea_rmc_msgs):
+        ds = _build_navigation_record(nmea_rmc_msgs)
+        assert ds["time"].dtype == np.dtype("datetime64[ns]")
 
-    def test_invalid_frequency_raises(self, native_hdf5_file, tmp_dir):
-        """Should raise ValueError for invalid frequency"""
-        output_path = tmp_dir / "output.ss.h5"
-        
-        with pytest.raises(ValueError):
-            native_hdf5_to_standard(
-                native_hdf5_file,
-                output_path,
-                freq_hz=999999
-            )
+    def test_source_attr_set(self, nmea_rmc_msgs):
+        ds = _build_navigation_record(nmea_rmc_msgs)
+        assert "source" in ds.attrs
+
+
+# ============================================================
+# _build_attitude_record
+# ============================================================
+
+@pytest.mark.unit
+class TestBuildAttitudeRecord:
+    def test_empty_input_returns_empty_valid_record(self):
+        ds = _build_attitude_record([])
+        ds.attitude_record.validate()
+        assert ds.attitude_record.is_empty()
+
+    def test_pitch_roll_messages_populate_fields(self, pitch_roll_msgs):
+        ds = _build_attitude_record(pitch_roll_msgs)
+        assert ds.sizes["obs"] == len(pitch_roll_msgs)
+        for var in ("roll_deg", "pitch_deg", "heave_m"):
+            assert var in ds.data_vars
+
+    def test_validates(self, pitch_roll_msgs):
+        ds = _build_attitude_record(pitch_roll_msgs)
+        ds.attitude_record.validate()
+
+    def test_time_is_datetime64_ns(self, pitch_roll_msgs):
+        ds = _build_attitude_record(pitch_roll_msgs)
+        assert ds["time"].dtype == np.dtype("datetime64[ns]")
+
+
+# ============================================================
+# _build_dvl_record
+# ============================================================
+
+@pytest.mark.unit
+class TestBuildDVLRecord:
+    def test_empty_input_returns_empty_valid_record(self):
+        ds = _build_dvl_record([])
+        ds.dvl_record.validate()
+        assert ds.dvl_record.is_empty()
+
+    def test_dvl_messages_populate_altitude(self, dvl_msgs):
+        ds = _build_dvl_record(dvl_msgs)
+        assert ds.sizes["obs"] == len(dvl_msgs)
+        assert "altitude_m" in ds.data_vars
+
+    def test_validates(self, dvl_msgs):
+        ds = _build_dvl_record(dvl_msgs)
+        ds.dvl_record.validate()
+
+    def test_time_is_datetime64_ns(self, dvl_msgs):
+        ds = _build_dvl_record(dvl_msgs)
+        assert ds["time"].dtype == np.dtype("datetime64[ns]")
+
+
+# ============================================================
+# _build_sensor_record
+# ============================================================
+
+@pytest.mark.unit
+class TestBuildSensorRecord:
+    def test_empty_input_returns_empty_valid_record(self):
+        ds = _build_sensor_record("pressure", [])
+        ds.sensor_record.validate()
+        assert ds.sensor_record.is_empty()
+
+    def test_pressure_messages_populate_fields(self, pressure_msgs):
+        ds = _build_sensor_record("pressure", pressure_msgs)
+        assert ds.sizes["obs"] == len(pressure_msgs)
+        assert "depth_m" in ds.data_vars
+
+    def test_validates(self, pressure_msgs):
+        ds = _build_sensor_record("pressure", pressure_msgs)
+        ds.sensor_record.validate()
+
+    def test_sensor_type_attr_set(self, pressure_msgs):
+        ds = _build_sensor_record("pressure", pressure_msgs)
+        assert ds.attrs["sensor_type"] == "pressure"
+
+    def test_time_is_datetime64_ns(self, pressure_msgs):
+        ds = _build_sensor_record("pressure", pressure_msgs)
+        assert ds["time"].dtype == np.dtype("datetime64[ns]")

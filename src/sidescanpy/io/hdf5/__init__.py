@@ -1,6 +1,6 @@
-"""HDF5 I/O for sidescan surveys."""
+"""HDF5 IO for SideScanSurvey objects (multi-frequency + aux records)."""
 
-from .reader import from_hdf5
-from .writer import to_hdf5
+from sidescanpy.io.hdf5.reader import read_survey
+from sidescanpy.io.hdf5.writer import write_survey
 
-__all__ = ['from_hdf5', 'to_hdf5']
+__all__ = ["read_survey", "write_survey"]

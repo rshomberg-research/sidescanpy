@@ -1,98 +1,218 @@
-"""Tests for HDF5 writer module."""
+"""
+Unit tests for sidescanpy.io.hdf5.writer.
 
+Tests focus on writer-side behavior: file creation, overwrite semantics,
+on-disk group structure, root attrs, and per-variable encoding (compression).
+
+Round-trip identity is tested separately in test_round_trip.py.
+
+2026 rshomberg@uri.edu
+"""
+
+import json
+from pathlib import Path
+
+import h5netcdf
+import numpy as np
 import pytest
 
-from sidescanpy.io.hdf5 import writer
+from sidescanpy.core.schema import (
+    HDF5_GROUP_AUX_STREAMS,
+    HDF5_GROUP_NAVIGATION,
+    HDF5_GROUP_ATTITUDE,
+    HDF5_GROUP_DVL,
+    HDF5_GROUP_SENSORS,
+    HDF5_GROUP_FREQUENCIES,
+)
+from sidescanpy.io.hdf5.writer import write_survey
 
 
+# ============================================================
+# FILE CREATION
+# ============================================================
 
 @pytest.mark.unit
-class TestHDF5Writer:
-    """Tests for HDF5 writer."""
-    
-    def test_to_hdf5_creates_file(self, sample_multi_frequency_survey, tmp_dir):
-        """Test that to_hdf5 creates an HDF5 file."""
-        output_file = tmp_dir / "survey.h5"
-        
-        print(f"\n📝 Writing survey to: {output_file}")
-        print(f"  Frequencies: {list(sample_multi_frequency_survey.frequencies)}")
-        
-        writer.to_hdf5(sample_multi_frequency_survey, output_file)
-        
-        print(f"  File exists: {output_file.exists()}")
-        if output_file.exists():
-            print(f"  File size: {output_file.stat().st_size} bytes")
-        
-        assert output_file.exists()
-        assert output_file.stat().st_size > 0
-    
-    def test_to_hdf5_preserves_frequencies(self, sample_multi_frequency_survey, tmp_dir):
-        """Test that all frequencies are written to HDF5."""
-        output_file = tmp_dir / "survey.h5"
-        n_freqs = sample_multi_frequency_survey.n_frequencies
-        
-        print(f"\n📝 Test: Preserve frequencies")
-        print(f"  Expected frequencies: {n_freqs}")
-        
-        writer.to_hdf5(sample_multi_frequency_survey, output_file)
-        
-        assert output_file.exists()
-        
-        # Read it back
-        import h5py
-        with h5py.File(output_file, 'r') as f:
-            freq_groups = [k for k in f.keys() if k.startswith('freq_')]
-            print(f"  Found groups: {freq_groups}")
-            assert len(freq_groups) == n_freqs
-    
-    def test_to_hdf5_invalid_path_creates_directory(self, sample_multi_frequency_survey, tmp_dir):
-        """Test that nested directories are created if needed."""
-        nested_dir = tmp_dir / "deep" / "nested" / "path"
-        output_file = nested_dir / "survey.h5"
-        
-        print(f"\n📝 Test: Create nested directories")
-        print(f"  Output path: {output_file}")
-        print(f"  Nested dir exists before: {nested_dir.exists()}")
-        
-        writer.to_hdf5(sample_multi_frequency_survey, output_file)
-        
-        print(f"  Nested dir exists after: {nested_dir.exists()}")
-        print(f"  File exists: {output_file.exists()}")
-        
-        assert nested_dir.exists()
-        assert output_file.exists()
-    
-    def test_to_hdf5_source_format_metadata(self, sample_multi_frequency_survey, tmp_dir):
-        """Test that survey metadata is preserved in HDF5."""
-        output_file = tmp_dir / "survey.h5"
-        
-        writer.to_hdf5(sample_multi_frequency_survey, output_file)
-        
-        # Read back and check attributes
-        import xarray as xr
-        import h5py
-        
-        with h5py.File(output_file, 'r') as f:
-            freq_key = 'freq_547500_hz'
-            if freq_key in f:
-                ds = xr.open_dataset(output_file, group=freq_key, engine='h5netcdf')
-                assert 'transmit_freq_start' in ds.attrs
-                assert ds.attrs['transmit_freq_start'] == 547500
+class TestWriteFileCreation:
+    def test_creates_file(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        assert p.exists()
+        assert p.stat().st_size > 0
+
+    def test_accepts_path_object(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        assert p.exists()
+
+    def test_accepts_string_path(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, str(p))
+        assert p.exists()
 
 
-@pytest.mark.integration
-class TestHDF5WriterIntegration:
-    """Integration tests for HDF5 writer."""
-    
-    def test_write_multiple_surveys(self, sample_multi_frequency_survey, tmp_dir):
-        """Test writing multiple surveys to separate files."""
-        files = []
-        
-        for i in range(3):
-            output_file = tmp_dir / f"survey_{i}.h5"
-            writer.to_hdf5(sample_multi_frequency_survey, output_file)
-            assert output_file.exists()
-            files.append(output_file)
-        
-        print(f"\n✓ Created {len(files)} HDF5 files")
-        assert len(files) == 3
+# ============================================================
+# OVERWRITE SEMANTICS
+# ============================================================
+
+@pytest.mark.unit
+class TestWriteOverwrite:
+    def test_overwrite_false_raises_when_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with pytest.raises(FileExistsError):
+            write_survey(sample_full_survey, p)
+
+    def test_overwrite_true_replaces(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        write_survey(sample_full_survey, p, overwrite=True)
+        assert p.exists()
+
+    def test_overwrite_default_is_false(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with pytest.raises(FileExistsError):
+            write_survey(sample_full_survey, p)
+
+
+# ============================================================
+# GROUP STRUCTURE ON DISK
+# ============================================================
+
+@pytest.mark.unit
+class TestWriteGroupStructure:
+    def test_frequencies_group_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert HDF5_GROUP_FREQUENCIES in f.groups
+
+    def test_aux_streams_group_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert HDF5_GROUP_AUX_STREAMS in f.groups
+
+    def test_each_frequency_has_subgroup(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            freq_groups = list(f[HDF5_GROUP_FREQUENCIES].groups)
+        for fk in sample_full_survey.frequencies:
+            assert fk in freq_groups
+
+    def test_navigation_subgroup_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert "navigation" in f[HDF5_GROUP_AUX_STREAMS].groups
+
+    def test_attitude_subgroup_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert "attitude" in f[HDF5_GROUP_AUX_STREAMS].groups
+
+    def test_dvl_subgroup_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert "dvl" in f[HDF5_GROUP_AUX_STREAMS].groups
+
+    def test_sensors_subgroup_exists_when_sensors_present(
+        self, sample_full_survey, tmp_path
+    ):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert "sensors" in f[HDF5_GROUP_AUX_STREAMS].groups
+
+    def test_sensors_subgroup_omitted_when_no_sensors(
+        self, sample_multi_frequency_survey, tmp_path
+    ):
+        """sample_multi_frequency_survey has no sensors. Parent group should
+        not be created."""
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_multi_frequency_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            aux_subgroups = list(f[HDF5_GROUP_AUX_STREAMS].groups)
+        assert "sensors" not in aux_subgroups
+
+    def test_individual_sensor_subgroup_exists(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            sensor_groups = list(f[HDF5_GROUP_SENSORS].groups)
+        for sensor_type in sample_full_survey.sensor_types:
+            assert sensor_type in sensor_groups
+
+
+# ============================================================
+# ROOT ATTRS
+# ============================================================
+
+@pytest.mark.unit
+class TestWriteRootAttrs:
+    def test_survey_name_in_root_attrs(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert f.attrs["survey_name"] == sample_full_survey.survey_name
+
+    def test_source_format_in_root_attrs(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert f.attrs["source_format"] == sample_full_survey.source_format
+
+    def test_source_files_round_trip_via_json(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            raw = f.attrs["source_files_json"]
+        decoded = json.loads(raw)
+        # source_files is list[Path] on the survey; serialized as list of strings
+        assert decoded == [str(p) for p in sample_full_survey.source_files]
+
+
+# ============================================================
+# PER-VARIABLE ENCODING (COMPRESSION)
+# ============================================================
+
+@pytest.mark.unit
+class TestWriteCompression:
+    def test_backscatter_is_compressed_per_frequency(
+        self, sample_full_survey, tmp_path
+    ):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+
+        with h5netcdf.File(str(p), "r") as f:
+            for fk in sample_full_survey.frequencies:
+                grp = f[f"{HDF5_GROUP_FREQUENCIES}/{fk}"]
+                for var in ("backscatter_raw", "backscatter_intensity"):
+                    assert grp[var].compression == "gzip", (
+                        f"{fk}/{var} should be gzip-compressed"
+                    )
+
+    def test_per_ping_scalars_not_compressed(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+
+        with h5netcdf.File(str(p), "r") as f:
+            fk = sample_full_survey.frequencies[0]
+            grp = f[f"{HDF5_GROUP_FREQUENCIES}/{fk}"]
+            for var in ("latitude", "longitude", "heading_deg"):
+                assert grp[var].compression is None
+
+    def test_aux_records_not_compressed(self, sample_full_survey, tmp_path):
+        """Aux records are tiny; compression is overhead."""
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+
+        with h5netcdf.File(str(p), "r") as f:
+            for var in ("latitude", "longitude"):
+                assert f[HDF5_GROUP_NAVIGATION][var].compression is None
+            for var in ("roll_deg", "pitch_deg", "heave_m"):
+                assert f[HDF5_GROUP_ATTITUDE][var].compression is None
+            assert f[HDF5_GROUP_DVL]["altitude_m"].compression is None

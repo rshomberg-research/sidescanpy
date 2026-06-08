@@ -10,8 +10,12 @@ basic information about the message.
 '''
 
 # TODO: organize and document  
-# This file is very very long. It would probably be helpful to break it up or
-# something
+
+# FIXME: right now a lot of the conversion is happening inside the messages.py
+# and occurring on read. Consider modifying to read as raw jsf messages and
+# handle any relevant math and adjustments during the conversion.
+
+# FIXME: a lot of these default to None, but they should default to np.nan
 
 import logging
 from pathlib import Path
@@ -62,9 +66,10 @@ class JSFMessageHeader:
 
 
 
-
 @dataclass
 class JSFMessage(ABC):
+    """Abstract class representing a full JSF Message"""
+
     _registry: ClassVar[Dict[int, Type['JSFMessage']]] = {}
     MESSAGE_TYPE: ClassVar[int]
 
@@ -216,7 +221,7 @@ class SonarDataMessage(JSFMessage):
     _pulse_id:          int = field(repr=False) # ???: outgoing pulse identifier (not used?)
     
     _raw_altitude:  int = field(repr=False) # altitude (mm (see validity flags))
-    sound_speed:    Optional[float]         # sound speed (m/s) (see validity flags)
+    sound_speed_ms:    Optional[float]         # sound speed (m/s) (see validity flags)
     mixer_freq:     float                   # mixer frequency (Hz), should be close to center frequency
 
     # CPU Time Block
@@ -276,7 +281,7 @@ class SonarDataMessage(JSFMessage):
     _raw_trace_data: list[int] = field(repr=False)    # Raw data output of trace
 
     # Converted fields
-    timestamp:              np.datetime64 = field(init=False) # seconds since 1970
+    timestamp_ns:             int = field(init=False) # nanoseconds since 1970
     channel:                  int = field(init=False) # Sonar channel (0=port, 1=stbd) (should have corresponding pings)
     course:       Optional[float] = field(init=False) # deg (0-259.9)
     speed:                  float = field(init=False) # speed (knots) # ???: not sure if over ground or water
@@ -292,18 +297,18 @@ class SonarDataMessage(JSFMessage):
     transmit_freq_end:      float = field(init=False)   # Hz
     sweep_length:           float = field(init=False)   # sec
     pressure_psi: Optional[float] = field(init=False)   # psi
-    depth:        Optional[float] = field(init=False)   # meters
+    depth_m:        Optional[float] = field(init=False)   # meters
     sample_freq:            float = field(init=False)   # Hz
 
-    altitude:     Optional[float] = field(init=False)   # meters
-    heading:      Optional[float] = field(init=False)   # degrees - towfish compass heading
-    pitch:        Optional[float] = field(init=False)   # degrees - positive bow up
-    roll:         Optional[float] = field(init=False)   # degrees - positive port up
+    altitude_m:   Optional[float] = field(init=False)   # meters
+    heading_deg:  Optional[float] = field(init=False)   # degrees - towfish compass heading
+    pitch_deg:    Optional[float] = field(init=False)   # degrees - positive bow up
+    roll_deg:     Optional[float] = field(init=False)   # degrees - positive port up
     mark_number:    Optional[int] = field(init=False)   # ???: possibly something the user can add by marking a location
 
-    water_temp:      Optional[float] = field(init=False, repr=False) # deg C
-    cable_out:       Optional[float] = field(init=False, repr=False) # meters
-    pipe_kilometers: Optional[float] = field(init=False, repr=False) # TODO
+    water_temp_C:  Optional[float] = field(init=False, repr=False) # deg C
+    cable_out_m:   Optional[float] = field(init=False, repr=False) # meters
+    pipe_length_km:     Optional[float] = field(init=False, repr=False) # TODO
 
     annotation_string:  Optional[str] = field(init=False, repr=False)
 
@@ -336,16 +341,23 @@ class SonarDataMessage(JSFMessage):
 
         self.channel = self._header.channel
 
+        # TODO: clean up timestamp fixes
+
         # NOTE: from docs -   
         # For higher resolution (milliseconds) use the Year, and Day values of
         # bytes 156 to 159, and then use the milliSecondsToday value of bytes
         # 200-203 to complete the timestamp
-        base_date = datetime(self._cpu_time_year, 1, 1, 
-                            #  tzinfo=timezone.utc,
-                             ) 
+        # base_date = datetime(self._cpu_time_year, 1, 1, 
+        #                      tzinfo=timezone.utc,
+        #                      ) 
+        # dt = base_date + timedelta(days=self._cpu_time_day - 1, milliseconds=self._timestamp_day_offset_ms)
+        # logger.debug((dt, dt.timestamp(), float(dt.timestamp())))
+        # self.timestamp_ns = int(np.datetime64(dt, "ns").astype('datetime64[ns]').astype(np.int64))
+        base_date = datetime(self._cpu_time_year, 1, 1) 
         dt = base_date + timedelta(days=self._cpu_time_day - 1, milliseconds=self._timestamp_day_offset_ms)
-        logger.debug((dt, dt.timestamp(), float(dt.timestamp())))
-        self.timestamp = np.datetime64(dt, "ns") # as unix timestamp
+        
+        # Convert instantly to a flat, safe integer
+        self.timestamp_ns = int(np.datetime64(dt, "ns").astype(np.int64))
 
         # TODO: why does this not work
         # self.timestamp = self._raw_timestamp_sec + self._timestamp_day_offset_ms % 1e3
@@ -379,6 +391,7 @@ class SonarDataMessage(JSFMessage):
         # Validity flags
         validity_flags = self.parse_validity_flags(self._validity_flags)
         # FIXME: do validity flags better (see DVL message)
+        # FIXME: change from None to np.nan
         if validity_flags['lat_lon'] is not True:
             logger.debug(f"Invalid lat/lon")
             self.latitude   = None
@@ -388,32 +401,32 @@ class SonarDataMessage(JSFMessage):
             self.course = None
         if validity_flags['heading'] is not True:
             logger.debug(f"Invalid heading")
-            self.heading = None
+            self.heading_deg = None
         if validity_flags['pressure'] is not True:
             logger.debug(f"Invalid pressure value")
             self.pressure_psi = None
         if validity_flags['pitch_roll'] is not True:
             logger.debug(f"Invalid pitch/role value")
-            self.pitch  = None
-            self.roll   = None
+            self.pitch_deg  = None
+            self.roll_deg   = None
         if validity_flags['altitude'] is not True:
             logger.debug(f"Invalid altitude value")
-            self.altitude = None
+            self.altitude_m = None
         if validity_flags['water_temp'] is not True:
             logger.debug(f"Invalid water temperature")
-            self.water_temp = None
+            self.water_temp_C = None
         if validity_flags['depth'] is not True:
             logger.debug(f"Invalid depth value")
-            self.depth = None
+            self.depth_m = None
         if validity_flags['annotation'] is not True:
             logger.debug(f"Invalid annotation value")
             self.annotation_string = None
         if validity_flags['cable_counter'] is not True:
             logger.debug(f"Invalid cable out value")
-            self.cable_out = None
+            self.cable_out_m = None
         if validity_flags['kp'] is not True:
             logger.debug(f"Invalid kilometers of pipe value")
-            self.pipe_kilometers = None
+            self.pipe_length_km = None
         if validity_flags['position_interpolated'] is not True:
             # TODO: figure out position
             logger.debug(f"Position not interpolated")
@@ -490,7 +503,7 @@ class SonarDataMessage(JSFMessage):
         self.pressure_psi   = self._raw_pressure / 1e3    # milli-PSI -> PSI
         # TODO: convert to Pa or kPa?
         # TODO: see validity flags
-        self.depth          = self._raw_depth / 1e3 # mm -> m
+        self.depth_m          = self._raw_depth / 1e3 # mm -> m
         # TODO: see validity flags
         
         if self._data_format == 0:      # one short per sample (total bytes = 2 * samples)
@@ -507,7 +520,7 @@ class SonarDataMessage(JSFMessage):
             raise ValueError(f"Unknown data format: {self._data_format}")
         # TODO: Use this in conjunction with the Sample Interval (bytes 114-115) to calculate correct sample rate
         # FIXME: "All values are modulo 65536"
-        self.altitude = self._raw_altitude / 1e3    # mm -> m
+        self.altitude_m = self._raw_altitude / 1e3    # mm -> m
 
         # Weighting Factor
         # TODO: all data MUST be scaled by 2**(-N)
@@ -515,14 +528,14 @@ class SonarDataMessage(JSFMessage):
         assert self._number_of_pulses==1, f"Number of pulses ({self._number_of_pulses}) != 1"
 
         # Orientation Sensor Block
-        self.heading = self._raw_compass_heading / 1e2
+        self.heading_deg = self._raw_compass_heading / 1e2
         # FIXME: See Validity Flag (bytes 30-31). The Compass heading is the
         # magnetic heading of the towfish. If a Gyro sensor is properly
         # interfaced to the DISCOVER Topside Acquisition Unit with a valid NMEA
         # HDT message, this field will contain the Gyro heading, relative to
         # True North.
-        self.pitch  = self._raw_pitch * 180/32768.0 # TODO: see validity flag
-        self.roll  = self._raw_roll * 180/32768.0   # TODO: see validity flag
+        self.pitch_deg  = self._raw_pitch * 180/32768.0 # TODO: see validity flag
+        self.roll_deg  = self._raw_roll * 180/32768.0   # TODO: see validity flag
 
         # TODO: trigger source
         if self._mark_number_code == 0:
@@ -555,8 +568,8 @@ class SonarDataMessage(JSFMessage):
         
         self._raw_adc_decimation/1e2 # ???: always 1.0?
 
-        self.water_temp = self._raw_water_temp / 1e1    # TODO: check validity flags
-        self.cable_out = self._raw_cable_out / 1e3      # TODO: check validity flags
+        self.water_temp_C = self._raw_water_temp / 1e1    # TODO: check validity flags
+        self.cable_out_m = self._raw_cable_out / 1e3      # TODO: check validity flags
 
         # Handle trace data
         self.backscatter_intensity = [float(val)*2**(-self._weighting_factor) for val in self._raw_trace_data]  # TODO: do some math on the trace data samples
@@ -608,6 +621,16 @@ class SonarDataMessage(JSFMessage):
     
     def to_bytes(self) -> bytes:
         raise NotImplementedError
+    
+    @property
+    def timestamp(self) -> np.datetime64:
+        """Returns the nanosecond timestamp as a NumPy datetime64 object."""
+        return np.datetime64(self.timestamp_ns, 'ns')
+
+    @timestamp.setter
+    def timestamp(self, value: np.datetime64):
+        """Allows updating the timestamp using a NumPy datetime64 object directly."""
+        self.timestamp_ns = int(value.astype('datetime64[ns]').astype(np.int64))
 
 @dataclass
 class LegacySideScanDataMessage(JSFMessage):    # TODO: low priority
@@ -777,8 +800,8 @@ class NMEAStringMessage(JSFMessage):
         logger.debug(f"No message string matches for prefix")
         parsed = pynmea2.parse(message_str)
         logger.debug(f"{parsed}")
-        # FIXME: the fall back is not working, it tries to use DPT
-        return NMEAGenericMessage(*fixed_fields, _raw_message=message_str, __header=_header)       
+        # FIXME: the fall back is not working, it tries to use DPT (i think fixed)
+        return NMEAGenericMessage(*fixed_fields, _raw_message=message_str, _header=_header)       
 
     def to_bytes(self) -> bytes:
         """Serializes fixed fields and appends the variable length NMEA string."""
@@ -806,15 +829,15 @@ class NMEAGenericMessage(NMEAStringMessage, nmea_prefix=None):
 # --- Concrete NMEA Subclasses ---
 @dataclass
 class NMEADBTMessage(NMEAStringMessage, nmea_prefix="$WHDBT"):
-    depth_feet: float       = field(init=False)
-    depth_meters: float     = field(init=False)
+    depth_ft: float         = field(init=False)
+    depth_m: float          = field(init=False)
     depth_fathoms: float    = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
         parsed = self.parse_sentence()
-        self.depth_feet     = float(parsed.depth_feet)
-        self.depth_meters   = float(parsed.depth_meters)
+        self.depth_ft       = float(parsed.depth_feet)
+        self.depth_m        = float(parsed.depth_meters)
         self.depth_fathoms  = float(parsed.depth_fathoms)
 
     def __repr__(self) -> str:
@@ -822,46 +845,92 @@ class NMEADBTMessage(NMEAStringMessage, nmea_prefix="$WHDBT"):
 
 @dataclass
 class NMEAVTGMessage(NMEAStringMessage, nmea_prefix="$GPVTG"):
+    course_true_deg:     float = field(init=False, default=float("nan"))
+    course_magnetic_deg: float = field(init=False, default=float("nan"))
+    speed_knots:         float = field(init=False, default=float("nan"))
+    speed_kmh:           float = field(init=False, default=float("nan"))
 
     def __post_init__(self):
         super().__post_init__()
         parsed = self.parse_sentence()
-        # TODO: impliment
+
+        # pynmea2 attribute names for VTG: true_track, mag_track, spd_over_grnd_kts, spd_over_grnd_kmph
+        try:
+            self.course_true_deg = float(parsed.true_track) if parsed.true_track is not None else float("nan")
+        except (TypeError, ValueError):
+            self.course_true_deg = float("nan")
+        try:
+            self.course_magnetic_deg = float(parsed.mag_track) if parsed.mag_track is not None else float("nan")
+        except (TypeError, ValueError):
+            self.course_magnetic_deg = float("nan")
+        try:
+            self.speed_knots = float(parsed.spd_over_grnd_kts) if parsed.spd_over_grnd_kts is not None else float("nan")
+        except (TypeError, ValueError):
+            self.speed_knots = float("nan")
+        try:
+            self.speed_kmh = float(parsed.spd_over_grnd_kmph) if parsed.spd_over_grnd_kmph is not None else float("nan")
+        except (TypeError, ValueError):
+            self.speed_kmh = float("nan")
+
     def __repr__(self) -> str:
         return super().__repr__()
     
 @dataclass
 class NMEAGGAMessage(NMEAStringMessage, nmea_prefix="$GPGGA"):
+    latitude:           float = field(init=False, default=float("nan"))
+    longitude:          float = field(init=False, default=float("nan"))
+    fix_quality:        int   = field(init=False, default=0)
+    n_satellites:       int   = field(init=False, default=0)
+    hdop:               float = field(init=False, default=float("nan"))
+    altitude_msl_m:     float = field(init=False, default=float("nan"))
+    geoid_separation_m: float = field(init=False, default=float("nan"))
 
     def __post_init__(self):
         super().__post_init__()
         parsed = self.parse_sentence()
-        # self.depth_feet     = float(parsed.depth_feet)
-        # self.depth_meters   = float(parsed.depth_meters)
-        # self.depth_fathoms  = float(parsed.depth_fathoms)
-        # TODO: impliment
 
+        self.latitude  = float(parsed.latitude)  if parsed.latitude  is not None else float("nan")
+        self.longitude = float(parsed.longitude) if parsed.longitude is not None else float("nan")
+
+        # GPS quality fields. pynmea2 returns these as strings; coerce.
+        try:
+            self.fix_quality = int(parsed.gps_qual) if parsed.gps_qual else 0
+        except (TypeError, ValueError):
+            self.fix_quality = 0
+        try:
+            self.n_satellites = int(parsed.num_sats) if parsed.num_sats else 0
+        except (TypeError, ValueError):
+            self.n_satellites = 0
+        try:
+            self.hdop = float(parsed.horizontal_dil) if parsed.horizontal_dil else float("nan")
+        except (TypeError, ValueError):
+            self.hdop = float("nan")
+        try:
+            self.altitude_msl_m = float(parsed.altitude) if parsed.altitude is not None else float("nan")
+        except (TypeError, ValueError):
+            self.altitude_msl_m = float("nan")
+        try:
+            self.geoid_separation_m = float(parsed.geo_sep) if parsed.geo_sep else float("nan")
+        except (TypeError, ValueError):
+            self.geoid_separation_m = float("nan")
 
     def __repr__(self) -> str:
         return super().__repr__()
     
 @dataclass
 class NMEARMCMessage(NMEAStringMessage, nmea_prefix="$GPRMC"):
-    latitude: float     = field(init=False)
-    longitude: float    = field(init=False)
-    speed_knots: float  = field(init=False)
-    course_deg: float   = field(init=False)
+    latitude:        float = field(init=False)
+    longitude:       float = field(init=False)
+    speed_knots:     float = field(init=False)
+    course_true_deg: float = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
         parsed = self.parse_sentence()
-        self.latitude       = parsed.latitude
-        self.longitude      = parsed.longitude
-        self.speed_knots    = parsed.spd_over_grnd
-        self.course_deg     = parsed.true_course
-
-    def __repr__(self) -> str:
-        return super().__repr__()
+        self.latitude         = parsed.latitude
+        self.longitude        = parsed.longitude
+        self.speed_knots      = float(parsed.spd_over_grnd) if parsed.spd_over_grnd is not None else float("nan")
+        self.course_true_deg  = float(parsed.true_course) if parsed.true_course is not None else float("nan")
 
 @dataclass
 class NMEAGLLMessage(NMEAStringMessage, nmea_prefix="$GPGLL"):
@@ -869,12 +938,10 @@ class NMEAGLLMessage(NMEAStringMessage, nmea_prefix="$GPGLL"):
     def __post_init__(self):
         super().__post_init__()
         parsed = self.parse_sentence()
-        self.latitude       = parsed.lat
-        self.lat_dir        = parsed.lat_dir
-        self.longitude      = parsed.lon
-        self.lon_dir        = parsed.lon_dir
-        self.status         = parsed.status
-        # self.tzinfo = parsed.tzinfo
+        self.latitude  = parsed.latitude   # decimal degrees, signed
+        self.longitude = parsed.longitude
+        self.lat_dir   = parsed.lat_dir    # keep for diagnostics
+        self.lon_dir   = parsed.lon_dir
         
     def __repr__(self) -> str:
         return super().__repr__()
@@ -883,14 +950,14 @@ class NMEAGLLMessage(NMEAStringMessage, nmea_prefix="$GPGLL"):
 
 @dataclass
 class NMEADPTMessage(NMEAStringMessage, nmea_prefix="$WHDPT"):
-    depth_meters: float = field(init=False)
+    depth_m: float = field(init=False)
     offset_meters: float = field(init=False)
 
     def __post_init__(self):
         super().__post_init__()
         parsed = self.parse_sentence()
         logger.debug(f"Parsed NMEA DPT String: {parsed}")
-        self.depth_meters = float(parsed.depth)
+        self.depth_m = float(parsed.depth)
         self.offset_meters = float(parsed.offset) if parsed.offset is not None else 0.0
 
     def __repr__(self) -> str:
@@ -903,6 +970,8 @@ class NMEAZDAMessage(NMEAStringMessage, nmea_prefix="$GPZDA"):
         super().__post_init__()
         parsed = self.parse_sentence()
         logger.debug(f"Parsed NMEA ZDA String: {parsed}")
+        
+        # Keep tzinfo for live operations, but see below for the pickle fix
         self.tzinfo = parsed.tzinfo
         self.day    = parsed.day
         self.month  = parsed.month
@@ -912,6 +981,29 @@ class NMEAZDAMessage(NMEAStringMessage, nmea_prefix="$GPZDA"):
 
     def __repr__(self) -> str:
         return super().__repr__()
+
+    # --- ADD SERIALIZATION OVERRIDES ---
+    
+    def __getstate__(self):
+        """Removes the unpicklable pynmea2 tzinfo object before pickling."""
+        state = self.__dict__.copy()
+        # Drop the broken tzinfo instance entirely from the dictionary payload
+        if 'tzinfo' in state:
+            del state['tzinfo']
+        return state
+
+    def __setstate__(self, state):
+        """Restores fields and dynamically rebuilds the operational components."""
+        self.__dict__.update(state)
+        # Reconstruct tzinfo on the fly using standard Python datetime tools
+        # to ensure it behaves normally after loading.
+        from datetime import timezone, timedelta
+        try:
+            hours = int(self.local_zone or 0)
+            minutes = int(self.local_zone_minutes or 0)
+            self.tzinfo = timezone(timedelta(hours=hours, minutes=minutes))
+        except Exception:
+            self.tzinfo = timezone.utc
 
 @dataclass
 class PitchRollDataMessage(JSFMessage):
@@ -949,15 +1041,14 @@ class PitchRollDataMessage(JSFMessage):
     # Derived fields
     timestamp:  float = field(init=False)   # seconds since 1970
 
-    # FIXME: include units
-    pitch:  Optional[float] = field(init=False, default=None) # deg positive bow up
-    roll:   Optional[float] = field(init=False, default=None) # deg positive port up
+    pitch_deg:  Optional[float] = field(init=False, default=None) # deg positive bow up
+    roll_deg:   Optional[float] = field(init=False, default=None) # deg positive port up
 
-    heave:      Optional[float] = field(init=False, default=None) # meters positive down 
-    heading:    Optional[float] = field(init=False, default=None) # deg (0-360)
-    yaw:        Optional[float] = field(init=False, default=None) # deg (0-360)
+    heave_m:      Optional[float] = field(init=False, default=None) # meters positive down 
+    heading_deg:    Optional[float] = field(init=False, default=None) # deg (0-360)
+    yaw_deg:        Optional[float] = field(init=False, default=None) # deg (0-360)
 
-    temperature:    Optional[float] = field(init=False, default=None) # deg C
+    temperature_C:    Optional[float] = field(init=False, default=None) # deg C
 
     accel_x:  Optional[float] = field(init=False, default=None)  # Gs
     accel_y:  Optional[float] = field(init=False, default=None)  # Gs
@@ -991,6 +1082,18 @@ class PitchRollDataMessage(JSFMessage):
         self.timestamp = self._raw_time_seconds + self._raw_offset_ms/1e3
         validity_flags = self.parse_validity_flags(self._data_flags)
 
+        # BUG: validity flags are rejecting all data on at least one device tested
+        # (20251015170335.jsf / survey-a). The raw values appear sensible — sonar
+        # embedded heading/roll/pitch derived from attitude data update at the
+        # expected 10 Hz rate, suggesting attitude is producing real data even when
+        # the validity flags claim otherwise. Options:
+        #   1. Fix bit positions in parse_validity_flags() if they don't match spec
+        #   2. Add an `ignore_validity` mode to messages.py for noncompliant devices
+        #   3. Trust raw values regardless of flags
+        # For now, attitude aux record may be empty-but-valid even when source
+        # messages exist; per-ping interpolation onto pings degrades gracefully via
+        # falling back to sonar_embedded.
+
         if validity_flags['accel_x']:
             self.accel_x = self._raw_accel_x * (20*1.5)/32768
         if validity_flags['accel_y']:
@@ -1012,7 +1115,7 @@ class PitchRollDataMessage(JSFMessage):
         if validity_flags['heading']:
             self.heading = self._raw_heading * 0.01     # -> deg
         if validity_flags['temperature']:
-            self.temperature = self._raw_temperature * 10   # -> deg C
+            self.temperature = self._raw_temperature / 10   # 1/10 deg C -> deg C
         if validity_flags['device_info']:
             pass    # TODO: define device info
         if validity_flags['yaw']:
@@ -1060,21 +1163,26 @@ class PressureSensorReadingMessage(JSFMessage):
 
     # Derived fields
     timestamp:      float = field(init=False)
-    pressure:       float = field(init=False)        # PSI
-    temperature:    float = field(init=False)        # °C
+    pressure_psi:       float = field(init=False)        # PSI
+    temperature_C:    float = field(init=False)        # °C
     salinity:       float = field(init=False)        # PPM
     conductivity:   float = field(init=False)        # micro-Siemens/cm
-    sound_speed:    float = field(init=False)        # m/s
-    depth:          float = field(init=False)        # meters
+    sound_speed_ms:    float = field(init=False)        # m/s
+    depth_m:          float = field(init=False)        # meters
 
     def __post_init__(self) -> None:
         self.timestamp = self._raw_time_seconds + self._raw_offset_ms / 1e3
-        self.pressure = self._raw_pressure / 1e3
-        self.temperature = self._raw_temperature / 1e3
+        self.pressure_psi = self._raw_pressure / 1e3
+        self.temperature_C = self._raw_temperature / 1e3
         self.salinity = self._raw_salinity
         self.conductivity = self._raw_conductivity
-        self.sound_speed = self._raw_sound_vel / 1e3      # mm/s -> m/s
-        self.depth = self._raw_depth
+        self.sound_speed_ms = self._raw_sound_vel / 1e3      # mm/s -> m/s
+        self.depth_m = self._raw_depth
+        # TODO: PressureSensorReadingMessage doesn't check validity flags at all
+        # (unlike Sonar/PitchRoll/DVL). For some devices, depth/sound_speed/
+        # temperature appear stuck at 0 which may indicate the device isn't
+        # populating those fields. Investigate whether to add a validity gate or
+        # whether 0 is the device's "no data" sentinel.
 
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "PressureSensorReadingMessage":
@@ -1082,6 +1190,7 @@ class PressureSensorReadingMessage(JSFMessage):
         return cls(_header=_header, *values)
 
     def to_bytes(self) -> bytes:
+        # TODO: at some point write a to_bytes for each message type and a writer.py for generating jsf files.
         raise NotImplementedError
     
 
@@ -1310,15 +1419,15 @@ class DopplerVelocityLogDataMessage(JSFMessage):
     water_vel_y:    Optional[float] = field(init=False, default=None) # m/s
     water_vel_z:    Optional[float] = field(init=False, default=None) # m/s
 
-    sensor_depth:   Optional[float] = field(init=False, default=None) # m
+    sensor_depth_m:   Optional[float] = field(init=False, default=None) # m
 
-    pitch:          Optional[float] = field(init=False, default=None) # deg (positive bow up)
-    roll:           Optional[float] = field(init=False, default=None) # deg (positive port up)
-    heading:        Optional[float] = field(init=False, default=None) # deg (0-360)
+    pitch_deg:          Optional[float] = field(init=False, default=None) # deg (positive bow up)
+    roll_deg:           Optional[float] = field(init=False, default=None) # deg (positive port up)
+    heading_deg:        Optional[float] = field(init=False, default=None) # deg (0-360)
 
     salinity:       Optional[float] = field(init=False, default=None) # parts per thousand
-    temperature:    Optional[float] = field(init=False, default=None) # deg C
-    sound_speed:    Optional[float] = field(init=False, default=None) # m/s
+    temperature_C:    Optional[float] = field(init=False, default=None) # deg C
+    sound_speed_ms:    Optional[float] = field(init=False, default=None) # m/s
 
     @staticmethod
     def parse_validity_flags(flags: int) -> dict:
@@ -1409,27 +1518,27 @@ class DopplerVelocityLogDataMessage(JSFMessage):
             self.water_vel_z = self._raw_water_vel_z / 1e3 # mm/s -> m/s
 
         if validity_flags['depth']:
-            self.sensor_depth = self._raw_depth_from_depth_sensor / 10 # dm -> m
+            self.sensor_depth_m = self._raw_depth_from_depth_sensor / 10 # dm -> m
 
         if validity_flags['pitch']:
-            self.pitch = self._raw_pitch * 0.01 # -> deg (positive bow up)
+            self.pitch_deg = self._raw_pitch * 0.01 # -> deg (positive bow up)
         if validity_flags['roll']:
-            self.roll = self._raw_pitch * 0.01  # -> deg (positive port up)
+            self.roll_deg = self._raw_roll * 0.01  # -> deg (positive port up)
 
-        logger.debug(f"Pitch: {(self.pitch, beam_results['pitch'])}")
-        logger.debug(f"Roll: {(self.roll, beam_results['roll'])}")
+        # logger.debug(f"Pitch: {(self.pitch_deg, beam_results['pitch'])}")
+        # logger.debug(f"Roll: {(self.roll_deg, beam_results['roll'])}")
 
         if validity_flags['heading']:
-            self.heading = self._raw_heading * 0.01 # -> deg (0-360)
+            self.heading_deg = self._raw_heading * 0.01 # -> deg (0-360)
 
         if validity_flags['salinity']:
             self.salinity = self._raw_salinity  # parts per thousand
 
         if validity_flags['temp']:
-            self.temperature = self._raw_temperature / 100 # deg C
+            self.temperature_C = self._raw_temperature / 100 # deg C
 
         if validity_flags['sound_velocity']:
-            self.sound_speed = self._raw_sound_vel*1.0 # m/s
+            self.sound_speed_ms = self._raw_sound_vel*1.0 # m/s
 
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "DopplerVelocityLogDataMessage":
@@ -1549,7 +1658,7 @@ class UnknownMessage2040(JSFMessage):
                   self.raw_5, self.raw_6, self.raw_7, self.raw_8]
         hex_str = ' '.join(f'0x{v:08x}' for v in values)
         dec_str = ' '.join(f'{v:12d}' for v in values)
-        return f"UnknownMessage2040(\n  HEX: {hex_str}\n  DEC: {dec_str}\n)"
+        return f"UnknownMessage2040(HEX: {hex_str})"
     
 
 @dataclass
@@ -1620,6 +1729,44 @@ class SonarMessageStatusMessage(JSFMessage):
 
 if __name__=='__main__':
 
+    def format_hex(data: bytes, line_width: int = 32) -> str:
+        """
+        Format binary data as readable hex with proper quotes and newlines.
+        
+        Parameters
+        ----------
+        data : bytes
+            Binary data to format
+        line_width : int
+            Number of hex bytes per line (default 32 = 16 bytes)
+        
+        Returns
+        -------
+        str
+            Formatted hex string ready to paste into Python code
+        """
+        # Convert to hex string
+        hex_str = data.hex()
+        
+        # Split into pairs
+        hex_pairs = [hex_str[i:i+2] for i in range(0, len(hex_str), 2)]
+        
+        # Group into lines (line_width is in hex digits, so divide by 2 for byte pairs)
+        bytes_per_line = line_width // 2
+        lines = []
+        
+        for i in range(0, len(hex_pairs), bytes_per_line):
+            line_pairs = hex_pairs[i:i + bytes_per_line]
+            line_hex = ' '.join(line_pairs)
+            lines.append(f"        '{line_hex}'")
+        
+        # Join with proper formatting
+        result = "return bytes.fromhex(\n"
+        result += '\n'.join(lines)
+        result += "\n    )"
+        
+        return result
+
     logging.basicConfig(
         level=logging.INFO
     )
@@ -1628,8 +1775,10 @@ if __name__=='__main__':
 
     fpath = Path("data/survey-a/jsf/20251015170335.jsf")
 
-    max_messages = 100
+    max_messages = 1000
     cnt = 0
+
+    message_types_seen = set({})
 
     with open(fpath, mode='rb') as f:
         while (cnt<max_messages):
@@ -1637,15 +1786,27 @@ if __name__=='__main__':
             if len(header_bytes) < JSFMessageHeader.STRUCT.size:
                 logger.info("End of file")
                 break 
+            
             header = JSFMessageHeader.from_bytes(header_bytes)
             message_bytes = f.read(header.message_size)
             cnt +=1
 
-            logger.info(f"{cnt} - {header}")
-            logger.info(f"{cnt} - Header Bytes: {repr(header_bytes)}")
+
 
             message = JSFMessage.from_bytes(header, message_bytes)
-            logger.info(f"{cnt} = {message}")
-            # logger.info(f"Messag Bytes: {repr(message_bytes)}")
+            
+            if type(message) in message_types_seen:
+                continue
+            message_types_seen.add(type(message))
 
-            # TODO: use this to get some real data for my tests
+            # Use this to get some real data for my tests
+            logger.info(f"{cnt} - {type(message)}")
+            logger.info(f"{cnt} - {header}")
+            logger.info(f"{cnt} - Header Bytes:\n{format_hex(header_bytes)}")
+            logger.info(f"{cnt} - {message}")
+            logger.info(f"{cnt} - Message Bytes:\n{format_hex(message_bytes)}")
+            # hex_string = message_bytes.hex()
+            # Insert spaces every 32 characters for readability:
+            # readable = ' '.join([hex_string[i:i+2] for i in range(0, len(hex_string), 2)])
+            # print(readable)
+                

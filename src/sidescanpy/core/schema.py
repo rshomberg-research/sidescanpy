@@ -39,7 +39,6 @@ REQUIRED_ATTRS  : set = {
     "freq_hz_end",
     "pulse_length_us",
     "sample_rate_hz",
-    "range_m",
     "processing_level",
     "processing_history",
 }
@@ -50,13 +49,15 @@ KNOWN_PROCESSING_LEVELS : set = {
     "georeferenced",
 }
 
+
 # CONSTANTS: HDF5 group structure
-HDF5_GROUP_AUX_STREAMS      : str = "aux_streams"
-HDF5_GROUP_NAVIGATION       : str = f"{HDF5_GROUP_AUX_STREAMS}/navigation"
-HDF5_GROUP_ATTITUDE         : str = f"{HDF5_GROUP_AUX_STREAMS}/attitude"
-HDF5_GROUP_ENVIRONMENTAL    : str = f"{HDF5_GROUP_AUX_STREAMS}/environmental"
-HDF5_GROUP_FREQUENCIES      : str = "frequencies"
-HDF5_FREQ_PREFIX            : str = "hz_"
+HDF5_GROUP_AUX_STREAMS  : str = "aux_streams"
+HDF5_GROUP_NAVIGATION   : str = f"{HDF5_GROUP_AUX_STREAMS}/navigation"
+HDF5_GROUP_ATTITUDE     : str = f"{HDF5_GROUP_AUX_STREAMS}/attitude"
+HDF5_GROUP_DVL          : str = f"{HDF5_GROUP_AUX_STREAMS}/dvl"
+HDF5_GROUP_SENSORS      : str = f"{HDF5_GROUP_AUX_STREAMS}/sensors"
+HDF5_GROUP_FREQUENCIES  : str = "frequencies"
+HDF5_FREQ_PREFIX        : str = "hz_"
 
 # CONSTANTS: I/O configuration
 HDF5_CHUNK_PING         : int = 256
@@ -255,3 +256,303 @@ class SideScanAccessor:
         })
         self._ds.attrs["processing_history"] = json.dumps(history)
 
+
+# ============================================================
+# AUXILIARY STREAM SCHEMAS
+# ============================================================
+
+# TODO: write tests for aux stream schemas
+
+# --- Navigation Record ---
+
+REQUIRED_NAV_DIMS   : set = {"obs"}
+REQUIRED_NAV_COORDS : set = {"time"}
+REQUIRED_NAV_VARS   : set = {"latitude", "longitude"}
+REQUIRED_NAV_ATTRS  : set = {"source"}
+
+
+@xr.register_dataset_accessor("navigation_record")
+class NavigationRecordAccessor:
+    """
+    xarray.Dataset accessor for navigation auxiliary streams.
+
+    A navigation record is a time series of position fixes, typically extracted
+    from NMEA messages (RMC, GLL, GGA) or fallback-extracted from per-ping
+    embedded fields. Stored as separate aux stream so it can be re-interpolated
+    onto ping times later.
+
+    Required dims: {obs}
+    Required coords: {time} (datetime64[ns])
+    Required vars: {latitude, longitude}
+    Optional vars: heading_deg, speed_knots, course_deg
+    Required attrs: {source}
+
+    Examples
+    --------
+    >>> nav.navigation_record.validate()
+    >>> nav.navigation_record.is_empty()
+    """
+
+    _ds: xr.Dataset
+
+    def __init__(self, ds: xr.Dataset) -> None:
+        self._ds = ds
+
+    def validate(self) -> None:
+        missing_dims = REQUIRED_NAV_DIMS - set(self._ds.dims)
+        if missing_dims:
+            raise ValueError(f"Navigation: missing dimensions: {missing_dims}")
+
+        missing_coords = REQUIRED_NAV_COORDS - set(self._ds.coords)
+        if missing_coords:
+            raise ValueError(f"Navigation: missing coordinates: {missing_coords}")
+
+        missing_vars = REQUIRED_NAV_VARS - set(self._ds.data_vars)
+        if missing_vars:
+            raise ValueError(f"Navigation: missing variables: {missing_vars}")
+
+        missing_attrs = REQUIRED_NAV_ATTRS - set(self._ds.attrs)
+        if missing_attrs:
+            raise ValueError(f"Navigation: missing attributes: {missing_attrs}")
+
+        if self._ds["time"].dtype != np.dtype("datetime64[ns]"):
+            raise ValueError(
+                f"Navigation: 'time' must be datetime64[ns], got {self._ds['time'].dtype}"
+            )
+
+    def is_valid(self) -> bool:
+        try:
+            self.validate()
+            return True
+        except ValueError:
+            return False
+
+    def is_empty(self) -> bool:
+        """Return True if the dataset has zero observations."""
+        return self._ds.sizes.get("obs", 0) == 0
+
+
+# --- Attitude Record ---
+
+REQUIRED_ATT_DIMS   : set = {"obs"}
+REQUIRED_ATT_COORDS : set = {"time"}
+REQUIRED_ATT_VARS   : set = {"roll_deg", "pitch_deg", "heave_m"}
+REQUIRED_ATT_ATTRS  : set = {"source"}
+
+
+@xr.register_dataset_accessor("attitude_record")
+class AttitudeRecordAccessor:
+    """
+    Auxiliary stream for attitude data (roll, pitch, heave).
+
+    Typically sourced from PitchRollDataMessage (JSF type 2020). Optional vars
+    include heading_deg, yaw_deg, temperature_c.
+    """
+
+    _ds: xr.Dataset
+
+    def __init__(self, ds: xr.Dataset) -> None:
+        self._ds = ds
+
+    def validate(self) -> None:
+        missing_dims = REQUIRED_ATT_DIMS - set(self._ds.dims)
+        if missing_dims:
+            raise ValueError(f"Attitude: missing dimensions: {missing_dims}")
+
+        missing_coords = REQUIRED_ATT_COORDS - set(self._ds.coords)
+        if missing_coords:
+            raise ValueError(f"Attitude: missing coordinates: {missing_coords}")
+
+        missing_vars = REQUIRED_ATT_VARS - set(self._ds.data_vars)
+        if missing_vars:
+            raise ValueError(f"Attitude: missing variables: {missing_vars}")
+
+        missing_attrs = REQUIRED_ATT_ATTRS - set(self._ds.attrs)
+        if missing_attrs:
+            raise ValueError(f"Attitude: missing attributes: {missing_attrs}")
+
+        if self._ds["time"].dtype != np.dtype("datetime64[ns]"):
+            raise ValueError(
+                f"Attitude: 'time' must be datetime64[ns], got {self._ds['time'].dtype}"
+            )
+
+    def is_valid(self) -> bool:
+        try:
+            self.validate()
+            return True
+        except ValueError:
+            return False
+
+    def is_empty(self) -> bool:
+        return self._ds.sizes.get("obs", 0) == 0
+
+
+# --- DVL Record ---
+
+REQUIRED_DVL_DIMS   : set = {"obs"}
+REQUIRED_DVL_COORDS : set = {"time"}
+REQUIRED_DVL_VARS   : set = {"altitude_m"}
+REQUIRED_DVL_ATTRS  : set = {"source"}
+
+
+@xr.register_dataset_accessor("dvl_record")
+class DVLRecordAccessor:
+    """
+    Auxiliary stream for DVL altimeter data.
+
+    Sourced from DopplerVelocityLogDataMessage (JSF type 2080). Optional vars
+    include bottom_vel_x/y/z, water_vel_x/y/z, sound_speed_ms, temperature_c.
+    """
+
+    _ds: xr.Dataset
+
+    def __init__(self, ds: xr.Dataset) -> None:
+        self._ds = ds
+
+    def validate(self) -> None:
+        missing_dims = REQUIRED_DVL_DIMS - set(self._ds.dims)
+        if missing_dims:
+            raise ValueError(f"DVL: missing dimensions: {missing_dims}")
+
+        missing_coords = REQUIRED_DVL_COORDS - set(self._ds.coords)
+        if missing_coords:
+            raise ValueError(f"DVL: missing coordinates: {missing_coords}")
+
+        missing_vars = REQUIRED_DVL_VARS - set(self._ds.data_vars)
+        if missing_vars:
+            raise ValueError(f"DVL: missing variables: {missing_vars}")
+
+        missing_attrs = REQUIRED_DVL_ATTRS - set(self._ds.attrs)
+        if missing_attrs:
+            raise ValueError(f"DVL: missing attributes: {missing_attrs}")
+
+        if self._ds["time"].dtype != np.dtype("datetime64[ns]"):
+            raise ValueError(
+                f"DVL: 'time' must be datetime64[ns], got {self._ds['time'].dtype}"
+            )
+
+    def is_valid(self) -> bool:
+        try:
+            self.validate()
+            return True
+        except ValueError:
+            return False
+
+    def is_empty(self) -> bool:
+        return self._ds.sizes.get("obs", 0) == 0
+
+
+# --- Generic Sensor Record ---
+# Catch-all for additional time-series streams. Pressure/depth from the
+# pressure sensor message is a candidate to test against DVL altitude.
+
+REQUIRED_GEN_DIMS   : set = {"obs"}
+REQUIRED_GEN_COORDS : set = {"time"}
+REQUIRED_GEN_VARS   : set = set()  # no required vars — depends on sensor
+REQUIRED_GEN_ATTRS  : set = {"source", "sensor_type"}
+
+
+@xr.register_dataset_accessor("sensor_record")
+class SensorRecordAccessor:
+    """
+    Generic auxiliary stream for arbitrary time-series sensor data.
+
+    Use for streams that don't fit the navigation/attitude/dvl categories,
+    e.g. pressure-derived depth, water temperature, conductivity.
+
+    Required dims: {obs}
+    Required coords: {time}
+    Required vars: (none — depends on sensor)
+    Required attrs: {source, sensor_type}
+    """
+
+    _ds: xr.Dataset
+
+    def __init__(self, ds: xr.Dataset) -> None:
+        self._ds = ds
+
+    def validate(self) -> None:
+        missing_dims = REQUIRED_GEN_DIMS - set(self._ds.dims)
+        if missing_dims:
+            raise ValueError(f"Sensor: missing dimensions: {missing_dims}")
+
+        missing_coords = REQUIRED_GEN_COORDS - set(self._ds.coords)
+        if missing_coords:
+            raise ValueError(f"Sensor: missing coordinates: {missing_coords}")
+
+        missing_attrs = REQUIRED_GEN_ATTRS - set(self._ds.attrs)
+        if missing_attrs:
+            raise ValueError(f"Sensor: missing attributes: {missing_attrs}")
+
+        if self._ds["time"].dtype != np.dtype("datetime64[ns]"):
+            raise ValueError(
+                f"Sensor: 'time' must be datetime64[ns], got {self._ds['time'].dtype}"
+            )
+
+    def is_valid(self) -> bool:
+        try:
+            self.validate()
+            return True
+        except ValueError:
+            return False
+
+    def is_empty(self) -> bool:
+        return self._ds.sizes.get("obs", 0) == 0
+    
+    # ============================================================
+# EMPTY RECORD BUILDERS
+# ============================================================
+# These produce zero-observation, schema-valid datasets. Used by the
+# converter (when no source messages exist) and by the HDF5 writer
+# (which always writes nav/attitude/dvl groups, even when unset).
+
+def make_empty_navigation_record(source: str = "empty") -> xr.Dataset:
+    """Zero-obs valid navigation_record."""
+    return xr.Dataset(
+        data_vars={
+            "latitude":  (("obs",), np.array([], dtype=np.float64)),
+            "longitude": (("obs",), np.array([], dtype=np.float64)),
+        },
+        coords={"time": (("obs",), np.array([], dtype="datetime64[ns]"))},
+        attrs={"source": source},
+    )
+
+
+def make_empty_attitude_record(source: str = "empty") -> xr.Dataset:
+    """Zero-obs valid attitude_record."""
+    return xr.Dataset(
+        data_vars={
+            "roll_deg":  (("obs",), np.array([], dtype=np.float32)),
+            "pitch_deg": (("obs",), np.array([], dtype=np.float32)),
+            "heave_m":   (("obs",), np.array([], dtype=np.float32)),
+        },
+        coords={"time": (("obs",), np.array([], dtype="datetime64[ns]"))},
+        attrs={"source": source},
+    )
+
+
+def make_empty_dvl_record(source: str = "empty") -> xr.Dataset:
+    """Zero-obs valid dvl_record."""
+    return xr.Dataset(
+        data_vars={
+            "altitude_m": (("obs",), np.array([], dtype=np.float32)),
+        },
+        coords={"time": (("obs",), np.array([], dtype="datetime64[ns]"))},
+        attrs={"source": source},
+    )
+
+
+def make_empty_sensor_record(
+    sensor_type: str,
+    source: str = "empty",
+    *,
+    var_name: str = "depth_m",
+) -> xr.Dataset:
+    """Zero-obs valid sensor_record."""
+    return xr.Dataset(
+        data_vars={
+            var_name: (("obs",), np.array([], dtype=np.float32)),
+        },
+        coords={"time": (("obs",), np.array([], dtype="datetime64[ns]"))},
+        attrs={"source": source, "sensor_type": sensor_type},
+    )

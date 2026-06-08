@@ -1,73 +1,79 @@
-'''
-Read MultiFrequencySideScanSurvey from netCDF files
+"""
+Read a SideScanFrequencyChannel from a NetCDF (.nc) file.
+
+Uses h5netcdf engine. Pass ``chunks=`` for lazy/dask-backed loading.
 
 2026 rshomberg@uri.edu
-'''
+"""
 
-import logging 
-from pathlib import Path 
+import logging
+from pathlib import Path
 
-import xarray as xr 
+import numpy as np
+import xarray as xr
 
-from sidescanpy.core.survey import MultiFrequencySideScanSurvey, SideScanFrequencyChannel 
+from sidescanpy.core.survey import SideScanFrequencyChannel
 
-# def _group_netcdf_filenames_by_freq(input_dir: Path) -> dict[str,list[Path]]:
-#     '''Pull files from a directory and group by frequency based on filename
-    
-#     Files should be saved (based on writer) using grouping of
-#     'freq_xxxx_hz_surveyName.nc'. Often surveyName represents only a partial
-#     survey where multiple files represent the full 
-#     '''
-#     ...
+logger = logging.getLogger(__name__)
 
-def from_netcdf(input_dir: Path) -> MultiFrequencySideScanSurvey:
-    '''Read survey from directory of netCDF files (one per frequency)'''
 
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Directory not found: {input_dir}")
-    
-    logging.debug(f"Reading survey from netCDF directory: {input_dir}")
+_NETCDF_ENGINE = "h5netcdf"
 
-    nc_files = sorted(input_dir.glob('freq_*/*.nc'))  # FIXME: magic str
-    if not nc_files:
-        raise FileNotFoundError(f"No freq_*/*.nc files found in {input_dir}")
-    
-    logging.info(f"Found {len(nc_files)} netCDF files")
 
-    survey = MultiFrequencySideScanSurvey(
-        # FIXME: this should really be some kind of SurveyMetaData object
-        source_file=input_dir.name,
-        source_format='netcdf',
-        survey_name=''
+def read_frequency_channel(
+    path: Path | str,
+    *,
+    chunks: dict[str, int] | None = None,
+) -> SideScanFrequencyChannel:
+    """
+    Read a NetCDF file back into a SideScanFrequencyChannel.
+
+    Parameters
+    ----------
+    path : Path or str
+        Source file path.
+    chunks : dict, optional
+        Pass to ``xr.open_dataset`` for lazy loading via dask. e.g.
+        ``chunks={"ping": 256}``. None (default) loads eagerly.
+
+    Returns
+    -------
+    SideScanFrequencyChannel
+        Validated channel wrapper around the loaded dataset.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``path`` does not exist.
+    ValueError
+        If the loaded dataset fails schema validation.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"NetCDF file not found: {p}")
+
+    ds = xr.open_dataset(
+        p,
+        engine=_NETCDF_ENGINE,
+        chunks=chunks,
     )
 
-    for nc_file in nc_files:
-        freq_key = nc_file.parent.name
+    ds = _normalize_string_coords(ds)
+    return SideScanFrequencyChannel(ds)
 
-        ds = xr.open_dataset(nc_file, engine='netcdf4')
 
-        survey.add_frequency(freq_key, ds)
-        logging.debug(f"Loaded {freq_key}: {nc_file} ({ds.sizes['ping']} pings)")
+def _normalize_string_coords(ds: xr.Dataset) -> xr.Dataset:
+    """Coerce byte-string coords back to native unicode strings.
 
-    logging.debug(f"{survey.n_frequencies} netCDF files loaded: {input_dir}")
-    return survey
-
-if __name__ == '__main__':
-
-    logging.basicConfig(
-        level=logging.DEBUG, 
-        format='%(asctime)s [%(levelname)8s] %(filename)<path>)s'
-    )
-
-    logging.info(f"Testing sidescanpy/io/netcdf/reader.py")
-
-    input_dir = Path("./tests/output/netcdf")
-
-    if not input_dir.exists():
-        logging.error(f"Directory not found: {input_dir}")
-        logging.info(f"Try running writer.py first to create test files")
-        exit(1)
-
-    survey = from_netcdf(input_dir)
-
-    logging.info(f"Loaded with {survey.n_frequencies} frequencies")
+    h5netcdf can return string coords as bytes (``<S12``) depending on how
+    they were written. Downstream code does ``.sel(channel_id="port")`` and
+    expects plain Python str.
+    """
+    for name in ("channel_id",):
+        if name not in ds.coords:
+            continue
+        values = ds.coords[name].values
+        if values.dtype.kind == "S":   # byte strings
+            decoded = np.array([v.decode("utf-8") for v in values])
+            ds = ds.assign_coords({name: (ds.coords[name].dims, decoded)})
+    return ds

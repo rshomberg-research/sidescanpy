@@ -275,7 +275,12 @@ class TestEnd2EndCorrection:
         
         assert abs(gain_difference - expected_difference) < 0.2
 
-
+    def test_backscatter_raw_unchanged_by_tvg(self):
+        ds = self.create_simple_dataset(backscatter_val=5.0, n_samples=20)
+        original_raw = ds["backscatter_raw"].values.copy()
+        result = apply_tvg(ds)
+        np.testing.assert_array_equal(result["backscatter_raw"].values, original_raw)
+        
 # ============================================================================
 # STEP 5: NAN/INF SAFETY TESTS
 # ============================================================================
@@ -421,3 +426,4 @@ class TestAbsorptionForFrequency:
         alpha_high = absorption_for_frequency(1495000)    # 1495 kHz
         
         assert alpha_low < alpha_mid < alpha_high
+

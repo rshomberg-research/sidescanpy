@@ -18,8 +18,17 @@ from sidescanpy.processing.radiometric import (
     absorption_for_frequency,
 )
 
+from sidescanpy.processing.interpolate import (
+    interpolate_aux_onto_pings,
+    interpolate_onto_channel,
+    DEFAULT_FIELD_SOURCES,
+)
+
 __all__ = [
     "apply_tvg",
     "TVGParams",
     "absorption_for_frequency",
+    "interpolate_aux_onto_pings",
+    "interpolate_onto_channel",
+    "DEFAULT_FIELD_SOURCES",
 ]
