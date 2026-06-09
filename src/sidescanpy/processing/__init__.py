@@ -51,6 +51,14 @@ from sidescanpy.processing.geometric import (
 
 from sidescanpy.processing.georeferencing import compute_georeferencing
 
+from sidescanpy.processing.slicing import (
+    slice_by_pings,
+    slice_by_samples,
+    slice_by_time,
+    slice_by_bbox,
+    slice_by_ground_range,
+)
+
 __all__ = [
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
@@ -60,4 +68,9 @@ __all__ = [
     "DEFAULT_FIELD_SOURCES",
     "compute_geometric_ranges",
     "compute_georeferencing",
+    "slice_by_pings",
+    "slice_by_samples",
+    "slice_by_time",
+    "slice_by_bbox",
+    "slice_by_ground_range",
 ]

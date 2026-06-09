@@ -70,6 +70,17 @@ class SideScanFrequencyChannel:
             f"pings={self.n_pings}, channels={self.n_channels}, "
             f"samples={self.n_samples})"
         )
+    
+    # def process_each_channel(self, fn, *args, **kwargs) -> SideScanSurvey:  # TODO: add to docs
+    #     """Apply fn(channel.dataset, *args, **kwargs) to each frequency channel,
+    #     returning a new survey with replaced channels."""
+    #     new = _shallow_copy_survey(self)
+    #     for fk, channel in list(self.freq_channels.items()):
+    #         new._freq_channels[fk] = SideScanFrequencyChannel(
+    #             fn(channel.dataset, *args, **kwargs),
+    #             freq_key=fk,
+    #         )
+    #     return new
 
 
 # ============================================================

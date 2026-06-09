@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-06
 
 ### Added
 - `docs/core.md` — schema, validation model, survey container reference.
@@ -45,7 +45,32 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   tests covering the math, NaN propagation, ellipsoid options, and
   metadata.
 - `pyproj>=3.6` added as a dependency.
-
+- Integration test for the full processing pipeline against real JSF data
+  (`tests/integration/test_full_pipeline.py`). Runs read → convert →
+  interpolate → apply_tvg → compute_geometric_ranges →
+  compute_georeferencing → write_survey → read_survey end-to-end, with
+  20 tests covering structural correctness, value ranges, and HDF5
+  round-trip of all new variables.
+- Pipeline diagnostic script `scripts/diagnose_pipeline.py`. Prints
+  finite-count and sample values at each pipeline stage. Useful for
+  surfacing integration bugs against real fixtures.
+- `sidescanpy.processing.slicing` — slicing operations on
+  `SideScanFrequencyChannel`. Five functions (`slice_by_pings`,
+  `slice_by_samples`, `slice_by_time`, `slice_by_bbox`,
+  `slice_by_ground_range`) that return new validated channels.
+  31 unit tests.
+- `sidescanpy.viz.waterfall.plot_waterfall` — port+starboard combined
+  waterfall plotting with configurable axis modes (`sample`/
+  `ground_range`/`across_track` on x; `ping`/`time`/`along_track` on
+  y). Percentile-based auto color scaling. Returns matplotlib Axes
+  for further customization. NaN-coordinate masking for water column
+  visualization in geometric modes.
+- `scripts/convert_jsf.py` — convert raw JSF to .ss.h5 with optional
+  pipeline processing through any level (raw, radiometric, geometric,
+  georef). Supports multi-file input.
+- `scripts/export_waterfall_series.py` — slice a survey along the
+  ping axis (or by a time window) and save each slice as a PNG.
+- `docs/viz.md` — viz module reference.
 
 ### Changed
 - Documentation pattern established: short `__init__.py` blurb (purpose,
@@ -57,6 +82,37 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   (which would advance processing_level).
 - `docs/core.md`, `docs/processing.md` updated to reflect the
   additive geometric/georeferencing model.
+- `scripts/plot_sonar_ping.py` rewritten using `read_survey()`,
+  `plot_waterfall()`, and per-axis-mode line plot. Both subplots now
+  share the same x-axis. New `--process`, `--x-axis`, `--y-axis`
+  flags. Multi-file directory loading dropped (single-file v1 scope).
+- Default colormap for visualization scripts is now `copper`.
+- `docs/processing.md` extended with slicing section.
+
+### Fixed
+- Navigation timestamp conversion in aux record builders was inverted,
+  causing nav/attitude/dvl/sensor timestamps to land near 1970-01-01
+  instead of the actual survey time. Affected interpolation onto ping
+  times — clamping always landed on the boundary nav fix.
+  (`int(m.timestamp * 1e9)` is now unconditional.)
+- `interpolate_aux_onto_pings` no longer overwrites valid per-ping
+  fields with NaN when the source aux variable is all NaN (e.g. attitude
+  pitch_deg/roll_deg/heave_m on devices where validity flags reject
+  all data). Now skips with a warning, preserving the original value.
+- `compute_geometric_ranges` treats `sound_vel_ms <= 0` as invalid
+  (in addition to NaN). Devices that report zero as a "no data"
+  sentinel previously cascaded to all-NaN geometric output. Now falls
+  back to 1500 m/s with a warning.
+- `plot_sonar_ping.py` along-track y-axis was computed slice-relative
+  for the waterfall but survey-relative for the marker line, causing
+  the waterfall to appear squashed at the top with the marker far
+  below. Both now use the same survey-relative reference.
+
+### Known issues
+- `plot_sonar_ping.py` slider performance: full waterfall re-renders
+  on every slider step. For 5000-ping surveys, slider drag lags
+  noticeably. Future work: cache waterfall, update only line plot
+  and marker on slider events.  
 
 ## [0.3.0] - 2026-06-03
 
