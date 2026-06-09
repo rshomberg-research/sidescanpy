@@ -1,26 +1,36 @@
 """
 Geometric range computation for SideScan sonar data.
 
-Computes per-sample slant range and ground range as data variables
-attached to the dataset. Does NOT resample backscatter — original sample
-positions and values are preserved. Downstream tools (xarray.interp,
-rioxarray, etc.) handle resampling onto regular grids on demand.
+Computes per-sample geometric variables as data variables attached to
+the dataset. Does NOT resample backscatter — original sample positions
+and values are preserved. Downstream tools (xarray.interp, rioxarray,
+etc.) handle resampling onto regular grids on demand.
 
-Slant range is computed from sample index, sound velocity, and sample
-rate:
+Outputs (all shape (ping, channel, sample)):
+    slant_range_m       attitude-invariant time-of-flight range
+    ground_range_m      sqrt(slant^2 - altitude^2), unsigned (flat-bottom,
+                        no pitch correction)
+    across_track_m      signed Y component, pitch-corrected
+                        (negative = port, positive = starboard)
+    along_track_m       signed X component, pitch-induced offset
+                        (positive = forward of nadir, negative = aft)
+    vertical_offset_m   Z component from platform = altitude_m for flat
+                        bottom (broadcast). Future: extends to bathymetry.
+    depth_per_sample_m  absolute water depth at sample location
+                        = depth_m + altitude_m
 
-    R_slant[ping, channel, sample] = sample_idx * sound_vel[ping] / (2 * sample_rate)
+Sign conventions:
+    - across_track_m: port channel negative, starboard positive
+    - along_track_m: positive forward of nadir (pitch-up reflects forward)
 
-Ground range is computed from slant range and per-ping altitude using
-the Pythagorean relation for a flat seafloor:
+Pitch-correction math:
+    across_track_m = ±ground_range_m * cos(pitch_rad)
+    along_track_m  = +ground_range_m * sin(pitch_rad)
 
-    R_ground = sqrt(R_slant^2 - altitude^2)   when R_slant > altitude
-             = NaN                              when R_slant <= altitude
-                                               (water column / nadir gap)
-
-Both port and starboard channels share the same per-ping altitude (single
-transducer assembly). Sound velocity is per-ping; per-sample variation
-through the water column is not modeled.
+Roll's effect on altitude is intentionally not modeled here. Future
+work: when DVL altitude is available it's pre-corrected; when only
+fathometer_reading_m is available, attitude correction is applied to
+derive altitude_m.
 
 The function does not modify processing_level. processing_history is
 appended with a record of the computation.
@@ -43,44 +53,41 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SOUND_VEL_MS = 1500.0
 
 
-def compute_geometric_ranges(ds: xr.Dataset) -> xr.Dataset:
+def compute_geometric_ranges(
+    ds: xr.Dataset,
+    *,
+    expose_unmasked_z: bool = False,
+) -> xr.Dataset:
     """
-    Attach slant_range_m and ground_range_m data variables to the dataset.
-
-    Both variables have shape ``(ping, channel, sample)`` and are computed
-    from per-ping altitude and sound velocity. Backscatter is preserved
-    unchanged.
+    Attach per-sample geometric variables to the dataset.
 
     Parameters
     ----------
     ds : xr.Dataset
-        Validated sidescan dataset. Must satisfy the schema (see
-        ``sidescanpy.core.schema``). Per-ping altitude and sound velocity
-        come from ``altitude_m`` and ``sound_vel_ms``; ``sample_rate_hz``
-        is read from dataset attrs.
+        Validated sidescan dataset.
+    expose_unmasked_z : bool, default False
+        If True, vertical_offset_m and depth_per_sample_m are written as
+        per-ping values broadcast to (ping, channel, sample) without
+        masking the water column. The Z-axis variables become well-defined
+        per-ping constants for every sample. The default (False) masks
+        them with the same NaN mask as ground_range_m for consistency.
 
     Returns
     -------
     xr.Dataset
-        New dataset (input is not modified) with two added data variables:
-
-        - ``slant_range_m`` : per-sample slant range in meters
-        - ``ground_range_m`` : per-sample ground range in meters
-          (NaN inside the nadir gap)
-
-        ``processing_level`` is unchanged. ``processing_history`` is
-        appended with a ``compute_geometric_ranges`` entry.
+        New dataset (input not modified) with six added per-sample data
+        variables. processing_level is unchanged. processing_history is
+        appended.
 
     Notes
     -----
     NaN handling:
-
-    - If a ping has NaN ``altitude_m``, all ground_range_m values for that
-      ping are NaN.
-    - If a ping has NaN ``sound_vel_ms``, the function falls back to
-      1500 m/s for slant range computation. A warning is logged.
-    - Samples where slant range <= altitude are NaN in ground_range_m
-      (water column samples; sound hasn't reached the bottom yet).
+      - NaN altitude_m for a ping → all per-sample geometry NaN for that
+        ping (slant_range_m is unaffected; it's altitude-independent).
+      - NaN sound_vel_ms for a ping → falls back to 1500 m/s with warning.
+      - Water-column samples (slant <= altitude) → NaN in ground_range_m,
+        across_track_m, along_track_m, and (by default) vertical_offset_m
+        and depth_per_sample_m.
     """
     ds.sidescan.validate()
 
@@ -89,37 +96,33 @@ def compute_geometric_ranges(ds: xr.Dataset) -> xr.Dataset:
     n_samples = ds.sizes["sample"]
     sample_rate = float(ds.attrs["sample_rate_hz"])
 
-    # Resolve per-ping sound velocity, falling back to default for NaN values
+    # ----- per-ping inputs -----
     sound_vel = ds["sound_vel_ms"].values.astype(np.float64)
     nan_sv = np.isnan(sound_vel)
     if nan_sv.any():
         n_nan = int(nan_sv.sum())
         logger.warning(
             f"{n_nan} of {n_pings} pings have NaN sound_vel_ms; "
-            f"falling back to {_DEFAULT_SOUND_VEL_MS} m/s for those pings"
+            f"falling back to {_DEFAULT_SOUND_VEL_MS} m/s"
         )
         sound_vel = np.where(nan_sv, _DEFAULT_SOUND_VEL_MS, sound_vel)
 
     altitude = ds["altitude_m"].values.astype(np.float64)
+    pitch_deg = ds["pitch_deg"].values.astype(np.float64)
+    depth = ds["depth_m"].values.astype(np.float64)
+    pitch_rad = np.deg2rad(pitch_deg)
 
-    # ----- slant range -----
-    # slant[ping, channel, sample] = sample_idx * sound_vel[ping] / (2 * sample_rate)
-    sample_idx = np.arange(n_samples, dtype=np.float64)              # (sample,)
-    sample_interval_per_ping = sound_vel / (2.0 * sample_rate)        # (ping,)
-
-    # Broadcast: (ping, 1, sample) * (sample,) → (ping, 1, sample)
-    slant_per_ping = sample_interval_per_ping[:, None] * sample_idx[None, :]   # (ping, sample)
-    # Tile across channels: (ping, channel, sample)
+    # ----- slant range (attitude-invariant) -----
+    sample_idx = np.arange(n_samples, dtype=np.float64)
+    sample_interval_per_ping = sound_vel / (2.0 * sample_rate)
+    slant_per_ping = sample_interval_per_ping[:, None] * sample_idx[None, :]
     slant_range = np.broadcast_to(
         slant_per_ping[:, None, :],
         (n_pings, n_channels, n_samples),
     ).astype(np.float32)
 
-    # ----- ground range -----
-    # ground = sqrt(slant^2 - altitude^2) where slant > altitude, else NaN
-    # Broadcast altitude (ping,) → (ping, 1, 1)
-    altitude_b = altitude[:, None, None]                             # (ping, 1, 1)
-
+    # ----- ground range (flat bottom, no pitch correction) -----
+    altitude_b = altitude[:, None, None]
     with np.errstate(invalid="ignore"):
         diff = slant_range.astype(np.float64) ** 2 - altitude_b ** 2
         ground_range = np.where(
@@ -128,6 +131,50 @@ def compute_geometric_ranges(ds: xr.Dataset) -> xr.Dataset:
             np.nan,
         ).astype(np.float32)
 
+    # NaN mask used for masking the dependent variables
+    valid_mask = ~np.isnan(ground_range)
+
+    # ----- across-track and along-track (pitch-corrected) -----
+    cos_pitch = np.cos(pitch_rad)[:, None, None]
+    sin_pitch = np.sin(pitch_rad)[:, None, None]
+
+    # Channel sign: port = -1, starboard = +1.  Channel index 0 = port.
+    channel_sign = np.array([-1.0, 1.0], dtype=np.float64)[None, :, None]
+
+    across_track = (
+        channel_sign * ground_range.astype(np.float64) * cos_pitch
+    ).astype(np.float32)
+
+    along_track = (
+        ground_range.astype(np.float64) * sin_pitch
+    ).astype(np.float32)
+    # Broadcast along_track to (ping, channel, sample) — same value for
+    # both channels, since pitch is platform-level.
+    along_track = np.broadcast_to(
+        along_track,
+        (n_pings, n_channels, n_samples),
+    ).astype(np.float32)
+
+    # ----- vertical offset and depth per sample -----
+    # For flat bottom: vertical_offset_m == altitude_m, broadcast.
+    # For depth_per_sample_m: == depth_m + altitude_m, broadcast.
+    vertical_per_ping = altitude.astype(np.float32)
+    depth_per_ping = (depth + altitude).astype(np.float32)
+
+    vertical_offset = np.broadcast_to(
+        vertical_per_ping[:, None, None],
+        (n_pings, n_channels, n_samples),
+    ).astype(np.float32).copy()  # copy to allow masking
+
+    depth_per_sample = np.broadcast_to(
+        depth_per_ping[:, None, None],
+        (n_pings, n_channels, n_samples),
+    ).astype(np.float32).copy()
+
+    if not expose_unmasked_z:
+        vertical_offset[~valid_mask] = np.nan
+        depth_per_sample[~valid_mask] = np.nan
+
     # ----- assemble output -----
     out = ds.copy(deep=False)
     out.attrs = dict(ds.attrs)
@@ -135,21 +182,48 @@ def compute_geometric_ranges(ds: xr.Dataset) -> xr.Dataset:
     out = out.assign(
         slant_range_m=(("ping", "channel", "sample"), slant_range),
         ground_range_m=(("ping", "channel", "sample"), ground_range),
+        across_track_m=(("ping", "channel", "sample"), across_track),
+        along_track_m=(("ping", "channel", "sample"), along_track.copy()),
+        vertical_offset_m=(("ping", "channel", "sample"), vertical_offset),
+        depth_per_sample_m=(("ping", "channel", "sample"), depth_per_sample),
     )
 
+    # Variable-level attrs
     out["slant_range_m"].attrs = {
         "units": "m",
         "long_name": "slant range (transducer to sample)",
-        "description": "Distance from transducer along the slant path.",
+        "description": "Distance from transducer along the slant path. "
+                       "Attitude-invariant.",
     }
     out["ground_range_m"].attrs = {
         "units": "m",
         "long_name": "ground range (across the seafloor)",
-        "description": (
-            "Horizontal distance across the seafloor from nadir to the "
-            "sample position, assuming a flat bottom at altitude_m below "
-            "the towfish. NaN inside the nadir gap (slant <= altitude)."
-        ),
+        "description": "Horizontal distance assuming flat bottom and zero "
+                       "pitch. Unsigned.",
+    }
+    out["across_track_m"].attrs = {
+        "units": "m",
+        "long_name": "across-track distance from platform, signed",
+        "description": "Y component in platform frame. Negative = port, "
+                       "positive = starboard. Pitch-corrected.",
+    }
+    out["along_track_m"].attrs = {
+        "units": "m",
+        "long_name": "along-track offset from nadir, signed",
+        "description": "X component in platform frame. Positive = forward "
+                       "of nadir (pitch-up reflects forward).",
+    }
+    out["vertical_offset_m"].attrs = {
+        "units": "m",
+        "long_name": "vertical distance from platform to sample",
+        "description": "Z component in platform frame. For flat bottom, "
+                       "equals altitude_m broadcast across samples.",
+    }
+    out["depth_per_sample_m"].attrs = {
+        "units": "m",
+        "long_name": "absolute water depth at sample",
+        "description": "depth_m + altitude_m broadcast across samples. "
+                       "Absolute depth in the water column.",
     }
 
     # ----- update processing history -----
@@ -169,6 +243,7 @@ def compute_geometric_ranges(ds: xr.Dataset) -> xr.Dataset:
                 "altitude_source": "altitude_m",
                 "sound_velocity_source": "sound_vel_ms",
                 "default_sound_vel_ms": _DEFAULT_SOUND_VEL_MS,
+                "expose_unmasked_z": expose_unmasked_z,
                 "n_pings_with_nan_sv": int(nan_sv.sum()),
             },
             "function": "sidescanpy.processing.geometric.compute_geometric_ranges",
@@ -178,8 +253,8 @@ def compute_geometric_ranges(ds: xr.Dataset) -> xr.Dataset:
     out.attrs["processing_history"] = json.dumps(history)
 
     logger.info(
-        "compute_geometric_ranges: added slant_range_m and ground_range_m "
-        "for %d pings × %d channels × %d samples",
+        "compute_geometric_ranges: added 6 per-sample variables for %d "
+        "pings × %d channels × %d samples",
         n_pings, n_channels, n_samples,
     )
 
