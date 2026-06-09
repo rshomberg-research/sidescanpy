@@ -27,6 +27,25 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   sample positions; ranges are derived from per-ping altitude and
   sound velocity. Handles nadir gap (water-column samples) and NaN
   altitude/sound velocity gracefully. ~24 unit tests.
+- `compute_geometric_ranges` now produces six per-sample data variables:
+  `slant_range_m`, `ground_range_m`, `across_track_m`, `along_track_m`,
+  `vertical_offset_m`, `depth_per_sample_m`. Includes pitch correction
+  for the platform-frame XYZ components. New `expose_unmasked_z` kwarg
+  controls whether vertical_offset and depth_per_sample mask the water
+  column (default: yes).
+- Sign conventions: across_track_m is negative for port, positive for
+  starboard. along_track_m is positive forward of nadir.
+- 53 unit tests covering the new variables, pitch math, sign conventions,
+  edge cases, and metadata propagation.
+- `sidescanpy.processing.georeferencing.compute_georeferencing` — adds
+  `latitude_per_sample` and `longitude_per_sample` data variables to a
+  dataset. Uses `pyproj.Geod` for vectorized geodetic forward calculations
+  on a configurable ellipsoid (default WGS84). Handles NaN propagation
+  through per-ping nav/heading and per-sample offset fields. 26 unit
+  tests covering the math, NaN propagation, ellipsoid options, and
+  metadata.
+- `pyproj>=3.6` added as a dependency.
+
 
 ### Changed
 - Documentation pattern established: short `__init__.py` blurb (purpose,
@@ -38,7 +57,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   (which would advance processing_level).
 - `docs/core.md`, `docs/processing.md` updated to reflect the
   additive geometric/georeferencing model.
-  
+
 ## [0.3.0] - 2026-06-03
 
 ### Added

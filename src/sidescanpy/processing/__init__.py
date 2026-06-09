@@ -45,6 +45,8 @@ from sidescanpy.processing.radiometric import (
     absorption_for_frequency,
 )
 
+from sidescanpy.processing.georeferencing import compute_georeferencing
+
 __all__ = [
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
@@ -52,4 +54,5 @@ __all__ = [
     "TVGParams",
     "absorption_for_frequency",
     "DEFAULT_FIELD_SOURCES",
+    "compute_georeferencing",
 ]
