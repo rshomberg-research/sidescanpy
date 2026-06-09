@@ -346,6 +346,29 @@ class TestEmptyAuxSkips:
         ch = result.get_frequency("hz_1495000")
         np.testing.assert_array_equal(ch.dataset["roll_deg"].values, original_roll)
 
+@pytest.mark.unit
+class TestAllNanSource:
+    def test_all_nan_source_preserves_original(self, tmp_path):
+        """When the aux source variable is all NaN, the per-ping field
+        should be preserved (not overwritten with NaN)."""
+        survey = _build_known_survey()
+        # Replace nav latitude with all NaN
+        nav = survey.navigation.copy(deep=True)
+        nav["latitude"][:] = np.nan
+        survey.navigation = nav
+
+        # Capture original per-ping latitude
+        fk = "hz_1495000"
+        ch = survey.get_frequency(fk)
+        original_lat = ch.dataset["latitude"].values.copy()
+
+        # Run interpolation
+        result = interpolate_aux_onto_pings(survey)
+        new_lat = result.get_frequency(fk).dataset["latitude"].values
+
+        # Original values must be preserved (not all NaN)
+        np.testing.assert_array_equal(new_lat, original_lat)
+
 
 @pytest.mark.unit
 class TestEmptyAuxForce:

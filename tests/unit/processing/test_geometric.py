@@ -565,6 +565,16 @@ class TestSoundVelocity:
             or np.isnan(ping1_slant)
         ), f"Ping with NaN sound_vel should use default or be NaN, got {ping1_slant}"
 
+    def test_zero_sound_velocity_falls_back(self):
+        sv = np.array([1500.0, 0.0, 1500.0], dtype=np.float32)
+        ds = _make_test_dataset(
+            n_pings=3, n_samples=20, sound_vel_ms=sv, altitude_m=5.0,
+        )
+        result = compute_geometric_ranges(ds)
+        slant = result["slant_range_m"].values
+        # Ping 1 has zero sv → fallback to 1500 → slant non-zero for non-zero samples
+        assert float(slant[1, 0, 10]) > 0
+
 
 # ============================================================
 # EDGE CASES

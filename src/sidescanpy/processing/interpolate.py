@@ -294,6 +294,15 @@ def _interpolate_channel_from_survey(
                 )
                 continue
 
+            # NEW: check if source variable is all NaN → preserve original
+            source_values = aux_ds[aux_var].values
+            if np.all(np.isnan(source_values)):
+                logger.warning(
+                    f"Skipping '{ping_field}': '{aux_name}.{aux_var}' source "
+                    f"is all NaN. Preserving original per-ping value."
+                )
+                continue
+
             interpolated = _interpolate_one_var(
                 source=aux_ds,
                 var_name=aux_var,
@@ -302,6 +311,7 @@ def _interpolate_channel_from_survey(
                 extrapolation=extrapolation,
                 drop_invalid=drop_invalid,
             )
+
             new_ds = new_ds.assign({ping_field: ("ping", interpolated)})
             fields_touched.append(ping_field)
 

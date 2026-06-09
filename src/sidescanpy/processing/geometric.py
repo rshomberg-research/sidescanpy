@@ -98,14 +98,14 @@ def compute_geometric_ranges(
 
     # ----- per-ping inputs -----
     sound_vel = ds["sound_vel_ms"].values.astype(np.float64)
-    nan_sv = np.isnan(sound_vel)
-    if nan_sv.any():
-        n_nan = int(nan_sv.sum())
+    invalid_sv = np.isnan(sound_vel) | (sound_vel <= 0) # BUG: why is sound_vel getting put at 0. check jsf messages.py
+    if invalid_sv.any():
+        n_invalid = int(invalid_sv.sum())
         logger.warning(
-            f"{n_nan} of {n_pings} pings have NaN sound_vel_ms; "
-            f"falling back to {_DEFAULT_SOUND_VEL_MS} m/s"
+            f"{n_invalid} of {n_pings} pings have invalid sound_vel_ms "
+            f"(NaN or non-positive); falling back to {_DEFAULT_SOUND_VEL_MS} m/s"
         )
-        sound_vel = np.where(nan_sv, _DEFAULT_SOUND_VEL_MS, sound_vel)
+        sound_vel = np.where(invalid_sv, _DEFAULT_SOUND_VEL_MS, sound_vel)
 
     altitude = ds["altitude_m"].values.astype(np.float64)
     pitch_deg = ds["pitch_deg"].values.astype(np.float64)
@@ -244,7 +244,7 @@ def compute_geometric_ranges(
                 "sound_velocity_source": "sound_vel_ms",
                 "default_sound_vel_ms": _DEFAULT_SOUND_VEL_MS,
                 "expose_unmasked_z": expose_unmasked_z,
-                "n_pings_with_nan_sv": int(nan_sv.sum()),
+                "n_pings_with_invalid_sv": int(invalid_sv.sum()),
             },
             "function": "sidescanpy.processing.geometric.compute_geometric_ranges",
             "version": __version__,

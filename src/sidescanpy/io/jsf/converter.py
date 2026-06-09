@@ -267,7 +267,7 @@ def _build_frequency_channel(
             "heave_m":      (["ping"], heave),
             "altitude_m":   (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll
             "sound_vel_ms": (["ping"], sound_vel),
-            "fathometer_reading_m": (["ping"], altitude)
+            "fathometer_reading_m": (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll)
         },
         coords={
             "ping_number": (["ping"], ping_numbers),

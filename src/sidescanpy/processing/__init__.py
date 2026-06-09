@@ -45,6 +45,10 @@ from sidescanpy.processing.radiometric import (
     absorption_for_frequency,
 )
 
+from sidescanpy.processing.geometric import (
+    compute_geometric_ranges,
+)
+
 from sidescanpy.processing.georeferencing import compute_georeferencing
 
 __all__ = [
@@ -54,5 +58,6 @@ __all__ = [
     "TVGParams",
     "absorption_for_frequency",
     "DEFAULT_FIELD_SOURCES",
+    "compute_geometric_ranges",
     "compute_georeferencing",
 ]
