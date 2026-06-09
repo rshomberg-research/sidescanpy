@@ -190,6 +190,7 @@ class TestEnd2EndCorrection:
             "altitude_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
             "heave_m": (["ping"], np.zeros(n_pings, dtype=np.float32)),
             "sound_vel_ms": (["ping"], np.full(n_pings, 1500.0, dtype=np.float32)),
+            "fathometer_reading_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
         }
 
         attrs = {
@@ -318,6 +319,7 @@ class TestNaNInfHandling:
             "altitude_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
             "heave_m": (["ping"], np.zeros(n_pings, dtype=np.float32)),
             "sound_vel_ms": (["ping"], np.full(n_pings, 1500.0, dtype=np.float32)),
+            "fathometer_reading_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
         }
 
         attrs = {

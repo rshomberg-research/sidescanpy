@@ -68,6 +68,7 @@ def _make_test_dataset(
         "altitude_m": (["ping"], alt),
         "heave_m": (["ping"], np.zeros(n_pings, dtype=np.float32)),
         "sound_vel_ms": (["ping"], sv),
+        "fathometer_reading_m": (["ping"], alt),
     }
 
     attrs = {

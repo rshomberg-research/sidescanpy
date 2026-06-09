@@ -67,6 +67,7 @@ def make_minimal_sidescan_dataset(
             "heave_m":      (["ping"], np.zeros(n_pings, dtype=np.float32)),
             "altitude_m":   (["ping"], np.full(n_pings, 5.0, dtype=np.float32)),
             "sound_vel_ms": (["ping"], np.full(n_pings, 1500.0, dtype=np.float32)),
+            "fathometer_reading_m": (["ping"], np.full(n_pings, 5.0, dtype=np.float32)),
         },
         coords={
             "ping_number": (["ping"], np.arange(1, n_pings + 1, dtype=np.int32)),

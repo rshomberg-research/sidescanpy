@@ -20,6 +20,7 @@ transform. See [`docs/core.md`](core.md) for the schema conventions.
 | `interpolate_aux_onto_pings` | Replace per-ping fields with interpolated aux values | (any) → (unchanged) |
 | `interpolate_onto_channel` | Lower-level: interpolate any external dataset onto pings | (any) → (unchanged) |
 | `apply_tvg` | Time-varying gain correction | raw → radiometric |
+| `compute_geometric_ranges` | Compute per-sample slant_range_m and ground_range_m | (any) → (unchanged) |
 
 `interpolate_*` functions don't change `processing_level` because
 interpolation is metadata enrichment, not a processing step in the
@@ -121,6 +122,39 @@ These are reasonable defaults from the Francois-Garrison formula. For precise
 values, compute using full F-G with CTD data and pass via
 `TVGParams(absorption_db_per_m=...)`.
 
+## `compute_geometric_ranges`
+
+Attaches per-sample `slant_range_m` and `ground_range_m` data variables
+to the dataset. Lossless: backscatter is preserved at original sample
+positions. Resampling onto a regular grid for plotting or mosaicking is
+left to downstream tools (`xarray.interp`, `rioxarray`, etc.) on demand.
+
+### Math
+
+Slant range: `R_slant[ping, channel, sample] = sample_idx * sound_vel[ping] / (2 * sample_rate)`
+
+Ground range (flat-bottom assumption):
+
+
+$R_ground = sqrt(R_slant^2 - altitude^2)$   when R_slant > altitude
+ = NaN                              when R_slant <= altitude
+
+The water-column samples (where slant ≤ altitude — sound hasn't
+reached the bottom yet) are NaN. This is the standard nadir gap.
+
+### NaN handling
+
+- NaN `altitude_m` for a ping → all `ground_range_m` for that ping is NaN.
+- NaN `sound_vel_ms` for a ping → falls back to 1500 m/s with a warning.
+
+### Notes
+
+- Both port and starboard channels share the same per-ping altitude
+  (one transducer assembly).
+- Sound velocity is per-ping. Per-sample variation through the water
+  column is not modeled.
+- `processing_level` is not modified — the operation is additive.
+- 
 ## Future work
 
 - **Geometric correction.** Slant-range to ground-range calculation using per-ping

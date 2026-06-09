@@ -21,6 +21,23 @@ logger = logging.getLogger(__name__)
 # CONSTANTS: required schema elements
 REQUIRED_DIMS   : set = {"ping", "channel", "sample"}
 REQUIRED_COORDS : set = {"ping_number", "time", "channel_id"}
+# NOTE: Per-ping fields. Notes on closely-related fields:
+#
+#   fathometer_reading_m
+#       Raw altimeter measurement. Distance from transducer to bottom along
+#       the altimeter's beam axis. Affected by platform attitude (pitch, roll)
+#       — when the platform tilts, the beam tilts with it.
+#
+#   altitude_m
+#       Vertical distance from transducer to bottom. Should be attitude-
+#       corrected. For now (until DVL is properly supported and attitude
+#       correction is implemented), altitude_m == fathometer_reading_m as a
+#       conservative simplification. Functions that need accurate vertical
+#       altitude should use altitude_m and we'll fix the source later.
+#
+#   depth_m
+#       Vertical distance from sea surface to transducer. Independent of
+#       altitude_m and fathometer_reading_m.
 REQUIRED_VARS   : set = {
     "backscatter_raw",
     "backscatter_intensity",
@@ -33,6 +50,7 @@ REQUIRED_VARS   : set = {
     "heave_m",
     "altitude_m",
     "sound_vel_ms",
+    "fathometer_reading_m",
 }
 REQUIRED_ATTRS  : set = {
     "freq_hz_start",
