@@ -5,115 +5,118 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.4.0] - 2026-06-06
+## [Unreleased]
 
 ### Added
-- `docs/core.md` — schema, validation model, survey container reference.
-- `docs/io_jsf.md` — JSF reader, message hierarchy, conventions.
-- `docs/io_netcdf.md` — single-channel NetCDF IO reference.
-- `docs/io_hdf5.md` — full-survey HDF5 IO with group layout.
-- `docs/processing.md` — interpolate and radiometric reference, including
-  per-field source decision matrix cross-linked from
-  `jsf_aux_source_selection.md`.
-- `CHANGELOG.md` (Keep a Changelog format).
-- `LICENSE` (MIT).
-- README rewrite focused on package purpose and quick-start example.
-- Module-level docstrings in `__init__.py` for `sidescanpy.core`,
-  `sidescanpy.io.jsf`, `sidescanpy.io.netcdf`, `sidescanpy.io.hdf5`,
-  and `sidescanpy.processing`. Each cross-links to its `docs/*.md` file.
-- `sidescanpy.processing.geometric.compute_geometric_ranges` — attaches
-  per-sample `slant_range_m` and `ground_range_m` data variables to a
-  validated dataset. Lossless: backscatter is preserved at original
-  sample positions; ranges are derived from per-ping altitude and
-  sound velocity. Handles nadir gap (water-column samples) and NaN
-  altitude/sound velocity gracefully. ~24 unit tests.
-- `compute_geometric_ranges` now produces six per-sample data variables:
-  `slant_range_m`, `ground_range_m`, `across_track_m`, `along_track_m`,
-  `vertical_offset_m`, `depth_per_sample_m`. Includes pitch correction
-  for the platform-frame XYZ components. New `expose_unmasked_z` kwarg
-  controls whether vertical_offset and depth_per_sample mask the water
-  column (default: yes).
-- Sign conventions: across_track_m is negative for port, positive for
-  starboard. along_track_m is positive forward of nadir.
-- 53 unit tests covering the new variables, pitch math, sign conventions,
-  edge cases, and metadata propagation.
-- `sidescanpy.processing.georeferencing.compute_georeferencing` — adds
-  `latitude_per_sample` and `longitude_per_sample` data variables to a
-  dataset. Uses `pyproj.Geod` for vectorized geodetic forward calculations
-  on a configurable ellipsoid (default WGS84). Handles NaN propagation
-  through per-ping nav/heading and per-sample offset fields. 26 unit
-  tests covering the math, NaN propagation, ellipsoid options, and
-  metadata.
-- `pyproj>=3.6` added as a dependency.
-- Integration test for the full processing pipeline against real JSF data
-  (`tests/integration/test_full_pipeline.py`). Runs read → convert →
-  interpolate → apply_tvg → compute_geometric_ranges →
-  compute_georeferencing → write_survey → read_survey end-to-end, with
-  20 tests covering structural correctness, value ranges, and HDF5
-  round-trip of all new variables.
-- Pipeline diagnostic script `scripts/diagnose_pipeline.py`. Prints
-  finite-count and sample values at each pipeline stage. Useful for
-  surfacing integration bugs against real fixtures.
-- `sidescanpy.processing.slicing` — slicing operations on
-  `SideScanFrequencyChannel`. Five functions (`slice_by_pings`,
-  `slice_by_samples`, `slice_by_time`, `slice_by_bbox`,
-  `slice_by_ground_range`) that return new validated channels.
-  31 unit tests.
-- `sidescanpy.viz.waterfall.plot_waterfall` — port+starboard combined
-  waterfall plotting with configurable axis modes (`sample`/
-  `ground_range`/`across_track` on x; `ping`/`time`/`along_track` on
-  y). Percentile-based auto color scaling. Returns matplotlib Axes
-  for further customization. NaN-coordinate masking for water column
-  visualization in geometric modes.
-- `scripts/convert_jsf.py` — convert raw JSF to .ss.h5 with optional
-  pipeline processing through any level (raw, radiometric, geometric,
-  georef). Supports multi-file input.
-- `scripts/export_waterfall_series.py` — slice a survey along the
-  ping axis (or by a time window) and save each slice as a PNG.
-- `docs/viz.md` — viz module reference.
+- ... 
 
 ### Changed
-- Documentation pattern established: short `__init__.py` blurb (purpose,
-  entry points, conventions, cross-link) plus focused `docs/*.md`
-  reference (entry points, conventions, known issues, future work).
-- `KNOWN_PROCESSING_LEVELS` trimmed to ``{"raw", "radiometric"}``.
-  Geometric and georeferencing operations are now treated as additive
-  (they attach new variables) rather than backscatter-transforming
-  (which would advance processing_level).
-- `docs/core.md`, `docs/processing.md` updated to reflect the
-  additive geometric/georeferencing model.
-- `scripts/plot_sonar_ping.py` rewritten using `read_survey()`,
-  `plot_waterfall()`, and per-axis-mode line plot. Both subplots now
-  share the same x-axis. New `--process`, `--x-axis`, `--y-axis`
-  flags. Multi-file directory loading dropped (single-file v1 scope).
-- Default colormap for visualization scripts is now `copper`.
-- `docs/processing.md` extended with slicing section.
+- ...
 
 ### Fixed
+- ...
+
+## [0.4.0] - 2026-06-09
+
+Major release adding geometric and georeferencing computations,
+slicing operations, visualization utilities, and a real-data
+integration test that surfaced and fixed three end-to-end bugs.
+
+### Added
+
+#### Processing
+- **`compute_geometric_ranges`** (`sidescanpy.processing.geometric`) —
+  computes six per-sample data variables: `slant_range_m`,
+  `ground_range_m`, `across_track_m`, `along_track_m`,
+  `vertical_offset_m`, `depth_per_sample_m`. Includes pitch correction
+  for the platform-frame XYZ components. Sign conventions: across_track
+  is negative for port, positive for starboard; along_track is positive
+  forward of nadir. Lossless: backscatter preserved at original sample
+  positions.
+- **`compute_georeferencing`** (`sidescanpy.processing.georeferencing`)
+  — computes per-sample `latitude_per_sample` and `longitude_per_sample`
+  via `pyproj.Geod` forward calculations on a configurable ellipsoid
+  (default WGS84). Vectorized; handles NaN propagation cleanly.
+- **Slicing module** (`sidescanpy.processing.slicing`) — five pure
+  functions for slicing `SideScanFrequencyChannel`: `slice_by_pings`,
+  `slice_by_samples`, `slice_by_time`, `slice_by_bbox`,
+  `slice_by_ground_range`. Schema-preserving.
+
+#### Visualization
+- **`plot_waterfall`** (`sidescanpy.viz`) — port+starboard combined
+  waterfall with configurable x-axis (sample/ground_range/across_track)
+  and y-axis (ping/time/along_track) modes. Percentile-based auto color
+  scaling, NaN-aware coordinate handling for water-column gap.
+
+#### Scripts
+- `scripts/convert_jsf.py` — convert raw JSF to `.ss.h5` with optional
+  pipeline processing (raw → radiometric → geometric → georef).
+  Supports multi-file input.
+- `scripts/export_waterfall_series.py` — export a series of waterfall
+  PNGs from a survey, sliced by ping count or time window.
+- `scripts/diagnose_pipeline.py` — print finite-count and sample values
+  at each pipeline stage; useful for surfacing integration bugs.
+
+#### Testing
+- Full-pipeline integration test (`tests/integration/test_full_pipeline.py`)
+  exercising read → convert → interpolate → TVG → geometric → georef
+  → write → read on the real sample JSF fixture. Surfaced three real-data
+  bugs (see Fixed below).
+- ~150 new unit tests across the new modules.
+
+#### Documentation
+- `CHANGELOG.md` (Keep a Changelog format).
+- `LICENSE` (MIT).
+- README rewritten as quick-start.
+- Module-level docstrings cross-linking to `docs/*.md` for `core`,
+  `io.jsf`, `io.netcdf`, `io.hdf5`, `processing`, `viz`.
+- New: `docs/core.md`, `docs/io_jsf.md`, `docs/io_netcdf.md`,
+  `docs/io_hdf5.md`, `docs/processing.md`, `docs/viz.md`.
+
+### Changed
+
+- **BREAKING**: `KNOWN_PROCESSING_LEVELS` trimmed to `{"raw",
+  "radiometric"}`. Geometric and georeferencing are now additive (they
+  attach new data variables) rather than backscatter-transforming.
+  Datasets with `processing_level == "geometric"` or `"georeferenced"`
+  written by older versions will now fail validation on load.
+- **BREAKING**: Schema rename — added `fathometer_reading_m` as a
+  required per-ping field (raw altimeter measurement, attitude-affected).
+  `altitude_m` semantics shifted to "vertical altitude after attitude
+  correction." For now `altitude_m == fathometer_reading_m` until
+  proper attitude correction lands. Existing `.ss.h5` files written
+  under the old schema will fail validation.
+- `scripts/plot_sonar_ping.py` rewritten: uses `read_survey()` and
+  `plot_waterfall()`. New `--process`, `--x-axis`, `--y-axis` flags.
+  Multi-file directory loading dropped.
+
+### Fixed
+
 - Navigation timestamp conversion in aux record builders was inverted,
-  causing nav/attitude/dvl/sensor timestamps to land near 1970-01-01
-  instead of the actual survey time. Affected interpolation onto ping
-  times — clamping always landed on the boundary nav fix.
-  (`int(m.timestamp * 1e9)` is now unconditional.)
+  causing all aux timestamps to land near 1970-01-01 instead of the
+  actual survey time. (`int(m.timestamp * 1e9)` is now unconditional.)
 - `interpolate_aux_onto_pings` no longer overwrites valid per-ping
-  fields with NaN when the source aux variable is all NaN (e.g. attitude
-  pitch_deg/roll_deg/heave_m on devices where validity flags reject
-  all data). Now skips with a warning, preserving the original value.
+  fields with NaN when the source aux variable is structurally all NaN
+  (e.g. attitude data on devices with broken validity flags). Skips and
+  preserves the original.
 - `compute_geometric_ranges` treats `sound_vel_ms <= 0` as invalid
   (in addition to NaN). Devices that report zero as a "no data"
-  sentinel previously cascaded to all-NaN geometric output. Now falls
-  back to 1500 m/s with a warning.
-- `plot_sonar_ping.py` along-track y-axis was computed slice-relative
-  for the waterfall but survey-relative for the marker line, causing
-  the waterfall to appear squashed at the top with the marker far
-  below. Both now use the same survey-relative reference.
+  sentinel previously cascaded to all-NaN geometric output. Falls back
+  to 1500 m/s with a warning.
+- `scripts/plot_sonar_ping.py` along-track y-axis previously mismatched
+  between waterfall (slice-relative) and marker line (survey-relative).
+  Both now use survey-relative reference consistently.
 
 ### Known issues
-- `plot_sonar_ping.py` slider performance: full waterfall re-renders
-  on every slider step. For 5000-ping surveys, slider drag lags
-  noticeably. Future work: cache waterfall, update only line plot
-  and marker on slider events.  
 
+- `plot_sonar_ping.py` slider re-renders the full waterfall on every
+  step; lags noticeably on 5000-ping surveys. Future: cache waterfall,
+  update only line plot and marker.
+
+### Dependencies
+
+- Added: `pyproj>=3.6`
+- 
 ## [0.3.0] - 2026-06-03
 
 ### Added

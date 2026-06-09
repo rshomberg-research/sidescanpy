@@ -154,7 +154,24 @@ reached the bottom yet) are NaN. This is the standard nadir gap.
 - Sound velocity is per-ping. Per-sample variation through the water
   column is not modeled.
 - `processing_level` is not modified — the operation is additive.
-- 
+
+## `slice_by_*` (slicing module)
+
+Slicing operations on `SideScanFrequencyChannel` for extracting subsets
+of a survey. All return validated channels.
+
+| Function | Slices by |
+|---|---|
+| `slice_by_pings` | Ping index range |
+| `slice_by_samples` | Sample index range |
+| `slice_by_time` | Ping timestamp (str or datetime64) |
+| `slice_by_bbox` | Lat/lon bounding box (per-ping by default; `use_per_sample=True` opt-in) |
+| `slice_by_ground_range` | Maximum ground range (requires `compute_geometric_ranges`) |
+
+All are pure functions returning new channels; the input is unchanged.
+Slicing is structural — `processing_level` and `processing_history` are
+preserved.
+
 ## Future work
 
 - **Geometric correction.** Slant-range to ground-range calculation using per-ping
