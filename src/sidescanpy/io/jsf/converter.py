@@ -391,8 +391,8 @@ def _build_navigation_record(nmea_msgs: list[NMEAStringMessage]) -> xr.Dataset:
             continue
         lat = _coerce(getattr(m, "latitude", None))
         lon = _coerce(getattr(m, "longitude", None))
-        ts  = int(m.timestamp) if hasattr(m, "timestamp") else \
-              int(np.datetime64(int(m.timestamp * 1e9), "ns").astype("int64"))
+        # ???: is this if/else correct?
+        ts = int(m.timestamp * 1e9)
         positional.append((ts, lat, lon))
 
     if not positional:
