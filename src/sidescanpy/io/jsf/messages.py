@@ -10,12 +10,14 @@ basic information about the message.
 '''
 
 # TODO: organize and document  
+# - [ ] include struct symbol explanations 
 
 # FIXME: right now a lot of the conversion is happening inside the messages.py
 # and occurring on read. Consider modifying to read as raw jsf messages and
 # handle any relevant math and adjustments during the conversion.
 
 # FIXME: a lot of these default to None, but they should default to np.nan
+
 
 import logging
 from pathlib import Path

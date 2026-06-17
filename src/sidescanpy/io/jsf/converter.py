@@ -163,7 +163,7 @@ def _group_sonar_by_frequency(
     groups: dict[str, list[SonarDataMessage]] = defaultdict(list)
     for m in sonar_msgs:
         # freq_hz_start labels the channel even when start != end (chirp)
-        freq_key = f"freq_{int(m.transmit_freq_start)}_hz"
+        freq_key = f"hz_{int(m.transmit_freq_start)}"
         groups[freq_key].append(m)
     return dict(groups)
 

@@ -1,11 +1,16 @@
 {
     "cSpell.words": [
         "backscatter",
+        "bathymetric",
         "chunksizes",
+        "despeckle",
         "interp",
         "nmea",
         "pynmea",
+        "shieve",
         "sidescan",
-        "sidescanpy"
+        "sidescanpy",
+        "stbd",
+        "towfish"
     ]
 }
