@@ -8,7 +8,19 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 ## [Unreleased]
 
 ### Added
-- ... 
+
+#### Gridding module (phase 1/3)
+- **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
+  (south, west, north, east), resolution in meters, and CRS support.
+  - Validates bounds (rejects inverted/empty boxes, antimeridian crossings)
+  - Geodetic distance calculations via pyproj (Web Mercator projection)
+  - Cell count derivation: `num_cells_ns`, `num_cells_ew`, `num_cells_total`
+  - Grid center coordinate generation as 2D arrays
+  - CRS reprojection with `reproject_to(crs)` helper
+  - Round-trip WGS84 ↔ UTM transformation accurate to ~0.03°
+  - Serialization: `to_dict()` / `from_dict()` for config storage
+  - 25/25 unit tests (TDD-first implementation)
+- Next: `SideScanGriddedRaster` (xarray wrapper) and resampling pipeline
 
 ### Changed
 - ...

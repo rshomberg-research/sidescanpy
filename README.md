@@ -52,6 +52,12 @@ write_survey(survey, "survey.ss.h5")
 
 ## Documentation
 
+- `docs/core.md`
+- `docs/processing.md`
+- `docs/vis.md`
+- `docs/io_hdf5.md`
+- `docs/io_netcdf.md`
+- `docs/io_sdf.md`
 - [`docs/io_jsf.md`](docs/io_jsf.md) — JSF reader, converter, message types
 - [`docs/jsf_aux_source_selection.md`](docs/jsf_aux_source_selection.md) — auxiliary stream comparison and per-field source decisions
 - [`CHANGELOG.md`](CHANGELOG.md) — version history
