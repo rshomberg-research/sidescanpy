@@ -217,3 +217,4 @@ src/.DS_Store
 tests/data/sdf/sample.sdf
 tests/data/jsf/*.jsf
 tests/data/sdf/*.sdf
+src/.DS_Store
