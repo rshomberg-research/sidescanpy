@@ -9,7 +9,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
-#### Gridding module (phase 1/3)
+#### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
   - Validates bounds (rejects inverted/empty boxes, antimeridian crossings)
@@ -19,14 +19,61 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   - CRS reprojection with `reproject_to(crs)` helper
   - Round-trip WGS84 ↔ UTM transformation accurate to ~0.03°
   - Serialization: `to_dict()` / `from_dict()` for config storage
-  - 25/25 unit tests (TDD-first implementation)
-- Next: `SideScanGriddedRaster` (xarray wrapper) and resampling pipeline
+- **`sidescanpy.grids.SideScanGriddedRaster`** — xarray-validated wrapper for
+  gridded backscatter (bbox, resolution, CRS, `n_contributing_samples`,
+  `units`). Supports `reproject_to()`, `slice_by_bbox()`,
+  `slice_by_indices()`, and dict serialization.
+- **`sidescanpy.grids.resample_channel_to_grid()`** — resamples georeferenced
+  channel backscatter onto a `GridDefinition` using `scipy.spatial.cKDTree`.
+  - `ResamplingMethod`: `mean`, `median`, `max`, `nearest`, `idw`
+  - Correctly treats 3D `(ping, channel, sample)` port/starboard samples as
+    independent observations (does not average channels together)
+  - `backscatter_var` parameter selects which backscatter variable to grid
+    (default `"backscatter_raw"`; pass `"backscatter_intensity"` to grid
+    TVG-corrected data — see Fixed, below)
+  - Validates 3D shape and lat/lon/backscatter shape agreement, raising
+    `ValueError` with an actionable message on 2D or mismatched input
+- **`sidescanpy.viz.gridded`** — `plot_gridded_raster()`,
+  `plot_gridded_with_coverage()`, `plot_gridded_multiple_methods()`,
+  `export_gridded_png()`
+- `scripts/demo_gridding_real_data.py` — end-to-end gridding demo against a
+  real `.ss.h5` survey; `--method` flag to run a single resampling method
+- `tests/unit/grids/conftest.py` — shared 3D channel fixtures
+  (`channel_3d`, `channel_3d_real_proportions`) matching production
+  `(ping, channel, sample)` proportions
 
 ### Changed
-- ...
+- All script/demo output directories now default under `./out/`, matching
+  existing repo convention.
 
 ### Fixed
-- ...
+- **`resample_channel_to_grid()` accepted 2D input silently.** No shape
+  validation existed; malformed or pre-flattened input could silently
+  misalign backscatter values with the wrong coordinates instead of erroring.
+  Now validates `backscatter_var` is 3D and that `latitude_per_sample` /
+  `longitude_per_sample` match its shape, raising a clear `ValueError`
+  otherwise.
+- **Gridding demos always plotted raw, uncorrected backscatter — even on
+  radiometrically corrected surveys.** `apply_tvg()`
+  (`processing/radiometric.py`) writes TVG-corrected values to
+  `backscatter_intensity` and deliberately leaves `backscatter_raw`
+  untouched as a linear-amplitude reference. `resample_channel_to_grid()`
+  hardcoded `backscatter_raw` with no way to select another variable, and
+  `demo_gridding_real_data.py`'s variable-selection fallback always matched
+  `backscatter_raw` first regardless of `processing_level`. Every gridded
+  map produced against radiometric-labeled data was silently ungridding the
+  uncorrected variable. Fixed via the new `backscatter_var` parameter; the
+  demo now selects `backscatter_intensity` automatically when
+  `processing_level == "radiometric"`.
+- **`SideScanGriddedRaster` and its colorbar hardcoded `units="linear"`
+  regardless of what was actually gridded.** TVG-corrected data is in dB, so
+  plots of corrected surveys were mislabeled. `SideScanGriddedRaster` now
+  takes a `units` parameter (propagated through `reproject_to()`,
+  `slice_by_bbox()`, `slice_by_indices()`, and dict serialization);
+  `resample_channel_to_grid()` sets it to `"dB"` when
+  `backscatter_var="backscatter_intensity"`, `"linear"` otherwise; the
+  colorbar label in `viz/gridded.py` now reads the raster's actual units
+  instead of a hardcoded string.
 
 ## [0.5.0] — 2026-06-17
 
