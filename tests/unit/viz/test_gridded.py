@@ -93,6 +93,29 @@ class TestPlotGriddedRaster:
         assert fig is not None
         plt.close(fig)
 
+    def test_colorbar_label_reflects_raster_units(self):
+        """
+        Colorbar label shows the raster's actual units, not a hardcoded
+        claim. Regression test: plot_gridded_raster() used to hardcode
+        "Backscatter (linear)" regardless of what was gridded, silently
+        mislabeling TVG-corrected (dB) data.
+        """
+        grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=5000.0)
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+
+        linear_raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter, units="linear")
+        fig, ax = plot_gridded_raster(linear_raster)
+        cbar_label = ax.collections[0].colorbar.ax.get_ylabel()
+        assert "linear" in cbar_label
+        plt.close(fig)
+
+        db_raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter, units="dB")
+        fig, ax = plot_gridded_raster(db_raster)
+        cbar_label = ax.collections[0].colorbar.ax.get_ylabel()
+        assert "dB" in cbar_label
+        assert "linear" not in cbar_label
+        plt.close(fig)
+
     def test_plot_existing_axes(self, sample_raster):
         """Plot on existing axes."""
         fig, ax = plt.subplots()

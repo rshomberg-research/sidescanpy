@@ -20,36 +20,43 @@ def _make_realistic_channel(
 ) -> xr.Dataset:
     """
     Create a realistic test channel with spatial structure.
-    
+
     Simulates a survey over a 2x2 degree area with:
-    - Port and starboard sides with realistic geometry
+    - Port and starboard sides (channel dim) with realistic geometry
     - Bathymetric features (ridges, valleys)
     - Water column gap at nadir
+
+    Matches the production schema (core/schema.py REQUIRED_DIMS): channel=2.
+    Port and starboard share identical lat/lon here since these tests only
+    check aggregate output, not spatial separation (see
+    TestResampleChannelToGrid3DValidation in tests/unit/grids/test_resample.py
+    for that).
     """
     pings = np.arange(num_pings)
+    channels = np.arange(2)
     samples = np.arange(samples_per_ping)
-    
+
     # Survey area: 2x2 degrees
     south, west, north, east = 39.0, -72.0, 41.0, -70.0
-    
+
     # Linear interpolation for pings (along-track)
     lats = np.linspace(south, north, num_pings)
-    
+
     # Samples span port to starboard
     # Assume slant range increases away from nadir
     # Create realistic lat/lon per sample
-    lat_per_sample = np.zeros((num_pings, samples_per_ping))
-    lon_per_sample = np.zeros((num_pings, samples_per_ping))
-    
+    lat_per_sample = np.zeros((num_pings, 2, samples_per_ping))
+    lon_per_sample = np.zeros((num_pings, 2, samples_per_ping))
+
     for i, ping_lat in enumerate(lats):
         # Longitude varies across samples (port to starboard)
         lons = np.linspace(west, east, samples_per_ping)
-        lat_per_sample[i, :] = ping_lat
-        lon_per_sample[i, :] = lons
-    
+        lat_per_sample[i, :, :] = ping_lat
+        lon_per_sample[i, :, :] = lons
+
     # Create backscatter with realistic features
-    backscatter = np.random.rand(num_pings, samples_per_ping) * 0.5
-    
+    backscatter = np.random.rand(num_pings, 2, samples_per_ping) * 0.5
+
     # Add a bright ridge feature in the middle
     ridge_center = samples_per_ping // 2
     ridge_width = 20
@@ -57,25 +64,27 @@ def _make_realistic_channel(
         ridge_intensity = 0.3 + 0.2 * np.sin(i * np.pi / num_pings)
         backscatter[
             i,
+            :,
             ridge_center - ridge_width : ridge_center + ridge_width,
         ] += ridge_intensity
-    
+
     # Water column gap at nadir (very high slant range)
-    backscatter[:, :50] = np.nan
-    backscatter[:, -50:] = np.nan
-    
+    backscatter[:, :, :50] = np.nan
+    backscatter[:, :, -50:] = np.nan
+
     # Add some noise spikes
     noise_idx = np.random.choice(
-        num_pings * samples_per_ping, size=100, replace=False
+        num_pings * 2 * samples_per_ping, size=100, replace=False
     )
     backscatter.ravel()[noise_idx] = np.random.rand(100)
-    
+
     ds = xr.Dataset(
         {
-            "backscatter_raw": (["ping", "sample"], backscatter),
-            "latitude_per_sample": (["ping", "sample"], lat_per_sample),
-            "longitude_per_sample": (["ping", "sample"], lon_per_sample),
+            "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+            "latitude_per_sample": (["ping", "channel", "sample"], lat_per_sample),
+            "longitude_per_sample": (["ping", "channel", "sample"], lon_per_sample),
             "ping": (["ping"], pings),
+            "channel": (["channel"], channels),
             "sample": (["sample"], samples),
         },
         attrs={
@@ -83,7 +92,7 @@ def _make_realistic_channel(
             "processing_level": "raw",
         },
     )
-    
+
     return ds
 
 

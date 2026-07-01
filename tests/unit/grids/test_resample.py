@@ -26,37 +26,44 @@ def _make_test_channel(
 ) -> xr.Dataset:
     """
     Create a minimal SideScanFrequencyChannel-like dataset.
-    
+
     Returns an xarray Dataset with:
-    - backscatter_raw (ping, sample)
-    - latitude_per_sample, longitude_per_sample (ping, sample)
+    - backscatter_raw (ping, channel, sample)
+    - latitude_per_sample, longitude_per_sample (ping, channel, sample)
     - Other required fields
+
+    Matches the production schema (core/schema.py REQUIRED_DIMS): channel=2
+    for port/starboard. Port and starboard share identical lat/lon here since
+    these tests only check aggregate output, not spatial separation — see
+    TestResampleChannelToGrid3DValidation for that.
     """
     # Create a simple survey grid covering a 1x1 degree area
     south, west, north, east = 39.0, -71.0, 40.0, -70.0
-    
-    # Generate ping/sample grid in lat/lon
+
+    # Generate ping/channel/sample grid in lat/lon
     pings = np.arange(num_pings)
+    channels = np.arange(2)
     samples = np.arange(samples_per_ping)
-    
+
     # Linear interpolation over the survey area
     lats = np.linspace(south, north, num_pings)
     lons = np.linspace(west, east, samples_per_ping)
-    
-    lat_per_sample = np.tile(lats[:, np.newaxis], (1, samples_per_ping))
-    lon_per_sample = np.tile(lons[np.newaxis, :], (num_pings, 1))
-    
+
+    lat_per_sample = np.tile(lats[:, np.newaxis, np.newaxis], (1, 2, samples_per_ping))
+    lon_per_sample = np.tile(lons[np.newaxis, np.newaxis, :], (num_pings, 2, 1))
+
     # Create backscatter: add some spatial structure
-    backscatter = np.random.rand(num_pings, samples_per_ping)
+    backscatter = np.random.rand(num_pings, 2, samples_per_ping)
     # Add a bright line in the middle
-    backscatter[:, samples_per_ping // 2 : samples_per_ping // 2 + 10] *= 2.0
-    
+    backscatter[:, :, samples_per_ping // 2 : samples_per_ping // 2 + 10] *= 2.0
+
     ds = xr.Dataset(
         {
-            "backscatter_raw": (["ping", "sample"], backscatter),
-            "latitude_per_sample": (["ping", "sample"], lat_per_sample),
-            "longitude_per_sample": (["ping", "sample"], lon_per_sample),
+            "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+            "latitude_per_sample": (["ping", "channel", "sample"], lat_per_sample),
+            "longitude_per_sample": (["ping", "channel", "sample"], lon_per_sample),
             "ping": (["ping"], pings),
+            "channel": (["channel"], channels),
             "sample": (["sample"], samples),
         },
         attrs={
@@ -64,7 +71,7 @@ def _make_test_channel(
             "processing_level": "raw",
         },
     )
-    
+
     return ds
 
 
@@ -335,7 +342,7 @@ class TestResampleChannelToGridNaN:
         """Resampling handles cells with some NaN samples."""
         channel = _make_test_channel(num_pings=50, samples_per_ping=128)
         # Mask out some samples as NaN
-        channel["backscatter_raw"].values[0:10, 0:20] = np.nan
+        channel["backscatter_raw"].values[0:10, :, 0:20] = np.nan
 
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
@@ -374,7 +381,7 @@ class TestResampleChannelToGridNaN:
     def test_resample_handles_inf(self):
         """Resampling handles inf values gracefully."""
         channel = _make_test_channel(num_pings=50, samples_per_ping=128)
-        channel["backscatter_raw"].values[10, 50] = np.inf
+        channel["backscatter_raw"].values[10, 0, 50] = np.inf
 
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
@@ -486,11 +493,8 @@ class TestResampleChannelToGridPerSide:
 
     @pytest.fixture
     def channel(self):
-        """Create a test channel."""
-        ds = _make_test_channel(num_pings=50, samples_per_ping=128)
-        # Add port/starboard markers
-        ds = ds.assign_coords(side=("sample", ["port"] * 64 + ["starboard"] * 64))
-        return ds
+        """Create a test channel with a real port/starboard channel dimension."""
+        return _make_test_channel(num_pings=50, samples_per_ping=128)
 
     def test_resample_with_port_starboard_separation(self, channel):
         """Resample can optionally separate port and starboard."""
@@ -567,3 +571,167 @@ class TestResampleChannelToGridMetadata:
         )
 
         assert "frequency_hz" in raster.dataset.attrs or raster.channel_name == "455 kHz"
+
+
+class TestResampleChannelToGrid3DValidation:
+    """
+    Test 3D (ping, channel, sample) input validation and channel-preserving
+    behavior. Uses the channel_3d fixture from conftest.py, which matches
+    the production schema (core/schema.py REQUIRED_DIMS).
+    """
+
+    @pytest.fixture
+    def grid(self):
+        """Create a test grid."""
+        return GridDefinition(
+            bbox=(39.0, -71.0, 40.0, -70.0),
+            resolution_m=5000.0,
+        )
+
+    def test_accepts_3d_data(self, channel_3d, grid):
+        """3D (ping, channel, sample) input resamples successfully."""
+        raster = resample_channel_to_grid(
+            channel_3d,
+            grid_def=grid,
+            method=ResamplingMethod.MEAN,
+        )
+
+        assert isinstance(raster, SideScanGriddedRaster)
+        assert np.any(np.isfinite(raster.backscatter))
+
+    def test_rejects_2d_data(self, grid):
+        """2D (ping, sample) input raises a clear ValueError, not a silent misread."""
+        ds_2d = xr.Dataset(
+            {
+                "backscatter_raw": (["ping", "sample"], np.random.rand(20, 32)),
+                "latitude_per_sample": (["ping", "sample"], np.full((20, 32), 39.5)),
+                "longitude_per_sample": (["ping", "sample"], np.full((20, 32), -70.5)),
+            },
+            attrs={"frequency_hz": 455_000, "processing_level": "raw"},
+        )
+
+        with pytest.raises(ValueError, match="3D"):
+            resample_channel_to_grid(ds_2d, grid_def=grid, method=ResamplingMethod.MEAN)
+
+    def test_rejects_mismatched_coordinate_shape(self, channel_3d, grid):
+        """latitude_per_sample shape diverging from backscatter_raw raises ValueError."""
+        bad = channel_3d.copy(deep=True)
+        # Collapse the channel dimension on latitude only, producing a
+        # (ping, sample) array against a (ping, channel, sample) backscatter_raw.
+        bad["latitude_per_sample"] = bad["latitude_per_sample"].isel(channel=0)
+
+        with pytest.raises(ValueError, match="shape"):
+            resample_channel_to_grid(bad, grid_def=grid, method=ResamplingMethod.MEAN)
+
+    def test_preserves_port_starboard_spatial_distinction(self):
+        """
+        Port and starboard samples resample into their own distinct grid
+        cells, not a blended average. Regression test for the historical
+        bug described in docs/planning/v0.6.0-gridding-refactor.md.
+        """
+        num_pings, num_samples = 30, 20
+        lat_track = np.linspace(39.0, 39.01, num_pings)
+        lon_center = -71.0
+
+        lat3d = np.tile(lat_track[:, np.newaxis, np.newaxis], (1, 2, num_samples))
+        lon3d = np.empty((num_pings, 2, num_samples))
+        lon3d[:, 0, :] = lon_center - 0.02  # port: well west
+        lon3d[:, 1, :] = lon_center + 0.02  # starboard: well east
+
+        backscatter = np.empty((num_pings, 2, num_samples))
+        backscatter[:, 0, :] = 1.0  # port value
+        backscatter[:, 1, :] = 5.0  # starboard value
+
+        channel = xr.Dataset(
+            {
+                "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+                "latitude_per_sample": (["ping", "channel", "sample"], lat3d),
+                "longitude_per_sample": (["ping", "channel", "sample"], lon3d),
+            },
+            attrs={"frequency_hz": 455_000, "processing_level": "raw"},
+        )
+
+        grid = GridDefinition(
+            bbox=(38.99, -71.03, 39.02, -70.97),
+            resolution_m=50.0,
+        )
+
+        raster = resample_channel_to_grid(
+            channel, grid_def=grid, method=ResamplingMethod.MEAN
+        )
+        finite_values = raster.backscatter[np.isfinite(raster.backscatter)]
+
+        # If channels were averaged together, every cell would read ~3.0.
+        assert not np.any(np.isclose(finite_values, 3.0, atol=0.1))
+        assert np.any(np.isclose(finite_values, 1.0, atol=0.1))
+        assert np.any(np.isclose(finite_values, 5.0, atol=0.1))
+
+    def test_output_shape_matches_grid(self, channel_3d, grid):
+        """Raster shape matches grid cell counts for 3D input."""
+        raster = resample_channel_to_grid(
+            channel_3d,
+            grid_def=grid,
+            method=ResamplingMethod.MEAN,
+        )
+
+        assert raster.backscatter.shape == (grid.num_cells_ns, grid.num_cells_ew)
+
+    def test_backscatter_var_selects_alternate_variable(self, channel_3d, grid):
+        """
+        backscatter_var lets callers grid a variable other than
+        backscatter_raw (e.g. TVG-corrected backscatter_intensity, which
+        apply_tvg() writes separately, leaving backscatter_raw untouched).
+        """
+        channel = channel_3d.copy(deep=True)
+        # A variable with values clearly distinct from backscatter_raw's
+        # [0, 1) random range, mimicking corrected dB-range data.
+        channel["backscatter_intensity"] = channel["backscatter_raw"] - 100.0
+
+        raster = resample_channel_to_grid(
+            channel,
+            grid_def=grid,
+            method=ResamplingMethod.MEAN,
+            backscatter_var="backscatter_intensity",
+        )
+
+        finite_values = raster.backscatter[np.isfinite(raster.backscatter)]
+        assert np.all(finite_values < -90.0)
+        assert raster.dataset.attrs["backscatter_variable"] == "backscatter_intensity"
+
+    def test_backscatter_var_missing_raises_clear_error(self, channel_3d, grid):
+        """Requesting a backscatter_var absent from the channel raises ValueError."""
+        with pytest.raises(ValueError, match="backscatter_intensity"):
+            resample_channel_to_grid(
+                channel_3d,
+                grid_def=grid,
+                method=ResamplingMethod.MEAN,
+                backscatter_var="backscatter_intensity",
+            )
+
+    def test_default_var_produces_linear_units(self, channel_3d, grid):
+        """Default backscatter_raw is recorded as linear units."""
+        raster = resample_channel_to_grid(channel_3d, grid_def=grid, method=ResamplingMethod.MEAN)
+
+        assert raster.units == "linear"
+        assert raster.dataset["backscatter"].attrs["units"] == "linear"
+
+    def test_backscatter_intensity_produces_db_units(self, channel_3d, grid):
+        """
+        backscatter_var="backscatter_intensity" is recorded as dB units,
+        matching apply_tvg()'s documented output convention
+        (processing/radiometric.py). Regression test for a bug where the
+        gridded raster and its colorbar silently claimed "linear" for
+        TVG-corrected dB data.
+        """
+        channel = channel_3d.copy(deep=True)
+        channel["backscatter_intensity"] = channel["backscatter_raw"] - 100.0
+
+        raster = resample_channel_to_grid(
+            channel,
+            grid_def=grid,
+            method=ResamplingMethod.MEAN,
+            backscatter_var="backscatter_intensity",
+        )
+
+        assert raster.units == "dB"
+        assert raster.dataset["backscatter"].attrs["units"] == "dB"

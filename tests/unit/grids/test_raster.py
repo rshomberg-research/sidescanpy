@@ -260,6 +260,54 @@ class TestSideScanGriddedRasterXarraySchema:
         assert sample_raster.dataset["longitude"].attrs["units"] == "degrees_east"
 
 
+class TestSideScanGriddedRasterUnits:
+    """
+    Test units propagation. Regression coverage for a bug where
+    SideScanGriddedRaster hardcoded units="linear" regardless of what was
+    actually gridded, and viz/gridded.py hardcoded a matching "(linear)"
+    colorbar label — silently mislabeling TVG-corrected (dB) data.
+    """
+
+    @pytest.fixture
+    def grid(self):
+        return GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=5000.0)
+
+    def test_default_units_is_linear(self, grid):
+        """Default units remains 'linear' for backward compatibility."""
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+        raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter)
+
+        assert raster.units == "linear"
+        assert raster.dataset["backscatter"].attrs["units"] == "linear"
+
+    def test_explicit_units_propagate_to_dataset(self, grid):
+        """Explicit units="dB" is reflected in the dataset attrs."""
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+        raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter, units="dB")
+
+        assert raster.units == "dB"
+        assert raster.dataset["backscatter"].attrs["units"] == "dB"
+
+    def test_units_survive_slice_by_indices(self):
+        """slice_by_indices() preserves the source raster's units."""
+        fine_grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=1000.0)
+        backscatter = np.random.rand(fine_grid.num_cells_ns, fine_grid.num_cells_ew)
+        raster = SideScanGriddedRaster(grid_def=fine_grid, backscatter=backscatter, units="dB")
+
+        sliced = raster.slice_by_indices(ns_slice=slice(10, 30), ew_slice=slice(15, 35))
+        assert sliced.units == "dB"
+
+    def test_units_survive_dict_round_trip(self, grid):
+        """to_dict()/from_dict() preserves units."""
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+        raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter, units="dB")
+
+        d = raster.to_dict(include_data=True)
+        restored = SideScanGriddedRaster.from_dict(d)
+
+        assert restored.units == "dB"
+
+
 class TestSideScanGriddedRasterReprojection:
     """Test reprojection to different CRS."""
 
