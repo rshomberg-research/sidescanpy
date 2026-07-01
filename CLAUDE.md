@@ -178,15 +178,15 @@ pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
 
 ## Current Work Focus
 
-### v0.6.0 — Gridding Module (Complete + hardened, unreleased)
+### v0.6.0 — Gridding Module (Complete, hardened, and verified usable — closed out)
 
-**Status:** All three phases complete, plus a 2026-07-01 hardening pass (see below). CHANGELOG `[Unreleased]` section now reflects the full shipped module. `pyproject.toml` version bump still pending — not yet released.
+**Status:** All three phases complete, hardened (2026-07-01), and verified to produce GIS-usable output on real data. Gridding work is closed out; focus has moved to v0.7.0 (below). `pyproject.toml` version bump still pending — not yet released.
 
 **Completed:**
 - ✅ `GridDefinition` (bbox + resolution + CRS)
-- ✅ `SideScanGriddedRaster` (xarray wrapper) — now carries a `units` param (`"linear"`/`"dB"`), propagated through `reproject_to()`/`slice_by_bbox()`/`slice_by_indices()`/dict serialization
-- ✅ `resample_channel_to_grid()` — verified (not just assumed) to handle 3D `(ping, channel, sample)` data correctly: treats each channel's samples as separate observations, does not average port/starboard. Validates 3D shape and lat/lon/backscatter shape agreement, raising `ValueError` on 2D or mismatched input. `backscatter_var` param (default `"backscatter_raw"`) selects which variable to grid. Final API differs from the original plan in `docs/planning/v0.6.0-gridding-refactor.md` (that doc describes the initial `histogram`/`linear`/`nearest`/`cubic` design; the shipped implementation uses a `ResamplingMethod` enum — `mean`, `median`, `max`, `nearest`, `idw` — built on `scipy.spatial.cKDTree`). `separate_sides` param exists in the signature but is **not implemented** (dead code, deferred to v0.7.0) — the planning doc has a "What Actually Shipped" / "Not Implemented" section with the full delta.
-- ✅ `viz/gridded.py` — gridded raster plots; colorbar labels now read the raster's actual `units` instead of a hardcoded `"linear"` string
+- ✅ `SideScanGriddedRaster` (xarray wrapper) — carries a `units` param (`"linear"`/`"dB"`), propagated through `reproject_to()`/`slice_by_bbox()`/`slice_by_indices()`/dict serialization
+- ✅ `resample_channel_to_grid()` — verified (not just assumed) to handle 3D `(ping, channel, sample)` data correctly: treats each channel's samples as separate observations, does not average port/starboard. Validates 3D shape and lat/lon/backscatter shape agreement, raising `ValueError` on 2D or mismatched input. `backscatter_var` param (default `"backscatter_raw"`) selects which variable to grid. Final API differs from the original plan in `docs/planning/v0.6.0-gridding-refactor.md` (that doc describes the initial `histogram`/`linear`/`nearest`/`cubic` design; the shipped implementation uses a `ResamplingMethod` enum — `mean`, `median`, `max`, `nearest`, `idw` — built on `scipy.spatial.cKDTree`). `separate_sides` param exists in the signature but is **not implemented** (dead code, deferred). The planning doc has a "What Actually Shipped" / "Not Implemented" section with the full delta.
+- ✅ `viz/gridded.py` — gridded raster plots; colorbar labels read the raster's actual `units` instead of a hardcoded `"linear"` string. `plot_gridded_with_coverage()` is a **diagnostic/QC view, not a data product** — its alpha channel exaggerates normal per-cell sample-density variation into visible "streaks" fanning out from the survey track (most visible at fine resolution / low ping counts, but present at any scale — confirmed still present, unchanged, on the full 5216-ping survey). The opaque view (`plot_gridded_raster()` / `export_gridded_png()`) does not exhibit this and is the correct thing to treat as the actual output. Documented directly in the function's docstring.
 - ✅ Integration test: `tests/integration/test_gridding_pipeline.py`
 - ✅ Demo scripts: `scripts/demo_gridding_real_data.py` (now has `--method` flag, selects `backscatter_intensity` automatically on radiometric-processed surveys), `scripts/demo_gridding_workflow.py`, `scripts/demo_min_mapping.py`, `scripts/demo_min_visualization.py`
 - ✅ `tests/unit/grids/conftest.py` — shared 3D channel fixtures matching production proportions
@@ -195,6 +195,9 @@ pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
 1. `resample_channel_to_grid()` had zero test coverage of 3D behavior and no shape validation; it happened to handle 3D correctly by accident (generic `.ravel()` over whatever shape arrives) rather than by design. Added validation + regression tests.
 2. Every gridding demo run against radiometrically-corrected surveys was silently gridding the **uncorrected** `backscatter_raw` variable, not the TVG-corrected `backscatter_intensity` written by `apply_tvg()`. Root cause: `resample_channel_to_grid()` hardcoded the variable name, and the demo's variable-selection fallback always matched `backscatter_raw` first. Fixed via new `backscatter_var` param.
 3. `SideScanGriddedRaster` and the colorbar both hardcoded `units="linear"` regardless of what was gridded, mislabeling dB-scale corrected data. Fixed via a `units` param threaded through the raster and viz layer.
+
+**2026-07-01 quality verification — "fan of streaks" investigated and resolved (as a non-issue):**
+Diagnosed an apparent "fan of thin radiating streaks" artifact seen in early gridding demos. Root cause: `plot_gridded_with_coverage()`'s alpha-transparency rendering exaggerates ordinary per-cell sample-density variation (KDTree search radius vs. real ping/sample spacing) into visible rays — present throughout the full survey, not just during vessel turns as first suspected. Confirmed via direct comparison that the pattern is **identical before and after the v0.6.0 hardening pass** (same coverage geometry, only backscatter units/values differ) — hardening never touched this and the pattern isn't a regression. The primary data product (opaque raster / GeoTIFF-bound output) does not exhibit it at all. Verified full-survey output at 1m resolution is clean, coherent, and usable for GIS work.
 
 ### Test Status (as of 2026-07-01)
 
@@ -207,20 +210,21 @@ tests/integration/             (run with --slow; requires local JSF/SDF fixtures
 
 ## Roadmap
 
-### v0.7.0 — Target detection + multi-scale image export
+### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
-**7a — Manual target export**
-- User specifies target by ping/sample, ground-range, or lat/lon
-- Export images centered on target at multiple zoom levels
-- New: `scripts/export_target_images.py`
-- Uses existing slicing + viz infrastructure
+**Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts.
 
-**7b — Detection-based target export**
-- Threshold, local-max, or anomaly detection on grids
-- Auto-export candidates at multi-scale
+**Priority 1 — GeoTIFF export**
+- `write_geotiff()` in `sidescanpy/grids/`, built on `rasterio` (new dependency — not yet in `pyproject.toml`)
+- CRS/resolution/bounds metadata; verify by opening in QGIS
+
+**Priority 2 — Target cropping from CSV**
 - New module: `sidescanpy/targets/`
+- CSV input (`target_id, ping, channel, sample, window_pings, window_samples, label`) → cropped PNGs + optional metadata sidecar
+- Attitude-corrected via existing `processing/geometric.py` pitch correction + `processing/slicing.py` (`slice_by_pings`/`slice_by_samples`)
+- CLI: `scripts/crop_targets.py`
 
-This unblocks the "find targets, export images" deliverable.
+**Priority 3 (deferred)** — YOLO bounding-box overlays; detection-based (threshold/anomaly) auto target export, superseding the old 7b sketch below.
 
 ### v0.8.0+ candidates (not yet ordered)
 
@@ -232,6 +236,7 @@ This unblocks the "find targets, export images" deliverable.
 - **Radiometric pipeline cleanup** — address TODOs before quantitative work
 - **Test fixture solution** — synthetic or small real fixtures in repo
 - **Lazy/dask processing verification** — confirm pipeline works chunked
+- **Detection-based target export** (old v0.7.0 "7b" sketch: threshold/local-max/anomaly detection on grids, auto-export candidates) — folded into v0.7.0 Priority 3, deferred
 
 ### Deferred (deliberately, not forgotten)
 

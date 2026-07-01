@@ -128,6 +128,19 @@ def plot_gridded_with_coverage(
     Cells with few contributing samples appear faded; cells with many
     contributing samples appear opaque.
 
+    This is a diagnostic/QC view, not a data product — see
+    plot_gridded_raster() / export_gridded_png() for the primary output.
+    On real survey data this view typically shows thin radiating
+    "streaks" fanning out from the survey track, especially at
+    resolutions finer than the along-track ping spacing. That reflects
+    normal per-cell sample-density variation in the underlying point
+    cloud (KDTree search radius vs. real ping/sample spacing), not
+    corrupted or misplaced data — the opaque view does not exhibit this
+    because it doesn't encode coverage as transparency. Confirmed via
+    diagnosis 2026-07-01: identical streak pattern present before and
+    after the v0.6.0 hardening pass (see
+    docs/planning/v0.6.0-gridding-refactor.md).
+
     Parameters
     ----------
     raster : SideScanGriddedRaster
