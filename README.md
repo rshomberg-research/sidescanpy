@@ -1,78 +1,190 @@
 # SideScanPy
 
-Python tools for ingesting, processing, and analyzing sidescan sonar data.
+Python library for processing sidescan sonar data from Edgetech JSF and Klein SDF surveys.
 
-> **Status:** Early development. APIs may change without notice.
-> ~310 unit tests + ~27 integration tests passing.
+## Features
 
-## What it does
+- **File I/O:**
+  - Read Edgetech JSF (`.jsf`) format
+  - Read Klein SDF (`.sdf`) format
+  - HDF5 (`.ss.h5`) round-trip serialization with `xarray`
+  - Single-channel NetCDF export
 
-- **Read** multiple raw data formats into validated survey objects
-- **Standardize** sonar data into an `xarray`-based schema with explicit
-  per-ping coordinates, time axes, and aux streams
-- **Persist** surveys to chunked HDF5 (full survey) or NetCDF (single frequency
-  channel) with lazy/dask-backed loading
-- **Interpolate** auxiliary navigation, attitude, and DVL records onto
-  per-ping timestamps
-- **Apply** radiometric corrections (time-varying gain) on raw
-  backscatter
+- **Processing:**
+  - Aux stream interpolation (nav, attitude, DVL) onto ping timestamps
+  - Time-varying gain (TVG) correction
+  - Slant range → ground range → per-sample depth calculation
+  - Per-sample lat/lon georeferencing
 
-## Install
+- **Visualization:**
+  - Port + starboard waterfall displays
+  - Multiple x-axis modes (sample, ground range, across-track)
+  - Multiple y-axis modes (ping, time, along-track)
+  - Batch PNG export
+
+- **Gridding** (v0.6.0, in progress):
+  - Geographic and projected grids (WGS84, UTM)
+  - Multiple resampling methods (histogram, linear, nearest, cubic)
+  - Statistical aggregations (mean, median, max)
+
+## Installation
+
+### Requirements
+- Python 3.14+
+- `uv` (recommended) or `pip`
+
+### From Source
 
 ```bash
-git clone https://github.com/<your-username>/sidescanpy
+git clone <repo-url>
 cd sidescanpy
-pip install -e .
+uv venv
+source .venv/bin/activate
+uv pip install -e .
 ```
 
-Requires Python ≥ 3.11.
+### Development Install
 
-## Quick example
+```bash
+uv pip install -e ".[dev]"
+pytest tests/unit/ -v  # Verify installation
+```
+
+## Quick Start
+
+### Load a JSF Survey
 
 ```python
-from sidescanpy.io.jsf import read_jsf, convert
-from sidescanpy.processing import interpolate_aux_onto_pings, apply_tvg
-from sidescanpy.io.hdf5 import write_survey
+from sidescanpy.io.jsf import read_jsf
+from sidescanpy.io.jsf.converter import convert
 
-# Parse a JSF file into a survey
+# Read raw JSF messages
 messages = read_jsf("survey.jsf")
-survey = convert(messages, source_files=["survey.jsf"])
 
-# Interpolate aux records onto ping times
+# Convert to SideScanSurvey
+survey = convert(messages, survey_name="my_survey")
+
+print(survey)
+# SideScanSurvey(name='my_survey', n_frequencies=2, nav=1234, att=567, dvl=890, sensors=1)
+```
+
+### Process a Survey
+
+```python
+from sidescanpy.processing.interpolate import interpolate_aux_onto_pings
+from sidescanpy.processing.radiometric import apply_tvg
+from sidescanpy.processing.geometric import compute_geometric_ranges
+from sidescanpy.processing.georeferencing import compute_georeferencing
+
+# Full pipeline
 survey = interpolate_aux_onto_pings(survey)
+survey = apply_tvg(survey)
+survey = compute_geometric_ranges(survey)
+survey = compute_georeferencing(survey)
+```
 
-# Apply TVG correction to each frequency channel
-for fk, channel in survey.freq_channels.items():
-    corrected = apply_tvg(channel.dataset)
-    survey.add_frequency(fk, corrected)
+### Save & Load HDF5
 
-# Save as a single HDF5 file
+```python
+from sidescanpy.io.hdf5 import write_survey, read_survey
+
+# Write
 write_survey(survey, "survey.ss.h5")
+
+# Read
+survey = read_survey("survey.ss.h5")
+```
+
+### Visualize
+
+```python
+import matplotlib.pyplot as plt
+from sidescanpy.viz import plot_waterfall
+
+channel = survey.get_frequency("hz_1495000")
+fig, ax = plt.subplots(figsize=(14, 6))
+plot_waterfall(
+    channel.dataset,
+    start=0,
+    stop=500,
+    x_axis="ground_range",
+    y_axis="along_track",
+    cmap="copper",
+    ax=ax,
+)
+plt.show()
+```
+
+### CLI Tools
+
+```bash
+# Convert format-detected file to HDF5
+python scripts/convert.py survey.jsf --output survey.ss.h5
+
+# Convert entire directory
+python scripts/batch_convert_and_plot.py /path/to/surveys/
+
+# Export waterfall PNGs
+python scripts/export_waterfall_series.py \
+    survey.ss.h5 1495000 \
+    --output-dir out/waterfalls/ \
+    --width 200
+```
+
+## Architecture
+
+See `CLAUDE.md` for detailed architecture and conventions.
+
+Top-level structure:
+
+```
+sidescanpy/
+├── core/         # Schema validation, survey containers
+├── io/           # File format readers/writers (JSF, SDF, HDF5, NetCDF)
+├── processing/   # Signal processing pipeline
+├── grids/        # Gridding and resampling (v0.6.0)
+└── viz/          # Visualization utilities
 ```
 
 ## Documentation
 
-- `docs/core.md`
-- `docs/processing.md`
-- `docs/vis.md`
-- `docs/io_hdf5.md`
-- `docs/io_netcdf.md`
-- `docs/io_sdf.md`
-- [`docs/io_jsf.md`](docs/io_jsf.md) — JSF reader, converter, message types
-- [`docs/jsf_aux_source_selection.md`](docs/jsf_aux_source_selection.md) — auxiliary stream comparison and per-field source decisions
-- [`CHANGELOG.md`](CHANGELOG.md) — version history
+- **User docs:** This README + `docs/`
+- **Development:** `docs/DEVELOPMENT.md`
+- **Architecture:** `CLAUDE.md`
+- **Changelog:** `CHANGELOG.md`
+- **Planning:** `docs/planning/`
 
-More module docs (`core`, `io_netcdf`, `io_hdf5`, `processing`) are forthcoming.
+Module documentation:
+- `docs/core.md` — Schema and survey containers
+- `docs/io_jsf.md` — Edgetech JSF format
+- `docs/io_sdf.md` — Klein SDF format
+- `docs/io_hdf5.md` — `.ss.h5` HDF5 layout
+- `docs/io_netcdf.md` — NetCDF export
+- `docs/processing.md` — Processing pipeline
+- `docs/vis.md` — Visualization (⚠️ typo: should be `viz.md`)
+- `docs/jsf_aux_source_selection.md` — JSF aux stream selection
+
+## Testing
+
+```bash
+# Fast unit tests (~30s)
+pytest tests/unit/ -v
+
+# Integration tests (requires real data fixtures)
+pytest tests/integration/ -v --slow
+
+# With coverage
+pytest tests/unit/ --cov=sidescanpy --cov-report=html
+```
+
+Test fixtures for real data are not committed to git due to file size limits.
+See `data/README.md` for details.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT — see `LICENSE`
 
-## Citation
+## Contact
 
-If you use this package in academic work, please cite:
-
-```
-Shomberg, R. (2026). SideScanPy: Python tools for sidescan sonar processing.
-University of Rhode Island.
-```
+Russ Shomberg <rshomberg@uri.edu>
+University of Rhode Island

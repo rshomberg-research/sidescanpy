@@ -12,6 +12,60 @@ ref
 .vscode
 .DS_Store
 
+# Claude Code
+.claude/settings.local.json
+.claude/*.log
+
+# Session artifacts
+out/
+demo_output/
+demo_output_real/
+
+# But keep planning docs
+!docs/planning/
+
+# Temporary/backup files
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.egg
+
+# Test outputs (that shouldn't be committed)
+tests/**/output/
+tests/**/references/*.png
+
+# Local data (too large)
+data/*.jsf
+data/*.sdf
+data/*.ss.h5
+!data/README.md
+!data/.gitkeep
+
+# Environment
+.env
+.env.local
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,visualstudiocode
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,visualstudiocode
 
