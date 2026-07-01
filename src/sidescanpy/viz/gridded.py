@@ -106,7 +106,8 @@ def plot_gridded_raster(
     ax.set_aspect("equal")
 
     if show_colorbar:
-        cbar = plt.colorbar(im, ax=ax, label="Backscatter (linear)")
+        units = raster.dataset["backscatter"].attrs.get("units", "unknown units")
+        cbar = plt.colorbar(im, ax=ax, label=f"Backscatter ({units})")
         logger.debug(f"Colorbar range: {vmin:.3f} — {vmax:.3f}")
 
     return fig, ax
@@ -296,7 +297,8 @@ def plot_gridded_multiple_methods(
         ax.grid(True, alpha=0.2, linestyle="--")
         ax.set_aspect("equal")
 
-        plt.colorbar(im, ax=ax, label="Backscatter")
+        units = raster.dataset["backscatter"].attrs.get("units", "unknown units")
+        plt.colorbar(im, ax=ax, label=f"Backscatter ({units})")
 
     # Hide unused subplots
     for idx in range(n_methods, n_rows * n_cols):

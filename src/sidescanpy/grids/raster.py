@@ -43,6 +43,7 @@ class SideScanGriddedRaster:
         backscatter: np.ndarray,
         channel_name: Optional[str] = None,
         processing_level: str = "raw",
+        units: str = "linear",
     ):
         """
         Create a SideScanGriddedRaster.
@@ -57,6 +58,10 @@ class SideScanGriddedRaster:
             Channel/frequency name (e.g., "455 kHz").
         processing_level : str, default "raw"
             Processing stage ("raw", "radiometric", etc.).
+        units : str, default "linear"
+            Units of the backscatter values ("linear" or "dB"). Callers
+            resampling TVG-corrected data (dB) must pass units="dB" —
+            this is not inferred from processing_level.
 
         Raises
         ------
@@ -67,6 +72,7 @@ class SideScanGriddedRaster:
         self.backscatter = np.asarray(backscatter, dtype=float)
         self.channel_name = channel_name or "unknown"
         self.processing_level = processing_level
+        self.units = units
 
         self._validate()
         self._dataset = None  # Lazy build
@@ -213,7 +219,7 @@ class SideScanGriddedRaster:
         ds.attrs["bbox_east"] = self.bbox[3]
 
         # Add variable attributes
-        ds["backscatter"].attrs["units"] = "linear"
+        ds["backscatter"].attrs["units"] = self.units
         ds["backscatter"].attrs["long_name"] = "Backscatter intensity"
 
         ds["latitude"].attrs["units"] = "degrees_north"
@@ -252,6 +258,7 @@ class SideScanGriddedRaster:
                 backscatter=self.backscatter.copy(),
                 channel_name=self.channel_name,
                 processing_level=self.processing_level,
+                units=self.units,
             )
 
         reprojected_grid = self.grid_def.reproject_to(target_crs)
@@ -261,6 +268,7 @@ class SideScanGriddedRaster:
             backscatter=self.backscatter.copy(),
             channel_name=self.channel_name,
             processing_level=self.processing_level,
+            units=self.units,
         )
 
     def slice_by_bbox(
@@ -345,6 +353,7 @@ class SideScanGriddedRaster:
             backscatter=subset_backscatter,
             channel_name=self.channel_name,
             processing_level=self.processing_level,
+            units=self.units,
         )
 
     def slice_by_indices(
@@ -396,9 +405,10 @@ class SideScanGriddedRaster:
             backscatter=subset_backscatter,
             channel_name=self.channel_name,
             processing_level=self.processing_level,
+            units=self.units,
         )
 
-    
+
     def to_dict(self, include_data: bool = False) -> dict:
         """
         Serialize to dict.
@@ -418,6 +428,7 @@ class SideScanGriddedRaster:
             "grid_def": self.grid_def.to_dict(),
             "channel_name": self.channel_name,
             "processing_level": self.processing_level,
+            "units": self.units,
         }
 
         if include_data:
@@ -436,6 +447,7 @@ class SideScanGriddedRaster:
             backscatter=backscatter,
             channel_name=d.get("channel_name"),
             processing_level=d.get("processing_level", "raw"),
+            units=d.get("units", "linear"),
         )
 
     def __repr__(self) -> str:

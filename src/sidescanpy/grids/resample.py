@@ -19,6 +19,44 @@ from sidescanpy.grids.raster import SideScanGriddedRaster
 logger = logging.getLogger(__name__)
 
 
+def _validate_channel_data(channel: xr.Dataset, backscatter_var: str) -> None:
+    """
+    Validate that channel has the required 3D (ping, channel, sample)
+    variables with matching shapes.
+
+    Raises
+    ------
+    ValueError
+        If required variables are missing, backscatter_var is not 3D, or
+        latitude_per_sample / longitude_per_sample don't match its shape.
+    """
+    required_vars = {backscatter_var, "latitude_per_sample", "longitude_per_sample"}
+    missing = required_vars - set(channel.data_vars)
+    if missing:
+        raise ValueError(
+            f"channel missing required variables: {missing}. "
+            f"Has: {set(channel.data_vars)}"
+        )
+
+    backscatter_shape = channel[backscatter_var].shape
+    if len(backscatter_shape) != 3:
+        raise ValueError(
+            f"{backscatter_var} must be 3D (ping, channel, sample), got shape "
+            f"{backscatter_shape} (ndim={len(backscatter_shape)}). Pass the "
+            f"full channel dataset, not a pre-flattened 2D array."
+        )
+
+    lat_shape = channel["latitude_per_sample"].shape
+    lon_shape = channel["longitude_per_sample"].shape
+    if lat_shape != backscatter_shape or lon_shape != backscatter_shape:
+        raise ValueError(
+            f"{backscatter_var}, latitude_per_sample, and longitude_per_sample "
+            f"must all share the same shape. Got {backscatter_var}="
+            f"{backscatter_shape}, latitude_per_sample={lat_shape}, "
+            f"longitude_per_sample={lon_shape}."
+        )
+
+
 class ResamplingMethod(str, Enum):
     """Resampling aggregation method."""
 
@@ -35,6 +73,7 @@ def resample_channel_to_grid(
     method: ResamplingMethod = ResamplingMethod.MEAN,
     separate_sides: bool = False,
     max_search_radius_m: Optional[float] = None,
+    backscatter_var: str = "backscatter_raw",
 ) -> SideScanGriddedRaster:
     """
     Resample channel backscatter to a regular grid.
@@ -42,8 +81,8 @@ def resample_channel_to_grid(
     Parameters
     ----------
     channel : xr.Dataset
-        Channel dataset with backscatter_raw and per-sample coordinates
-        (latitude_per_sample, longitude_per_sample).
+        Channel dataset with a backscatter variable (see backscatter_var)
+        and per-sample coordinates (latitude_per_sample, longitude_per_sample).
     grid_def : GridDefinition
         Target grid definition (bbox, resolution, CRS).
     method : ResamplingMethod, default "mean"
@@ -53,6 +92,12 @@ def resample_channel_to_grid(
         If False, merge port and starboard into single backscatter variable.
     max_search_radius_m : float, optional
         Maximum search radius in meters. If None, use 1.5x grid resolution.
+    backscatter_var : str, default "backscatter_raw"
+        Name of the backscatter variable in channel to resample. Radiometric
+        correction (processing/radiometric.py apply_tvg()) writes corrected
+        values to "backscatter_intensity", leaving "backscatter_raw" as an
+        untouched linear-amplitude reference — pass
+        backscatter_var="backscatter_intensity" to grid the corrected data.
 
     Returns
     -------
@@ -65,13 +110,7 @@ def resample_channel_to_grid(
         If channel is missing required variables or grid bounds don't overlap.
     """
     # Validate input
-    required_vars = {"backscatter_raw", "latitude_per_sample", "longitude_per_sample"}
-    missing = required_vars - set(channel.data_vars)
-    if missing:
-        raise ValueError(
-            f"channel missing required variables: {missing}. "
-            f"Has: {set(channel.data_vars)}"
-        )
+    _validate_channel_data(channel, backscatter_var)
 
     # Extract frequency and metadata
     frequency_hz = channel.attrs.get("frequency_hz", 0)
@@ -85,12 +124,12 @@ def resample_channel_to_grid(
         channel_name = "unknown"
 
     # Extract data
-    backscatter_raw = channel["backscatter_raw"].values.astype(float)  # (ping, sample)
+    backscatter_data = channel[backscatter_var].values.astype(float)  # (ping, channel, sample)
     lat_per_sample = channel["latitude_per_sample"].values.astype(float)
     lon_per_sample = channel["longitude_per_sample"].values.astype(float)
 
     # Flatten to 1D for KDTree
-    backscatter_1d = backscatter_raw.ravel()
+    backscatter_1d = backscatter_data.ravel()
     lat_1d = lat_per_sample.ravel()
     lon_1d = lon_per_sample.ravel()
 
@@ -192,12 +231,18 @@ def resample_channel_to_grid(
         f"{backscatter_grid.size:,} cells filled"
     )
 
+    # Units: apply_tvg() (processing/radiometric.py) writes TVG-corrected
+    # values to backscatter_intensity in dB, leaving backscatter_raw as
+    # untouched linear amplitude. Other variable names default to linear.
+    units = "dB" if backscatter_var == "backscatter_intensity" else "linear"
+
     # Create raster
     raster = SideScanGriddedRaster(
         grid_def=grid_def,
         backscatter=backscatter_grid,
         channel_name=channel_name,
         processing_level=processing_level,
+        units=units,
     )
 
     # Add n_contributing_samples to dataset
@@ -213,5 +258,6 @@ def resample_channel_to_grid(
     # Add resampling metadata
     raster.dataset.attrs["resampling_method"] = method.value
     raster.dataset.attrs["frequency_hz"] = frequency_hz
+    raster.dataset.attrs["backscatter_variable"] = backscatter_var
 
     return raster
