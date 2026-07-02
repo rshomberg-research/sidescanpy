@@ -1011,7 +1011,7 @@ def real_jsf_file_path():
     Path to the actual survey file used for these fixtures.
     Source: 20251015170335.jsf (ping 69, first sonar data message)
     """
-    return Path("data/survey-a/jsf/20251015170335.jsf")
+    return Path("data/survey-a/raw/20251015170335.jsf")
 
 # Reference epoch for synthesizing timestamps
 _EPOCH_2026_NS = int(np.datetime64("2026-01-01T00:00:00", "ns").astype("int64"))

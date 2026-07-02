@@ -1,4 +1,4 @@
-data/
+data/*
 !tests/data
 out/
 tmp
