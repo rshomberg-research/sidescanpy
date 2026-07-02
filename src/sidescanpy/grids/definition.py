@@ -10,7 +10,7 @@ import logging
 from typing import NamedTuple, Tuple
 
 import numpy as np
-from pyproj import CRS, Transformer
+from pyproj import CRS, Geod, Transformer
 
 logger = logging.getLogger(__name__)
 
@@ -98,22 +98,26 @@ class GridDefinition:
         self, lat1: float, lon1: float, lat2: float, lon2: float
     ) -> float:
         """
-        Compute distance between two WGS84 points in meters.
+        Compute true geodesic distance between two WGS84 points in meters.
 
-        Uses pyproj Transformer to convert to Web Mercator (meters).
+        Uses pyproj.Geod (WGS84 ellipsoid) — not a Web Mercator (EPSG:3857)
+        Euclidean distance. Web Mercator's vertical scale is
+        1/cos(latitude), so a Euclidean distance in its projected meters
+        overstates true ground distance away from the equator (e.g.
+        ~39% too large at 44°N) — this silently made extent_m_ns/
+        extent_m_ew, and therefore num_cells_ns/num_cells_ew, wrong for
+        any WGS84 grid away from the equator. Fixed 2026-07-02; found
+        while investigating why gridded output looked noisier than
+        expected relative to the requested resolution_m.
         """
         if self.crs.to_epsg() != 4326:
             raise RuntimeError(
                 "_geodetic_distance_m requires WGS84 (EPSG:4326)"
             )
 
-        transformer = Transformer.from_crs(
-            "EPSG:4326", "EPSG:3857", always_xy=True
-        )  # WGS84 → Web Mercator (meters)
-        x1, y1 = transformer.transform(lon1, lat1)
-        x2, y2 = transformer.transform(lon2, lat2)
-
-        return float(np.hypot(x2 - x1, y2 - y1))
+        geod = Geod(ellps="WGS84")
+        _, _, distance_m = geod.inv(lon1, lat1, lon2, lat2)
+        return float(distance_m)
 
     def _project_distance_m(
         self, x1: float, y1: float, x2: float, y2: float
@@ -344,3 +348,67 @@ class GridDefinition:
             f"resolution_m={self.resolution_m}, "
             f"crs={crs_name})"
         )
+
+
+# ============================================================
+# UTM AUTO-SELECTION
+# ============================================================
+
+def utm_crs_for_lonlat(lon: float, lat: float) -> CRS:
+    """Pick the WGS84 UTM zone CRS containing (lon, lat).
+
+    Standard "auto-UTM" heuristic: zone = floor((lon + 180) / 6) + 1,
+    hemisphere from the sign of ``lat``. EPSG 326xx for northern-
+    hemisphere zones, 327xx for southern. Good enough to pick a sane
+    projected CRS automatically for a survey's gridded output; near a
+    zone boundary (every 6° of longitude) the "correct" zone is a
+    judgment call anyway — pass an explicit CRS via ``GridDefinition``
+    if a specific zone/datum is required (e.g. matching a state-plane
+    system already in use for a project).
+
+    Parameters
+    ----------
+    lon, lat : float
+        WGS84 degrees. Typically the center of the survey's bbox.
+
+    Returns
+    -------
+    pyproj.CRS
+        WGS84 / UTM zone CRS (EPSG 32601-32660 or 32701-32760).
+    """
+    zone = int((lon + 180) // 6) + 1
+    zone = min(max(zone, 1), 60)
+    epsg = 32600 + zone if lat >= 0 else 32700 + zone
+    return CRS.from_epsg(epsg)
+
+
+def utm_grid_from_wgs84_bbox(
+    bbox: Tuple[float, float, float, float],
+    resolution_m: float,
+) -> "GridDefinition":
+    """Build a GridDefinition in an auto-selected UTM zone from a WGS84 bbox.
+
+    Picks the UTM zone containing the bbox's center point (via
+    ``utm_crs_for_lonlat``), then reprojects the bbox into that zone's
+    meters via ``GridDefinition.reproject_to`` (dense edge sampling,
+    not just 4 corners, for accuracy).
+
+    Parameters
+    ----------
+    bbox : (south, west, north, east)
+        WGS84 degrees.
+    resolution_m : float
+        Grid cell size in meters.
+
+    Returns
+    -------
+    GridDefinition
+        Projected (UTM) grid covering the same ground area as ``bbox``.
+    """
+    south, west, north, east = bbox
+    center_lon = (west + east) / 2.0
+    center_lat = (south + north) / 2.0
+    utm_crs = utm_crs_for_lonlat(center_lon, center_lat)
+
+    wgs84_grid = GridDefinition(bbox=bbox, resolution_m=resolution_m, crs=CRS.from_epsg(4326))
+    return wgs84_grid.reproject_to(utm_crs)

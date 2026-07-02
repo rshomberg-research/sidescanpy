@@ -417,14 +417,65 @@ class TestResampleChannelToGridUTM:
         )
 
     def test_resample_to_utm_grid(self, channel, utm_grid):
-        """Resample channel to UTM grid."""
-        # Need to reproject channel coordinates to UTM first
-        # For now, skip this test (transformation would be separate step)
-        pytest.skip("Channel reprojection not yet implemented")
+        """Resample channel (WGS84 lat/lon samples) onto a UTM grid.
+
+        resample_channel_to_grid() reprojects the WGS84 sample
+        coordinates into the grid's own CRS before querying — no
+        separate channel-reprojection step needed by the caller.
+        """
+        raster = resample_channel_to_grid(
+            channel,
+            grid_def=utm_grid,
+            method=ResamplingMethod.MEAN,
+        )
+
+        assert isinstance(raster, SideScanGriddedRaster)
+        # utm_grid's bbox only partially overlaps this channel's lat/lon
+        # extent (see docstring math in the fixture derivation) — some,
+        # not necessarily all, cells should get real data.
+        assert raster.data_coverage > 0
 
     def test_resample_preserves_utm_crs(self, channel, utm_grid):
         """Output raster has same CRS as input grid."""
-        pytest.skip("Channel reprojection not yet implemented")
+        raster = resample_channel_to_grid(
+            channel,
+            grid_def=utm_grid,
+            method=ResamplingMethod.MEAN,
+        )
+
+        assert raster.crs == utm_grid.crs
+        assert raster.crs.to_epsg() == 26919
+
+    def test_resample_to_utm_grid_matches_reprojected_wgs84_grid(self, channel):
+        """A UTM grid and its geographic-equivalent WGS84 grid should
+        resample to the same physical cells (allowing for the different
+        cell-center placement each CRS's linspace produces), confirming
+        the projected-CRS code path isn't silently returning something
+        unrelated to the WGS84 path's result."""
+        utm_crs = CRS.from_epsg(26919)
+        utm_grid = GridDefinition(
+            bbox=(4320000.0, 400000.0, 4330000.0, 410000.0),
+            resolution_m=1000.0,
+            crs=utm_crs,
+        )
+        wgs84_grid = utm_grid.reproject_to(CRS.from_epsg(4326))
+
+        raster_utm = resample_channel_to_grid(
+            channel, grid_def=utm_grid, method=ResamplingMethod.MEAN,
+        )
+        raster_wgs84 = resample_channel_to_grid(
+            channel, grid_def=wgs84_grid, method=ResamplingMethod.MEAN,
+        )
+
+        assert raster_utm.data_coverage > 0
+        assert raster_wgs84.data_coverage > 0
+        # Both cover (approximately) the same ground area, so coverage
+        # fraction should be in the same ballpark, not orders of
+        # magnitude apart (which is what the old degrees-vs-meters bug
+        # would have produced: near-zero coverage for the UTM grid).
+        assert raster_utm.data_coverage == pytest.approx(
+            raster_wgs84.data_coverage, abs=0.3
+        )
 
 
 class TestResampleChannelToGridEdgeCases:

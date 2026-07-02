@@ -16,6 +16,26 @@ from sidescanpy.grids.raster import SideScanGriddedRaster
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# CRS-AWARE LABELS
+# ============================================================
+
+def _axis_labels(raster: SideScanGriddedRaster) -> Tuple[str, str]:
+    """(xlabel, ylabel) for a raster's CRS — degrees for geographic, meters for projected."""
+    if raster.is_geographic:
+        return "Longitude (°E)", "Latitude (°N)"
+    return "Easting (m)", "Northing (m)"
+
+
+def _crs_label(raster: SideScanGriddedRaster) -> str:
+    """Short human-readable CRS identifier, e.g. 'WGS 84 / UTM zone 19N (EPSG:32619)'."""
+    crs = raster.crs
+    epsg = crs.to_epsg()
+    if epsg is not None:
+        return f"{crs.name} (EPSG:{epsg})"
+    return crs.name
+
+
 def plot_gridded_raster(
     raster: SideScanGriddedRaster,
     fig: Optional[plt.Figure] = None,
@@ -23,6 +43,8 @@ def plot_gridded_raster(
     cmap: str = "viridis",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    vmin_pct: float = 1.0,
+    vmax_pct: float = 99.0,
     show_colorbar: bool = True,
     show_grid: bool = False,
     title: Optional[str] = None,
@@ -41,13 +63,26 @@ def plot_gridded_raster(
     cmap : str, default "viridis"
         Colormap name.
     vmin, vmax : float, optional
-        Colorbar min/max. If None, use percentile-based auto-scaling.
+        Colorbar min/max. If None, use percentile-based auto-scaling
+        (``vmin_pct``/``vmax_pct``).
+    vmin_pct, vmax_pct : float, default 1.0 and 99.0
+        Percentiles for auto color scaling when ``vmin``/``vmax`` aren't
+        given. Matches ``plot_waterfall``'s defaults — use the same
+        values for both when comparing a waterfall and a gridded export
+        of the same data, otherwise the two can show very different
+        apparent contrast/normalization purely from differing percentile
+        cutoffs, independent of any real difference in the underlying
+        values (backscatter distributions with a sharp low-end density
+        cliff, e.g. from floor-clipped no-return samples, are
+        especially sensitive to this — a 1-2 percentile difference can
+        shift the effective vmin by tens of dB).
     show_colorbar : bool, default True
         Include colorbar.
     show_grid : bool, default False
         Show grid lines.
     title : str, optional
-        Plot title. If None, auto-generate from raster metadata.
+        Plot title. If None, auto-generate from raster metadata,
+        including the CRS (see ``_crs_label``).
 
     Returns
     -------
@@ -58,19 +93,21 @@ def plot_gridded_raster(
     if fig is None or ax is None:
         fig, ax = plt.subplots(figsize=(10, 8))
 
-    # Extract backscatter and coordinates
+    # Extract backscatter and coordinates (CRS-aware: lat/lon degrees
+    # for a geographic raster, northing/easting meters for a projected
+    # one — see SideScanGriddedRaster.y_values/x_values)
     backscatter = raster.backscatter
-    lats = raster.dataset["latitude"].values
-    lons = raster.dataset["longitude"].values
+    ys = raster.y_values
+    xs = raster.x_values
 
     # Auto-scale if not provided
     if vmin is None or vmax is None:
         finite_vals = backscatter[np.isfinite(backscatter)]
         if len(finite_vals) > 0:
             if vmin is None:
-                vmin = np.percentile(finite_vals, 2)
+                vmin = np.percentile(finite_vals, vmin_pct)
             if vmax is None:
-                vmax = np.percentile(finite_vals, 98)
+                vmax = np.percentile(finite_vals, vmax_pct)
         else:
             vmin, vmax = 0, 1
 
@@ -79,8 +116,8 @@ def plot_gridded_raster(
 
     # Plot
     im = ax.pcolormesh(
-        lons,
-        lats,
+        xs,
+        ys,
         backscatter_masked,
         cmap=cmap,
         vmin=vmin,
@@ -89,14 +126,16 @@ def plot_gridded_raster(
     )
 
     # Labels and formatting
-    ax.set_xlabel("Longitude (°E)")
-    ax.set_ylabel("Latitude (°N)")
+    xlabel, ylabel = _axis_labels(raster)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
 
     if title is None:
         title = (
             f"{raster.channel_name} — "
             f"{raster.dataset.attrs.get('resampling_method', 'unknown')} "
-            f"(resolution: {raster.resolution_m:.0f} m)"
+            f"(resolution: {raster.resolution_m:.0f} m)\n"
+            f"CRS: {_crs_label(raster)}"
         )
     ax.set_title(title)
 
@@ -120,6 +159,8 @@ def plot_gridded_with_coverage(
     cmap: str = "viridis",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    vmin_pct: float = 1.0,
+    vmax_pct: float = 99.0,
     title: Optional[str] = None,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
@@ -153,6 +194,11 @@ def plot_gridded_with_coverage(
         Colormap name.
     vmin, vmax : float, optional
         Backscatter colorbar min/max.
+    vmin_pct, vmax_pct : float, default 1.0 and 99.0
+        Percentiles for auto color scaling — matches
+        ``plot_waterfall``'s/``plot_gridded_raster``'s defaults; see
+        ``plot_gridded_raster`` for why keeping these consistent across
+        views matters.
     title : str, optional
         Plot title.
 
@@ -165,8 +211,8 @@ def plot_gridded_with_coverage(
         fig, ax = plt.subplots(figsize=(10, 8))
 
     backscatter = raster.backscatter
-    lats = raster.dataset["latitude"].values
-    lons = raster.dataset["longitude"].values
+    ys = raster.y_values
+    xs = raster.x_values
 
     # Get n_contributing_samples if available, otherwise use uniform alpha
     if "n_contributing_samples" in raster.dataset.data_vars:
@@ -181,9 +227,9 @@ def plot_gridded_with_coverage(
         finite_vals = backscatter[np.isfinite(backscatter)]
         if len(finite_vals) > 0:
             if vmin is None:
-                vmin = np.percentile(finite_vals, 2)
+                vmin = np.percentile(finite_vals, vmin_pct)
             if vmax is None:
-                vmax = np.percentile(finite_vals, 98)
+                vmax = np.percentile(finite_vals, vmax_pct)
         else:
             vmin, vmax = 0, 1
 
@@ -204,7 +250,7 @@ def plot_gridded_with_coverage(
     colors[..., 3] = alpha  # Set alpha channel
 
     # Plot as image
-    extent = [lons.min(), lons.max(), lats.min(), lats.max()]
+    extent = [xs.min(), xs.max(), ys.min(), ys.max()]
     im = ax.imshow(
         colors,
         extent=extent,
@@ -213,14 +259,16 @@ def plot_gridded_with_coverage(
         interpolation="nearest",
     )
 
-    ax.set_xlabel("Longitude (°E)")
-    ax.set_ylabel("Latitude (°N)")
+    xlabel, ylabel = _axis_labels(raster)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
 
     if title is None:
         title = (
             f"{raster.channel_name} — "
             f"{raster.dataset.attrs.get('resampling_method', 'unknown')} "
-            f"(coverage: {raster.data_coverage:.1%})"
+            f"(coverage: {raster.data_coverage:.1%})\n"
+            f"CRS: {_crs_label(raster)}"
         )
     ax.set_title(title)
     ax.grid(True, alpha=0.2, linestyle="--")
@@ -233,6 +281,8 @@ def plot_gridded_multiple_methods(
     cmap: str = "viridis",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    vmin_pct: float = 1.0,
+    vmax_pct: float = 99.0,
 ) -> Tuple[plt.Figure, np.ndarray]:
     """
     Plot gridded rasters from multiple resampling methods side-by-side.
@@ -247,7 +297,10 @@ def plot_gridded_multiple_methods(
     cmap : str, default "viridis"
         Colormap name.
     vmin, vmax : float, optional
-        Shared colorbar range. If None, compute from all rasters.
+        Shared colorbar range. If None, compute from all rasters
+        (``vmin_pct``/``vmax_pct``).
+    vmin_pct, vmax_pct : float, default 1.0 and 99.0
+        Percentiles for auto color scaling — see ``plot_gridded_raster``.
 
     Returns
     -------
@@ -265,9 +318,9 @@ def plot_gridded_multiple_methods(
         all_finite = np.array(all_finite)
         if len(all_finite) > 0:
             if vmin is None:
-                vmin = np.percentile(all_finite, 2)
+                vmin = np.percentile(all_finite, vmin_pct)
             if vmax is None:
-                vmax = np.percentile(all_finite, 98)
+                vmax = np.percentile(all_finite, vmax_pct)
         else:
             vmin, vmax = 0, 1
 
@@ -291,12 +344,12 @@ def plot_gridded_multiple_methods(
 
         # Plot
         backscatter_masked = np.ma.masked_invalid(raster.backscatter)
-        lats = raster.dataset["latitude"].values
-        lons = raster.dataset["longitude"].values
+        ys = raster.y_values
+        xs = raster.x_values
 
         im = ax.pcolormesh(
-            lons,
-            lats,
+            xs,
+            ys,
             backscatter_masked,
             cmap=cmap,
             vmin=vmin,
@@ -304,8 +357,9 @@ def plot_gridded_multiple_methods(
             shading="auto",
         )
 
-        ax.set_xlabel("Longitude (°E)", fontsize=9)
-        ax.set_ylabel("Latitude (°N)", fontsize=9)
+        xlabel, ylabel = _axis_labels(raster)
+        ax.set_xlabel(xlabel, fontsize=9)
+        ax.set_ylabel(ylabel, fontsize=9)
         ax.set_title(f"{method_name} (cov: {raster.data_coverage:.1%})", fontsize=10)
         ax.grid(True, alpha=0.2, linestyle="--")
         ax.set_aspect("equal")
@@ -330,6 +384,8 @@ def export_gridded_png(
     cmap: str = "viridis",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    vmin_pct: float = 1.0,
+    vmax_pct: float = 99.0,
 ) -> None:
     """
     Export gridded raster to PNG file.
@@ -346,12 +402,17 @@ def export_gridded_png(
         Colormap name.
     vmin, vmax : float, optional
         Colorbar range.
+    vmin_pct, vmax_pct : float, default 1.0 and 99.0
+        Percentiles for auto color scaling when vmin/vmax aren't given
+        — see ``plot_gridded_raster``.
     """
     fig, ax = plot_gridded_raster(
         raster,
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
+        vmin_pct=vmin_pct,
+        vmax_pct=vmax_pct,
         show_colorbar=True,
     )
 

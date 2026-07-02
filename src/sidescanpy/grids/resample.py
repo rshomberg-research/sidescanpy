@@ -11,12 +11,15 @@ from typing import Optional
 
 import numpy as np
 import xarray as xr
+from pyproj import CRS, Transformer
 from scipy.spatial import cKDTree
 
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 
 logger = logging.getLogger(__name__)
+
+_WGS84 = CRS.from_epsg(4326)
 
 
 def _validate_channel_data(channel: xr.Dataset, backscatter_var: str) -> None:
@@ -147,20 +150,43 @@ def resample_channel_to_grid(
         f"valid samples using {method.value} aggregation"
     )
 
-    # Build KDTree in lat/lon space (WGS84)
-    # Note: this is approximate for large areas; a projection would be more accurate
-    sample_coords = np.column_stack([lat_valid, lon_valid])
+    # Sample coordinates are always WGS84 lat/lon (from compute_georeferencing).
+    # Reproject into the grid's own CRS before building the KDTree, so search
+    # radius and distances are computed in the grid's native units — degrees
+    # for a geographic grid, meters for a projected one (e.g. UTM) — rather
+    # than always assuming WGS84 degrees regardless of grid_def.crs.
+    is_geographic = grid_def.crs.is_geographic
+    if is_geographic:
+        y_valid, x_valid = lat_valid, lon_valid
+    else:
+        transformer = Transformer.from_crs(_WGS84, grid_def.crs, always_xy=True)
+        x_valid, y_valid = transformer.transform(lon_valid, lat_valid)
+
+    # Build KDTree in the grid's native coordinate space
+    sample_coords = np.column_stack([y_valid, x_valid])
     tree = cKDTree(sample_coords)
 
-    # Get grid cell centers
-    grid_lats, grid_lons = grid_def.get_grid_centers()
-    num_cells_ns, num_cells_ew = grid_lats.shape
+    # Get grid cell centers — same native space as above (lat/lon for a
+    # geographic grid, northing/easting for a projected one; see
+    # GridDefinition.get_grid_centers)
+    grid_ys, grid_xs = grid_def.get_grid_centers()
+    num_cells_ns, num_cells_ew = grid_ys.shape
 
-    # Search radius: use 1.5x grid resolution in degrees (~111 km per degree at equator)
-    if max_search_radius_m is None:
-        search_radius_deg = 1.5 * grid_def.resolution_m / 111000.0
+    # Search radius in the grid's native units: degrees (~111 km per degree
+    # at the equator) for a geographic grid, meters directly for a projected
+    # one — resolution_m is already in meters, so no unit conversion needed
+    # there.
+    if is_geographic:
+        if max_search_radius_m is None:
+            search_radius = 1.5 * grid_def.resolution_m / 111000.0
+        else:
+            search_radius = max_search_radius_m / 111000.0
     else:
-        search_radius_deg = max_search_radius_m / 111000.0
+        search_radius = (
+            1.5 * grid_def.resolution_m
+            if max_search_radius_m is None
+            else max_search_radius_m
+        )
 
     # Initialize output arrays
     backscatter_grid = np.full((num_cells_ns, num_cells_ew), np.nan, dtype=float)
@@ -169,13 +195,13 @@ def resample_channel_to_grid(
     # Resample each cell
     for i in range(num_cells_ns):
         for j in range(num_cells_ew):
-            cell_lat = grid_lats[i, j]
-            cell_lon = grid_lons[i, j]
+            cell_y = grid_ys[i, j]
+            cell_x = grid_xs[i, j]
 
             # Query tree for samples near this cell
             indices = tree.query_ball_point(
-                [cell_lat, cell_lon],
-                r=search_radius_deg,
+                [cell_y, cell_x],
+                r=search_radius,
             )
 
             if not indices:
@@ -201,19 +227,19 @@ def resample_channel_to_grid(
                 backscatter_grid[i, j] = np.max(valid_contrib)
             elif method == ResamplingMethod.NEAREST:
                 # Find nearest sample
-                dists, nearest_idx = tree.query([cell_lat, cell_lon], k=1)
+                dists, nearest_idx = tree.query([cell_y, cell_x], k=1)
                 nearest_backscatter = backscatter_valid[nearest_idx]
                 if np.isfinite(nearest_backscatter):
                     backscatter_grid[i, j] = nearest_backscatter
             elif method == ResamplingMethod.IDW:
                 # Inverse-distance weighting
-                sample_lats = lat_valid[indices]
-                sample_lons = lon_valid[indices]
-                
-                # Compute distances in degrees
-                dlat = sample_lats - cell_lat
-                dlon = sample_lons - cell_lon
-                distances = np.sqrt(dlat**2 + dlon**2)
+                sample_ys = y_valid[indices]
+                sample_xs = x_valid[indices]
+
+                # Distances in the grid's native units (degrees or meters)
+                dy = sample_ys - cell_y
+                dx = sample_xs - cell_x
+                distances = np.sqrt(dy**2 + dx**2)
                 
                 # Avoid division by zero
                 distances[distances == 0] = 1e-9

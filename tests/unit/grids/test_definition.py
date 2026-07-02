@@ -10,7 +10,11 @@ from pyproj import CRS
 
 # Import will fail until sidescanpy/grids/definition.py exists.
 # That's expected in TDD mode.
-from sidescanpy.grids.definition import GridDefinition
+from sidescanpy.grids.definition import (
+    GridDefinition,
+    utm_crs_for_lonlat,
+    utm_grid_from_wgs84_bbox,
+)
 
 @pytest.mark.unit
 class TestGridDefinitionInstantiation:
@@ -98,26 +102,28 @@ class TestGridDefinitionMetrics:
 
     def test_cell_count_ns(self):
         """North-south cell count is ceil(extent / resolution)."""
-        # 1 degree at 39.5°N ≈ 111.3 km (geodetic via Web Mercator)
-        # Actual measured: ~127 km
-        # 127,000 m / 100 m = 1270 cells; Web Mercator distorts to ~144k cells
+        # 1 degree of latitude ≈ 111.3 km everywhere (true geodesic
+        # distance, via pyproj.Geod — fixed 2026-07-02; previously
+        # extent_m_ns/ew went through a Web Mercator projection whose
+        # vertical scale is 1/cos(latitude), overstating this by ~39%
+        # at 39.5°N specifically because Web Mercator distorts N-S
+        # distance away from the equator).
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
             resolution_m=100.0,
         )
         ns_cells = grid.num_cells_ns
-        # Accept wide range due to projection effects
-        assert 1200 < ns_cells < 1500, f"Got {ns_cells}"  
+        assert 1090 < ns_cells < 1130, f"Got {ns_cells}"
 
     def test_cell_count_ew(self):
         """East-west cell count (at mid-latitude)."""
+        # 1 degree of longitude at 39.5°N ≈ 111.3 km * cos(39.5°) ≈ 85.9 km.
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
             resolution_m=100.0,
         )
         ew_cells = grid.num_cells_ew
-        # Similar wide tolerance for projection effects
-        assert 1000 < ew_cells < 1300, f"Got {ew_cells}"
+        assert 840 < ew_cells < 880, f"Got {ew_cells}"
 
     def test_total_cells(self):
         """num_cells_total = num_cells_ns * num_cells_ew."""
@@ -298,8 +304,14 @@ class TestGridDefinitionEdgeCases:
 
     def test_near_pole(self):
         """Grid near a pole (high latitude)."""
+        # A realistic few-degree-wide bbox, not the full -180..180 span:
+        # west=-180 and east=180 are literally the same meridian, so a
+        # true geodesic point-to-point distance between them is ~0 —
+        # not a meaningful "east-west extent" for a survey grid, and
+        # only appeared nonzero previously because of the Web Mercator
+        # distance bug fixed 2026-07-02 (see test_cell_count_ns).
         grid = GridDefinition(
-            bbox=(85.0, -180.0, 86.0, 180.0),
+            bbox=(85.0, -1.0, 86.0, 1.0),
             resolution_m=1000.0,
         )
         # Should handle gracefully (though ew extent is smaller)
@@ -313,3 +325,67 @@ class TestGridDefinitionEdgeCases:
                 bbox=(39.0, 170.0, 40.0, -170.0),  # crosses ±180°
                 resolution_m=10.0,
             )
+
+
+class TestUtmCrsForLonlat:
+    """Auto-UTM zone selection."""
+
+    def test_maine_coast_is_zone_19n(self):
+        # site-b area (~ -68.8, 44.1) — matches the survey names
+        # already used throughout this project's docs/fixtures.
+        crs = utm_crs_for_lonlat(-68.8, 44.1)
+        assert crs.to_epsg() == 32619
+
+    def test_northern_hemisphere_uses_326xx(self):
+        crs = utm_crs_for_lonlat(-71.0, 41.5)
+        assert 32601 <= crs.to_epsg() <= 32660
+
+    def test_southern_hemisphere_uses_327xx(self):
+        crs = utm_crs_for_lonlat(-70.0, -30.0)
+        assert 32701 <= crs.to_epsg() <= 32760
+
+    def test_same_zone_number_different_hemisphere(self):
+        north = utm_crs_for_lonlat(-70.0, 10.0)
+        south = utm_crs_for_lonlat(-70.0, -10.0)
+        # Same longitude → same zone number, different EPSG family
+        assert north.to_epsg() - 32600 == south.to_epsg() - 32700
+
+    def test_zone_boundaries_clamped(self):
+        # Should not raise or produce an out-of-range EPSG at the extremes
+        crs_west = utm_crs_for_lonlat(-179.9, 10.0)
+        crs_east = utm_crs_for_lonlat(179.9, 10.0)
+        assert 32601 <= crs_west.to_epsg() <= 32660
+        assert 32601 <= crs_east.to_epsg() <= 32660
+
+
+class TestUtmGridFromWgs84Bbox:
+    """Building a projected GridDefinition directly from a WGS84 bbox."""
+
+    def test_returns_projected_grid(self):
+        grid = utm_grid_from_wgs84_bbox(
+            bbox=(44.0, -69.0, 44.1, -68.8), resolution_m=1.0,
+        )
+        assert not grid.crs.is_geographic
+        assert grid.crs.to_epsg() == 32619
+
+    def test_bbox_is_in_meters_not_degrees(self):
+        grid = utm_grid_from_wgs84_bbox(
+            bbox=(44.0, -69.0, 44.1, -68.8), resolution_m=1.0,
+        )
+        south, west, north, east = grid.bbox
+        # UTM eastings/northings are on the order of 1e5-1e7, nothing
+        # like WGS84 degree magnitudes.
+        assert south > 1000
+        assert west > 1000
+        assert north > south
+        assert east > west
+
+    def test_covers_same_ground_area_as_input(self):
+        bbox_deg = (44.0, -69.0, 44.1, -68.8)
+        grid = utm_grid_from_wgs84_bbox(bbox=bbox_deg, resolution_m=10.0)
+        wgs84_equivalent = GridDefinition(bbox=bbox_deg, resolution_m=10.0)
+
+        # Extents (in meters) should roughly match between the native
+        # WGS84-geodetic-distance computation and the UTM projected one.
+        assert grid.extent_m_ns == pytest.approx(wgs84_equivalent.extent_m_ns, rel=0.05)
+        assert grid.extent_m_ew == pytest.approx(wgs84_equivalent.extent_m_ew, rel=0.05)

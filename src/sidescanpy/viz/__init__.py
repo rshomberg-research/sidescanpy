@@ -15,6 +15,14 @@ Public functions
 - :func:`plot_gridded_multiple_methods` — side-by-side comparison of
   resampling methods.
 - :func:`export_gridded_png` — save gridded raster to PNG.
+- :func:`along_track_distance_m` — cumulative along-track distance
+  (meters) from per-ping lat/lon; the primitive behind
+  ``y_axis="along_track"``, exposed for non-plotting callers (e.g.
+  distance-based segmentation).
+- :func:`plot_track_and_scanlines` — full-survey nadir track plus
+  periodic port/starboard scan-line rungs, in a projected (UTM by
+  default) coordinate system. Geometry/coverage only, no backscatter.
+- :func:`export_track_and_scanlines_png` — save that plot to PNG.
 
 Future:
 - ``plot_geographic`` — map-style scatter on lat/lon (deferred).
@@ -22,18 +30,22 @@ Future:
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.viz.waterfall import plot_waterfall
+from sidescanpy.viz.waterfall import plot_waterfall, along_track_distance_m
 from sidescanpy.viz.gridded import (
     plot_gridded_raster,
     plot_gridded_with_coverage,
     plot_gridded_multiple_methods,
     export_gridded_png,
 )
+from sidescanpy.viz.track import plot_track_and_scanlines, export_track_and_scanlines_png
 
 __all__ = [
     "plot_waterfall",
+    "along_track_distance_m",
     "plot_gridded_raster",
     "plot_gridded_with_coverage",
     "plot_gridded_multiple_methods",
     "export_gridded_png",
+    "plot_track_and_scanlines",
+    "export_track_and_scanlines_png",
 ]

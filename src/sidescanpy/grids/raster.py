@@ -113,6 +113,40 @@ class SideScanGriddedRaster:
         return self.grid_def.crs
 
     @property
+    def is_geographic(self) -> bool:
+        """True for a geographic CRS (e.g. WGS84), False for projected (e.g. UTM)."""
+        return self.crs.is_geographic
+
+    @property
+    def y_coord_name(self) -> str:
+        """Name of the north-south position coordinate in ``dataset``.
+
+        ``"latitude"`` for a geographic CRS, ``"northing"`` for a
+        projected one — matches whichever :meth:`GridDefinition.get_grid_centers`
+        actually returns for this raster's CRS.
+        """
+        return "latitude" if self.is_geographic else "northing"
+
+    @property
+    def x_coord_name(self) -> str:
+        """Name of the east-west position coordinate in ``dataset``.
+
+        ``"longitude"`` for a geographic CRS, ``"easting"`` for a
+        projected one.
+        """
+        return "longitude" if self.is_geographic else "easting"
+
+    @property
+    def y_values(self) -> np.ndarray:
+        """North-south position array (degrees or meters — see ``y_coord_name``)."""
+        return self.dataset[self.y_coord_name].values
+
+    @property
+    def x_values(self) -> np.ndarray:
+        """East-west position array (degrees or meters — see ``x_coord_name``)."""
+        return self.dataset[self.x_coord_name].values
+
+    @property
     def bbox(self) -> Tuple[float, float, float, float]:
         """Bounding box (south, west, north, east)."""
         return self.grid_def.bbox
@@ -180,19 +214,25 @@ class SideScanGriddedRaster:
         return self._dataset
 
     def _build_dataset(self) -> xr.Dataset:
-        """Construct xarray Dataset with schema."""
+        """Construct xarray Dataset with schema.
+
+        Position coordinates are named/labeled per the grid's CRS —
+        ``latitude``/``longitude`` (degrees) for a geographic CRS,
+        ``northing``/``easting`` (meters) for a projected one (e.g.
+        UTM). See ``y_coord_name``/``x_coord_name``.
+        """
         # Generate grid centers matching the actual backscatter shape
         # Get nominal grid centers from grid def
-        lats, lons = self.grid_def.get_grid_centers()
+        ys, xs = self.grid_def.get_grid_centers()
 
         # Trim/pad to match backscatter shape exactly
         ns_actual, ew_actual = self.backscatter.shape
-        ns_grid, ew_grid = lats.shape
+        ns_grid, ew_grid = ys.shape
 
         if (ns_grid, ew_grid) != (ns_actual, ew_actual):
             # Trim to match backscatter shape
-            lats = lats[:ns_actual, :ew_actual]
-            lons = lons[:ns_actual, :ew_actual]
+            ys = ys[:ns_actual, :ew_actual]
+            xs = xs[:ns_actual, :ew_actual]
 
         # Create data variables and coordinates
         data_vars = {
@@ -200,8 +240,8 @@ class SideScanGriddedRaster:
         }
 
         coords = {
-            "latitude": (["ns", "ew"], lats),
-            "longitude": (["ns", "ew"], lons),
+            self.y_coord_name: (["ns", "ew"], ys),
+            self.x_coord_name: (["ns", "ew"], xs),
         }
 
         # Build dataset
@@ -222,11 +262,16 @@ class SideScanGriddedRaster:
         ds["backscatter"].attrs["units"] = self.units
         ds["backscatter"].attrs["long_name"] = "Backscatter intensity"
 
-        ds["latitude"].attrs["units"] = "degrees_north"
-        ds["latitude"].attrs["long_name"] = "Latitude"
-
-        ds["longitude"].attrs["units"] = "degrees_east"
-        ds["longitude"].attrs["long_name"] = "Longitude"
+        if self.is_geographic:
+            ds[self.y_coord_name].attrs["units"] = "degrees_north"
+            ds[self.y_coord_name].attrs["long_name"] = "Latitude"
+            ds[self.x_coord_name].attrs["units"] = "degrees_east"
+            ds[self.x_coord_name].attrs["long_name"] = "Longitude"
+        else:
+            ds[self.y_coord_name].attrs["units"] = "m"
+            ds[self.y_coord_name].attrs["long_name"] = "Northing"
+            ds[self.x_coord_name].attrs["units"] = "m"
+            ds[self.x_coord_name].attrs["long_name"] = "Easting"
 
         return ds
 

@@ -513,5 +513,62 @@ class TestSideScanGriddedRasterEdgeCases:
             backscatter=backscatter,
             # no processing_level specified
         )
-        
+
         assert raster.processing_level == "raw"  # or other sensible default
+
+
+class TestSideScanGriddedRasterProjectedCRS:
+    """A projected (e.g. UTM) grid gets northing/easting coords in meters,
+    not latitude/longitude in degrees — the coordinate NAME changes, not
+    just its label/units, since a variable named "latitude" with meter
+    values would be actively misleading to anyone inspecting the dataset."""
+
+    @pytest.fixture
+    def utm_raster(self):
+        grid = GridDefinition(
+            bbox=(4320000.0, 400000.0, 4330000.0, 410000.0),
+            resolution_m=1000.0,
+            crs=CRS.from_epsg(26919),
+        )
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+        return SideScanGriddedRaster(grid_def=grid, backscatter=backscatter)
+
+    def test_is_geographic_false_for_utm(self, utm_raster):
+        assert utm_raster.is_geographic is False
+
+    def test_coord_names_are_northing_easting(self, utm_raster):
+        assert utm_raster.y_coord_name == "northing"
+        assert utm_raster.x_coord_name == "easting"
+
+    def test_dataset_uses_northing_easting_not_lat_lon(self, utm_raster):
+        assert "northing" in utm_raster.dataset.coords
+        assert "easting" in utm_raster.dataset.coords
+        assert "latitude" not in utm_raster.dataset.coords
+        assert "longitude" not in utm_raster.dataset.coords
+
+    def test_northing_easting_units_are_meters(self, utm_raster):
+        assert utm_raster.dataset["northing"].attrs["units"] == "m"
+        assert utm_raster.dataset["easting"].attrs["units"] == "m"
+
+    def test_northing_easting_values_are_in_projected_range(self, utm_raster):
+        # bbox was given directly in EPSG:26919 meters — cell centers
+        # should fall within that range, not look like lat/lon degrees.
+        assert utm_raster.y_values.min() >= 4_320_000
+        assert utm_raster.y_values.max() <= 4_330_000
+        assert utm_raster.x_values.min() >= 400_000
+        assert utm_raster.x_values.max() <= 410_000
+
+    def test_crs_epsg_in_attrs(self, utm_raster):
+        assert utm_raster.dataset.attrs["crs_epsg"] == 26919
+
+    def test_geographic_raster_still_uses_lat_lon(self):
+        """Unchanged behavior for the default WGS84 case."""
+        grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=1000.0)
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+        raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter)
+
+        assert raster.is_geographic is True
+        assert raster.y_coord_name == "latitude"
+        assert raster.x_coord_name == "longitude"
+        assert "northing" not in raster.dataset.coords
+        assert raster.dataset["latitude"].attrs["units"] == "degrees_north"

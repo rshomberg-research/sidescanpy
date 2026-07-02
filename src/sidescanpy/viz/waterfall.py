@@ -36,6 +36,7 @@ def plot_waterfall(
     stop: int | None = None,
     x_axis: XAxisMode = "sample",
     y_axis: YAxisMode = "ping",
+    ping_offset: int = 0,
     cmap: str | Colormap = _DEFAULT_CMAP,
     vmin: float | None = None,
     vmax: float | None = None,
@@ -75,6 +76,15 @@ def plot_waterfall(
           Computed via ``pyproj.Geod.inv`` from per-ping latitude/
           longitude.
 
+    ping_offset : int, default 0
+        Added to ``y_axis="ping"`` values (and to the title's ping
+        range). Use when ``ds`` is itself an already-extracted window
+        of a larger survey (e.g. one segment of a multi-file
+        concatenated channel) so the y-axis reports the segment's true
+        position in the full survey instead of 0-based local indices.
+        Ignored for ``y_axis="time"``/``"along_track"`` — those are
+        derived from ``ds``'s own per-ping fields and need no external
+        offset.
     cmap : str or Colormap, default "copper"
         Matplotlib colormap.
     vmin, vmax : float, optional
@@ -101,7 +111,7 @@ def plot_waterfall(
     """
     # Slice the dataset by ping range
         # Compute full-survey y values, then slice
-    y_full = _compute_y_full(ds, y_axis)
+    y_full = _compute_y_full(ds, y_axis, ping_offset=ping_offset)
     y_sliced = y_full[start:stop]
 
     # Slice dataset for backscatter and x-axis
@@ -174,7 +184,9 @@ def plot_waterfall(
     # Title
     if title is None:
         proc_level = ds.attrs.get("processing_level", "raw")
-        title = f"Waterfall  pings {start}–{stop}  ({proc_level})"
+        title_start = start + ping_offset
+        title_stop = (stop if stop is not None else ds.sizes["ping"]) + ping_offset
+        title = f"Waterfall  pings {title_start}–{title_stop}  ({proc_level})"
     ax.set_title(title)
 
     return ax
@@ -260,15 +272,26 @@ def _compute_y_values(
     y_2d = np.broadcast_to(y[:, None], (n_pings, n_samples)).copy()
     return y_2d, y_2d
 
-def _compute_y_full(ds: xr.Dataset, y_axis: YAxisMode) -> np.ndarray:
+def _compute_y_full(ds: xr.Dataset, y_axis: YAxisMode, ping_offset: int = 0) -> np.ndarray:
     """Compute 1D y values for all pings in ds. Length = ds.sizes['ping']."""
     if y_axis == "ping":
-        return np.arange(ds.sizes["ping"], dtype=np.float64)
+        return np.arange(ds.sizes["ping"], dtype=np.float64) + ping_offset
     if y_axis == "time":
         return ds["time"].values.astype("datetime64[ns]")
     if y_axis == "along_track":
         return _along_track_distance(ds)
     raise ValueError(f"Unknown y_axis: {y_axis}")
+
+def along_track_distance_m(ds: xr.Dataset) -> np.ndarray:
+    """Cumulative along-track distance (meters) from per-ping lat/lon.
+
+    Public wrapper around the same computation used internally for
+    ``y_axis="along_track"`` — exposed for callers (e.g. distance-based
+    segmentation) that need the coordinate array without going through
+    ``plot_waterfall``.
+    """
+    return _along_track_distance(ds)
+
 
 def _along_track_distance(ds: xr.Dataset) -> np.ndarray:
     """Compute cumulative along-track distance from per-ping lat/lon."""

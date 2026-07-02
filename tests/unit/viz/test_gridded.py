@@ -8,6 +8,7 @@ correct types; visual verification is manual).
 import pytest
 import numpy as np
 import matplotlib.pyplot as plt
+from pyproj import CRS
 
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
@@ -16,6 +17,8 @@ from sidescanpy.viz.gridded import (
     plot_gridded_with_coverage,
     plot_gridded_multiple_methods,
     export_gridded_png,
+    _axis_labels,
+    _crs_label,
 )
 
 @pytest.fixture
@@ -38,8 +41,101 @@ def sample_raster():
     n_contrib[np.isnan(backscatter)] = 0
     raster.dataset["n_contributing_samples"] = (["ns", "ew"], n_contrib)
     raster.dataset["n_contributing_samples"].attrs["units"] = "count"
-    
+
     return raster
+
+
+@pytest.fixture
+def utm_raster():
+    """A raster in a projected (UTM) CRS, for axis-label/CRS-info tests."""
+    grid = GridDefinition(
+        bbox=(4320000.0, 400000.0, 4330000.0, 410000.0),
+        resolution_m=1000.0,
+        crs=CRS.from_epsg(26919),
+    )
+    backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+    return SideScanGriddedRaster(
+        grid_def=grid, backscatter=backscatter, channel_name="455 kHz",
+    )
+
+
+class TestCrsAwareLabels:
+    """Axis labels and CRS info adapt to the raster's CRS."""
+
+    def test_axis_labels_geographic(self, sample_raster):
+        xlabel, ylabel = _axis_labels(sample_raster)
+        assert "Longitude" in xlabel
+        assert "Latitude" in ylabel
+
+    def test_axis_labels_projected(self, utm_raster):
+        xlabel, ylabel = _axis_labels(utm_raster)
+        assert "Easting" in xlabel and "(m)" in xlabel
+        assert "Northing" in ylabel and "(m)" in ylabel
+
+    def test_crs_label_includes_epsg(self, utm_raster):
+        label = _crs_label(utm_raster)
+        assert "26919" in label
+
+    def test_plot_gridded_raster_uses_easting_northing_for_utm(self, utm_raster):
+        fig, ax = plot_gridded_raster(utm_raster)
+        try:
+            assert "Easting" in ax.get_xlabel()
+            assert "Northing" in ax.get_ylabel()
+            assert "26919" in ax.get_title()
+        finally:
+            plt.close(fig)
+
+    def test_plot_gridded_raster_uses_lat_lon_for_geographic(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster, title=None)
+        try:
+            assert "Longitude" in ax.get_xlabel()
+            assert "Latitude" in ax.get_ylabel()
+        finally:
+            plt.close(fig)
+
+
+class TestPlotGriddedRasterPercentiles:
+    """vmin_pct/vmax_pct default to plot_waterfall's 1/99, not a
+    different hardcoded value — keeping waterfall and gridded exports
+    of the same data comparably normalized (see docstring in
+    plot_gridded_raster for why a seemingly small percentile
+    difference can matter a lot)."""
+
+    def test_default_percentiles_match_1_99(self, sample_raster):
+        finite = sample_raster.backscatter[np.isfinite(sample_raster.backscatter)]
+        expected_vmin = np.percentile(finite, 1.0)
+        expected_vmax = np.percentile(finite, 99.0)
+
+        fig, ax = plot_gridded_raster(sample_raster)
+        try:
+            im = ax.collections[0] if ax.collections else ax.images[0]
+            assert im.norm.vmin == pytest.approx(expected_vmin)
+            assert im.norm.vmax == pytest.approx(expected_vmax)
+        finally:
+            plt.close(fig)
+
+    def test_custom_percentiles_respected(self, sample_raster):
+        finite = sample_raster.backscatter[np.isfinite(sample_raster.backscatter)]
+        expected_vmin = np.percentile(finite, 5.0)
+        expected_vmax = np.percentile(finite, 95.0)
+
+        fig, ax = plot_gridded_raster(sample_raster, vmin_pct=5.0, vmax_pct=95.0)
+        try:
+            im = ax.collections[0] if ax.collections else ax.images[0]
+            assert im.norm.vmin == pytest.approx(expected_vmin)
+            assert im.norm.vmax == pytest.approx(expected_vmax)
+        finally:
+            plt.close(fig)
+
+    def test_explicit_vmin_vmax_overrides_percentiles(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster, vmin=0.1, vmax=0.9)
+        try:
+            im = ax.collections[0] if ax.collections else ax.images[0]
+            assert im.norm.vmin == pytest.approx(0.1)
+            assert im.norm.vmax == pytest.approx(0.9)
+        finally:
+            plt.close(fig)
+
 
 class TestPlotGriddedRaster:
     """Test plot_gridded_raster()."""
