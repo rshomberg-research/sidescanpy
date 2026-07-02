@@ -18,6 +18,14 @@ Public entry points
   to backscatter. Converts raw linear amplitude to dB.
 - :func:`absorption_for_frequency` — frequency-dependent absorption
   defaults for typical coastal seawater.
+- :func:`run_pipeline` — run the processing pipeline through a target
+  ladder level (``none/radiometric/geometric/georef``).
+- :func:`run_correction_steps` — run an explicit set of correction
+  steps on every channel of a survey, for combinations the ladder
+  can't express (e.g. geometric ranges without TVG).
+- :func:`apply_correction_steps` — same step-set semantics as
+  ``run_correction_steps`` but for a single already-aux-interpolated
+  channel dataset, skipping the survey-level aux interpolation.
 
 Conventions
 -----------
@@ -59,6 +67,14 @@ from sidescanpy.processing.slicing import (
     slice_by_ground_range,
 )
 
+from sidescanpy.processing.pipeline import (
+    run_pipeline,
+    run_correction_steps,
+    apply_correction_steps,
+    VALID_PROCESS_LEVELS,
+    VALID_STEPS,
+)
+
 __all__ = [
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
@@ -73,4 +89,9 @@ __all__ = [
     "slice_by_time",
     "slice_by_bbox",
     "slice_by_ground_range",
+    "run_pipeline",
+    "run_correction_steps",
+    "apply_correction_steps",
+    "VALID_PROCESS_LEVELS",
+    "VALID_STEPS",
 ]
