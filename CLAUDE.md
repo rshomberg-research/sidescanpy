@@ -198,19 +198,73 @@ longitude_per_sample: (ping, channel, sample)
 3. **Wait for user to commit** — don't auto-commit
 
 ### Common Commands
+
+**Note:** ROS2 is installed system-wide and its `setup.bash` injects
+`PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages` into every shell.
+Always clear it before running pytest or use `make test` (see `Makefile`).
+Long-term fix: use a conda environment for this project so the ROS PYTHONPATH
+is fully isolated. See Known Issues #14.
+
 ```bash
 # Activate venv
 source .venv/bin/activate
 
-# Run unit tests
-pytest tests/unit/ -v
+# Run unit tests (PYTHONPATH= clears ROS injection)
+PYTHONPATH="" python -m pytest tests/unit/ -v
+
+# Or just:
+make test       # quiet
+make test-v     # verbose
+make test-cov   # with coverage
 
 # Run specific test file
-pytest tests/unit/grids/test_resample.py -v
+PYTHONPATH="" python -m pytest tests/unit/grids/test_resample.py -v
 
 # Run with coverage
-pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
+PYTHONPATH="" python -m pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
 ```
+
+---
+
+## Lessons Learned
+
+### Passing Tests ≠ Correct Code
+A refactor of `resample_channel_to_grid()` produced tests that passed while using
+2D synthetic data. The real data was 3D. Tests never exercised the actual data
+structure the library operated on in production. **Test fixtures must match real
+data shapes.** A test that passes with unrealistic data is false confidence.
+
+### Diagnostic Views vs. Data Products
+- **Data product** (`plot_gridded_raster()`, GeoTIFF): clean output for GIS/reports. Must be trustworthy.
+- **Diagnostic view** (`plot_gridded_with_coverage()`): reveals internal data structure. Expected to show "artifacts" because that's the point.
+
+Don't judge output quality by diagnostic views. Judge data products by whether
+they look right in their target use case (e.g., open the GeoTIFF in QGIS).
+
+### Path A/B/C Refactor Framework
+When a component has known issues and limited time:
+- **Path A:** Accept and document current state
+- **Path B:** Full refactor as originally planned
+- **Path C:** Minimal hardening — lock in current behavior with tests and validation, defer scope expansion
+
+Path C was chosen for v0.6.0 gridding and worked well. Consider this when
+"good enough" beats "complete."
+
+### Documentation Drift Is Real
+`CLAUDE.md` was updated to claim gridding was "complete and verified" when it
+wasn't. Diagnostic work later found: no 3D validation, no channel-handling tests,
+demo scripts pre-flattening data before calling the library, dead code misleading
+about capabilities. **Verify documentation against actual code state periodically.
+Trust but verify AI-generated summaries of "what's done."**
+
+### Dev Environment Isolation
+ROS2's `setup.bash` (sourced unconditionally in `~/.bashrc`) injects
+`PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages`. This leaks into pytest
+and caused silent test failures when `launch_testing` tried to import `lark`. The
+venv's `include-system-site-packages = false` does **not** block `PYTHONPATH`
+injection — that's a shell env var, not a site-packages flag. Always prefix
+pytest with `PYTHONPATH=""` or use `make test`. The correct long-term fix is a
+conda environment that fully isolates this project from the system ROS install.
 
 ---
 
@@ -353,6 +407,7 @@ tests/integration/             (run with --slow; requires local JSF/SDF fixtures
 6. **Klein SDF `depth_m` is NaN** — Klein records depth as a sensor voltage; calibration constants are in companion INI files which we don't yet parse. Requires INI calibration parsing (deferred; ~1 session). **Workaround:** users with calibration override directly: `ch.dataset["depth_m"] = (["ping"], calibrated_array)`.
 7. **`compute_geometric_ranges` falls back to 1500 m/s** — When `sound_vel_ms` is NaN (always the case for SDF surveys). Acceptable for typical work; would need refinement for cold-water or thermocline-crossing surveys.
 8. **Klein 3500-series assumption** — SDF reader STRUCT matches Klein 3500 layout (no fields 93/94). 5000/5900 series may differ; would need per-version STRUCTs if encountered.
+9. **`channel_id` not an indexed coordinate — `.sel(channel_id=...)` breaks in xarray 2025.10+.** Tests and some internal code use `.sel(channel_id="port"/"starboard")` but `channel_id` is a non-indexed coordinate. Newer xarray raises `KeyError: "no index found for coordinate 'channel_id'"`. Fix: use `.isel(channel=0)` / `.isel(channel=1)`, or call `.set_index(channel="channel_id")` before label selection. Currently causes 3 unit test failures.
 
 ### Low Priority
 9. **SDF `--x-axis ground_range` rendering is "blurry."** Likely due to inaccurate altitude (depth not calibrated → altitude derived poorly). Will improve when bottom detection or INI parsing lands. Cosmetic for now since JSF data renders correctly.
