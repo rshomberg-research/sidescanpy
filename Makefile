@@ -1,14 +1,14 @@
 .PHONY: test test-v test-cov
 
-# ROS2 injects PYTHONPATH system-wide; clear it so pytest sees only the venv.
-# Use 'conda activate sidescanpy' as the long-term fix.
+# ROS2 injects PYTHONPATH system-wide; clear it so uv run sees only the venv.
+# Long-term fix: conda env for ROS, uv for this project.
 PYTHONPATH =
 
 test:
-	python -m pytest tests/unit/ -q
+	uv run pytest tests/unit/ -q
 
 test-v:
-	python -m pytest tests/unit/ -v
+	uv run pytest tests/unit/ -v
 
 test-cov:
-	python -m pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
+	uv run pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing

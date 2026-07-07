@@ -199,29 +199,40 @@ longitude_per_sample: (ping, channel, sample)
 
 ### Common Commands
 
-**Note:** ROS2 is installed system-wide and its `setup.bash` injects
-`PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages` into every shell.
-Always clear it before running pytest or use `make test` (see `Makefile`).
-Long-term fix: use a conda environment for this project so the ROS PYTHONPATH
-is fully isolated. See Known Issues #14.
+**Environment:** This project uses `uv` for dependency management. Run
+`uv sync --extra dev` once after cloning or pulling to install/update the
+environment. No manual venv activation needed — `uv run` handles it.
+
+**ROS2 note:** ROS2 Jazzy is installed system-wide and its `setup.bash`
+injects `PYTHONPATH=/opt/ros/jazzy/lib/python3.12/site-packages` into every
+shell. The Makefile clears this automatically. Always use `make test` or
+prefix commands with `PYTHONPATH=""`. Long-term fix: conda env for ROS work,
+keep this project in uv. See Known Issues #14.
+
+**Other workstation:** The same uv migration was applied here on 2026-07-07.
+If the other workstation is still on the old pip/venv setup, run:
+```bash
+# One-time migration on other workstation
+rm -rf .venv
+uv sync --extra dev
+```
+The same ROS PYTHONPATH issue likely applies there too — verify with
+`echo $PYTHONPATH` and use `make test` rather than invoking pytest directly.
 
 ```bash
-# Activate venv
-source .venv/bin/activate
+# Install / sync environment
+uv sync --extra dev
 
-# Run unit tests (PYTHONPATH= clears ROS injection)
-PYTHONPATH="" python -m pytest tests/unit/ -v
-
-# Or just:
+# Run unit tests
 make test       # quiet
 make test-v     # verbose
 make test-cov   # with coverage
 
-# Run specific test file
-PYTHONPATH="" python -m pytest tests/unit/grids/test_resample.py -v
+# Run a specific test file
+PYTHONPATH="" uv run pytest tests/unit/grids/test_resample.py -v
 
-# Run with coverage
-PYTHONPATH="" python -m pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
+# Run with coverage manually
+PYTHONPATH="" uv run pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
 ```
 
 ---
