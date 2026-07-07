@@ -115,6 +115,23 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     - Maps to approximately -120 dB (well below noise floor)
     - Preserves zero values appropriately (water column)
 
+    **KNOWN ISSUE (unconfirmed root cause, under investigation as of
+    2026-07-02):** the "water column" assumption above for the clipped-
+    to-floor population is not yet confirmed. On real data, ~1% of
+    samples hit this exact floor, clustered in a fixed leading run of
+    ~50-60 samples at the *start* of every ping (not scattered through
+    the range, not correlated with `altitude_m`), and — critically —
+    `ground_range_m` at those samples does *not* collapse toward zero
+    the way genuine water-column returns should (see
+    `processing/geometric.py`'s `compute_geometric_ranges` masking).
+    Whatever these samples are, the existing water-column mask isn't
+    catching them, so they pass `resample_channel_to_grid()`'s
+    finite-coordinate filter and get included in gridding — see
+    `docs/planning/handoff-tvg-range-residual.md` and `CLAUDE.md` Known
+    Issues #4-#5 for the full evidence and a related, separately
+    confirmed ~37 dB range-dependent TVG residual found in the same
+    investigation.
+
     Parameters
     ----------
     ds : xr.Dataset
@@ -247,7 +264,9 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
         float(slant_range[-1]),
     )
 
-    # FIXME: I am not 100% sure that the backscatter values are in intensity. They could be in -db. The range is about 0-80, while db expectations would be -80 to 0
+    # FIXME: I am not 100% sure that the backscatter values are in intensity.
+    # They could be in -db. The range is about 0-80, while db expectations would
+    # be -80 to 0
 
     # ========================================================================
     # Step 4: Apply TVG correction

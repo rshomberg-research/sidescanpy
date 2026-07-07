@@ -76,6 +76,14 @@ def plot_gridded_raster(
         cliff, e.g. from floor-clipped no-return samples, are
         especially sensitive to this — a 1-2 percentile difference can
         shift the effective vmin by tens of dB).
+
+        **Matching these two values is necessary but not sufficient**
+        for a waterfall and a gridded export to look comparably
+        normalized: percentiles are computed over different underlying
+        populations (every raw sample vs. every gridded cell *mean*),
+        so even identical ``vmin_pct``/``vmax_pct`` can yield different
+        absolute bounds — see ``resample_channel_to_grid()``'s "Notes"
+        section and ``docs/planning/handoff-tvg-range-residual.md``.
     show_colorbar : bool, default True
         Include colorbar.
     show_grid : bool, default False

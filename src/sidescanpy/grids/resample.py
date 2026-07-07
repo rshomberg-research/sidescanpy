@@ -102,6 +102,24 @@ def resample_channel_to_grid(
         untouched linear-amplitude reference — pass
         backscatter_var="backscatter_intensity" to grid the corrected data.
 
+    Notes
+    -----
+    **This function does not filter out or otherwise special-case the
+    TVG floor-clipped sample population** (see `apply_tvg()`'s
+    "KNOWN ISSUE" docstring note). Those samples generally have finite
+    georeferenced coordinates, so they pass the `np.isfinite(lat)/
+    np.isfinite(lon)` filter here like any other sample and get
+    included in each cell's aggregation. With `method=MEAN` (the
+    default) and typical real-survey point densities (thousands of raw
+    samples per cell at 1m resolution), that ~1% outlier population
+    gets *diluted*, not removed — it's swamped by the majority-real
+    samples in the same cell, not excluded from the average. This
+    dilution is exactly why a gridded raster's effective dynamic range
+    (and therefore its percentile-based color scale) can differ sharply
+    from a per-sample waterfall's — see `docs/planning/
+    handoff-tvg-range-residual.md` for the full writeup connecting this
+    to a separately confirmed range-dependent TVG residual.
+
     Returns
     -------
     SideScanGriddedRaster
