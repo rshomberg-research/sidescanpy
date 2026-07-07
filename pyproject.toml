@@ -10,6 +10,7 @@ authors = [{name = "Russ Shomberg"}]
 dependencies = [
     "xarray>=2023.0",
     "h5py>=3.0",
+    "h5netcdf>=1.0",
     "numpy>=1.20",
     "pandas>=1.0",
     "matplotlib>=3.0",

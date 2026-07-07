@@ -31,6 +31,7 @@ from dataclasses import astuple, dataclass, field
 from datetime import datetime, timezone
 import logging
 import math
+import numpy as np
 import struct
 from typing import ClassVar
 
@@ -606,9 +607,6 @@ class SDFUnknownPage:
     @property
     def timestamp(self) -> float:
         return self.header.timestamp
-
-# Compatibility import for downstream code expecting np
-import numpy as np
 
 # ============================================================
 # DIAGNOSTIC / DEBUG ENTRY POINT
