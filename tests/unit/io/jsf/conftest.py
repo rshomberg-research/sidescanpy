@@ -1009,9 +1009,14 @@ def jsf_fixture_data_dir():
 def real_jsf_file_path():
     """
     Path to the actual survey file used for these fixtures.
-    Source: 20251015170335.jsf (ping 69, first sonar data message)
+
+    Originally sourced from a URI survey-a JSF survey file
+    (20251015170335.jsf, ping 69, first sonar data message); copied here
+    2026-07-07 as a fixed, sidescanpy-owned test fixture (renamed
+    `sample.jsf`) since the original survey data now lives in that
+    project's own separate repo, not this one.
     """
-    return Path("data/survey-a/raw/20251015170335.jsf")
+    return Path("tests/data/jsf/sample.jsf")
 
 # Reference epoch for synthesizing timestamps
 _EPOCH_2026_NS = int(np.datetime64("2026-01-01T00:00:00", "ns").astype("int64"))

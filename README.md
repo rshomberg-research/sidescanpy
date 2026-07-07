@@ -117,19 +117,14 @@ plt.show()
 
 ### CLI Tools
 
-```bash
-# Convert format-detected file to HDF5
-python scripts/convert.py survey.jsf --output survey.ss.h5
-
-# Convert entire directory
-python scripts/batch_convert_and_plot.py /path/to/surveys/
-
-# Export waterfall PNGs
-python scripts/export_waterfall_series.py \
-    survey.ss.h5 1495000 \
-    --output-dir out/waterfalls/ \
-    --width 200
-```
+This library is a pure Python API — it doesn't ship its own CLI scripts.
+The batch-conversion/visualization CLI tools that used to live in this
+repo's own `scripts/` directory (`convert.py`, `batch_convert_and_plot.py`,
+`export_waterfall_series.py`, `visualization_demo.py`, and others) moved
+out to a downstream consumer project (`project-a`, as of 2026-07-07) —
+see that project's own docs for usage. They're straightforward to
+reproduce against any `sidescanpy` install using the Quick Start examples
+above as a starting point.
 
 ## Architecture
 

@@ -13,6 +13,17 @@ The package can:
 - Resample georeferenced channels onto a regular grid (`sidescanpy.grids`, v0.6.0)
 - Produce waterfall and gridded-raster visualizations, plus PNG exports
 
+**Note (2026-07-07):** This library is consumed by several separate,
+private downstream projects (each their own git repo, living as siblings
+under `<workspace>/` rather than nested in this one).
+None of their code, data, or process details belong in this repo — that
+includes not naming or describing them here beyond what's needed for
+this library's own context; some may have confidentiality requirements
+significant enough that their existence itself shouldn't be disclosed. As
+part of the same reorganization, this repo's own former `scripts/`
+directory (CLI tools built on top of the library) moved out to one of
+those consumer projects — see "Quick Reference" below.
+
 ---
 
 ## Quick Reference
@@ -20,7 +31,8 @@ The package can:
 - **Source code:** `src/sidescanpy/`
 - **Tests:** `tests/unit/` (fast), `tests/integration/` (slow, requires fixtures)
 - **Docs:** `docs/` (module refs), `docs/planning/` (feature plans)
-- **Scripts:** `scripts/` (CLI tools and demos)
+- **Scripts:** moved out of this repo 2026-07-07 (see note above) — CLI
+  tools and demos now live in the `project-a` consumer project
 - **Changelog:** `CHANGELOG.md` (Keep a Changelog format)
 - **Development guide:** `docs/DEVELOPMENT.md`
 
@@ -57,17 +69,17 @@ sidescanpy/
     ├── gridded.py      # gridded raster plots (v0.6.0)
     └── track.py        # NEW v0.7.0: full-survey track + scan-line plot (UTM)
 
-scripts/
-├── convert_survey.py             # NEW v0.7.0: batch JSF/SDF → HDF5 converter
-├── visualization_demo.py         # NEW v0.7.0: multi-file waterfall+gridded matrix across correction levels
-├── convert.py                    # Format-dispatching converter (.jsf or .sdf), single call
-├── batch_convert_and_plot.py     # Directory batch: convert + waterfall export in one pass
-├── plot_sonar_ping.py            # Interactive viewer
-├── export_waterfall_series.py    # Single-file slice + PNG export
-├── old/                          # Superseded numbered pipeline scripts (01_*, 02_*, 03_*,
-│                                  #   convert_jsf*.py) — predate convert.py, not deleted, not maintained
-└── (gridding demos, diagnostic scripts)
 ```
+
+`scripts/` (CLI tools built on the library: `convert_survey.py`,
+`visualization_demo.py`, `convert.py`, `batch_convert_and_plot.py`,
+`plot_sonar_ping.py`, `export_waterfall_series.py`, the superseded
+`scripts/old/` ones, gridding demos, diagnostic scripts) moved to the
+`project-a` consumer project's own `scripts/` directory as of
+2026-07-07 — see that project's docs, not this file, for their current
+state. Every mention of `scripts/...` in the "Current Work Focus"/
+changelog sections below predates that move and describes work done while
+they still lived here; left as historical record, not updated.
 
 ### Data flow
 
