@@ -234,7 +234,13 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     n_samples = ds.sizes["sample"]
     sound_velocity = ds["sound_vel_ms"].mean().item()  # scalar, m/s
     # FIXME: sound_velocity should change at each ping
-    if np.isnan(sound_velocity):
+    # 2026-07-16: widened to also catch exactly-zero (not just NaN) —
+    # confirmed on real JSF data that sound_vel_ms is exactly 0.0 for 100%
+    # of pings in at least one survey, which silently pinned every
+    # sample's slant range at min_range_m (see
+    # docs/planning/handoff-tvg-sound-velocity-zero-bug.md). Matches
+    # geometric.py's already-correct `invalid_sv` check.
+    if np.isnan(sound_velocity) or sound_velocity <= 0:
         sound_velocity = 1500.0
 
     sample_interval_m = sound_velocity / (2.0 * sample_rate)

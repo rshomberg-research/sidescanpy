@@ -159,10 +159,10 @@ class TestTVGGainCalculation:
 class TestEnd2EndCorrection:
     """Test complete correction pipeline with known values."""
 
-    def create_simple_dataset(self, n_pings=5, n_samples=100, backscatter_val=10.0):
+    def create_simple_dataset(self, n_pings=5, n_samples=100, backscatter_val=10.0, sound_vel_ms=1500.0):
         """Create minimal test dataset."""
         import pandas as pd
-        
+
         coords = {
             "ping": np.arange(n_pings),
             "channel": np.arange(2),
@@ -189,7 +189,7 @@ class TestEnd2EndCorrection:
             "depth_m": (["ping"], np.full(n_pings, 50.0, dtype=np.float32)),
             "altitude_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
             "heave_m": (["ping"], np.zeros(n_pings, dtype=np.float32)),
-            "sound_vel_ms": (["ping"], np.full(n_pings, 1500.0, dtype=np.float32)),
+            "sound_vel_ms": (["ping"], np.full(n_pings, sound_vel_ms, dtype=np.float32)),
             "fathometer_reading_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
         }
 
@@ -281,7 +281,45 @@ class TestEnd2EndCorrection:
         original_raw = ds["backscatter_raw"].values.copy()
         result = apply_tvg(ds)
         np.testing.assert_array_equal(result["backscatter_raw"].values, original_raw)
-        
+
+    def test_zero_sound_velocity_falls_back_to_default(self):
+        """Confirmed real-world case (2026-07-16): sound_vel_ms can be
+        exactly 0.0, not NaN. Before the fix, this silently pinned every
+        sample's slant range at min_range_m, making TVG's gain constant per
+        ping instead of range-varying (docs/planning/handoff-tvg-sound-
+        velocity-zero-bug.md). Must fall back to 1500.0 m/s exactly like
+        NaN already does."""
+        ds_zero = self.create_simple_dataset(backscatter_val=1.0, n_samples=101, sound_vel_ms=0.0)
+        ds_default = self.create_simple_dataset(backscatter_val=1.0, n_samples=101, sound_vel_ms=1500.0)
+
+        result_zero = apply_tvg(ds_zero)
+        result_default = apply_tvg(ds_default)
+
+        np.testing.assert_allclose(
+            result_zero["backscatter_intensity"].values,
+            result_default["backscatter_intensity"].values,
+            rtol=1e-5,
+        )
+        # And directly: gain must vary across samples, not be constant —
+        # the specific failure mode this fix addresses.
+        gains = result_zero["backscatter_intensity"].values[0, 0, :]
+        assert not np.allclose(gains, gains[0])
+
+    def test_nan_sound_velocity_still_falls_back_to_default(self):
+        """Regression guard: the NaN case (already handled before this
+        fix) must keep working identically."""
+        ds_nan = self.create_simple_dataset(backscatter_val=1.0, n_samples=101, sound_vel_ms=np.nan)
+        ds_default = self.create_simple_dataset(backscatter_val=1.0, n_samples=101, sound_vel_ms=1500.0)
+
+        result_nan = apply_tvg(ds_nan)
+        result_default = apply_tvg(ds_default)
+
+        np.testing.assert_allclose(
+            result_nan["backscatter_intensity"].values,
+            result_default["backscatter_intensity"].values,
+            rtol=1e-5,
+        )
+
 # ============================================================================
 # STEP 5: NAN/INF SAFETY TESTS
 # ============================================================================

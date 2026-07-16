@@ -355,6 +355,64 @@ The user asked for gridded output in proper projected coordinates (northing/east
 - `utm_crs_for_lonlat()` doesn't handle a segment whose bbox straddles a UTM zone boundary specially — it just picks the zone containing the bbox center, which is fine for typical segment sizes but could put a wide segment's edges in an adjacent zone's "wrong" region. Not addressed; flag if a survey's segments turn out to be UTM-zone-width or wider.
 - The "why gridded looks smoothed relative to waterfall" finding (#4 above) suggests `resolution_m`/`--grid-method` may need per-survey tuning rather than a one-size-fits-all default; no auto-tuning implemented.
 
+### v0.8.0 — TVG Diagnostics, Stage 1 (Complete)
+
+**Status:** Implemented 2026-07-16, per `docs/planning/v0.8.0-tvg-diagnostics.md`. Purely additive — `processing/radiometric.py` untouched (verified via `git diff`).
+
+**Completed:**
+- ✅ `sidescanpy/analysis/tvg_diagnostics.py` (new file in the pre-existing but previously-empty-of-TVG-content `analysis/` subpackage — see caveat below) — `before_after_backscatter()`, `mean_backscatter_vs_range()`, `mean_backscatter_vs_sample_index()`, `bin_pings_by_altitude()`, `_linear_to_db()`.
+- ✅ `sidescanpy/viz/tvg_diagnostics.py` — `plot_mean_vs_range()`, `plot_tvg_gain_curve()`, `plot_per_ping_profiles()`, `plot_multi_frequency_comparison()`, `plot_altitude_bin_comparison()`.
+- ✅ `tests/unit/analysis/test_tvg_diagnostics.py` (24 tests) + `tests/unit/viz/test_tvg_diagnostics.py` (9 smoke tests) — all synthetic fixtures, no real data. Full suite: 983 passing / 36 skipped (was 950/36 — grew by exactly the 33 new tests, zero regressions).
+- ✅ `project-a/scripts/analyze_tvg.py` (separate repo) — CLI wrapping the above, with `--absorption-db-per-m`/`--spreading-loss-db` sweep overrides and CSV/JSON dumps alongside PNGs. Supersedes `debug_radiometric.py`/`debug_radiometric_visualization.py` (moved to `project-a/scripts/old/`).
+- ✅ Validated against real data: converted `~/data/sidescan/project-a/survey-a/jsf/20251015170335.jsf` fresh (no `.ss.h5` existed for it anymore) and reproduced `handoff-tvg-range-residual.md`'s ~37 dB residual table numerically to within 0.05 dB — confirms the new tooling measures the same thing the original manual investigation found.
+
+**⚠️ Found something bigger than diagnostics while validating — see `docs/planning/handoff-tvg-sound-velocity-zero-bug.md`:** the absorption-coefficient sweep (0.2–0.72 dB/m) barely moved the residual (<0.6 dB), which traced to `sound_vel_ms` being exactly `0.0` (not NaN) for **100% of pings** in the real survey tested. `apply_tvg()`'s sound-velocity fallback only checks `np.isnan(...)`, not `<= 0` (unlike `compute_geometric_ranges()`'s already-correct check — Known Issue #7) — so `apply_tvg()` has been computing TVG gain as if every sample were at the clipped `min_range_m = 0.5` floor, regardless of true range. This substantially — but, per the simulated-fix numbers in that doc, not fully — explains Known Issue #4's ~37 dB residual. **Not fixed yet**, deliberately: this is a real behavior change to `apply_tvg()`'s output on real data and was out of scope for Stage 1's diagnostics-only mandate; see the handoff doc for the suggested one-line fix and why the remaining (smaller, non-monotonic) residual after that fix now looks more like evidence for a missing angular/grazing-angle correction than for simple absorption mistuning.
+
+**Pre-existing discovery, unrelated to this work, not touched:** `src/sidescanpy/analysis/` already existed (not created by this Stage 1 work) containing `comparison.py`, `geoplot.py`, `plotting.py` — none referenced anywhere in `src/` or `tests/` (confirmed via grep), and `geoplot.py` imports `sidescanpy.io.hdf5_manager.HDF5Loader`, a class that doesn't exist in the current `io/` architecture (`io/hdf5/` with `read_survey`/`write_survey` functions). Looks like orphaned code from before the 2026-07-07 family reorg, undocumented anywhere in this file. Left alone — out of scope for this session, but worth someone deciding whether to delete or resurrect it.
+
+### v0.8.0 follow-up — sound-velocity fix applied, residual investigation deepened (2026-07-16)
+
+**Status:** Fix applied and merged into this same work; deepened
+investigation complete; no further code change made (see rationale
+below). Full writeups: `docs/planning/handoff-tvg-residual-post-fix-findings.md`
+(the investigation), `docs/planning/v0.9.0-empirical-range-correction.md`
+(the resulting design proposal, awaiting approval, not implemented).
+
+- ✅ **Applied** the sound-velocity fallback fix flagged (not applied) in
+  the previous session: `apply_tvg()`'s check widened from
+  `np.isnan(sound_velocity)` to `np.isnan(sound_velocity) or
+  sound_velocity <= 0`, matching `compute_geometric_ranges()`'s pattern.
+  Two new regression tests in `tests/unit/processing/test_radiometric.py`
+  (`test_zero_sound_velocity_falls_back_to_default`,
+  `test_nan_sound_velocity_still_falls_back_to_default`). Suite: 985
+  passing / 36 skipped (was 983 — zero regressions).
+- ✅ Re-validated against real data: the fix's real-world effect matches
+  last session's *simulated* prediction almost exactly (e.g. 10–15m bin:
+  predicted ≈30.5dB, actual 30.53dB).
+- ✅ Deepened the investigation using existing Stage 1 tooling (no new
+  code needed): multi-frequency comparison (`hz_1495000` vs `hz_547500`),
+  altitude-bin comparison, and a post-fix absorption-coefficient sweep.
+- **Result: neither original candidate cleanly confirmed.** The residual
+  is altitude-invariant (evidence against candidate 2 as originally
+  framed — a true grazing-angle effect should vary with geometry) but
+  non-monotonic for `hz_1495000` and a completely different
+  rise-then-plateau shape for `hz_547500` (evidence against candidate 1 —
+  no single retuned absorption coefficient produces either shape, and
+  the sweep confirmed no tested value flattens the curve; the *current*
+  default of 0.20 dB/m for 1495kHz is already near-locally-optimal among
+  values tried). Leading hypothesis, unconfirmed: a hardware TVG/AGC
+  artifact baked into the raw signal before `sidescanpy` sees it, not a
+  missing software correction term.
+- **No `absorption_for_frequency()` coefficient change made** — the
+  evidence pointed away from a simple retune (see above), and changing
+  the model's functional form (the only thing that could actually help)
+  is a real design decision belonging in
+  `docs/planning/v0.9.0-empirical-range-correction.md`'s proposal, not a
+  mechanical fix to make autonomously. That doc is explicitly
+  awaiting-approval, not implemented, with several open questions for
+  the user (is this worth pursuing now; is a hardware TVG curve
+  documented anywhere; per-survey vs. fixed calibration).
+
 ### Test Status (as of 2026-07-01)
 
 ```
@@ -384,7 +442,7 @@ tests/integration/             (run with --slow; requires local JSF/SDF fixtures
 
 ### v0.8.0+ candidates (not yet ordered)
 
-- **TVG diagnostics** — `docs/planning/v0.8.0-tvg-diagnostics.md` is a written, scoped plan (2026-07-03) for diagnosing the range-dependent TVG residual and floor-clipped-sample issue (Known Issues #4/#5) before changing `processing/radiometric.py` — awaiting approval, not yet just an idea.
+- ~~**TVG diagnostics**~~ — Stage 1 complete 2026-07-16 (see "v0.8.0 — TVG Diagnostics, Stage 1" above), sound-velocity fix applied and residual investigation deepened same day (see "v0.8.0 follow-up" above). Next step, if it happens, is `docs/planning/v0.9.0-empirical-range-correction.md` — a design proposal awaiting approval, not Stage 2's original beam-pattern framing (evidence didn't cleanly support that framing either — see the follow-up section).
 - **Klein INI parsing** — unblocks proper `depth_m` for SDF (~1 session; see Known Issues #5)
 - **Bottom detection** (`processing/detect_bottom.py`) — fallback altitude
 - **Per-side diagnostic mode** — port/starboard bands in gridded raster
@@ -419,6 +477,8 @@ tests/integration/             (run with --slow; requires local JSF/SDF fixtures
    - Works "well enough" for visualization but not for quantitative analysis. Revisit before any acoustic-quantitative work.
    - As of 2026-07-01, gridding demos correctly grid the TVG-corrected `backscatter_intensity` variable (see `resample_channel_to_grid()`'s `backscatter_var` param) instead of silently ignoring it — but the above correctness TODOs on the correction itself still apply.
    - **2026-07-02 — quantitatively confirmed a real range-dependent TVG residual**, found while investigating why `visualization_demo.py`'s `gridded_full` output still didn't visually resemble `waterfall_full` for the same segment even after the CRS/percentile fixes above. Binning already-TVG-corrected `backscatter_intensity` by `ground_range_m` (real data, `20251015170335.ss.h5`, first 2000 pings, floor-clipped samples from Issue #5 excluded) shows a strong, monotonic falloff — mean ≈ **+1 dB at 10–15m range down to ≈ -36 dB at 55–65m range**, a ~37 dB systematic gradient that TVG is specifically supposed to remove (spreading + absorption loss compensation). This is **not** a bug in `resample_channel_to_grid()`, `SideScanGriddedRaster`, or the percentile-scaling fix (all three verified correct/wired-in) — it's a real residual in the TVG correction itself, and the two views disagree cosmetically only because of how each one's color scale reacts to it: the waterfall's percentile-based `vmin` is dominated by the ~1% Issue #5 floor-clipped population (pinned to ≈-125 dB), stretching its color range wide enough to visually flatten/hide the ~37 dB real gradient sitting entirely within the upper end of that range; gridding's cell-*mean* aggregation **dilutes, not removes,** that same outlier population — the floor-clipped samples are *not* excluded from gridding (they generally have finite georeferenced coordinates and pass `resample_channel_to_grid()`'s finite-coordinate filter same as any other sample; see that function's docstring "Notes" section), they're just statistically swamped by the thousands of real samples sharing their cell at typical resolutions, narrowing the effective color range enough to make the gradient plainly visible as a vignette-like darkening toward the swath edges. Confirms this file's existing "not for quantitative analysis" caveat with a concrete number — revisit the TVG spreading/absorption model before trusting either view's absolute dB values, not just before "acoustic-quantitative work" in the abstract. Full writeup: `docs/planning/handoff-tvg-range-residual.md`.
+   - **2026-07-16 — root cause found and fixed: this residual was substantially explained by `sound_vel_ms` being exactly `0.0` (not NaN) for every ping in the tested real survey, which `apply_tvg()`'s sound-velocity fallback didn't catch (only checked `np.isnan`, unlike `compute_geometric_ranges()`'s correct `np.isnan(...) | (... <= 0)` — Known Issue #7).** This silently pinned every sample's TVG-computed slant range at the `min_range_m = 0.5` floor, making the "range-varying" correction actually constant per ping. **Fix applied same day** (`apply_tvg()`'s check widened to match `geometric.py`'s), changing the residual from a ~37 dB monotonic falloff to a smaller (~6-8 dB peak-to-trough), **non-monotonic, altitude-invariant "bowl"** residual (real-data confirmation, not just simulation, matches last session's predicted numbers almost exactly). Full writeup: `docs/planning/handoff-tvg-sound-velocity-zero-bug.md`.
+   - **2026-07-16 — deepened investigation: neither original candidate (mistuned absorption vs. missing angular/grazing correction) cleanly explains the remaining bowl.** Altitude-invariance argues against a grazing-angle effect; a qualitatively different residual shape between `hz_1495000` (bowl) and `hz_547500` (sharp rise then flat plateau), plus an absorption-coefficient sweep confirming no single value flattens the curve (the current 0.20 dB/m default for 1495kHz is already near-locally-optimal among values tried), argues against simple coefficient retuning. Leading hypothesis, unconfirmed: a hardware TVG/AGC artifact baked into the raw signal upstream of `sidescanpy`. No further code change made — see `docs/planning/v0.9.0-empirical-range-correction.md` for the resulting design proposal (awaiting approval, not implemented; several genuine judgment-call questions for the user). Full writeup: `docs/planning/handoff-tvg-residual-post-fix-findings.md`.
 5. **Sharp low-end "cliff" in `backscatter_intensity` (~1% of samples pinned at the TVG dB-conversion floor, ~-120 dB) — cause not yet confirmed, needs investigation.** Found 2026-07-02 while investigating why gridded output looked less normalized than the waterfall (see v0.7.0 "gridding correctness pass" above). Evidence gathered so far, on real data (`data/survey-a/20251015170335.ss.h5`, first 500 pings, `hz_1495000`):
    - The floor values come from **exactly-zero raw linear amplitude** in `backscatter_raw` (100% of sampled floor points, not just near-zero/noise) — `apply_tvg()`'s `20*log10(clip(x, 1e-6))` floors these to ≈-120 dB, which is a correct response to genuinely-zero input, not a bug in the TVG conversion itself.
    - These zero-amplitude samples form a **leading run at the start of every ping** — median run length 56 samples (out of 4792), tight across ~500 pings (p10=51, p90=60, std≈3.5) — **not** scattered through the range or concentrated at long range.
