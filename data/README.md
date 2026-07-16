@@ -53,6 +53,7 @@ data/<survey_name>/
 | Segment file        | `segment_<NNN>.png`, zero-padded, shared numbering across output types/correction levels for a given frequency | `segment_001.png`                  |
 | Track file          | `track.png` under `track_full/hz_<freq>/` — one per survey per frequency, not segmented (`--output-types track`, opt-in) | `track_full/hz_1495000/track.png` |
 | Manifest            | `manifest.json` at the root of `exports/`, one per survey                                                      | `exports/manifest.json`            |
+| TVG diagnostics     | `tvg_diagnostics/hz_<freq>/` — sibling to the `<output_type>_<correction_level>` subtree, not suffixed by correction level since it inherently compares raw vs. corrected within one output (`project-a/scripts/analyze_tvg.py`, see `docs/planning/v0.8.0-tvg-diagnostics.md`) | `tvg_diagnostics/hz_1495000/mean_vs_range.png` |
 
 This makes a survey directory self-describing and portable — copy
 `data/site-b/` anywhere and everything about that survey
