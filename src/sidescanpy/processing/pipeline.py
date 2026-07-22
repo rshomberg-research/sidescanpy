@@ -28,6 +28,7 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
 from sidescanpy.processing.interpolate import interpolate_aux_onto_pings
 from sidescanpy.processing.radiometric import apply_tvg
+from sidescanpy.processing.range_correction import apply_empirical_range_correction
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +39,27 @@ logger = logging.getLogger(__name__)
 
 STEP_TVG = "tvg"
 STEP_GEOMETRIC = "geometric"
+STEP_RANGE_CORRECTION = "range_correction"
 STEP_GEOREF = "georef"
 
 # Fixed application order — georeferencing needs across_track_m/
 # along_track_m from the geometric step; TVG has no dependency on
 # either but is applied first by convention (matches the pre-existing
-# ladder's step order).
-VALID_STEPS = (STEP_TVG, STEP_GEOMETRIC, STEP_GEOREF)
+# ladder's step order). range_correction needs ground_range_m from the
+# geometric step, so it's ordered right after it; it has no dependency
+# on georef either way. range_correction is deliberately **not** part of
+# the default ladder below (_LADDER_STEPS) — it's an optional,
+# empirically-calibrated step (see processing/range_correction.py), not
+# a universal physics-based correction like the other three. Existing
+# callers using run_pipeline()'s ladder see no behavior change; opt in
+# via run_correction_steps()/apply_correction_steps() with an explicit
+# step set that includes "range_correction".
+VALID_STEPS = (STEP_TVG, STEP_GEOMETRIC, STEP_RANGE_CORRECTION, STEP_GEOREF)
 
 _STEP_FUNCTIONS = {
     STEP_TVG: apply_tvg,
     STEP_GEOMETRIC: compute_geometric_ranges,
+    STEP_RANGE_CORRECTION: apply_empirical_range_correction,
     STEP_GEOREF: compute_georeferencing,
 }
 
@@ -71,8 +82,11 @@ def apply_correction_steps(
     ds : xr.Dataset
         Single frequency channel dataset.
     steps : set of str
-        Any subset of ``{"tvg", "geometric", "georef"}``, applied in
-        the fixed order ``VALID_STEPS``. Empty set is a no-op.
+        Any subset of ``{"tvg", "geometric", "range_correction", "georef"}``,
+        applied in the fixed order ``VALID_STEPS``. Empty set is a no-op.
+        ``"range_correction"`` requires ``"geometric"`` to have run first
+        (needs ``ground_range_m``) — including it without ``"geometric"``
+        raises inside ``apply_empirical_range_correction`` itself.
 
     Returns
     -------
@@ -103,8 +117,8 @@ def run_correction_steps(
     """Run an explicit set of correction steps on every frequency channel.
 
     Unlike :func:`run_pipeline`, ``steps`` is not a ladder position —
-    any subset of ``{"tvg", "geometric", "georef"}`` is valid,
-    including combinations the ladder can't express (e.g.
+    any subset of ``{"tvg", "geometric", "range_correction", "georef"}``
+    is valid, including combinations the ladder can't express (e.g.
     ``{"geometric"}`` without ``"tvg"``: geometric ranges over raw,
     non-TVG-corrected backscatter).
 
@@ -112,8 +126,8 @@ def run_correction_steps(
     ----------
     survey : SideScanSurvey
     steps : set of str
-        Any subset of ``{"tvg", "geometric", "georef"}``. Empty set
-        means no processing (equivalent to raw).
+        Any subset of ``{"tvg", "geometric", "range_correction", "georef"}``.
+        Empty set means no processing (equivalent to raw).
 
     Returns
     -------

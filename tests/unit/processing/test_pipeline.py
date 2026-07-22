@@ -63,6 +63,29 @@ class TestRunCorrectionSteps:
         assert _has_var(result, "ground_range_m")
         assert _has_var(result, "latitude_per_sample")
 
+    def test_range_correction_without_georef(self, sample_multi_frequency_survey):
+        """range_correction is opt-in and independent of georef — a
+        supported combination the ladder can't express (range_correction
+        isn't part of any ladder level). With the bundled default
+        calibration table empty (no fitted curves shipped yet), this
+        exercises the "no calibrated frequency match" skip path in
+        apply_empirical_range_correction — must not raise, and
+        processing_level/ground_range_m must be unaffected by the skip."""
+        result = run_correction_steps(
+            sample_multi_frequency_survey, {"tvg", "geometric", "range_correction"}
+        )
+        assert set(_levels(result).values()) == {"radiometric"}
+        assert _has_var(result, "ground_range_m")
+        assert not _has_var(result, "latitude_per_sample")
+
+    def test_range_correction_requires_geometric(self, sample_multi_frequency_survey):
+        """apply_empirical_range_correction requires ground_range_m —
+        requesting it without "geometric" must raise, not silently skip."""
+        with pytest.raises(ValueError, match="ground_range_m"):
+            run_correction_steps(
+                sample_multi_frequency_survey, {"tvg", "range_correction"}
+            )
+
     def test_georef_without_geometric_raises(self, sample_multi_frequency_survey):
         """compute_georeferencing requires across_track_m/along_track_m
         from compute_geometric_ranges — an ordering constraint documented
