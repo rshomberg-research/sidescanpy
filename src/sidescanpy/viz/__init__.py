@@ -38,6 +38,7 @@ from sidescanpy.viz.gridded import (
     export_gridded_png,
 )
 from sidescanpy.viz.track import plot_track_and_scanlines, export_track_and_scanlines_png
+from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 
 __all__ = [
     "plot_waterfall",
@@ -48,4 +49,6 @@ __all__ = [
     "export_gridded_png",
     "plot_track_and_scanlines",
     "export_track_and_scanlines_png",
+    "contact_sheet",
+    "render_target_context",
 ]

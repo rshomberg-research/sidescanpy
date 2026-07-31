@@ -1,0 +1,141 @@
+"""
+Thumbnail grid and boxed-context QA rendering for sonar targets.
+
+Per ``docs/planning/v0.10.0-target-catalog-and-coco-export.md`` Phase 3 —
+confirmed nothing reusable existed anywhere in the family for either of
+these before this module. Uses the same percentile-based amplitude
+auto-scaling convention as ``viz/waterfall.py`` (default 1st/99th
+percentile) so target imagery reads consistently with other sidescanpy
+figures.
+
+2026 rshomberg@uri.edu
+"""
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
+
+from sidescanpy.targets.core import Target, bbox_from_center
+
+_DEFAULT_CMAP = "copper"
+_DEFAULT_VMIN_PCT = 1.0
+_DEFAULT_VMAX_PCT = 99.0
+
+
+def _vlimits(image: np.ndarray, vmin_pct: float, vmax_pct: float) -> tuple[float, float]:
+    finite = image[np.isfinite(image)]
+    if finite.size == 0:
+        raise ValueError("No finite values in image; cannot auto-scale color")
+    return float(np.percentile(finite, vmin_pct)), float(np.percentile(finite, vmax_pct))
+
+
+def contact_sheet(
+    images: list[np.ndarray],
+    captions: list[str],
+    *,
+    ncols: int = 6,
+    cmap: str = _DEFAULT_CMAP,
+    vmin_pct: float = _DEFAULT_VMIN_PCT,
+    vmax_pct: float = _DEFAULT_VMAX_PCT,
+    cell_size: tuple[float, float] = (2.2, 2.2),
+    suptitle: str | None = None,
+) -> Figure:
+    """Grid of thumbnails, one per image, captioned individually.
+
+    Each image is auto-scaled independently (its own percentile range) —
+    appropriate for a review grid of unrelated crops, not for comparing
+    absolute intensity across targets.
+
+    Parameters
+    ----------
+    images : list of 2D arrays
+        One per target.
+    captions : list of str
+        Same length as ``images``.
+    ncols : int, default 6
+        Grid columns; rows are computed to fit.
+    """
+    if len(images) != len(captions):
+        raise ValueError(f"images ({len(images)}) and captions ({len(captions)}) must be the same length")
+    n = len(images)
+    ncols = max(1, min(ncols, n)) if n else 1
+    nrows = max(1, -(-n // ncols)) if n else 1
+
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(cell_size[0] * ncols, cell_size[1] * nrows), squeeze=False
+    )
+    for idx, ax in enumerate(axes.flat):
+        if idx < n:
+            image = images[idx]
+            vmin, vmax = _vlimits(image, vmin_pct, vmax_pct)
+            ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+            ax.set_title(captions[idx], fontsize=8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    if suptitle:
+        fig.suptitle(suptitle)
+    fig.tight_layout()
+    return fig
+
+
+def render_target_context(
+    window: np.ndarray,
+    target: Target,
+    *,
+    box_size: tuple[float, float] = (40.0, 40.0),
+    cmap: str = _DEFAULT_CMAP,
+    vmin_pct: float = _DEFAULT_VMIN_PCT,
+    vmax_pct: float = _DEFAULT_VMAX_PCT,
+    title: str | None = None,
+) -> Figure:
+    """Full ping-window image with a box drawn at ``target``'s computed
+    position, for visual QA of the localization formula.
+
+    ``box_size`` is a fixed placeholder (width, height in samples/pings)
+    around the computed center — no real measured target dimensions exist
+    in the source catalog (``LengthMeters``/``WidthMeters`` unpopulated),
+    so this is explicitly not derived from anything measured.
+    """
+    row = target.extra_attributes.get("window_row")
+    col = target.sample
+    if row is None or col is None:
+        raise ValueError(
+            f"Target {target.target_id} has no computed window position "
+            "(missing extra_attributes['window_row'] or .sample)"
+        )
+
+    vmin, vmax = _vlimits(window, vmin_pct, vmax_pct)
+
+    # Sample-index count and ping-index count aren't the same physical
+    # unit (sample spacing depends on sound velocity/sample rate, ping
+    # spacing on vessel speed/ping rate) — so there's no single "true"
+    # aspect ratio to preserve here, aspect="equal" (1 sample-unit == 1
+    # ping-unit) is just as arbitrary as any other fixed ratio, and for a
+    # full ~4800-sample x ~200-ping window it produces an unusably thin
+    # ~24:1 strip. The previous hardcoded figsize=(10, 8) (~1.25:1) was a
+    # *different* arbitrary choice that happened to look badly distorted/
+    # zoomed-in for a wide window. Matching EdgeTech Discover's own
+    # per-target images instead (found 2026-07-30 by comparing output
+    # directly) — theirs render the same full sample width at a
+    # deliberately compressed, reasonable landscape aspect (~512x200,
+    # ~2.56:1) rather than 1:1 or square — so this uses a comparable
+    # fixed aspect instead of trying to derive a "correct" one.
+    fig_h = 5.0
+    fig_w = fig_h * 2.56
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.imshow(window, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+
+    x, y, w, h = bbox_from_center(row, col, box_size)
+    ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="red", linewidth=1.5))
+
+    ax.set_xlabel("Sample")
+    ax.set_ylabel("Ping (window-local)")
+    ax.set_title(
+        title
+        or f"Target {target.target_id}  "
+        f"(ping {target.ping}, sample {target.sample}, confidence={target.position_confidence})"
+    )
+    fig.tight_layout()
+    return fig
