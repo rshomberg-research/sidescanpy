@@ -8,6 +8,7 @@ correct types; visual verification is manual).
 import pytest
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm
 from pyproj import CRS
 
 from sidescanpy.grids.definition import GridDefinition
@@ -19,6 +20,7 @@ from sidescanpy.viz.gridded import (
     export_gridded_png,
     _axis_labels,
     _crs_label,
+    _mask_floor_clip,
 )
 
 @pytest.fixture
@@ -137,6 +139,44 @@ class TestPlotGriddedRasterPercentiles:
             plt.close(fig)
 
 
+class TestMaskFloorClip:
+    """Floor-clip artifact values (sidescanpy/CLAUDE.md Known Issue #5) are
+    not real backscatter returns and should be masked to NaN, not treated
+    as legitimate low-end data, matching viz/waterfall.py's handling."""
+
+    def test_zero_and_neg120_masked_to_nan(self):
+        bs = np.array([0.0, -120.0, 5.3, -40.0, 0.1])
+        result = _mask_floor_clip(bs)
+        assert np.isnan(result[0])
+        assert np.isnan(result[1])
+        np.testing.assert_array_equal(result[[2, 3, 4]], bs[[2, 3, 4]])
+
+    def test_no_floor_values_returns_equivalent_array(self):
+        bs = np.array([5.3, -40.0, 0.1])
+        result = _mask_floor_clip(bs)
+        np.testing.assert_array_equal(result, bs)
+
+
+class TestPlotGriddedRasterExcludesFloorClip:
+    def test_vmin_not_pulled_down_by_floor_clip_zeros(self):
+        grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=5000.0)
+        backscatter = np.random.uniform(
+            10.0, 20.0, size=(grid.num_cells_ns, grid.num_cells_ew)
+        )
+        backscatter[: grid.num_cells_ns // 2, :] = 0.0
+        raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter)
+
+        fig, ax = plot_gridded_raster(raster)
+        try:
+            im = ax.collections[0] if ax.collections else ax.images[0]
+            # If the floor-clip zeros leaked into the percentile calc,
+            # vmin would be pulled down near 0 instead of staying within
+            # the real [10, 20) population.
+            assert im.norm.vmin >= 9.0
+        finally:
+            plt.close(fig)
+
+
 class TestPlotGriddedRaster:
     """Test plot_gridded_raster()."""
 
@@ -236,6 +276,49 @@ class TestPlotGriddedRaster:
 
         fig, ax = plot_gridded_raster(raster)
         assert fig is not None
+        plt.close(fig)
+
+
+class TestPlotGriddedRasterGamma:
+    """gamma is a display-only PowerNorm applied to the color mapping —
+    the plotted array and colorbar stay in the raster's real units,
+    never renormalized to [0, 1]. gamma=1.0 must remain byte-for-byte
+    identical to pre-gamma behavior (plain vmin/vmax, no norm object)."""
+
+    def test_default_gamma_is_linear_not_powernorm(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster)
+        mesh = ax.collections[0]
+        assert not isinstance(mesh.norm, PowerNorm)
+        plt.close(fig)
+
+    def test_gamma_applies_powernorm_with_matching_bounds(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster, gamma=2.0)
+        mesh = ax.collections[0]
+        assert isinstance(mesh.norm, PowerNorm)
+        assert mesh.norm.gamma == 2.0
+        vmin, vmax = mesh.get_clim()
+        assert vmin < vmax
+        plt.close(fig)
+
+    def test_gamma_does_not_change_underlying_plotted_values(self, sample_raster):
+        fig1, ax1 = plot_gridded_raster(sample_raster)
+        fig2, ax2 = plot_gridded_raster(sample_raster, gamma=3.0)
+        try:
+            np.testing.assert_array_equal(
+                ax1.collections[0].get_array().data, ax2.collections[0].get_array().data
+            )
+        finally:
+            plt.close(fig1)
+            plt.close(fig2)
+
+    def test_colorbar_label_stays_real_units_with_gamma(self):
+        grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=5000.0)
+        backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
+        db_raster = SideScanGriddedRaster(grid_def=grid, backscatter=backscatter, units="dB")
+
+        fig, ax = plot_gridded_raster(db_raster, gamma=2.5)
+        cbar_label = ax.collections[0].colorbar.ax.get_ylabel()
+        assert "dB" in cbar_label
         plt.close(fig)
 
 
@@ -359,3 +442,12 @@ class TestExportGriddedPng:
         )
 
         assert output_path.exists()
+
+    def test_export_png_with_gamma(self, sample_raster, tmp_path):
+        """Export with a gamma display curve — should not error."""
+        output_path = tmp_path / "test_raster_gamma.png"
+
+        export_gridded_png(sample_raster, str(output_path), gamma=2.5)
+
+        assert output_path.exists()
+        assert output_path.stat().st_size > 0

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
-from matplotlib.colors import Colormap
+from matplotlib.colors import Colormap, PowerNorm
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,21 @@ YAxisMode = Literal["ping", "time", "along_track"]
 _DEFAULT_CMAP = "copper"
 _DEFAULT_VMIN_PCT = 1.0
 _DEFAULT_VMAX_PCT = 99.0
+
+# Deterministic floor-clip artifact values, not real backscatter returns
+# (see sidescanpy/CLAUDE.md Known Issue #5): 0.0 is exact-zero raw linear
+# amplitude (pre-TVG); -120.0 is apply_tvg()'s `20*log10(clip(x, 1e-6))`
+# floor (post-TVG dB). Masked to NaN before color-scaling/plotting so they
+# don't stretch vmin/vmax or render as fake dark pixels.
+_FLOOR_CLIP_VALUES = (0.0, -120.0)
+
+
+def _mask_floor_clip(bs: np.ndarray) -> np.ndarray:
+    """Replace exact floor-clip artifact values with NaN."""
+    mask = np.isin(bs, _FLOOR_CLIP_VALUES)
+    if not mask.any():
+        return bs
+    return np.where(mask, np.nan, bs)
 
 
 def plot_waterfall(
@@ -42,6 +57,8 @@ def plot_waterfall(
     vmax: float | None = None,
     vmin_pct: float = _DEFAULT_VMIN_PCT,
     vmax_pct: float = _DEFAULT_VMAX_PCT,
+    gamma: float = 1.0,
+    show_colorbar: bool = False,
     ax: Axes | None = None,
     title: str | None = None,
 ) -> Axes:
@@ -93,6 +110,17 @@ def plot_waterfall(
     vmin_pct, vmax_pct : float, default 1.0 and 99.0
         Percentiles for auto color scaling. Ignored if ``vmin`` or
         ``vmax`` is given.
+    gamma : float, default 1.0
+        Display-only power-law contrast curve, applied via
+        ``matplotlib.colors.PowerNorm(gamma, vmin, vmax)`` instead of a
+        plain linear ``Normalize``. The plotted array itself is never
+        modified — only the value-to-color mapping is warped — so the
+        backscatter stays real dB and (if ``show_colorbar=True``) the
+        colorbar keeps honest dB tick values, just non-uniformly
+        spaced. ``gamma=1.0`` (default) is a linear scale, identical to
+        this function's behavior before this parameter existed.
+    show_colorbar : bool, default False
+        If True, add a colorbar labeled "Backscatter (dB)".
     ax : matplotlib.axes.Axes, optional
         Axes to plot on. If not given, creates a new figure with a
         single Axes.
@@ -119,7 +147,7 @@ def plot_waterfall(
     n_pings_slice = sliced.sizes["ping"]
     n_samples = sliced.sizes["sample"]
 
-    bs = sliced["backscatter_intensity"].values
+    bs = _mask_floor_clip(sliced["backscatter_intensity"].values)
 
     # Compute x for the slice
     x_port, x_stbd = _compute_x_values(sliced, x_axis)
@@ -159,16 +187,22 @@ def plot_waterfall(
     x_port, y_port_clean, c_port = _mask_invalid_coord(x_port, y_port, bs[:, 0, :])
     x_stbd, y_stbd_clean, c_stbd = _mask_invalid_coord(x_stbd, y_stbd, bs[:, 1, :])
 
+    # gamma != 1.0: PowerNorm warps the color mapping only, so the plotted
+    # array and colorbar stay real dB (never renormalized to [0, 1]).
+    norm = PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax) if gamma != 1.0 else None
+    scale_kwargs = {"norm": norm} if norm is not None else {"vmin": vmin, "vmax": vmax}
+
     ax.pcolormesh(
         x_port, y_port_clean, c_port,
-        cmap=cmap, vmin=vmin, vmax=vmax, shading="nearest",
-        rasterized=True,
+        cmap=cmap, shading="nearest", rasterized=True, **scale_kwargs,
     )
-    ax.pcolormesh(
+    mesh_stbd = ax.pcolormesh(
         x_stbd, y_stbd_clean, c_stbd,
-        cmap=cmap, vmin=vmin, vmax=vmax, shading="nearest",
-        rasterized=True,
+        cmap=cmap, shading="nearest", rasterized=True, **scale_kwargs,
     )
+
+    if show_colorbar:
+        fig.colorbar(mesh_stbd, ax=ax, label="Backscatter (dB)")
     # ----- axis labels and limits -----
     ax.set_xlabel(_x_axis_label(x_axis))
     ax.set_ylabel(_y_axis_label(y_axis))

@@ -16,6 +16,23 @@ from sidescanpy.grids.raster import SideScanGriddedRaster
 logger = logging.getLogger(__name__)
 
 
+# Deterministic floor-clip artifact values, not real backscatter returns
+# (see sidescanpy/CLAUDE.md Known Issue #5): 0.0 is exact-zero raw linear
+# amplitude (pre-TVG); -120.0 is apply_tvg()'s `20*log10(clip(x, 1e-6))`
+# floor (post-TVG dB). Masked to NaN before color-scaling/plotting so they
+# don't stretch vmin/vmax or render as fake dark cells — matches
+# viz/waterfall.py's plot_waterfall() handling of the same artifact.
+_FLOOR_CLIP_VALUES = (0.0, -120.0)
+
+
+def _mask_floor_clip(backscatter: np.ndarray) -> np.ndarray:
+    """Replace exact floor-clip artifact values with NaN."""
+    mask = np.isin(backscatter, _FLOOR_CLIP_VALUES)
+    if not mask.any():
+        return backscatter
+    return np.where(mask, np.nan, backscatter)
+
+
 # ============================================================
 # CRS-AWARE LABELS
 # ============================================================
@@ -45,6 +62,7 @@ def plot_gridded_raster(
     vmax: Optional[float] = None,
     vmin_pct: float = 1.0,
     vmax_pct: float = 99.0,
+    gamma: float = 1.0,
     show_colorbar: bool = True,
     show_grid: bool = False,
     title: Optional[str] = None,
@@ -84,6 +102,15 @@ def plot_gridded_raster(
         so even identical ``vmin_pct``/``vmax_pct`` can yield different
         absolute bounds — see ``resample_channel_to_grid()``'s "Notes"
         section and ``docs/planning/handoff-tvg-range-residual.md``.
+    gamma : float, default 1.0
+        Display-only power-law contrast curve, applied via
+        ``matplotlib.colors.PowerNorm(gamma, vmin, vmax)`` instead of a
+        plain linear scale. The plotted array is never renormalized —
+        only the value-to-color mapping is warped — so ``raster``
+        stays in its real units (e.g. dB) and the colorbar (if shown)
+        keeps honest, correctly-labeled tick values, just non-uniformly
+        spaced. ``gamma=1.0`` (default) is linear, identical to this
+        function's behavior before this parameter existed.
     show_colorbar : bool, default True
         Include colorbar.
     show_grid : bool, default False
@@ -104,7 +131,7 @@ def plot_gridded_raster(
     # Extract backscatter and coordinates (CRS-aware: lat/lon degrees
     # for a geographic raster, northing/easting meters for a projected
     # one — see SideScanGriddedRaster.y_values/x_values)
-    backscatter = raster.backscatter
+    backscatter = _mask_floor_clip(raster.backscatter)
     ys = raster.y_values
     xs = raster.x_values
 
@@ -122,15 +149,20 @@ def plot_gridded_raster(
     # Create masked array for NaN handling
     backscatter_masked = np.ma.masked_invalid(backscatter)
 
+    # gamma != 1.0: PowerNorm warps the color mapping only, so the plotted
+    # array and colorbar stay in the raster's real units (never renormalized
+    # to [0, 1]) — matches viz/waterfall.py's plot_waterfall().
+    norm = mcolors.PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax) if gamma != 1.0 else None
+    scale_kwargs = {"norm": norm} if norm is not None else {"vmin": vmin, "vmax": vmax}
+
     # Plot
     im = ax.pcolormesh(
         xs,
         ys,
         backscatter_masked,
         cmap=cmap,
-        vmin=vmin,
-        vmax=vmax,
         shading="auto",
+        **scale_kwargs,
     )
 
     # Labels and formatting
@@ -142,7 +174,7 @@ def plot_gridded_raster(
         title = (
             f"{raster.channel_name} — "
             f"{raster.dataset.attrs.get('resampling_method', 'unknown')} "
-            f"(resolution: {raster.resolution_m:.0f} m)\n"
+            f"(resolution: {raster.resolution_m:g} m)\n"
             f"CRS: {_crs_label(raster)}"
         )
     ax.set_title(title)
@@ -218,7 +250,7 @@ def plot_gridded_with_coverage(
     if fig is None or ax is None:
         fig, ax = plt.subplots(figsize=(10, 8))
 
-    backscatter = raster.backscatter
+    backscatter = _mask_floor_clip(raster.backscatter)
     ys = raster.y_values
     xs = raster.x_values
 
@@ -320,7 +352,8 @@ def plot_gridded_multiple_methods(
     if vmin is None or vmax is None:
         all_finite = []
         for raster in rasters.values():
-            finite_vals = raster.backscatter[np.isfinite(raster.backscatter)]
+            masked_bs = _mask_floor_clip(raster.backscatter)
+            finite_vals = masked_bs[np.isfinite(masked_bs)]
             all_finite.extend(finite_vals)
 
         all_finite = np.array(all_finite)
@@ -351,7 +384,7 @@ def plot_gridded_multiple_methods(
         ax = axes[row, col]
 
         # Plot
-        backscatter_masked = np.ma.masked_invalid(raster.backscatter)
+        backscatter_masked = np.ma.masked_invalid(_mask_floor_clip(raster.backscatter))
         ys = raster.y_values
         xs = raster.x_values
 
@@ -394,6 +427,8 @@ def export_gridded_png(
     vmax: Optional[float] = None,
     vmin_pct: float = 1.0,
     vmax_pct: float = 99.0,
+    gamma: float = 1.0,
+    show_colorbar: bool = True,
 ) -> None:
     """
     Export gridded raster to PNG file.
@@ -413,6 +448,10 @@ def export_gridded_png(
     vmin_pct, vmax_pct : float, default 1.0 and 99.0
         Percentiles for auto color scaling when vmin/vmax aren't given
         — see ``plot_gridded_raster``.
+    gamma : float, default 1.0
+        Display-only power-law contrast curve — see ``plot_gridded_raster``.
+    show_colorbar : bool, default True
+        Include colorbar.
     """
     fig, ax = plot_gridded_raster(
         raster,
@@ -421,7 +460,8 @@ def export_gridded_png(
         vmax=vmax,
         vmin_pct=vmin_pct,
         vmax_pct=vmax_pct,
-        show_colorbar=True,
+        gamma=gamma,
+        show_colorbar=show_colorbar,
     )
 
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
