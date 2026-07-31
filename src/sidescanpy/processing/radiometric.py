@@ -99,6 +99,95 @@ def absorption_for_frequency(freq_hz: float) -> float:
         return 0.05
 
 
+def tvg_gain_db(range_m: np.ndarray, params: TVGParams) -> np.ndarray:
+    """
+    Per-range TVG gain (dB): spreading loss + absorption loss.
+
+    ``spreading_loss (dB) = spreading_loss_db * log10(range_m)``
+    ``absorption_loss (dB) = 2 * absorption_db_per_m * range_m`` (factor of
+    2 for the two-way path)
+
+    Shared by ``apply_tvg()`` (xarray survey pipeline) and
+    ``apply_tvg_to_amplitude()`` (plain-array path, e.g. target crop
+    windows) so both apply the identical formula rather than maintaining
+    it twice. Caller is responsible for clipping ``range_m`` to
+    ``params.min_range_m`` first (as both callers here do) — this
+    function doesn't clip on its own since it has no opinion on what a
+    caller's minimum range should be.
+    """
+    spreading = params.spreading_loss_db * np.log10(range_m)
+    absorption = 2.0 * params.absorption_db_per_m * range_m
+    return spreading + absorption
+
+
+def apply_tvg_to_amplitude(
+    amplitude: np.ndarray,
+    meters_per_sample: float,
+    *,
+    params: TVGParams | None = None,
+    freq_hz: float | None = None,
+) -> np.ndarray:
+    """
+    Apply TVG correction to a plain linear-amplitude array — no xarray
+    ``Dataset`` required.
+
+    For use on data that isn't a full survey channel (e.g. a target's
+    raw ping-sample window decoded straight from its catalog SQLite via
+    ``sidescanpy.io.jsf.targets.decode_target_window``), where
+    constructing a full ``SideScanSurvey``/``Dataset`` just to TVG-correct
+    a small crop isn't warranted. Same formula and defaults as
+    ``apply_tvg()`` — see that function for the physical justification.
+
+    Parameters
+    ----------
+    amplitude : np.ndarray
+        Linear amplitude, sample axis last (e.g. ``(n_pings, n_samples)``
+        or ``(n_samples,)``).
+    meters_per_sample : float
+        Range covered by one sample (two-way), e.g. a target catalog's
+        own ``PingMetersPerSample`` — the per-sample analog of
+        ``apply_tvg()``'s ``sound_velocity / (2 * sample_rate)``.
+    params : TVGParams, optional
+        If ``None``, built from defaults with ``absorption_db_per_m``
+        derived from ``freq_hz`` (required in that case, matching
+        ``apply_tvg()``'s own default-resolution pattern).
+    freq_hz : float, optional
+        Used only when ``params`` is ``None`` (or has no
+        ``absorption_db_per_m`` set), to derive a default via
+        ``absorption_for_frequency()``.
+
+    Returns
+    -------
+    np.ndarray
+        TVG-corrected values in dB, same shape as ``amplitude``.
+    """
+    if params is None:
+        if freq_hz is None:
+            raise ValueError(
+                "apply_tvg_to_amplitude requires either `params` with "
+                "absorption_db_per_m set, or `freq_hz` to derive a default"
+            )
+        params = TVGParams(absorption_db_per_m=absorption_for_frequency(freq_hz))
+    elif params.absorption_db_per_m is None:
+        if freq_hz is None:
+            raise ValueError(
+                "params.absorption_db_per_m is None and no `freq_hz` was "
+                "given to derive a default"
+            )
+        params = TVGParams(
+            spreading_loss_db=params.spreading_loss_db,
+            absorption_db_per_m=absorption_for_frequency(freq_hz),
+            min_range_m=params.min_range_m,
+        )
+
+    n_samples = amplitude.shape[-1]
+    amplitude_db = 20.0 * np.log10(np.clip(amplitude, 1e-6, None))
+    range_m = np.arange(n_samples, dtype=np.float64) * meters_per_sample
+    range_m = np.clip(range_m, params.min_range_m, None)
+    gain_db = tvg_gain_db(range_m, params)
+    return amplitude_db + gain_db
+
+
 def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     """
     Apply time-varying gain (TVG) correction to raw backscatter_intensity.
@@ -256,12 +345,8 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     # ========================================================================
     # Step 3: Compute TVG gain (dB) for each sample
     # ========================================================================
-    # TVG = spreading_loss + absorption_loss
-    # spreading_loss (dB) = 20 * log10(R)
-    # absorption_loss (dB) = 2 * alpha * R  (factor of 2 for two-way path)
-    spreading = params.spreading_loss_db * np.log10(slant_range)
-    absorption = 2.0 * params.absorption_db_per_m * slant_range
-    tvg_db = spreading + absorption
+    # TVG = spreading_loss + absorption_loss — see tvg_gain_db() docstring
+    tvg_db = tvg_gain_db(slant_range, params)
 
     logger.debug(
         "TVG gains: min=%.2f dB, max=%.2f dB (at %.1f m)",

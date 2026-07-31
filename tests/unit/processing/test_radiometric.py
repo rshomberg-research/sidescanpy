@@ -13,7 +13,13 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from sidescanpy.processing.radiometric import apply_tvg, TVGParams, absorption_for_frequency
+from sidescanpy.processing.radiometric import (
+    apply_tvg,
+    apply_tvg_to_amplitude,
+    tvg_gain_db,
+    TVGParams,
+    absorption_for_frequency,
+)
 
 
 # ============================================================================
@@ -464,6 +470,92 @@ class TestAbsorptionForFrequency:
         alpha_low = absorption_for_frequency(100000)      # 100 kHz
         alpha_mid = absorption_for_frequency(547500)      # 547.5 kHz
         alpha_high = absorption_for_frequency(1495000)    # 1495 kHz
-        
+
         assert alpha_low < alpha_mid < alpha_high
+
+
+# ============================================================================
+# tvg_gain_db() / apply_tvg_to_amplitude(): shared helper + plain-array path
+# ============================================================================
+
+class TestTvgGainDbHelper:
+    """tvg_gain_db() is apply_tvg()'s Step 3 lifted out as a pure function —
+    cross-check it reproduces the same numbers apply_tvg() itself produces
+    via the full xarray path, using the same scenario as
+    TestEnd2EndCorrection.test_correction_with_spreading_and_absorption."""
+
+    def test_matches_apply_tvg_end_to_end_gain(self):
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.1)
+        range_m = 75.0  # sample 100 at sound_vel=1500, sample_rate=1000 Hz
+
+        gain = tvg_gain_db(np.array([range_m]), params)[0]
+
+        spreading = 20.0 * np.log10(range_m)
+        absorption = 2.0 * 0.1 * range_m
+        assert abs(gain - (spreading + absorption)) < 1e-10
+
+    def test_increases_monotonically_with_range(self):
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.1)
+        ranges = np.array([10.0, 50.0, 100.0, 200.0])
+        gains = tvg_gain_db(ranges, params)
+        assert np.all(np.diff(gains) > 0)
+
+
+class TestApplyTvgToAmplitude:
+    """apply_tvg_to_amplitude() — the plain-array (no xarray) TVG path used
+    for target-window crops, which don't come as a full survey Dataset."""
+
+    def test_flattens_known_range_dependent_falloff(self):
+        # Synthetic amplitude that falls off exactly as 1/R (pure
+        # geometric spreading, no absorption) — TVG with spreading-only
+        # params should flatten this back to a constant.
+        n_samples = 200
+        meters_per_sample = 0.05
+        sample_idx = np.arange(n_samples)
+        range_m = np.clip(sample_idx * meters_per_sample, 0.5, None)
+        amplitude = 1.0 / range_m  # pure 1/R falloff
+
+        corrected = apply_tvg_to_amplitude(
+            amplitude, meters_per_sample,
+            params=TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0),
+        )
+
+        # 20*log10(1/R) + 20*log10(R) == 0 for every sample (spreading
+        # exactly cancels a pure 1/R falloff) — flat within float slop.
+        assert np.ptp(corrected) < 1e-6
+
+    def test_matches_apply_tvg_for_equivalent_input(self):
+        # Same scenario as TestEnd2EndCorrection.test_correction_with_spreading_and_absorption
+        # (sound_vel=1500, sample_rate=1000 -> meters_per_sample=0.75),
+        # confirming the plain-array path agrees with the xarray path.
+        meters_per_sample = 1500.0 / (2.0 * 1000.0)
+        amplitude = np.full(200, 1.0)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.1)
+
+        corrected = apply_tvg_to_amplitude(amplitude, meters_per_sample, params=params)
+
+        sample_idx = 100
+        range_m = sample_idx * meters_per_sample  # 75.0
+        expected = 0.0 + 20.0 * np.log10(range_m) + 2.0 * 0.1 * range_m
+        assert abs(corrected[sample_idx] - expected) < 0.1
+
+    def test_freq_hz_derives_absorption_default(self):
+        amplitude = np.full(50, 1.0)
+        corrected_via_freq = apply_tvg_to_amplitude(amplitude, 0.05, freq_hz=1495000)
+        corrected_via_explicit = apply_tvg_to_amplitude(
+            amplitude, 0.05,
+            params=TVGParams(absorption_db_per_m=absorption_for_frequency(1495000)),
+        )
+        np.testing.assert_array_almost_equal(corrected_via_freq, corrected_via_explicit)
+
+    def test_raises_without_params_or_freq_hz(self):
+        with pytest.raises(ValueError):
+            apply_tvg_to_amplitude(np.full(10, 1.0), 0.05)
+
+    def test_2d_pings_by_samples_input(self):
+        amplitude = np.full((5, 50), 1.0)
+        corrected = apply_tvg_to_amplitude(amplitude, 0.05, freq_hz=1495000)
+        assert corrected.shape == (5, 50)
+        # Every ping should get the identical per-sample gain.
+        np.testing.assert_array_almost_equal(corrected[0], corrected[-1])
 

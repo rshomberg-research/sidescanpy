@@ -16,6 +16,10 @@ Public entry points
   times.
 - :func:`apply_tvg` — apply time-varying gain (spreading + absorption)
   to backscatter. Converts raw linear amplitude to dB.
+- :func:`apply_tvg_to_amplitude` — same TVG correction as
+  :func:`apply_tvg`, but on a plain ``(..., n_samples)`` array rather
+  than a full ``xr.Dataset`` — for data that isn't a survey channel
+  (e.g. a target catalog's own decoded crop window).
 - :func:`absorption_for_frequency` — frequency-dependent absorption
   defaults for typical coastal seawater.
 - :func:`run_pipeline` — run the processing pipeline through a target
@@ -49,6 +53,8 @@ from sidescanpy.processing.interpolate import (
 )
 from sidescanpy.processing.radiometric import (
     apply_tvg,
+    apply_tvg_to_amplitude,
+    tvg_gain_db,
     TVGParams,
     absorption_for_frequency,
 )
@@ -79,6 +85,8 @@ __all__ = [
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
     "apply_tvg",
+    "apply_tvg_to_amplitude",
+    "tvg_gain_db",
     "TVGParams",
     "absorption_for_frequency",
     "DEFAULT_FIELD_SOURCES",
