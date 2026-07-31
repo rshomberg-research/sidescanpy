@@ -16,6 +16,7 @@ import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap, PowerNorm
+from matplotlib.ticker import FuncFormatter
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,112 @@ def plot_waterfall(
         title_stop = (stop if stop is not None else ds.sizes["ping"]) + ping_offset
         title = f"Waterfall  pings {title_start}–{title_stop}  ({proc_level})"
     ax.set_title(title)
+
+    return ax
+
+
+def plot_survey_overview(
+    ds: xr.Dataset,
+    *,
+    ping_stride: int = 20,
+    break_ping_indices: list[int] | None = None,
+    x_axis: XAxisMode = "sample",
+    cmap: str | Colormap = _DEFAULT_CMAP,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    vmin_pct: float = _DEFAULT_VMIN_PCT,
+    vmax_pct: float = _DEFAULT_VMAX_PCT,
+    gamma: float = 1.0,
+    show_colorbar: bool = False,
+    ax: Axes | None = None,
+    title: str | None = None,
+) -> Axes:
+    """
+    Compressed, whole-survey waterfall overview.
+
+    Strides the ping axis by ``ping_stride`` before rendering (via
+    ``plot_waterfall``), so a very long survey renders as one
+    reasonably-sized image instead of one row of pixels per ping.
+    Optionally draws a horizontal marker line + ping-number label at each
+    index in ``break_ping_indices`` — useful for e.g. file boundaries in
+    a multi-file concatenated survey. Nothing in ``SideScanSurvey``/
+    ``.ss.h5`` currently records per-ping source-file identity, so if you
+    need break markers, compute the boundary ping indices yourself (e.g.
+    while concatenating per-file datasets) and pass them in here.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Validated sidescan dataset (typically a whole survey/channel, not
+        a pre-sliced segment).
+    ping_stride : int, default 20
+        Vertical compression factor — every ``ping_stride``-th ping is
+        kept. Higher = more compressed. Must be >= 1.
+    break_ping_indices : list[int], optional
+        Ping indices (in ``ds``'s own, un-strided index space) at which
+        to draw a break marker — e.g. where one source file ends and the
+        next begins in a concatenated survey.
+    x_axis, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, show_colorbar, ax, title
+        Same meaning as in ``plot_waterfall``. ``title`` defaults to a
+        summary of the total ping count and compression factor.
+
+    Returns
+    -------
+    Axes
+        The matplotlib Axes containing the plot. The y-axis is labeled
+        with true ping numbers (not the strided/local index), even
+        though the underlying mesh is built from the strided data.
+
+    Raises
+    ------
+    ValueError
+        If ``ping_stride`` is not a positive integer, or (via
+        ``plot_waterfall``) if a required variable is missing for the
+        chosen ``x_axis`` mode.
+    """
+    if ping_stride < 1:
+        raise ValueError(f"ping_stride must be >= 1, got {ping_stride}")
+
+    n_pings = ds.sizes["ping"]
+    strided = ds.isel(ping=slice(0, None, ping_stride))
+
+    if title is None:
+        proc_level = ds.attrs.get("processing_level", "raw")
+        title = f"Survey overview  {n_pings} pings, 1:{ping_stride} compressed  ({proc_level})"
+
+    ax = plot_waterfall(
+        strided,
+        x_axis=x_axis,
+        y_axis="ping",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        vmin_pct=vmin_pct,
+        vmax_pct=vmax_pct,
+        gamma=gamma,
+        show_colorbar=show_colorbar,
+        ax=ax,
+        title=title,
+    )
+
+    # plot_waterfall labeled the y-axis with the *strided* dataset's own
+    # local 0..N-1 ping index — it has no notion of the stride applied
+    # above. Relabel tick text to true ping numbers without touching the
+    # already-plotted mesh's coordinates (which must stay in local/strided
+    # index space to match break-marker placement below).
+    ax.yaxis.set_major_formatter(
+        FuncFormatter(lambda val, _pos: f"{val * ping_stride:.0f}")
+    )
+
+    if break_ping_indices:
+        xlim = ax.get_xlim()
+        for break_idx in break_ping_indices:
+            local_y = break_idx / ping_stride
+            ax.axhline(y=local_y, color="red", linestyle="--", linewidth=0.8, alpha=0.8)
+            ax.text(
+                xlim[1], local_y, f" ping {break_idx}",
+                color="red", fontsize=7, va="center", ha="left", clip_on=False,
+            )
 
     return ax
 

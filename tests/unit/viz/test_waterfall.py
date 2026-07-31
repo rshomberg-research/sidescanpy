@@ -12,7 +12,12 @@ import numpy as np
 import pytest
 from matplotlib.colors import PowerNorm
 
-from sidescanpy.viz.waterfall import _compute_y_full, _mask_floor_clip, plot_waterfall
+from sidescanpy.viz.waterfall import (
+    _compute_y_full,
+    _mask_floor_clip,
+    plot_survey_overview,
+    plot_waterfall,
+)
 from tests.conftest import make_minimal_sidescan_dataset
 
 
@@ -178,5 +183,104 @@ class TestPlotWaterfallColorbar:
             plot_waterfall(sample_dataset, gamma=2.5, show_colorbar=True, ax=ax)
             cbar_label = fig.axes[-1].get_ylabel()
             assert cbar_label == "Backscatter (dB)"
+        finally:
+            plt.close(fig)
+
+
+class TestPlotSurveyOverview:
+    def test_rejects_nonpositive_stride(self, sample_dataset):
+        with pytest.raises(ValueError, match="ping_stride"):
+            plot_survey_overview(sample_dataset, ping_stride=0)
+
+    def test_strides_ping_axis(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(ds, ping_stride=20, ax=ax)
+            # mesh built from strided data: ceil(1000/20) = 50 rows
+            mesh = ax.collections[-1]
+            n_rows = mesh.get_array().shape[0]
+            assert n_rows == 50
+        finally:
+            plt.close(fig)
+
+    def test_default_stride_is_twenty(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(ds, ax=ax)
+            mesh = ax.collections[-1]
+            assert mesh.get_array().shape[0] == 50
+        finally:
+            plt.close(fig)
+
+    def test_yaxis_ticks_report_true_ping_numbers_not_local_index(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(ds, ping_stride=20, ax=ax)
+            # local mesh row 10 corresponds to true ping 10*20=200
+            label = ax.yaxis.get_major_formatter()(10)
+            assert label == "200"
+        finally:
+            plt.close(fig)
+
+    def test_no_break_markers_by_default(self):
+        # plot_waterfall itself always draws one port|starboard divider
+        # axvline for x_axis="sample" — that's the baseline to compare
+        # against, not zero.
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(ds, ping_stride=20, ax=ax)
+            assert len(ax.lines) == 1
+        finally:
+            plt.close(fig)
+
+    def test_break_indices_draw_one_line_each(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(
+                ds, ping_stride=20, break_ping_indices=[300, 700], ax=ax,
+            )
+            # 1 baseline divider (from plot_waterfall) + 2 break markers
+            assert len(ax.lines) == 3
+        finally:
+            plt.close(fig)
+
+    def test_break_line_placed_at_stride_adjusted_position(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(
+                ds, ping_stride=20, break_ping_indices=[300], ax=ax,
+            )
+            # last line added is the break marker (added after the
+            # baseline divider inside plot_waterfall)
+            line = ax.lines[-1]
+            # axhline at true ping 300 -> local y = 300/20 = 15
+            y_data = line.get_ydata()
+            assert y_data[0] == pytest.approx(15.0)
+        finally:
+            plt.close(fig)
+
+    def test_title_reports_total_pings_and_stride(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(ds, ping_stride=20, ax=ax)
+            title = ax.get_title()
+            assert "1000" in title
+            assert "1:20" in title
+        finally:
+            plt.close(fig)
+
+    def test_custom_title_overrides_default(self):
+        ds = make_minimal_sidescan_dataset(n_pings=1000)
+        fig, ax = plt.subplots()
+        try:
+            plot_survey_overview(ds, title="My Survey", ax=ax)
+            assert ax.get_title() == "My Survey"
         finally:
             plt.close(fig)
