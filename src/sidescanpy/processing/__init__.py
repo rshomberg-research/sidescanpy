@@ -63,6 +63,11 @@ from sidescanpy.processing.geometric import (
     compute_geometric_ranges,
 )
 
+from sidescanpy.processing.farrange import (
+    detect_far_range_cutoff_sample,
+    crop_far_range_noise,
+)
+
 from sidescanpy.processing.georeferencing import compute_georeferencing
 
 from sidescanpy.processing.slicing import (
@@ -92,6 +97,8 @@ __all__ = [
     "DEFAULT_FIELD_SOURCES",
     "compute_geometric_ranges",
     "compute_georeferencing",
+    "detect_far_range_cutoff_sample",
+    "crop_far_range_noise",
     "slice_by_pings",
     "slice_by_samples",
     "slice_by_time",

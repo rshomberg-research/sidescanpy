@@ -470,13 +470,87 @@ data, deferred to a future round rather than mirrored unverified.
   pre-existing `tests/unit/io/jsf/test_targets.py`; fixed by adding the
   missing `__init__.py` files to match convention, not by renaming
   either test file.
-- **GeoTIFF (stage 9) deliberately skipped** — still needs the explicit
-  `rasterio` dependency sign-off `v0.7.0-geotiff-and-cropping.md`
-  flagged and never got.
+- **GeoTIFF (stage 10, renumbered — see below) deliberately skipped** —
+  still needs the explicit `rasterio` dependency sign-off
+  `v0.7.0-geotiff-and-cropping.md` flagged and never got.
 
 `project-a` side (the actual standardized scripts + cleanup) is
 tracked in that project's own docs, not here — see its `README.md`/
-`CLAUDE.md` for current state once that phase lands.
+`CLAUDE.md` for current state.
+
+**2026-08-06 follow-up — far-range crop stage added, pipeline
+restructured to edit `.ss.h5` files in place (13 stages, `10` now the
+GeoTIFF gap):**
+- ✅ New `processing/farrange.py`: `detect_far_range_cutoff_sample()` /
+  `crop_far_range_noise()` — implements candidate solution (a) from
+  `docs/planning/handoff-hf-farrange-noise-amplification.md` (Known
+  Issue #6). Bins raw backscatter by sample index (no geometric
+  computation needed — runs immediately after conversion), finds the
+  bin with the minimum mean among statistically-reliable bins, and crops
+  the sample axis there only if a later bin's mean rises
+  `rise_threshold_db` (default 3.0) or more above that floor —
+  conservative by design: a channel with no detected rise is left
+  untouched, not cropped to a guessed constant.
+  - **Real bug found and fixed while building this**: Known Issue #5's
+    leading run of exact-zero raw amplitude converts to exactly -120dB
+    (`_linear_to_db`'s clip floor), which — if not excluded — is *lower*
+    than the genuine far-range floor and gets picked as "the floor" by
+    the bin-minimum search; the real, much stronger near-nadir signal in
+    the very next bin then reads as a huge spurious "rise," producing a
+    false-positive crop right at the start of a channel that has no
+    far-range problem at all. Confirmed on real data
+    (`unknown/20241017181822.ss.h5`, `hz_557500`: bin 0 read -9.62dB
+    only because ~23% of it was blanking-run zeros, vs. bins 1+ reading
+    30-36dB). Fixed by masking exact -120dB before binning, mirroring
+    `viz/waterfall.py`'s existing `_mask_floor_clip`. Regression test:
+    `tests/unit/processing/test_farrange.py::test_leading_floor_clip_run_not_mistaken_for_the_floor`.
+  - **Second bug found via real-data idempotency testing**: a channel
+    where no crop was needed never got a `processing_history` entry (the
+    function only appended history on an actual crop), so a caller
+    checking "has this file already been through this stage?" couldn't
+    tell "never checked" apart from "checked, nothing to crop" — the
+    channel got needlessly re-scanned on every rerun. Fixed:
+    `crop_far_range_noise()` now always appends a history entry
+    (`params={"cropped": True/False, ...}`).
+- ✅ `project-a/scripts/` restructured: correction stages
+  (`02_crop_farrange.py`, `04_radiometric.py`, `06_geometric.py`,
+  `08_georef.py`) now read-and-overwrite one `ss_h5/` directory in place
+  rather than writing a separate directory per stage
+  (`ss_h5_radiometric/`/`ss_h5_geometric/`/`ss_h5_georef/`, the original
+  v0.12.0 design). Reason: real-data measurement on one 898MB file from
+  `survey-a` showed radiometric at 2.8x and geometric at 6.3x
+  raw size *each*, kept simultaneously — with three real surveys on this
+  machine's actual free space (16GB), the original design didn't fit.
+  In-place editing works because `backscatter_raw` stays immutable and
+  correction steps only add data (matches this file's own "Lossless
+  transforms: `compute_*` adds variables; `apply_*` modifies existing"
+  convention) — one file already carries raw + every correction applied
+  to it. Writes are atomic (temp file + `Path.replace()`) and each stage
+  is idempotent (skips files already past that point). Real-data
+  verification: 3 files through the full corrected pipeline settled at
+  420MB total (single copy each), vs. an estimated 900MB+ under the old
+  4-copy design for the same 3 files — and the crop stage alone cut the
+  pre-correction total from 50MB to 27MB before the expensive
+  geometric/georef arrays (6 + 2 new per-sample float arrays) even got
+  added.
+  - **Real bug found via this same real-data testing, root-caused (not
+    a `sidescanpy` bug)**: an early version of the old per-directory
+    design failed reading a geometric-stage output file with
+    `OSError: [Errno group not found: aux_streams] 'aux_streams'`, right
+    as free disk dropped from 16GB to 6.2GB during that same test.
+    `write_survey()` always writes `aux_streams` unconditionally — no
+    code path skips it — so this reads as disk-pressure-induced write
+    corruption (`to_netcdf(mode="a")`'s sequential appends likely
+    failing/truncating silently under `ENOSPC`), not a logic bug. The
+    atomic-write pattern above directly prevents this recurring: a
+    write that fails partway never overwrites or is mistaken for a valid
+    file, regardless of why it failed.
+  - Renumbering: `02_track_maps.py`→`03`, `03_radiometric.py`→`04`
+    (rewritten), `04_waterfalls.py`→`05`, `05_geometric.py`→`06`
+    (rewritten), `06_ground_waterfalls.py`→`07`, `07_georef.py`→`08`
+    (rewritten), `08_grid.py`→`09`, `10_read_targets.py`→`11`,
+    `11_track_with_targets.py`→`12`, `12_export_chips.py`→`13`. GeoTIFF's
+    gap moves from `09` to `10`.
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
@@ -544,7 +618,7 @@ tracked in that project's own docs, not here — see its `README.md`/
    - **Net read so far:** looks more consistent with a fixed transmit/receiver blanking or ring-down period (a hardware/acquisition-time artifact, roughly constant in *samples*, not tied to bottom geometry) than with either hypothesis raised when this was found — not the "water column, ground range → 0" pattern (ground range doesn't collapse here), and not a smooth incident-angle falloff either (values are hard exact zeros, not a gradual attenuation curve). **Not confirmed** — would need to check whether the run length is constant in *time* (varies with any sample-rate/range-scale changes across the survey) vs. constant in *samples* regardless of settings, and whether this pattern holds on the SDF/Klein side or is JSF/Edgetech-specific, before treating it as settled.
    - Not yet fixed or worked around anywhere — `resample_channel_to_grid()`/`plot_waterfall()` currently include these samples like any other data point.
    - See `docs/planning/handoff-tvg-range-residual.md` for the full writeup tying this together with the range-dependent TVG residual (Known Issue #4) into one investigation.
-6. **Far-range noise amplification on channels whose recorded range window exceeds their real useful range — confirmed 2026-08-06, distinct from #4/#5.** A per-survey acquisition setting (which channel gets the longer recorded window — not fixed by frequency, confirmed by comparing two real surveys with opposite HF/LF asymmetry) can leave a channel's array extending well past where real backscatter decays into noise. On `project-a`'s `unknown` survey, `hz_1495000`'s recorded window (≈165m) extends far past its real signal cutoff (≈50-60m, matching the original ~60m visual observation that started this investigation). Raw amplitude past that cutoff doesn't stay flat — it climbs back up over the remaining ~100m (-30dB at 55-60m → -21dB at 160-165m), new supporting evidence for the "hardware TVG/AGC artifact baked into the raw signal" hypothesis from the Known Issue #4 investigation below. `apply_tvg()`'s gain formula (`tvg_gain_db()`, uncapped, monotonically increasing with range) then compounds this: corrected mean balloons from ~31dB (real signal peak, 5-15m) to ~88dB by 160-165m, a ~57dB overshoot that dominates this codebase's percentile-based color scaling and visually flattens the legitimate near-nadir signal into "one strip of real data, the rest flat." Not fixed — three candidate fixes (data-driven far-range mask; cap the TVG gain formula; fix percentile scaling to exclude the outlier tail) proposed, awaiting a design decision, same posture as the `v0.9.0-empirical-range-correction.md` proposal below. **Open issue this surfaced, broader than this one finding: we have no reliable way to know whether TVG/AGC was already applied by the sonar hardware or EdgeTech Discover's acquisition software before a `.jsf` file reaches `sidescanpy`** — if so, `apply_tvg()` double-corrects, uncompensated, which alone could produce residuals like Known Issue #4's without any bug in this codebase's math. Two currently-unused JSF header fields (`_gain_factor`, `_user_transmit_level` — `io/jsf/messages.py` lines 210-211, parsed but never read past that, marked `# ???: do we need to use this`) are an unfollowed lead. See the handoff doc's "What this doesn't settle" section. Full writeup: `docs/planning/handoff-hf-farrange-noise-amplification.md`.
+6. **Far-range noise amplification on channels whose recorded range window exceeds their real useful range — confirmed 2026-08-06, distinct from #4/#5.** A per-survey acquisition setting (which channel gets the longer recorded window — not fixed by frequency, confirmed by comparing two real surveys with opposite HF/LF asymmetry) can leave a channel's array extending well past where real backscatter decays into noise. On `project-a`'s `unknown` survey, `hz_1495000`'s recorded window (≈165m) extends far past its real signal cutoff (≈50-60m, matching the original ~60m visual observation that started this investigation). Raw amplitude past that cutoff doesn't stay flat — it climbs back up over the remaining ~100m (-30dB at 55-60m → -21dB at 160-165m), new supporting evidence for the "hardware TVG/AGC artifact baked into the raw signal" hypothesis from the Known Issue #4 investigation below. `apply_tvg()`'s gain formula (`tvg_gain_db()`, uncapped, monotonically increasing with range) then compounds this: corrected mean balloons from ~31dB (real signal peak, 5-15m) to ~88dB by 160-165m, a ~57dB overshoot that dominates this codebase's percentile-based color scaling and visually flattens the legitimate near-nadir signal into "one strip of real data, the rest flat." **2026-08-06 fixed** via `processing/farrange.py: crop_far_range_noise()` (candidate fix (a), data-driven mask/crop) — see the "Cross-Project Standard Pipeline Scripts" roadmap entry above for details; the other two candidate fixes (cap the TVG gain formula; fix percentile scaling) remain undone, not needed once the affected samples are cropped out entirely. **Open issue this surfaced, broader than this one finding: we have no reliable way to know whether TVG/AGC was already applied by the sonar hardware or EdgeTech Discover's acquisition software before a `.jsf` file reaches `sidescanpy`** — if so, `apply_tvg()` double-corrects, uncompensated, which alone could produce residuals like Known Issue #4's without any bug in this codebase's math. **2026-08-06 follow-up, partially resolved:** read raw `_gain_factor`/`_user_transmit_level` JSF header fields directly (previously parsed but completely unused) across one file from each of `project-a`'s three surveys. `_user_transmit_level` is constant (100) everywhere — not informative. `_gain_factor` is real and actively varying, strongly anti-correlated with the raw signal's own mean amplitude on *every* survey checked (r = −0.80 to −0.86) — the exact signature of an active per-ping automatic gain control applied before the `.jsf` file is written. This confirms hardware/acquisition-side AGC is genuinely active (not hypothetical), but doesn't by itself prove `apply_tvg()` double-corrects: `_gain_factor` is one scalar per ping (broadband), not a per-sample range-dependent curve, so it can't alone produce the per-sample far-range climb or Known Issue #4's shape. Still unresolved: what `_gain_factor`'s units represent, and whether it's applied to `_raw_trace_data` before storage (making "raw" already gain-compensated) or merely recorded alongside an uncompensated signal. Full writeup: `docs/planning/handoff-hf-farrange-noise-amplification.md`'s "2026-08-06 follow-up" section.
 7. **Klein SDF `depth_m` is NaN** — Klein records depth as a sensor voltage; calibration constants are in companion INI files which we don't yet parse. Requires INI calibration parsing (deferred; ~1 session). **Workaround:** users with calibration override directly: `ch.dataset["depth_m"] = (["ping"], calibrated_array)`.
 8. **`compute_geometric_ranges` falls back to 1500 m/s** — When `sound_vel_ms` is NaN (always the case for SDF surveys). Acceptable for typical work; would need refinement for cold-water or thermocline-crossing surveys.
 9. **Klein 3500-series assumption** — SDF reader STRUCT matches Klein 3500 layout (no fields 93/94). 5000/5900 series may differ; would need per-version STRUCTs if encountered.
