@@ -424,6 +424,34 @@ tests/integration/             (run with --slow; requires local JSF/SDF fixtures
 
 ## Roadmap
 
+### Next Steps — Cross-Project Standard Pipeline Scripts
+
+**Status:** Proposed (2026-08-06), not started. See
+`docs/planning/v0.12.0-standard-pipeline-scripts.md` for the full plan.
+
+Each consumer project (`project-a` especially) has accumulated a pile
+of one-off/debug/superseded scripts (`project-a/scripts/` currently
+has ~30 top-level scripts plus 10 more in `scripts/old/`) alongside the
+scripts that actually matter for day-to-day processing. Goal: a small,
+consistent set of pipeline-stage scripts — one per project, mirroring
+each other in name/order/interface — covering the standard sidescan
+workflow (convert to `.ss.h5` → track maps → radiometric correction →
+waterfalls → geometric correction → ground-projected waterfalls →
+georeference → gridded segments → GeoTIFF → read target file → map
+targets with track → target chips as COCO/YOLO), each a thin driver over
+shared `sidescanpy` library calls (most stages already have one — see
+the doc's coverage table) with per-project customization (segment
+selection, bbox fixes, non-default exports, etc.) confined to clearly-
+marked per-project config rather than duplicated/copy-pasted logic. Two
+real gaps block full parity: **GeoTIFF export** (planned in
+`v0.7.0-geotiff-and-cropping.md`, never implemented — no `rasterio` dep
+exists) and **YOLO target-chip export** (COCO exists, YOLO doesn't).
+Resolves `project-a/README.md`'s long-open "split by format vs.
+duplicate vs. promote into `sidescanpy`" question for scripts that
+aren't actually project-specific. Once the standardized scripts are
+verified against real data, superseded scripts get **deleted**, not
+moved to another `scripts/old/`-style graveyard.
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)
