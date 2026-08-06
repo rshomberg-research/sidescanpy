@@ -21,9 +21,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from sidescanpy.targets.core import Target, bbox_from_center
-
-_CONFIDENCE_RANK = {"unknown": 0, "approximate": 1, "verified": 2}
+from sidescanpy.targets.core import CONFIDENCE_RANK, Target, bbox_from_center, clip_bbox
 
 
 @dataclass
@@ -34,16 +32,6 @@ class CocoImageEntry:
     file_name: str
     width: int
     height: int
-
-
-def _clip_bbox(
-    bbox: tuple[float, float, float, float], width: int, height: int
-) -> tuple[tuple[float, float, float, float], bool]:
-    x, y, w, h = bbox
-    x0, y0 = max(x, 0.0), max(y, 0.0)
-    x1, y1 = min(x + w, float(width)), min(y + h, float(height))
-    clipped = (x0, y0, max(x1 - x0, 0.0), max(y1 - y0, 0.0))
-    return clipped, clipped != bbox
 
 
 def write_coco(
@@ -66,8 +54,8 @@ def write_coco(
 
     Returns the dict that was written, for inline inspection/testing.
     """
-    min_rank = _CONFIDENCE_RANK[min_confidence]
-    included = [e for e in entries if _CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
+    min_rank = CONFIDENCE_RANK[min_confidence]
+    included = [e for e in entries if CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
 
     categories = [{"id": 1, "name": category_name}]
     images = []
@@ -86,7 +74,7 @@ def write_coco(
 
         row = t.extra_attributes.get("window_row")
         col = t.sample
-        bbox, was_clipped = _clip_bbox(bbox_from_center(row, col, box_size), entry.width, entry.height)
+        bbox, was_clipped = clip_bbox(bbox_from_center(row, col, box_size), entry.width, entry.height)
 
         annotations.append(
             {

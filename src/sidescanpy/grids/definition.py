@@ -412,3 +412,49 @@ def utm_grid_from_wgs84_bbox(
 
     wgs84_grid = GridDefinition(bbox=bbox, resolution_m=resolution_m, crs=CRS.from_epsg(4326))
     return wgs84_grid.reproject_to(utm_crs)
+
+
+def bbox_from_channel_dataset(
+    ds, margin_frac: float = 0.1, min_margin_deg: float = 0.001
+) -> Tuple[float, float, float, float]:
+    """(south, west, north, east) bbox fit to a channel dataset's
+    per-sample lat/lon extent, with a small margin so edge cells aren't
+    clipped.
+
+    Promoted from a project-local helper (``auto_grid_bbox`` in
+    ``project-a/scripts/visualization_demo.py``) — same logic, renamed
+    to fit this module's existing ``utm_crs_for_lonlat``/
+    ``utm_grid_from_wgs84_bbox`` naming. Typically the first step before
+    ``utm_grid_from_wgs84_bbox`` when auto-fitting a grid to a segment.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Must have ``latitude_per_sample``/``longitude_per_sample``
+        (i.e. already georeferenced via ``compute_georeferencing``).
+    margin_frac : float, default 0.1
+        Fraction of the lat/lon extent added as margin on each side.
+    min_margin_deg : float, default 0.001
+        Minimum margin (degrees), for a near-zero-extent segment.
+
+    Returns
+    -------
+    (south, west, north, east)
+
+    Raises
+    ------
+    ValueError
+        If no finite latitude/longitude_per_sample values are present.
+    """
+    lats = ds["latitude_per_sample"].values
+    lons = ds["longitude_per_sample"].values
+    valid_lats = lats[np.isfinite(lats)]
+    valid_lons = lons[np.isfinite(lons)]
+    if valid_lats.size == 0 or valid_lons.size == 0:
+        raise ValueError("No valid latitude/longitude_per_sample in dataset")
+
+    south, north = float(np.min(valid_lats)), float(np.max(valid_lats))
+    west, east = float(np.min(valid_lons)), float(np.max(valid_lons))
+    margin_lat = max((north - south) * margin_frac, min_margin_deg)
+    margin_lon = max((east - west) * margin_frac, min_margin_deg)
+    return (south - margin_lat, west - margin_lon, north + margin_lat, east + margin_lon)

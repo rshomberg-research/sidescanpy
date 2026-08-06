@@ -6,5 +6,6 @@ ML interchange formats.
 """
 
 from sidescanpy.targets.interchange.coco import CocoImageEntry, write_coco
+from sidescanpy.targets.interchange.yolo import write_yolo
 
-__all__ = ["CocoImageEntry", "write_coco"]
+__all__ = ["CocoImageEntry", "write_coco", "write_yolo"]

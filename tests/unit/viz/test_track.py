@@ -4,6 +4,8 @@ Unit tests for sidescanpy.viz.track — survey track + scan-line plotting.
 2026 rshomberg@uri.edu
 """
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -11,6 +13,7 @@ from pyproj import CRS
 
 from sidescanpy.viz.track import (
     _project,
+    build_survey_track,
     export_track_and_scanlines_png,
     plot_track_and_scanlines,
 )
@@ -112,3 +115,42 @@ class TestExportTrackAndScanlinesPng:
         export_track_and_scanlines_png(lat, lon, pl, po, sl, so, str(out_path))
         assert out_path.exists()
         assert out_path.stat().st_size > 0
+
+
+class TestBuildSurveyTrack:
+    def test_none_when_no_file_has_frequency(self, sample_multi_frequency_survey):
+        surveys = {Path("a.ss.h5"): sample_multi_frequency_survey}
+        result = build_survey_track(surveys, "hz_999999", scanline_stride=5)
+        assert result is None
+
+    def test_returns_track_and_scanline_arrays(self, sample_multi_frequency_survey):
+        surveys = {Path("a.ss.h5"): sample_multi_frequency_survey}
+        n_pings = sample_multi_frequency_survey.get_frequency("hz_1495000").dataset.sizes["ping"]
+        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
+        assert result is not None
+        assert len(result["track_lat"]) == n_pings
+        assert len(result["track_lon"]) == n_pings
+        expected_n_rungs = len(np.arange(0, n_pings, 3))
+        assert len(result["scan_port_lat"]) == expected_n_rungs
+        assert len(result["scan_stbd_lat"]) == expected_n_rungs
+
+    def test_multi_file_concatenates_in_time_order(self, sample_multi_frequency_survey):
+        from sidescanpy.core import SideScanSurvey
+
+        ds_a = sample_multi_frequency_survey.get_frequency("hz_1495000").dataset.copy()
+        ds_b = ds_a.copy()
+        # Shift file b's timestamps later so file a must sort first
+        ds_b = ds_b.assign_coords(time=ds_b["time"] + np.timedelta64(1, "h"))
+        ds_b["latitude"] = ds_a["latitude"] + 10.0  # distinguishable values
+
+        survey_a = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        survey_a.add_frequency("hz_1495000", ds_a)
+        survey_b = SideScanSurvey(source_files=["b.jsf"], source_format="JSF", survey_name="b")
+        survey_b.add_frequency("hz_1495000", ds_b)
+
+        surveys = {Path("b.ss.h5"): survey_b, Path("a.ss.h5"): survey_a}
+        n_pings = ds_a.sizes["ping"]
+        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
+        # file a (earlier timestamps) must appear first in the concatenated track
+        np.testing.assert_array_equal(result["track_lat"][:n_pings], ds_a["latitude"].values)
+        np.testing.assert_array_equal(result["track_lat"][n_pings:], ds_b["latitude"].values)

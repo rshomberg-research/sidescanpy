@@ -73,6 +73,28 @@ class Target:
     extra_attributes: dict[str, Any] = field(default_factory=dict)
 
 
+CONFIDENCE_RANK = {"unknown": 0, "approximate": 1, "verified": 2}
+
+
+def clip_bbox(
+    bbox: tuple[float, float, float, float], width: int, height: int
+) -> tuple[tuple[float, float, float, float], bool]:
+    """Clip a ``(x, y, w, h)`` pixel box to an image's bounds.
+
+    Shared by ``interchange/coco.py`` and ``interchange/yolo.py`` so both
+    formats agree on exactly the same clipped box for a given target.
+
+    Returns
+    -------
+    (clipped_bbox, was_clipped)
+    """
+    x, y, w, h = bbox
+    x0, y0 = max(x, 0.0), max(y, 0.0)
+    x1, y1 = min(x + w, float(width)), min(y + h, float(height))
+    clipped = (x0, y0, max(x1 - x0, 0.0), max(y1 - y0, 0.0))
+    return clipped, clipped != bbox
+
+
 def bbox_from_center(row: float, col: float, box_size: tuple[float, float]) -> tuple[float, float, float, float]:
     """Build a ``(x, y, w, h)`` pixel box of ``box_size`` (width, height)
     centered on ``(col, row)``.

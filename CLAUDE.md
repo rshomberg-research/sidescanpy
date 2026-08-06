@@ -424,33 +424,59 @@ tests/integration/             (run with --slow; requires local JSF/SDF fixtures
 
 ## Roadmap
 
-### Next Steps — Cross-Project Standard Pipeline Scripts
+### Cross-Project Standard Pipeline Scripts
 
-**Status:** Proposed (2026-08-06), not started. See
-`docs/planning/v0.12.0-standard-pipeline-scripts.md` for the full plan.
+**Status:** In progress (started 2026-08-06). See
+`docs/planning/v0.12.0-standard-pipeline-scripts.md` for the full plan
+and its updated status note. **Scope for this round: `sidescanpy` +
+`project-a` only** — `project-b` is an empty scaffold with zero real
+data, deferred to a future round rather than mirrored unverified.
 
-Each consumer project (`project-a` especially) has accumulated a pile
-of one-off/debug/superseded scripts (`project-a/scripts/` currently
-has ~30 top-level scripts plus 10 more in `scripts/old/`) alongside the
-scripts that actually matter for day-to-day processing. Goal: a small,
-consistent set of pipeline-stage scripts — one per project, mirroring
-each other in name/order/interface — covering the standard sidescan
-workflow (convert to `.ss.h5` → track maps → radiometric correction →
-waterfalls → geometric correction → ground-projected waterfalls →
-georeference → gridded segments → GeoTIFF → read target file → map
-targets with track → target chips as COCO/YOLO), each a thin driver over
-shared `sidescanpy` library calls (most stages already have one — see
-the doc's coverage table) with per-project customization (segment
-selection, bbox fixes, non-default exports, etc.) confined to clearly-
-marked per-project config rather than duplicated/copy-pasted logic. Two
-real gaps block full parity: **GeoTIFF export** (planned in
-`v0.7.0-geotiff-and-cropping.md`, never implemented — no `rasterio` dep
-exists) and **YOLO target-chip export** (COCO exists, YOLO doesn't).
-Resolves `project-a/README.md`'s long-open "split by format vs.
-duplicate vs. promote into `sidescanpy`" question for scripts that
-aren't actually project-specific. Once the standardized scripts are
-verified against real data, superseded scripts get **deleted**, not
-moved to another `scripts/old/`-style graveyard.
+`sidescanpy` side (library gap-filling + promotion out of
+`project-a/scripts/` project-local helpers) is **complete**:
+- ✅ `targets/interchange/yolo.py: write_yolo()` — new, mirrors
+  `write_coco()`. `targets/core.py` gained public `clip_bbox()`/
+  `CONFIDENCE_RANK` (promoted from `interchange/coco.py`'s private
+  copies) so both writers share them.
+- ✅ `viz/waterfall.py: resolve_waterfall_axes()` — promoted from
+  `visualization_demo.py`.
+- ✅ `viz/track.py: build_survey_track()` — promoted from
+  `visualization_demo.py`.
+- ✅ New `viz/targets.py: plot_track_with_targets()` /
+  `export_track_with_targets_png()` — promoted from
+  `plot_track_with_targets.py`'s `main()` body. Separate module from
+  `viz/track.py` (needs `targets.core.Target`, matches the existing
+  `viz/contact_sheet.py` precedent of isolating that dependency).
+- ✅ `grids/definition.py: bbox_from_channel_dataset()` — promoted from
+  `visualization_demo.py`'s `auto_grid_bbox()`.
+- ✅ `io/jsf/targets.py: decode_and_correct_window()` — new, wraps the
+  decode → TVG → orient-for-display → range-detrend chain previously
+  duplicated inline in `export_target_dataset.py`. Deliberately **not**
+  in `targets/core.py` (where the original plan sketch put it) —
+  `io/jsf/targets.py` already imports `targets.core.Target`, so the
+  reverse would be a circular import and a layering violation of
+  `targets/core.py`'s own "format-agnostic, no format-specific IO"
+  contract.
+- All new/promoted code has unit tests (`tests/unit/targets/interchange/
+  test_yolo.py`, cases added to `test_waterfall.py`/`test_track.py`/
+  `test_definition.py`, new `tests/unit/viz/test_targets.py`, a case
+  added to `tests/unit/io/jsf/test_targets.py`). Full suite: 1095
+  passing / 36 skipped (was 985 as of 2026-07-16 — grew by more than
+  just this session's new tests; not independently reconciled against
+  the last recorded count). Two test directories (`tests/unit/viz/`,
+  `tests/unit/io/jsf/`) were missing `__init__.py` (every sibling test
+  dir has one) — this only surfaced as an actual collection error once
+  a new `tests/unit/viz/test_targets.py` collided on basename with the
+  pre-existing `tests/unit/io/jsf/test_targets.py`; fixed by adding the
+  missing `__init__.py` files to match convention, not by renaming
+  either test file.
+- **GeoTIFF (stage 9) deliberately skipped** — still needs the explicit
+  `rasterio` dependency sign-off `v0.7.0-geotiff-and-cropping.md`
+  flagged and never got.
+
+`project-a` side (the actual standardized scripts + cleanup) is
+tracked in that project's own docs, not here — see its `README.md`/
+`CLAUDE.md` for current state once that phase lands.
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 

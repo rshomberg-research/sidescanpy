@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sidescanpy.io.jsf.targets import decode_target_window, read_discover_targets
+from sidescanpy.io.jsf.targets import decode_and_correct_window, decode_target_window, read_discover_targets
 
 _SCHEMA = """
 CREATE TABLE Target (
@@ -165,6 +165,33 @@ def test_target_ping_missing_from_own_window_is_unknown_confidence(tmp_path):
     t = read_discover_targets(tmp_path)[0]
     assert t.position_confidence == "unknown"
     assert t.extra_attributes["window_row"] is None
+
+
+def test_decode_and_correct_window_matches_manual_chain(tmp_path):
+    from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
+    from sidescanpy.targets.core import detrend_by_range, orient_for_display
+
+    _make_target_file(
+        tmp_path / "Target-0001.target",
+        ping_seq=105,
+        channel=0,
+        window_seqs=list(range(100, 110)),
+        n_samples=8,
+        weighting_factor=1,
+        mps=0.1,
+    )
+    t = read_discover_targets(tmp_path)[0]
+
+    window, corrected_target = decode_and_correct_window(t, freq_hz=1_495_000)
+
+    expected = decode_target_window(t)
+    expected = apply_tvg_to_amplitude(expected, t.extra_attributes["ping_meters_per_sample"], freq_hz=1_495_000)
+    expected, expected_target = orient_for_display(expected, t)
+    expected = detrend_by_range(expected)
+
+    np.testing.assert_allclose(window, expected)
+    assert corrected_target.sample == expected_target.sample
+    assert corrected_target.extra_attributes["window_row"] == expected_target.extra_attributes["window_row"]
 
 
 def test_unreadable_file_is_skipped_not_raised(tmp_path):

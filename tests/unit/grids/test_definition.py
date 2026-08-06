@@ -12,6 +12,7 @@ from pyproj import CRS
 # That's expected in TDD mode.
 from sidescanpy.grids.definition import (
     GridDefinition,
+    bbox_from_channel_dataset,
     utm_crs_for_lonlat,
     utm_grid_from_wgs84_bbox,
 )
@@ -389,3 +390,51 @@ class TestUtmGridFromWgs84Bbox:
         # WGS84-geodetic-distance computation and the UTM projected one.
         assert grid.extent_m_ns == pytest.approx(wgs84_equivalent.extent_m_ns, rel=0.05)
         assert grid.extent_m_ew == pytest.approx(wgs84_equivalent.extent_m_ew, rel=0.05)
+
+
+class TestBboxFromChannelDataset:
+    """Auto-fit a WGS84 bbox to a channel dataset's per-sample extent."""
+
+    def test_bbox_covers_full_lat_lon_extent_with_margin(self, channel_3d):
+        south, west, north, east = bbox_from_channel_dataset(channel_3d)
+        lats = channel_3d["latitude_per_sample"].values
+        lons = channel_3d["longitude_per_sample"].values
+        assert south < float(np.min(lats))
+        assert north > float(np.max(lats))
+        assert west < float(np.min(lons))
+        assert east > float(np.max(lons))
+
+    def test_margin_scales_with_extent_by_default(self, channel_3d):
+        south, west, north, east = bbox_from_channel_dataset(channel_3d, margin_frac=0.5)
+        lats = channel_3d["latitude_per_sample"].values
+        lat_extent = float(np.max(lats)) - float(np.min(lats))
+        # margin_frac=0.5 -> half the extent added on each side
+        assert (float(np.min(lats)) - south) == pytest.approx(lat_extent * 0.5, rel=0.05)
+
+    def test_min_margin_deg_applies_to_near_zero_extent(self):
+        import xarray as xr
+
+        lat = np.full((5, 2, 3), 41.0)
+        lon = np.full((5, 2, 3), -71.0)
+        ds = xr.Dataset(
+            {
+                "latitude_per_sample": (["ping", "channel", "sample"], lat),
+                "longitude_per_sample": (["ping", "channel", "sample"], lon),
+            }
+        )
+        south, west, north, east = bbox_from_channel_dataset(ds, min_margin_deg=0.01)
+        assert north - south == pytest.approx(0.02)
+        assert east - west == pytest.approx(0.02)
+
+    def test_raises_on_all_nan_coordinates(self):
+        import xarray as xr
+
+        nan = np.full((5, 2, 3), np.nan)
+        ds = xr.Dataset(
+            {
+                "latitude_per_sample": (["ping", "channel", "sample"], nan.copy()),
+                "longitude_per_sample": (["ping", "channel", "sample"], nan.copy()),
+            }
+        )
+        with pytest.raises(ValueError, match="No valid"):
+            bbox_from_channel_dataset(ds)

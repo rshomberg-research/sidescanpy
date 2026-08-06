@@ -54,7 +54,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sidescanpy.targets.core import Target
+from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
+from sidescanpy.targets.core import Target, detrend_by_range, orient_for_display
 
 _SOURCE_FORMAT = "jsf_discover"
 
@@ -214,3 +215,42 @@ def decode_target_window(target: Target) -> np.ndarray:
 
     n_samples = min(len(r) for r in rows)
     return np.stack([r[:n_samples] for r in rows])
+
+
+def decode_and_correct_window(target: Target, *, freq_hz: float) -> tuple[np.ndarray, Target]:
+    """Decode ``target``'s window and run it through the same
+    TVG -> orient-for-display -> range-detrend chain used everywhere this
+    project renders a target crop.
+
+    Kept in this module (not ``targets.core``, despite operating on a
+    ``Target``) because it composes ``decode_target_window``, which is
+    JSF-specific and itself imports from ``targets.core`` — putting this
+    the other way around would be a circular import as well as a
+    layering violation of ``targets.core``'s own "format-agnostic, no
+    format-specific IO" contract.
+
+    Parameters
+    ----------
+    target : Target
+        Must have ``extra_attributes["ping_meters_per_sample"]`` (set by
+        ``read_discover_targets``).
+    freq_hz : float
+        Acquisition frequency for the TVG absorption term — this
+        survey's target catalogs don't record it per-target, so callers
+        pass their own known constant (see ``absorption_for_frequency``).
+
+    Returns
+    -------
+    (window, target)
+        TVG-corrected, display-oriented, range-detrended window, and a
+        copy of ``target`` with ``.sample``/``extra_attributes["window_row"]``
+        remapped to match ``orient_for_display``'s flips (see that
+        function's docstring).
+    """
+    window = decode_target_window(target)
+    window = apply_tvg_to_amplitude(
+        window, target.extra_attributes["ping_meters_per_sample"], freq_hz=freq_hz,
+    )
+    window, target = orient_for_display(window, target)
+    window = detrend_by_range(window)
+    return window, target

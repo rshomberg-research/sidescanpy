@@ -17,6 +17,7 @@ from sidescanpy.viz.waterfall import (
     _mask_floor_clip,
     plot_survey_overview,
     plot_waterfall,
+    resolve_waterfall_axes,
 )
 from tests.conftest import make_minimal_sidescan_dataset
 
@@ -185,6 +186,26 @@ class TestPlotWaterfallColorbar:
             assert cbar_label == "Backscatter (dB)"
         finally:
             plt.close(fig)
+
+
+class TestResolveWaterfallAxes:
+    def test_geometric_step_forces_distance_axes_regardless_of_cli(self):
+        assert resolve_waterfall_axes(frozenset({"geometric"}), "sample", "ping") == (
+            "across_track", "along_track",
+        )
+
+    def test_geometric_plus_other_steps_still_forces_distance_axes(self):
+        assert resolve_waterfall_axes(
+            frozenset({"tvg", "geometric", "georef"}), "sample", "ping"
+        ) == ("across_track", "along_track")
+
+    def test_no_geometric_step_passes_cli_axes_through(self):
+        assert resolve_waterfall_axes(frozenset({"tvg"}), "ground_range", "time") == (
+            "ground_range", "time",
+        )
+
+    def test_empty_steps_passes_cli_axes_through(self):
+        assert resolve_waterfall_axes(frozenset(), "sample", "ping") == ("sample", "ping")
 
 
 class TestPlotSurveyOverview:

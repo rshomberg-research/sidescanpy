@@ -227,6 +227,27 @@ def plot_waterfall(
     return ax
 
 
+def resolve_waterfall_axes(steps: frozenset[str], cli_x_axis: str, cli_y_axis: str) -> tuple[str, str]:
+    """Pick the waterfall x/y axis mode for a given correction's step set.
+
+    Corrections that include the "geometric" step always render in
+    real-world distance (across_track x meters-in / along_track meters)
+    rather than the caller's chosen x/y axis — otherwise the geometric
+    correction has no visible effect (sample-index and raw ping-count
+    axes look identical whether or not ground/across-track ranges were
+    computed, since only the color values change from TVG, not the
+    pixel geometry). The caller's axes remain in effect for corrections
+    without "geometric" (raw, radiometric), where sample/ping/time are
+    the only meaningful choices anyway.
+
+    Promoted from a project-local helper in ``project-a/scripts/
+    visualization_demo.py`` — same name/signature, no behavior change.
+    """
+    if "geometric" in steps:
+        return "across_track", "along_track"
+    return cli_x_axis, cli_y_axis
+
+
 def plot_survey_overview(
     ds: xr.Dataset,
     *,

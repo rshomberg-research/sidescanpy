@@ -22,10 +22,17 @@ Public functions
   (meters) from per-ping lat/lon; the primitive behind
   ``y_axis="along_track"``, exposed for non-plotting callers (e.g.
   distance-based segmentation).
+- :func:`resolve_waterfall_axes` — pick x/y axis mode for a correction's
+  step set (geometric corrections always render in real-world distance).
 - :func:`plot_track_and_scanlines` — full-survey nadir track plus
   periodic port/starboard scan-line rungs, in a projected (UTM by
   default) coordinate system. Geometry/coverage only, no backscatter.
 - :func:`export_track_and_scanlines_png` — save that plot to PNG.
+- :func:`build_survey_track` — build the lat/lon track + scan-line
+  arrays ``plot_track_and_scanlines`` needs from a multi-file survey dict.
+- :func:`plot_track_with_targets` — track + scan-lines with target
+  catalog positions overlaid.
+- :func:`export_track_with_targets_png` — save that plot to PNG.
 
 Future:
 - ``plot_geographic`` — map-style scatter on lat/lon (deferred).
@@ -33,26 +40,40 @@ Future:
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.viz.waterfall import plot_waterfall, plot_survey_overview, along_track_distance_m
+from sidescanpy.viz.waterfall import (
+    plot_waterfall,
+    plot_survey_overview,
+    along_track_distance_m,
+    resolve_waterfall_axes,
+)
 from sidescanpy.viz.gridded import (
     plot_gridded_raster,
     plot_gridded_with_coverage,
     plot_gridded_multiple_methods,
     export_gridded_png,
 )
-from sidescanpy.viz.track import plot_track_and_scanlines, export_track_and_scanlines_png
+from sidescanpy.viz.track import (
+    plot_track_and_scanlines,
+    export_track_and_scanlines_png,
+    build_survey_track,
+)
 from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
+from sidescanpy.viz.targets import plot_track_with_targets, export_track_with_targets_png
 
 __all__ = [
     "plot_waterfall",
     "plot_survey_overview",
     "along_track_distance_m",
+    "resolve_waterfall_axes",
     "plot_gridded_raster",
     "plot_gridded_with_coverage",
     "plot_gridded_multiple_methods",
     "export_gridded_png",
     "plot_track_and_scanlines",
     "export_track_and_scanlines_png",
+    "build_survey_track",
     "contact_sheet",
     "render_target_context",
+    "plot_track_with_targets",
+    "export_track_with_targets_png",
 ]
