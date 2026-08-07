@@ -220,7 +220,19 @@ def build_survey_track(
         strided_idx = np.arange(0, ds.sizes["ping"], scanline_stride)
         edge_ds = ds.isel(ping=strided_idx).load()
         edge_ds = apply_correction_steps(edge_ds, {"geometric", "georef"})
-        edge_datasets.append(edge_ds.isel(sample=[-1]))
+        # Each file's sample axis may be a different length (e.g. one
+        # file's channel was cropped further than another's by the
+        # far-range noise crop stage), so "sample"'s own index label
+        # for the retained last sample (e.g. 557 vs. 663) differs
+        # across files. Left in place, concatenating along "ping" below
+        # aligns on that mismatched "sample" label and NaNs out
+        # whichever file doesn't have that particular index value —
+        # drop the label since only the value at "the last sample" is
+        # wanted here, not which index it came from.
+        last_sample = edge_ds.isel(sample=[-1])
+        if "sample" in last_sample.coords:
+            last_sample = last_sample.drop_vars("sample")
+        edge_datasets.append(last_sample)
 
     track_lat = np.concatenate(track_lat_parts)
     track_lon = np.concatenate(track_lon_parts)

@@ -154,3 +154,40 @@ class TestBuildSurveyTrack:
         # file a (earlier timestamps) must appear first in the concatenated track
         np.testing.assert_array_equal(result["track_lat"][:n_pings], ds_a["latitude"].values)
         np.testing.assert_array_equal(result["track_lat"][n_pings:], ds_b["latitude"].values)
+
+    def test_mismatched_sample_window_lengths_do_not_nan_out_rungs(self):
+        """Regression test: a real survey's two files can have
+        differently-sized sample axes (e.g. one file's channel was
+        trimmed further by the far-range noise crop than the other's).
+        The last-sample "sample" coordinate then differs by value
+        across files (e.g. index 79 vs. 99); concatenating without
+        accounting for that used to align on the mismatched label and
+        NaN out whichever file didn't have that particular value."""
+        from sidescanpy.core import SideScanSurvey
+
+        from tests.conftest import make_minimal_sidescan_dataset
+
+        # altitude_m must be well below the (very short, default-fixture)
+        # slant range reached by the last sample, or every sample is
+        # legitimately water-column-masked regardless of this bug.
+        # A real .ss.h5-loaded dataset carries an explicit indexed
+        # "sample" coordinate (assigned by the HDF5 backend on open,
+        # not by this in-memory fixture) — assign one here too, since
+        # that indexed label is exactly what the old code aligned on.
+        ds_a = make_minimal_sidescan_dataset(n_pings=10, n_samples=100)
+        ds_a["altitude_m"] = (["ping"], np.full(10, 0.05, dtype=np.float32))
+        ds_a = ds_a.assign_coords(sample=np.arange(ds_a.sizes["sample"]))
+        ds_b = make_minimal_sidescan_dataset(n_pings=10, n_samples=80)
+        ds_b["altitude_m"] = (["ping"], np.full(10, 0.05, dtype=np.float32))
+        ds_b = ds_b.assign_coords(sample=np.arange(ds_b.sizes["sample"]))
+
+        survey_a = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        survey_a.add_frequency("hz_1495000", ds_a)
+        survey_b = SideScanSurvey(source_files=["b.jsf"], source_format="JSF", survey_name="b")
+        survey_b.add_frequency("hz_1495000", ds_b)
+
+        surveys = {Path("a.ss.h5"): survey_a, Path("b.ss.h5"): survey_b}
+        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
+
+        assert not np.isnan(result["scan_port_lat"]).any()
+        assert not np.isnan(result["scan_stbd_lat"]).any()
