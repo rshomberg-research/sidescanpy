@@ -50,6 +50,12 @@ from sidescanpy.io.sdf.reader import (
 # converter (still uses old API; will need updating)
 from sidescanpy.io.sdf.converter import convert
 
+from sidescanpy.io.sdf.targets import (
+    read_klein_targets,
+    decode_target_window,
+    resolve_target_position,
+)
+
 __all__ = [
     "SDFPageHeader",
     "SDFSonarPage",
@@ -63,4 +69,7 @@ __all__ = [
     "PAGE_HEADER_BYTES",
     "HEADER_TOTAL_BYTES",
     "PAGE_VERSIONS_SONAR",
+    "read_klein_targets",
+    "decode_target_window",
+    "resolve_target_position",
 ]
