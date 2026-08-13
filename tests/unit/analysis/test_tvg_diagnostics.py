@@ -21,11 +21,12 @@ from sidescanpy.analysis.tvg_diagnostics import (
     _linear_to_db,
     before_after_backscatter,
     bin_pings_by_altitude,
+    fit_hardware_tvg_curve,
     mean_backscatter_vs_range,
     mean_backscatter_vs_sample_index,
 )
 from sidescanpy.processing.pipeline import apply_correction_steps
-from sidescanpy.processing.radiometric import TVGParams
+from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
 
 # ============================================================
@@ -364,3 +365,125 @@ class TestBinPingsByAltitude:
         bins = bin_pings_by_altitude(ds, n_bins=2)
         total = sum(b.sizes["ping"] for b in bins.values())
         assert total == 5
+
+
+# ============================================================
+# fit_hardware_tvg_curve
+# ============================================================
+
+def _make_binned_curve(
+    true_params: TVGParams,
+    *,
+    r_min: float = 1.0,
+    r_max: float = 80.0,
+    step: float = 1.0,
+    source_level_db: float = 50.0,
+    count: int = 1000,
+) -> pd.DataFrame:
+    """A mean_backscatter_vs_range()-shaped DataFrame built from an EXACT
+    known TVGParams -- reuses tvg_gain_db() (the function under test's
+    own dependency) so the fixture is guaranteed self-consistent, rather
+    than a hand-derived formula that could drift from it."""
+    r = np.arange(r_min, r_max, step)
+    mean = source_level_db - tvg_gain_db(r, true_params)
+    return pd.DataFrame({
+        "range_min_m": r - step / 2,
+        "range_max_m": r + step / 2,
+        "mean": mean,
+        "median": mean,
+        "std": np.zeros_like(mean),
+        "p10": mean,
+        "p90": mean,
+        "count": np.full_like(r, count, dtype=int),
+    })
+
+
+_ABSORPTION = 0.15  # arbitrary, distinct from any absorption_for_frequency() default
+
+
+class TestFitHardwareTvgCurve:
+    def test_flat_curve_picks_flat(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        assert result.best.name == "flat"
+        assert result.best.rmse_db == pytest.approx(0.0, abs=1e-9)
+
+    def test_spreading_only_curve_picks_spreading_only(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        assert result.best.name == "spreading_only"
+        assert result.best.scale == pytest.approx(1.0, abs=1e-6)
+        assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
+
+    def test_absorption_only_curve_picks_absorption_only(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        assert result.best.name == "absorption_only"
+        assert result.best.scale == pytest.approx(1.0, abs=1e-6)
+        assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
+
+    def test_full_physics_curve_picks_full_physics(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=_ABSORPTION))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        assert result.best.name == "full_physics"
+        assert result.best.scale == pytest.approx(1.0, abs=1e-6)
+        assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
+
+    def test_all_four_candidates_present_in_fixed_order(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        assert [c.name for c in result.candidates] == [
+            "flat", "spreading_only", "absorption_only", "full_physics",
+        ]
+
+    def test_r_ref_auto_selection_skips_low_count_bins(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        # First bin (r~1) has too few samples; second (r~2) is fine.
+        binned.loc[0, "count"] = 5
+        result = fit_hardware_tvg_curve(
+            binned, absorption_db_per_m=_ABSORPTION, min_count_for_r_ref=30,
+        )
+        assert result.best.r_ref_m == pytest.approx(binned["range_min_m"].iloc[1] + 0.5)
+
+    def test_r_ref_auto_selection_ignores_far_edge_noise_spike(self):
+        # A near-flat curve (as from a survey where hardware has already
+        # compensated almost everything) with a tiny noise-level bump at
+        # the far edge -- an unrestricted global-max search would anchor
+        # r_ref_m there, collapsing r_fit_max_m's window to that single
+        # bin and making every candidate's fit degenerate (RMSE=0 for
+        # all). Reproduces a real bug found against a genuinely-flat
+        # Klein survey.
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0), r_max=80.0)
+        binned.loc[binned.index[-1], "mean"] += 0.05
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        max_range = (binned["range_min_m"].iloc[-1] + binned["range_max_m"].iloc[-1]) / 2.0
+        assert result.best.r_ref_m < max_range
+        assert result.best.n_bins_used > 1
+
+    def test_r_fit_max_auto_selection_matches_documented_formula(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION), r_max=80.0)
+        result = fit_hardware_tvg_curve(
+            binned, absorption_db_per_m=_ABSORPTION, fit_fraction=0.6,
+        )
+        r_ref = result.best.r_ref_m
+        max_range = (binned["range_min_m"].iloc[-1] + binned["range_max_m"].iloc[-1]) / 2.0
+        expected = r_ref + 0.6 * (max_range - r_ref)
+        assert result.best.r_fit_max_m == pytest.approx(expected)
+
+    def test_explicit_r_ref_and_r_fit_max_override_auto_selection(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        result = fit_hardware_tvg_curve(
+            binned, absorption_db_per_m=_ABSORPTION, r_ref_m=10.0, r_fit_max_m=40.0,
+        )
+        assert result.best.r_ref_m == 10.0
+        assert result.best.r_fit_max_m == 40.0
+
+    def test_empty_binned_raises(self):
+        empty = pd.DataFrame(columns=["range_min_m", "range_max_m", "mean", "count"])
+        with pytest.raises(ValueError, match="no rows"):
+            fit_hardware_tvg_curve(empty, absorption_db_per_m=_ABSORPTION)
+
+    def test_no_bin_meets_min_count_raises(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0), count=1)
+        with pytest.raises(ValueError, match="min_count_for_r_ref"):
+            fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, min_count_for_r_ref=30)

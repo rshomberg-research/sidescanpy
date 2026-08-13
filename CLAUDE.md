@@ -413,6 +413,49 @@ below). Full writeups: `docs/planning/handoff-tvg-residual-post-fix-findings.md`
   the user (is this worth pursuing now; is a hardware TVG curve
   documented anywhere; per-survey vs. fixed calibration).
 
+### v0.9.0 — Empirical Range Correction (Complete)
+
+**Status:** Implemented 2026-07-22, per
+`docs/planning/v0.9.0-empirical-range-correction.md` (design proposal —
+that doc's status line is stale and predates this entry; treat this
+entry as the source of truth for what actually shipped). Answers that
+doc's open questions #2-5 as follows: non-parametric piecewise-linear
+interpolation over observed bins (not a low-order polynomial — the two
+calibrated frequencies have qualitatively different residual shapes, a
+smooth bowl vs. a sharp near-field rise-then-plateau, that a single
+polynomial risks fitting poorly); a **fixed, bundled default
+calibration** (`load_default()`) rather than per-survey fitting; scoped
+to the two frequencies actually observed (`hz_1495000`, `hz_547500`),
+matched by `freq_hz_start` with a small tolerance for float round-trip,
+not built generically for arbitrary frequencies. Question #2 (is a
+hardware TVG/AGC curve documented anywhere) was never answered — this
+empirical fit is still a workaround for an unconfirmed root cause, not a
+substitute for the real curve; see the "v0.13.0" entry below for the
+tooling built later to investigate that question directly per-survey.
+
+**Completed:**
+- ✅ `processing/range_correction.py` (new module, not folded into
+  `apply_tvg()`): `RangeCorrectionTable` (per-frequency piecewise-linear
+  lookup, JSON-serializable, `load_default()` reads a bundled calibration
+  resource), `fit_range_correction()` (fits `target_level_db - mean` per
+  range bin from one TVG-corrected channel, count-weighted target level
+  so the fit has ~zero net effect on absolute level), `apply_empirical_range_correction()`
+  (adds the fitted correction to `backscatter_intensity`; refuses to
+  double-apply via `processing_history`; skips with a warning, doesn't
+  guess, for an uncalibrated frequency; non-finite `ground_range_m`
+  samples get zero correction, not propagated NaN).
+- ✅ New, distinct, **opt-in only** step (`"range_correction"` in
+  `pipeline.py`'s step framework) — not added to the default correction
+  ladder, so existing consumers see no behavior change.
+- ✅ `project-a/scripts/debug/fit_range_correction.py` — the
+  fitting/validation CLI that produced the bundled default calibration.
+- ✅ Tests: `tests/unit/processing/test_range_correction.py`.
+- **Known, documented limitation, not hidden:** the bundled default
+  calibration is fit from one real survey and validated only against a
+  held-out ping range of that *same* survey — not genuine cross-survey
+  validation. Revisit once a second independent real survey is
+  available for calibration.
+
 ### Test Status (as of 2026-07-01)
 
 ```
@@ -552,6 +595,89 @@ GeoTIFF gap):**
     `11_track_with_targets.py`→`12`, `12_export_chips.py`→`13`. GeoTIFF's
     gap moves from `09` to `10`.
 
+### v0.13.0 — Selectable TVG Terms + Hardware-Curve Fitting (Complete)
+
+**Status:** Implemented 2026-08-13, per
+`docs/planning/v0.13.0-tvg-term-selection-and-hardware-curve-fitting.md`.
+Different angle from v0.9.0's empirical range correction above: that
+module fits-and-removes whatever residual shape is observed, agnostic to
+cause; this one is investigative tooling to help figure out, per survey,
+*whether* hardware/acquisition already applied part of TVG before
+`sidescanpy` sees the data (Known Issue #4's leading hypothesis, Known
+Issue #6's `_gain_factor` evidence) — and, if so, a pipeline option to
+avoid double-correcting it. Does **not** resolve the open hardware-AGC
+question generally; it's a tool to investigate it per-survey, and the
+JSF LF channel's honest result (see below) is itself evidence the
+question stays open.
+
+**Completed:**
+- ✅ `processing/pipeline.py`: `apply_correction_steps()`/
+  `run_correction_steps()` gained a general `step_params: dict[str,
+  dict] | None` passthrough (`step_params={"tvg": {"params":
+  TVGParams(...)}}`) — closes a plumbing gap, not a math gap:
+  `tvg_gain_db()`'s spreading and absorption terms were already
+  independently zero-able via `TVGParams`, there was just no way to get
+  a custom `TVGParams` through the CLI/pipeline machinery.
+- ✅ `analysis/tvg_diagnostics.py`: `fit_hardware_tvg_curve()` +
+  `TVGCandidateFit`/`TVGCandidateFitResult`. Fits 4 candidate models
+  (`flat`, `spreading_only`, `absorption_only`, `full_physics`) against
+  an observed raw-backscatter-vs-range curve, **each with one free scale
+  parameter, independently — deliberately not a joint 2-parameter
+  regression** (tried during the investigation that motivated this;
+  found poorly conditioned — the two terms are too collinear over
+  realistic range spans, producing wild/sign-flipped coefficients even
+  when the combined curve visually fit well). `r_ref_m` (the loss
+  reference bin) auto-selects the max-mean bin among count-eligible
+  bins, restricted to the near-field half of the range
+  (`r_ref_search_fraction`, default 0.5) — not simply the nearest bin
+  (Known Issue #5's blanking/ring-down artifact reads anomalously *low*
+  right at the start of every ping and would corrupt the fit's sign if
+  picked), and not an unrestricted global max either (found, against a
+  real near-flat Klein survey, to occasionally land on a far-range
+  noise-level bump purely by chance, collapsing the fit window to a
+  single bin and making every candidate degenerate to RMSE=0).
+- ✅ `viz/tvg_diagnostics.py`: `plot_candidate_fit()` — observed loss +
+  each candidate's scaled model curve, fit window shaded.
+- ✅ `project-a/scripts/04_radiometric.py`: `--spreading-loss-db`/
+  `--absorption-db-per-m`/`--no-spreading`/`--no-absorption` flags
+  (mutually exclusive per term — errors out rather than picking a silent
+  winner, since a silent precedence rule risks exactly the kind of
+  undetected double-correction this tooling exists to prevent).
+- ✅ `project-a/scripts/debug/fit_tvg_hardware_curve.py` (new) — CLI
+  wrapping the fit + plot, reusing `tvg_range_residual_diagnostic.py`'s
+  `_reconstruct_raw()` helper for already-pipelined `ss_h5` files.
+- ✅ Tests: `tests/unit/processing/test_pipeline.py`,
+  `tests/unit/analysis/test_tvg_diagnostics.py`,
+  `tests/unit/viz/test_tvg_diagnostics.py`. Full suite: 1140 passing / 36
+  skipped (was 1122 before this work).
+- **Real-data findings (JSF `survey-a`, both channels;
+  reconstructed-raw via `_reconstruct_raw()` since production files are
+  already fully pipelined):**
+  - `hz_1495000` (HF): `absorption_only` wins clearly, scale≈2.18,
+    RMSE≈1.07dB — consistent with hardware having already removed
+    spreading loss, absorption loss remaining uncompensated.
+  - `hz_547500` (LF): `absorption_only` also wins clearly, scale≈2.03,
+    RMSE≈0.40dB — **this supersedes an earlier, less careful ad-hoc
+    finding** (in the "TVG Parameters or Sound Velocity?" artifact) that
+    LF didn't fit any of the 4 candidates well; that ad-hoc analysis
+    predates this session's sign-convention and near-field-artifact
+    fixes to the fitting logic and was very likely corrupted by the same
+    bugs. Both JSF channels now show the same qualitative pattern.
+  - Klein clean file (`project-b`, `survey-b`,
+    `hz_455000`, `sonar_data180914090300.ss.h5`): near-flat raw curve
+    (~0.3dB peak-to-trough over 1-39m) — winning candidate's scale is
+    ≈-0.02 (effectively zero), RMSE≈0.01dB, distinguishing it clearly
+    from JSF's scale≈2. Consistent with hardware having compensated both
+    terms. (The same survey's `hz_900000` channel only records to ~8m
+    range — too short a span for a meaningful fit; not a data-quality
+    problem, just a short-range high-resolution channel.)
+- **Not done:** confirming the hardware-AGC hypothesis directly (no
+  instrument documentation was examined) — this tooling produces
+  evidence consistent with it, not proof. No change to `absorption_for_frequency()`
+  or `tvg_gain_db()`'s formula — both terms were already correct and
+  independently zero-able; this work is entirely about exposing that
+  capability and adding tooling to decide *when* to use it.
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)
@@ -570,7 +696,7 @@ GeoTIFF gap):**
 
 ### v0.8.0+ candidates (not yet ordered)
 
-- ~~**TVG diagnostics**~~ — Stage 1 complete 2026-07-16 (see "v0.8.0 — TVG Diagnostics, Stage 1" above), sound-velocity fix applied and residual investigation deepened same day (see "v0.8.0 follow-up" above). Next step, if it happens, is `docs/planning/v0.9.0-empirical-range-correction.md` — a design proposal awaiting approval, not Stage 2's original beam-pattern framing (evidence didn't cleanly support that framing either — see the follow-up section).
+- ~~**TVG diagnostics**~~ — Stage 1 complete 2026-07-16 (see "v0.8.0 — TVG Diagnostics, Stage 1" above), sound-velocity fix applied and residual investigation deepened same day (see "v0.8.0 follow-up" above). Empirical range correction (the proposed next step) complete 2026-07-22 (see "v0.9.0 — Empirical Range Correction" above) — not Stage 2's original beam-pattern framing (evidence didn't cleanly support that framing either — see the follow-up section). Selectable TVG terms + hardware-curve-fitting tooling (a different, complementary angle on the same open question) complete 2026-08-13 (see "v0.13.0" below).
 - **Klein INI parsing** — unblocks proper `depth_m` for SDF (~1 session; see Known Issues #5)
 - **Bottom detection** (`processing/detect_bottom.py`) — fallback altitude
 - **Per-side diagnostic mode** — port/starboard bands in gridded raster
@@ -619,6 +745,13 @@ GeoTIFF gap):**
    - Not yet fixed or worked around anywhere — `resample_channel_to_grid()`/`plot_waterfall()` currently include these samples like any other data point.
    - See `docs/planning/handoff-tvg-range-residual.md` for the full writeup tying this together with the range-dependent TVG residual (Known Issue #4) into one investigation.
 6. **Far-range noise amplification on channels whose recorded range window exceeds their real useful range — confirmed 2026-08-06, distinct from #4/#5.** A per-survey acquisition setting (which channel gets the longer recorded window — not fixed by frequency, confirmed by comparing two real surveys with opposite HF/LF asymmetry) can leave a channel's array extending well past where real backscatter decays into noise. On `project-a`'s `unknown` survey, `hz_1495000`'s recorded window (≈165m) extends far past its real signal cutoff (≈50-60m, matching the original ~60m visual observation that started this investigation). Raw amplitude past that cutoff doesn't stay flat — it climbs back up over the remaining ~100m (-30dB at 55-60m → -21dB at 160-165m), new supporting evidence for the "hardware TVG/AGC artifact baked into the raw signal" hypothesis from the Known Issue #4 investigation below. `apply_tvg()`'s gain formula (`tvg_gain_db()`, uncapped, monotonically increasing with range) then compounds this: corrected mean balloons from ~31dB (real signal peak, 5-15m) to ~88dB by 160-165m, a ~57dB overshoot that dominates this codebase's percentile-based color scaling and visually flattens the legitimate near-nadir signal into "one strip of real data, the rest flat." **2026-08-06 fixed** via `processing/farrange.py: crop_far_range_noise()` (candidate fix (a), data-driven mask/crop) — see the "Cross-Project Standard Pipeline Scripts" roadmap entry above for details; the other two candidate fixes (cap the TVG gain formula; fix percentile scaling) remain undone, not needed once the affected samples are cropped out entirely. **Open issue this surfaced, broader than this one finding: we have no reliable way to know whether TVG/AGC was already applied by the sonar hardware or EdgeTech Discover's acquisition software before a `.jsf` file reaches `sidescanpy`** — if so, `apply_tvg()` double-corrects, uncompensated, which alone could produce residuals like Known Issue #4's without any bug in this codebase's math. **2026-08-06 follow-up, partially resolved:** read raw `_gain_factor`/`_user_transmit_level` JSF header fields directly (previously parsed but completely unused) across one file from each of `project-a`'s three surveys. `_user_transmit_level` is constant (100) everywhere — not informative. `_gain_factor` is real and actively varying, strongly anti-correlated with the raw signal's own mean amplitude on *every* survey checked (r = −0.80 to −0.86) — the exact signature of an active per-ping automatic gain control applied before the `.jsf` file is written. This confirms hardware/acquisition-side AGC is genuinely active (not hypothetical), but doesn't by itself prove `apply_tvg()` double-corrects: `_gain_factor` is one scalar per ping (broadband), not a per-sample range-dependent curve, so it can't alone produce the per-sample far-range climb or Known Issue #4's shape. Still unresolved: what `_gain_factor`'s units represent, and whether it's applied to `_raw_trace_data` before storage (making "raw" already gain-compensated) or merely recorded alongside an uncompensated signal. Full writeup: `docs/planning/handoff-hf-farrange-noise-amplification.md`'s "2026-08-06 follow-up" section.
+
+**2026-08-12 follow-up — owner disputed the JSF diagnosis; re-tested and re-confirmed, plus a real SDF-side bug found and fixed.** The owner independently observed the same category of symptom on `project-b` (Klein SDF) and suspected a shared `sidescanpy` bug rather than two coincidental hardware artifacts, and specifically distrusted the JSF conclusion above. Investigated properly rather than defended on priors:
+- **Owner's alternative hypothesis for JSF, tested directly and refuted:** "TVG got applied to invalid/near-zero far-range data, and TVG's uncapped range-growing gain formula manufactured a fake climb." Both required premises are false: `apply_tvg()` (`processing/radiometric.py`) only ever reads/writes `backscatter_intensity` — confirmed by code read and a live `np.shares_memory()` check that `backscatter_raw` is untouched. The exact file the original climb evidence came from (`unknown/ss_h5/20241017181753.ss.h5`, `hz_1495000`) has `processing_level="raw"`, empty `processing_history`, and `backscatter_raw == backscatter_intensity` byte-for-byte — TVG had definitely not run. The original evidence itself used only `_linear_to_db()` (plain unit conversion), never `apply_tvg()`'s gain formula. And raw *linear* amplitude itself (no dB, no TVG at all) climbs ~2.6x from floor to far edge — nowhere near the `1e-6` clip floor that would make "invalid" data behave pathologically. The JSF diagnosis stands, now on stronger evidence than the original investigation had.
+- **JSF decode path independently audited** (`io/jsf/messages.py`): the sample-count field is cross-validated against the message's actual byte length with a hard `ValueError` on mismatch, and the converter hard-fails (not pads) on any per-ping inconsistency — rules out a fabricated-sample decode bug with high confidence. Found one unrelated, currently-dormant bug (`num_samples` uses only the 16-bit LSB, not the MSB-extended 20-bit value, until `__post_init__` recomputes it — harmless while real counts stay `<<65536`) and several parsed-but-unused header fields (`_starting_depth`, `_gain_factor`, `_user_transmit_level`, `_raw_pipe_dist_km`) — real gaps, not the cause of this issue. A fully independent clean-room byte decode (bypassing `sidescanpy.io.jsf` entirely) was spec'd but not run — the converging evidence above made it a nice-to-have, not a blocker.
+- **SDF side: real bug found and fixed, distinct from the JSF issue.** `io/sdf/converter.py`'s `_build_channel_dataset` pads every ping to the group's max sample count with NaN — previously silent, and the true per-ping length was discarded. **Fixed**: now logs a warning when padding actually occurs, and a new `valid_samples` (ping, channel) variable preserves each ping's true recorded length through padding. In practice this is currently scoped to pages within one physical `.sdf` file (`01_convert.py` calls `read_and_convert()` once per file), not across a whole multi-file survey — `dispatch.py`'s multi-file-merge capability would pad across files too if ever used that way, worth knowing before doing so.
+- **Independently confirmed on real `project-b` data: the same floor-then-climb hardware-artifact pattern found on JSF also exists on Klein/SDF hardware.** Raw-byte-level analysis of `survey-b/sonar_data180914072000.sdf` (`hz_900000`) reproduced the pattern directly from raw pages (bypassing sidescanpy's converter entirely) — this is new cross-vendor evidence for the "hardware TVG/AGC baked into raw signal" hypothesis, not previously checked on any non-JSF system.
+- **Convert→crop pipeline inefficiency fixed**: `01_convert.py` used to write the full uncropped array to disk, then `02_crop_farrange.py` read it back and rewrote it cropped — doubling I/O for the data being thrown away. `01_convert.py` now runs `crop_far_range_noise()` in memory before its first (only) write; `02_crop_farrange.py` remains for already-converted files and becomes a fast no-op when run against files already-cropped at convert time. Verified end-to-end on real `project-a` data (converted 10 files fresh; `02_crop_farrange.py` run afterward skipped all 10 in ~1s instead of rewriting them) and by running the crop cleanup against already-existing real data: `project-a/unknown/ss_h5` (converted before this fix) reclaimed ~1.7G (4.5G → 2.8G) when cropped; `project-b/survey-b/ss_h5` was already fully cropped from an earlier session, so this run found nothing left to reclaim there (confirms the idempotency skip works correctly, not a null result from a bug).
 7. **Klein SDF `depth_m` is NaN** — Klein records depth as a sensor voltage; calibration constants are in companion INI files which we don't yet parse. Requires INI calibration parsing (deferred; ~1 session). **Workaround:** users with calibration override directly: `ch.dataset["depth_m"] = (["ping"], calibrated_array)`.
 8. **`compute_geometric_ranges` falls back to 1500 m/s** — When `sound_vel_ms` is NaN (always the case for SDF surveys). Acceptable for typical work; would need refinement for cold-water or thermocline-crossing surveys.
 9. **Klein 3500-series assumption** — SDF reader STRUCT matches Klein 3500 layout (no fields 93/94). 5000/5900 series may differ; would need per-version STRUCTs if encountered.

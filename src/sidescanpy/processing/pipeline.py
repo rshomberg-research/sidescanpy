@@ -11,7 +11,10 @@ Two entry points:
   explicit *set* of steps, so callers can request combinations the
   ladder can't express, such as geometric ranges without TVG (verified
   as a supported combination in ``docs/planning/workflow-decisions.md``'s
-  "Verified combinations" table).
+  "Verified combinations" table). Also accepts an optional
+  ``step_params`` dict for callers that need to override a step
+  function's own defaults (e.g. custom ``TVGParams`` for the ``"tvg"``
+  step) without bypassing this pipeline machinery.
 
 ``run_pipeline`` is implemented on top of ``run_correction_steps`` — the
 ladder is just a fixed mapping from level name to step set.
@@ -67,6 +70,8 @@ _STEP_FUNCTIONS = {
 def apply_correction_steps(
     ds: xr.Dataset,
     steps: frozenset[str] | set[str] | tuple[str, ...],
+    *,
+    step_params: dict[str, dict] | None = None,
 ) -> xr.Dataset:
     """Apply an explicit set of correction steps to one channel dataset.
 
@@ -87,6 +92,18 @@ def apply_correction_steps(
         ``"range_correction"`` requires ``"geometric"`` to have run first
         (needs ``ground_range_m``) — including it without ``"geometric"``
         raises inside ``apply_empirical_range_correction`` itself.
+    step_params : dict[str, dict], optional
+        Per-step keyword overrides, keyed by step name and unpacked as
+        ``**kwargs`` into that step's function — e.g.
+        ``step_params={"tvg": {"params": TVGParams(absorption_db_per_m=0.0)}}``
+        calls ``apply_tvg(ds, params=TVGParams(absorption_db_per_m=0.0))``
+        instead of ``apply_tvg(ds)``. A general dict rather than a
+        TVG-specific kwarg since ``_STEP_FUNCTIONS`` already holds
+        callables with differing optional second arguments (``apply_tvg``'s
+        ``params``, ``apply_empirical_range_correction``'s ``table``) — one
+        mechanism covers all of them, not just TVG, and needs no signature
+        change the next time another step grows an override. An entry for
+        a step not present in ``steps`` is silently unused, not an error.
 
     Returns
     -------
@@ -105,14 +122,17 @@ def apply_correction_steps(
             f"Valid steps: {VALID_STEPS}"
         )
 
+    step_params = step_params or {}
     for step in [s for s in VALID_STEPS if s in steps]:
-        ds = _STEP_FUNCTIONS[step](ds)
+        ds = _STEP_FUNCTIONS[step](ds, **step_params.get(step, {}))
     return ds
 
 
 def run_correction_steps(
     survey: SideScanSurvey,
     steps: frozenset[str] | set[str] | tuple[str, ...],
+    *,
+    step_params: dict[str, dict] | None = None,
 ) -> SideScanSurvey:
     """Run an explicit set of correction steps on every frequency channel.
 
@@ -128,6 +148,11 @@ def run_correction_steps(
     steps : set of str
         Any subset of ``{"tvg", "geometric", "range_correction", "georef"}``.
         Empty set means no processing (equivalent to raw).
+    step_params : dict[str, dict], optional
+        Per-step keyword overrides — see :func:`apply_correction_steps`.
+        Applied identically to every frequency channel in the survey
+        (a term-selection or calibration choice is survey-wide, not
+        per-channel).
 
     Returns
     -------
@@ -154,7 +179,7 @@ def run_correction_steps(
     survey = interpolate_aux_onto_pings(survey)
 
     for fk, channel in list(survey.freq_channels.items()):
-        ds = apply_correction_steps(channel.dataset, steps)
+        ds = apply_correction_steps(channel.dataset, steps, step_params=step_params)
         survey.add_frequency(fk, ds)
 
     return survey

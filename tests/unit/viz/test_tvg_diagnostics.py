@@ -13,8 +13,11 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from sidescanpy.analysis.tvg_diagnostics import fit_hardware_tvg_curve
+from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 from sidescanpy.viz.tvg_diagnostics import (
     plot_altitude_bin_comparison,
+    plot_candidate_fit,
     plot_mean_vs_range,
     plot_multi_frequency_comparison,
     plot_per_ping_profiles,
@@ -136,4 +139,42 @@ class TestPlotAltitudeBinComparison:
         )
         assert len(ax.get_lines()) == 2
         assert ax.get_legend() is not None
+        plt.close(fig)
+
+
+@pytest.fixture
+def sample_fit_result():
+    r = np.arange(1.0, 80.0, 1.0)
+    params = TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.15)
+    mean = 50.0 - tvg_gain_db(r, params)
+    binned = pd.DataFrame({
+        "range_min_m": r - 0.5, "range_max_m": r + 0.5,
+        "mean": mean, "count": np.full_like(r, 1000, dtype=int),
+    })
+    return fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15)
+
+
+class TestPlotCandidateFit:
+    def test_returns_fig_ax(self, sample_fit_result):
+        fig, ax = plot_candidate_fit(
+            sample_fit_result.best,
+            sample_fit_result.observed_range_m,
+            sample_fit_result.observed_loss_db,
+        )
+        assert fig is not None
+        assert ax is not None
+        plt.close(fig)
+
+    def test_repeated_calls_show_observed_once(self, sample_fit_result):
+        fig, ax = plt.subplots()
+        for i, candidate in enumerate(sample_fit_result.candidates):
+            plot_candidate_fit(
+                candidate,
+                sample_fit_result.observed_range_m,
+                sample_fit_result.observed_loss_db,
+                ax=ax,
+                show_observed=(i == 0),
+            )
+        # 1 observed line + 4 candidate lines, not 4 observed + 4 candidate.
+        assert len(ax.get_lines()) == 5
         plt.close(fig)

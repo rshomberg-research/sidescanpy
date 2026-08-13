@@ -17,6 +17,9 @@ import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
+from sidescanpy.analysis.tvg_diagnostics import TVGCandidateFit
+from sidescanpy.processing.radiometric import tvg_gain_db
+
 logger = logging.getLogger(__name__)
 
 
@@ -190,4 +193,64 @@ def plot_altitude_bin_comparison(
     if title:
         ax.set_title(title)
     ax.legend()
+    return fig, ax
+
+
+def plot_candidate_fit(
+    fit: TVGCandidateFit,
+    observed_range_m: np.ndarray,
+    observed_loss_db: np.ndarray,
+    ax: Axes | None = None,
+    *,
+    color: str | None = None,
+    show_observed: bool = True,
+    title: str | None = None,
+) -> tuple[Figure, Axes]:
+    """
+    Overlay one `analysis.tvg_diagnostics.fit_hardware_tvg_curve()`
+    candidate's fitted model against the observed raw-loss curve it was
+    fit against.
+
+    Call once per candidate on the same `ax` (`result.candidates` from
+    `TVGCandidateFitResult`) — `show_observed=True` on the first call
+    only, `False` on the rest, so the observed curve is drawn once and
+    each candidate's fitted line overlays it. Mirrors
+    `plot_mean_vs_range`'s existing "call twice for before/after" idiom,
+    generalized to "call once per candidate."
+
+    Parameters
+    ----------
+    fit : TVGCandidateFit
+        One candidate from `TVGCandidateFitResult.candidates` (or `.best`).
+    observed_range_m, observed_loss_db : np.ndarray
+        `TVGCandidateFitResult.observed_range_m`/`.observed_loss_db` —
+        the same arrays for every candidate fit from one
+        `fit_hardware_tvg_curve()` call, so passing a different
+        candidate on repeated calls only changes the overlaid line.
+    show_observed : bool, default True
+        Plot the observed curve itself. Set `False` on repeat calls
+        against the same `ax` to avoid redrawing it once per candidate.
+    """
+    fig, ax = _new_fig_ax(ax)
+
+    if show_observed:
+        ax.plot(
+            observed_range_m, observed_loss_db,
+            ".", color="black", markersize=3, alpha=0.5, label="observed",
+        )
+
+    model_curve = tvg_gain_db(np.clip(observed_range_m, fit.params.min_range_m, None), fit.params)
+    i_ref = int(np.argmin(np.abs(observed_range_m - fit.r_ref_m)))
+    model_loss = fit.scale * (model_curve - model_curve[i_ref])
+    ax.plot(
+        observed_range_m, model_loss, "--", color=color,
+        label=f"{fit.name} (scale={fit.scale:.2f}, RMSE={fit.rmse_db:.2f}dB)",
+    )
+    ax.axvspan(fit.r_ref_m, fit.r_fit_max_m, alpha=0.05, color=color)
+
+    ax.set_xlabel("Range (m)")
+    ax.set_ylabel(f"Loss relative to {fit.r_ref_m:.1f}m (dB)")
+    if title:
+        ax.set_title(title)
+    ax.legend(fontsize=8)
     return fig, ax

@@ -10,13 +10,15 @@ math. Consumes `apply_tvg()`'s existing public API as-is.
 2026 rshomberg@uri.edu
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.pipeline import apply_correction_steps
-from sidescanpy.processing.radiometric import TVGParams, apply_tvg
+from sidescanpy.processing.radiometric import TVGParams, apply_tvg, tvg_gain_db
 
 _MIN_LINEAR = 1e-6
 
@@ -51,9 +53,12 @@ def before_after_backscatter(
         Valid frequency channel dataset with processing_level == "raw".
     params : TVGParams, optional
         Custom TVG parameters (e.g. for an absorption-coefficient sweep).
-        Passed directly to `apply_tvg()` — bypasses
-        `apply_correction_steps()`'s fixed step functions, which don't
-        expose a way to override TVG parameters.
+        Passed directly to `apply_tvg()` rather than through
+        `apply_correction_steps(ds_raw, {"tvg"}, step_params=...)` —
+        both now support custom `TVGParams` (`step_params` added
+        alongside this module's `fit_hardware_tvg_curve()`), this
+        function just has no reason to route through the extra
+        machinery for a single step it already calls directly.
 
     Returns
     -------
@@ -267,3 +272,284 @@ def bin_pings_by_altitude(
         label = f"altitude_{lo:.2f}_{hi:.2f}m"
         result[label] = ds.isel(ping=mask)
     return result
+
+
+# ============================================================
+# HARDWARE-TVG CANDIDATE FITTING
+# ============================================================
+#
+# What follows formalizes an investigation this project's own history
+# (CLAUDE.md Known Issue #4, and the "TVG Parameters or Sound Velocity?"
+# artifact it led to) did by hand: real sonar hardware appears to
+# pre-apply *partial* TVG correction to "raw" backscatter before it ever
+# reaches this library, and apply_tvg()'s own physics-based correction
+# then double-corrects whatever hardware already fixed. There's no way
+# to know this in advance for a new survey — the functions below fit a
+# small set of candidate explanations against that survey's own observed
+# raw-vs-range curve and report which one the data actually looks like.
+
+_TVG_CANDIDATE_NAMES = ("flat", "spreading_only", "absorption_only", "full_physics")
+
+
+@dataclass(frozen=True)
+class TVGCandidateFit:
+    """One candidate hardware-correction hypothesis, fit against an
+    observed raw-backscatter-vs-range curve.
+
+    `scale` is the fitted multiplier on the candidate's model curve:
+    close to 1.0 means the observed data matches that candidate's model
+    at face value (e.g. `absorption_only` at scale~1 means the raw
+    signal decays exactly like uncompensated absorption loss alone, as
+    if hardware had already removed spreading loss); close to 0.0 means
+    that term contributes essentially nothing to what's observed, i.e.
+    hardware likely already compensated for it.
+    """
+
+    name: str  # one of _TVG_CANDIDATE_NAMES
+    params: TVGParams  # TVGParams used to generate this candidate's model curve
+    scale: float
+    rmse_db: float
+    r_ref_m: float
+    r_fit_max_m: float
+    n_bins_used: int
+
+
+@dataclass(frozen=True)
+class TVGCandidateFitResult:
+    """All four candidate fits for one raw-vs-range curve, plus the winner."""
+
+    candidates: list[TVGCandidateFit]  # fixed order: _TVG_CANDIDATE_NAMES
+    best: TVGCandidateFit
+    observed_range_m: np.ndarray  # bin centers used for the fit (for plotting)
+    observed_loss_db: np.ndarray  # observed_loss(r) at those centers (for plotting)
+
+
+def fit_hardware_tvg_curve(
+    binned: pd.DataFrame,
+    *,
+    spreading_loss_db: float = 20.0,
+    absorption_db_per_m: float,
+    r_ref_m: float | None = None,
+    r_fit_max_m: float | None = None,
+    min_count_for_r_ref: int = 30,
+    fit_fraction: float = 0.6,
+    r_ref_search_fraction: float = 0.5,
+) -> TVGCandidateFitResult:
+    """
+    Fit four candidate hardware-correction models against an observed
+    raw-backscatter-vs-range curve, to characterize what a sonar's
+    hardware/acquisition chain may have already applied before this
+    library ever saw the data.
+
+    Each candidate is one term (or combination) of `tvg_gain_db()`'s own
+    formula, reused directly rather than re-derived — no formula
+    duplication:
+
+    - `"flat"`: neither term present (hardware fully compensated both).
+    - `"spreading_only"`: only `20*log10(R)` present (hardware already
+      removed absorption loss, spreading loss remains).
+    - `"absorption_only"`: only `2*absorption_db_per_m*R` present
+      (hardware already removed spreading loss, absorption remains).
+    - `"full_physics"`: both terms present, i.e. hardware applied no
+      correction at all — the raw signal decays exactly per the
+      physically-grounded model `apply_tvg()` assumes.
+
+    Each candidate is fit with **one free scale parameter,
+    independently** — this deliberately does NOT fit a single joint
+    2-parameter regression over spreading and absorption simultaneously.
+    A joint fit was tried during the investigation that motivated this
+    function and found poorly conditioned: over realistic range spans
+    the two terms are too collinear, producing wild, sign-flipped, or
+    physically uninterpretable coefficients even when the combined curve
+    visually fit well. Do not "improve" this into a joint fit without
+    re-deriving why that failed (see
+    `docs/planning/v0.13.0-tvg-term-selection-and-hardware-curve-fitting.md`).
+
+    Parameters
+    ----------
+    binned : pd.DataFrame
+        `mean_backscatter_vs_range()`'s own output, computed by the
+        caller on **raw** (uncorrected) backscatter — e.g.
+        `mean_backscatter_vs_range(ds_raw_or_reconstructed,
+        value_var="backscatter_db_raw", ...)` from
+        `before_after_backscatter()`'s output. This function does no
+        binning of its own; it only fits candidate curves to bins
+        already computed.
+    spreading_loss_db : float, default 20.0
+        Physical constant (spherical spreading) — rarely needs
+        overriding, unlike `absorption_db_per_m`.
+    absorption_db_per_m : float
+        No default: the `absorption_only`/`full_physics` candidates are
+        only meaningful if built from *this survey's actual*
+        frequency-appropriate coefficient. Callers should pass
+        `absorption_for_frequency(ds.attrs["freq_hz_start"])` explicitly
+        rather than rely on this function to guess it.
+    r_ref_m : float, optional
+        Reference range bin — `observed_loss(r) = mean[r_ref] - mean[r]`
+        is what every candidate is actually fit against, since
+        `tvg_gain_db()`'s absolute level has no meaning without an
+        unknown source-level/target-strength constant. Auto-selected
+        when `None` as the bin with the **maximum mean** among
+        `min_count_for_r_ref`-eligible bins that also fall within the
+        near-field search window (`r_ref_search_fraction`, below) — the
+        physically-motivated reference is the strongest observed return
+        (the near-nadir peak), not simply the first/nearest bin. Real
+        data has a blanking/ring-down artifact immediately at the start
+        of every ping (near-zero-range bins read anomalously *low*, not
+        high — see Known Issue #5) that a "first bin past some count"
+        rule would otherwise anchor on, inverting the sign of every fit.
+        Restricting the search to the near-field half (rather than the
+        full range) matters separately: on a survey where hardware has
+        already flattened the raw curve almost entirely (peak-to-trough
+        under ~1dB — pure measurement noise at that point, not a real
+        peak), an unrestricted global-max search can land on a
+        far-range bin purely by chance, which then collapses
+        `r_fit_max_m`'s window to a single bin (see `fit_fraction`) and
+        makes every candidate's fit degenerate (RMSE=0 for all of
+        them). Found on a real, genuinely-flat Klein survey.
+    r_fit_max_m : float, optional
+        End of the fit window (inclusive). Auto-selected when `None`
+        (see below). Bins beyond this are ignored by the fit (though
+        still returned in `observed_range_m`/`observed_loss_db` for
+        plotting the full curve).
+    min_count_for_r_ref : int, default 30
+        When auto-selecting `r_ref_m`, only consider bins with at least
+        this many samples — avoids anchoring the loss reference on a
+        thin, noisy bin whose mean is an unreliable estimate. Conservative
+        floor; lower only for very short/sparse ping ranges.
+    fit_fraction : float, default 0.6
+        When auto-selecting `r_fit_max_m`: `r_ref_m + fit_fraction *
+        (max_observed_range_m - r_ref_m)` — restricts the fit to a
+        contiguous near-to-mid window, deliberately excluding the
+        far-range tail, where Known Issue #6's noise-amplification
+        artifacts live and per-bin sample counts thin out. This is a
+        reasonable, inspectable heuristic, not a validated one —
+        callers investigating a real survey should still look at the
+        full curve (via the returned `observed_range_m`/
+        `observed_loss_db`, or `viz.tvg_diagnostics.plot_candidate_fit`)
+        and override `r_fit_max_m` directly if the auto-selected window
+        looks wrong for that survey.
+    r_ref_search_fraction : float, default 0.5
+        When auto-selecting `r_ref_m`, only consider bins within this
+        fraction of the observed range span from its near edge (e.g.
+        0.5 = the near-field half). Keeps the auto-selected reference
+        physically near-field even when the true peak is only a
+        fraction of a dB above the noise floor everywhere else — see
+        `r_ref_m`'s docstring above for the failure mode this prevents.
+        Falls back to the full range if no eligible bin falls in that
+        window (shouldn't happen with realistic range coverage).
+
+    Returns
+    -------
+    TVGCandidateFitResult
+
+    Raises
+    ------
+    ValueError
+        If `binned` is empty, or no bin has `count >= min_count_for_r_ref`.
+    """
+    if binned.empty:
+        raise ValueError("fit_hardware_tvg_curve: `binned` has no rows")
+
+    range_centers = ((binned["range_min_m"] + binned["range_max_m"]) / 2.0).to_numpy()
+    means = binned["mean"].to_numpy()
+    counts = binned["count"].to_numpy()
+
+    order = np.argsort(range_centers)
+    range_centers, means, counts = range_centers[order], means[order], counts[order]
+
+    if r_ref_m is None:
+        eligible = np.where(counts >= min_count_for_r_ref)[0]
+        if eligible.size == 0:
+            raise ValueError(
+                f"fit_hardware_tvg_curve: no bin has count >= {min_count_for_r_ref}; "
+                "lower min_count_for_r_ref or pass r_ref_m explicitly"
+            )
+        # Restrict to the near-field half (or r_ref_search_fraction) of
+        # the range span -- see r_ref_search_fraction's docstring for
+        # why an unrestricted global-max search can fail on real,
+        # near-flat data. Falls back to all eligible bins if none fall
+        # in that window.
+        near_field_cutoff = range_centers.min() + r_ref_search_fraction * (
+            range_centers.max() - range_centers.min()
+        )
+        near_field_eligible = eligible[range_centers[eligible] <= near_field_cutoff]
+        search_pool = near_field_eligible if near_field_eligible.size > 0 else eligible
+        # Strongest observed return among eligible bins, not merely the
+        # first/nearest one -- see the "Real data has a blanking/
+        # ring-down artifact" note in the docstring for why "first bin
+        # past some count" silently anchors on an artifact instead.
+        best_eligible = search_pool[np.argmax(means[search_pool])]
+        r_ref_m = float(range_centers[best_eligible])
+
+    if r_fit_max_m is None:
+        r_fit_max_m = r_ref_m + fit_fraction * (float(range_centers.max()) - r_ref_m)
+
+    i_ref = int(np.argmin(np.abs(range_centers - r_ref_m)))
+    observed_loss_db = means[i_ref] - means
+
+    fit_mask = (range_centers >= r_ref_m) & (range_centers <= r_fit_max_m)
+    n_bins_used = int(fit_mask.sum())
+
+    param_sets = {
+        "flat": TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0),
+        "spreading_only": TVGParams(spreading_loss_db=spreading_loss_db, absorption_db_per_m=0.0),
+        "absorption_only": TVGParams(spreading_loss_db=0.0, absorption_db_per_m=absorption_db_per_m),
+        "full_physics": TVGParams(spreading_loss_db=spreading_loss_db, absorption_db_per_m=absorption_db_per_m),
+    }
+
+    # tvg_gain_db() takes range_m >= 0 with no singularity at r=0 for
+    # log10 only when r>0 -- clip at the same min_range_m floor
+    # apply_tvg()/apply_tvg_to_amplitude() already use, purely to avoid
+    # log10(0) on a possible zero-range bin center; this has no bearing
+    # on the fit itself (both model and reference are clipped identically).
+    range_for_model = np.clip(range_centers, TVGParams().min_range_m, None)
+
+    candidates = []
+    for name in _TVG_CANDIDATE_NAMES:
+        params = param_sets[name]
+        model_curve = tvg_gain_db(range_for_model, params)
+        # tvg_gain_db is a *gain* (grows with range, meant to compensate
+        # loss); a raw signal that still carries this term uncompensated
+        # is correspondingly *weaker* at longer range by the same
+        # amount. observed_loss_db is defined ref-minus-r (positive =
+        # weaker at r than at r_ref), so the model must match that sign:
+        # r-minus-ref, the opposite subtraction order from the gain
+        # curve's own natural (increasing) direction.
+        model_loss = model_curve - model_curve[i_ref]
+
+        if name == "flat":
+            # Model is identically zero everywhere -- no free scale to
+            # fit (scale*0 == 0 for any scale), so report scale=0.0 and
+            # RMSE directly against the observed loss itself.
+            scale = 0.0
+            residual = observed_loss_db[fit_mask]
+        else:
+            m = model_loss[fit_mask]
+            o = observed_loss_db[fit_mask]
+            denom = np.dot(m, m)
+            scale = float(np.dot(m, o) / denom) if denom > 0 else 0.0
+            residual = scale * m - o
+
+        rmse_db = float(np.sqrt(np.mean(residual**2))) if residual.size else float("nan")
+
+        candidates.append(
+            TVGCandidateFit(
+                name=name,
+                params=params,
+                scale=scale,
+                rmse_db=rmse_db,
+                r_ref_m=r_ref_m,
+                r_fit_max_m=r_fit_max_m,
+                n_bins_used=n_bins_used,
+            )
+        )
+
+    best = min(candidates, key=lambda c: c.rmse_db)
+
+    return TVGCandidateFitResult(
+        candidates=candidates,
+        best=best,
+        observed_range_m=range_centers,
+        observed_loss_db=observed_loss_db,
+    )

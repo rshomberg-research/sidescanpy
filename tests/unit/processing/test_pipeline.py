@@ -6,6 +6,9 @@ ladder (run_pipeline) and explicit step-set primitive
 2026 rshomberg@uri.edu
 """
 
+import json
+
+import numpy as np
 import pytest
 
 from sidescanpy.processing.pipeline import (
@@ -15,6 +18,7 @@ from sidescanpy.processing.pipeline import (
     run_correction_steps,
     run_pipeline,
 )
+from sidescanpy.processing.radiometric import TVGParams
 
 
 def _levels(survey):
@@ -103,6 +107,22 @@ class TestRunCorrectionSteps:
         result = run_correction_steps(sample_multi_frequency_survey, VALID_STEPS)
         assert _has_var(result, "latitude_per_sample")
 
+    def test_step_params_reaches_every_frequency_channel(self, sample_multi_frequency_survey):
+        zeroed = TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0)
+        result = run_correction_steps(
+            sample_multi_frequency_survey, {"tvg"},
+            step_params={"tvg": {"params": zeroed}},
+        )
+        for ch in result.freq_channels.values():
+            history = json.loads(ch.dataset.attrs["processing_history"])
+            tvg_entry = next(h for h in history if h["step"] == "tvg_correction")
+            assert tvg_entry["params"]["spreading_loss_db"] == 0.0
+            assert tvg_entry["params"]["absorption_db_per_m"] == 0.0
+
+    def test_step_params_none_is_backward_compatible(self, sample_multi_frequency_survey):
+        result = run_correction_steps(sample_multi_frequency_survey, {"tvg"}, step_params=None)
+        assert set(_levels(result).values()) == {"radiometric"}
+
 
 class TestApplyCorrectionSteps:
     """apply_correction_steps operates on a bare channel dataset, not a
@@ -132,6 +152,34 @@ class TestApplyCorrectionSteps:
     def test_unknown_step_raises(self, sample_dataset):
         with pytest.raises(ValueError, match="Unknown correction step"):
             apply_correction_steps(sample_dataset, {"bogus"})
+
+    def test_step_params_overrides_tvg_params(self, sample_dataset):
+        zeroed = TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0)
+        result = apply_correction_steps(
+            sample_dataset, {"tvg"}, step_params={"tvg": {"params": zeroed}}
+        )
+        history = json.loads(result.attrs["processing_history"])
+        tvg_entry = next(h for h in history if h["step"] == "tvg_correction")
+        assert tvg_entry["params"]["spreading_loss_db"] == 0.0
+        assert tvg_entry["params"]["absorption_db_per_m"] == 0.0
+
+        # Both terms zeroed -> no gain added, backscatter_intensity is
+        # exactly the plain linear-to-dB conversion of the raw amplitude.
+        expected_db = 20.0 * np.log10(np.clip(sample_dataset["backscatter_intensity"].values, 1e-6, None))
+        assert np.allclose(result["backscatter_intensity"].values, expected_db)
+
+    def test_step_params_none_is_backward_compatible(self, sample_dataset):
+        with_none = apply_correction_steps(sample_dataset, {"tvg"}, step_params=None)
+        without_kwarg = apply_correction_steps(sample_dataset, {"tvg"})
+        assert with_none["backscatter_intensity"].equals(without_kwarg["backscatter_intensity"])
+
+    def test_step_params_entry_for_unrequested_step_is_harmless(self, sample_dataset):
+        # "georef" isn't in the requested step set -- its entry in
+        # step_params must simply be unused, not an error.
+        result = apply_correction_steps(
+            sample_dataset, {"tvg"}, step_params={"georef": {"bogus_kwarg": 1}}
+        )
+        assert result.attrs["processing_level"] == "radiometric"
 
 
 class TestRunPipeline:
