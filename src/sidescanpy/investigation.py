@@ -86,11 +86,14 @@ class InvestigationResult:
     def summary_row(self) -> dict[str, Any]:
         """One flat dict per source, matching the handoff's comparison-table columns."""
         s1, s2, s3, s4, s5 = (self.stages.get(f"stage{i}") for i in range(1, 6))
+        s2_5 = self.stages.get("stage2_5")
         return {
             "source": self.source_path,
             "freq_key": self.freq_key,
             "dtype": s1.metrics.get("dtype") if s1 else None,
             "nadir": s2.classification if s2 else None,
+            "weak_zone_physical": s2_5.classification if s2_5 else None,
+            "weak_zone_implied_angle_deg": s2_5.metrics.get("implied_angle_deg_median") if s2_5 else None,
             "usable_range_m": s3.metrics.get("usable_range_m") if s3 else None,
             "best_fit_model": s4.metrics.get("best_candidate") if s4 else None,
             "tvg_status": s4.classification if s4 else None,

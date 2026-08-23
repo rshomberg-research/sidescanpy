@@ -606,7 +606,19 @@ def stage2_nadir(
             metrics["geometric_bottom_contact_sample_p10"] = float(np.percentile(finite_first, 10))
             metrics["geometric_bottom_contact_sample_p90"] = float(np.percentile(finite_first, 90))
         else:
-            notes.append(f"{range_var!r} present but has no finite values — geometric boundary not computed.")
+            note = f"{range_var!r} present but has no finite values — geometric boundary not computed."
+            if "slant_range_m" in ds and "altitude_m" in ds:
+                slant_max = float(np.nanmax(ds["slant_range_m"].values)) if np.isfinite(ds["slant_range_m"].values).any() else float("nan")
+                altitude_min = float(np.nanmin(ds["altitude_m"].values)) if np.isfinite(ds["altitude_m"].values).any() else float("nan")
+                if np.isfinite(slant_max) and np.isfinite(altitude_min) and slant_max < altitude_min:
+                    note += (
+                        f" Likely cause: this channel's max recorded slant range ({slant_max:.1f}m) "
+                        f"never reaches the vehicle's own altitude ({altitude_min:.1f}m min) at any "
+                        f"sample -- the entire recorded window is water column for every ping, the beam "
+                        f"never gets far enough out to hit bottom (a short-range acquisition setting on "
+                        f"this channel vs. how high the vehicle was actually flying, not a processing bug)."
+                    )
+            notes.append(note)
     else:
         notes.append(f"{range_var!r} not found — geometric boundary not computed (run compute_geometric_ranges first).")
 
@@ -693,6 +705,9 @@ def stage2_5_beam_geometry(
     *,
     ping_idx: int | None = None,
     candidate_angles_from_vertical_deg: tuple[float, ...] = (0.0, 15.0, 30.0, 45.0, 60.0, 70.0, 80.0),
+    near_vertical_threshold_deg: float = 5.0,
+    max_consistent_std_deg: float = 15.0,
+    min_valid_fraction: float = 0.2,
 ) -> StageResult:
     """
     Test a competing explanation for the Stage 2 "weak zone" (the gap
@@ -731,9 +746,38 @@ def stage2_5_beam_geometry(
     which this function cannot distinguish on its own (no independent
     depth/altitude truth source is used) — see the returned notes.
 
-    This function does not decide between the hypotheses; it computes
-    the numbers needed to look at the evidence directly (via
-    `viz.investigation.plot_stage2_5_beam_geometry`) and judge.
+    **Reports a `classification` for this, computed across every ping
+    in `ds` (not just `ping_idx`), not left implicit** — the earlier
+    `survey-a` finding (25 deg HF / 18 deg LF, i.e. genuinely
+    tilted) is one dataset's answer, not a property of this stage or a
+    default assumption; a different survey's hardware/mounting can
+    come out the other way, and the automated pipeline needs to say
+    which one it found rather than requiring a human to re-read the
+    diagnostic plot every time:
+
+    - `"water_column_tilted_beam"` — median implied angle is clearly
+      nonzero (>= `near_vertical_threshold_deg`) and consistent across
+      pings/channels (std <= `max_consistent_std_deg`). The Stage 2
+      "weak zone" is best read as *water column*, not weak bottom
+      backscatter — the beam simply isn't illuminating that range at
+      all, until its own footprint reaches the seafloor.
+    - `"near_grazing_weak_backscatter"` — median implied angle is near
+      0 (beam close to straight down). The weak zone is best read as
+      genuine near-grazing-incidence weak backscatter, not a distinct
+      off-vertical water column — Stage 2's original assumption holds
+      here.
+    - `"ambiguous"` — implied angle is inconsistent across pings/
+      channels (high std) or too close to horizontal to trust; neither
+      reading is well supported.
+    - `"undetermined"` — too few pings/channels yielded a valid implied
+      angle (bad altitude, mostly-impossible geometry) to classify at
+      all.
+
+    This is a heuristic over straight-line geometry with no real
+    beam-pattern modeling — treat it as a strong prior to report and
+    look at, not a substitute for a human checking
+    `viz.investigation.plot_stage2_5_beam_geometry` on a genuinely
+    unfamiliar dataset.
 
     Nadir convention note: this survey's nadir reads as a *gap*
     (Stage 2). A survey where nadir instead reads *bright* implies a
@@ -757,12 +801,27 @@ def stage2_5_beam_geometry(
         Attitude-invariant range, used for the implied-angle
         back-calculation.
     ping_idx : int, optional
-        Defaults to the middle ping, matching Stage 2's other
-        single-ping plots.
+        Which single ping's implied angle/geometry to report in
+        `metrics["implied"]` for the diagram plot. Defaults to the
+        middle ping, matching Stage 2's other single-ping plots — the
+        `classification` below is independent of this choice, computed
+        across every ping instead.
     candidate_angles_from_vertical_deg : tuple of float
         Straight-line depression angles to test, measured from
         vertical (0 = nadir-pointing, matching Stage 2's original
         assumption; larger = more tilted toward the horizon).
+    near_vertical_threshold_deg : float, default 5.0
+        Median cross-ping implied angle below this counts as
+        "near-vertical" (`near_grazing_weak_backscatter`), at or above
+        it counts as a genuine tilt.
+    max_consistent_std_deg : float, default 15.0
+        Cross-ping implied-angle std-dev above this is "too
+        inconsistent to trust" (`ambiguous`), regardless of the median.
+    min_valid_fraction : float, default 0.2
+        Fraction of (ping, channel) pairs that must yield a valid
+        implied angle (finite altitude, `slant_range >= altitude`,
+        `first_strong_return_sample` detected) before classifying at
+        all — below this, `"undetermined"`.
 
     Returns
     -------
@@ -770,9 +829,13 @@ def stage2_5_beam_geometry(
         `metrics["candidates"]` is a list of dicts (one per candidate
         angle): `angle_from_vertical_deg`, `angle_from_horizontal_deg`,
         `predicted_across_track_m`, `predicted_slant_range_m`.
-        `metrics["implied"]` holds the back-calculated angle per
-        channel (`None` where undefined). `data` carries nothing extra
-        — the plotting layer reads `ds`/`stage2` directly.
+        `metrics["implied"]` holds the back-calculated angle for
+        `ping_idx` only, per channel (`None` where undefined) — for the
+        diagram plot. `metrics["implied_angle_deg_median"]`,
+        `["implied_angle_deg_std"]`, `["implied_angle_valid_fraction"]`
+        are the cross-ping aggregate this stage's `classification` is
+        actually based on. `data` carries nothing extra — the plotting
+        layer reads `ds`/`stage2` directly.
     """
     for required in (range_var, slant_range_var, "altitude_m"):
         if required not in ds:
@@ -841,13 +904,92 @@ def stage2_5_beam_geometry(
                     )
         implied[label] = entry
 
+    # Cross-ping classification -- the single ping_idx entry above is
+    # for the diagram plot only; the classification the automated
+    # pipeline reports is based on every ping, not one, since a single
+    # ping's detector noise is a weak basis for "is this survey's beam
+    # tilted or not."
+    implied_angle_deg_median = None
+    implied_angle_deg_std = None
+    implied_angle_valid_fraction = 0.0
+    classification = "undetermined"
+
+    if first_strong is not None:
+        n_p, n_c = first_strong.shape
+        n_samples = ds.sizes["sample"]
+        altitude_all = ds["altitude_m"].values.astype(np.float64)  # (ping,)
+        altitude_valid = np.isfinite(altitude_all) & (altitude_all > 0)
+
+        boundary_valid = np.isfinite(first_strong) & altitude_valid[:, None]
+        b_idx = np.where(boundary_valid, np.round(first_strong), 0).astype(int)
+        b_idx = np.clip(b_idx, 0, n_samples - 1)
+
+        slant_arr = ds[slant_range_var].values  # (ping, channel, sample)
+        p_grid, c_grid = np.meshgrid(np.arange(n_p), np.arange(n_c), indexing="ij")
+        slant_at_boundary = slant_arr[p_grid, c_grid, b_idx]  # (ping, channel)
+
+        altitude_bc = np.broadcast_to(altitude_all[:, None], (n_p, n_c))
+        geom_valid = boundary_valid & np.isfinite(slant_at_boundary) & (slant_at_boundary >= altitude_bc)
+
+        cos_angle = np.full((n_p, n_c), np.nan)
+        np.divide(altitude_bc, slant_at_boundary, out=cos_angle, where=geom_valid)
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle_from_vertical_all = np.degrees(np.arccos(cos_angle))
+        angle_from_vertical_all = np.where(geom_valid, angle_from_vertical_all, np.nan)
+
+        finite_angles = angle_from_vertical_all[np.isfinite(angle_from_vertical_all)]
+        implied_angle_valid_fraction = float(finite_angles.size / angle_from_vertical_all.size)
+        if finite_angles.size > 0:
+            implied_angle_deg_median = float(np.median(finite_angles))
+            implied_angle_deg_std = float(np.std(finite_angles))
+
+        if implied_angle_deg_median is None or implied_angle_valid_fraction < min_valid_fraction:
+            classification = "undetermined"
+            notes.append(
+                f"Only {implied_angle_valid_fraction:.0%} of (ping, channel) pairs yielded a "
+                f"valid implied angle -- too few to classify the weak zone's physical nature "
+                f"(need >= {min_valid_fraction:.0%})."
+            )
+        elif implied_angle_deg_median < near_vertical_threshold_deg:
+            classification = "near_grazing_weak_backscatter"
+            notes.append(
+                f"Cross-ping implied angle: median {implied_angle_deg_median:.1f} deg from "
+                f"vertical (std {implied_angle_deg_std:.1f} deg, "
+                f"{implied_angle_valid_fraction:.0%} of pings/channels valid) -- close to "
+                f"straight down. The Stage 2 weak zone here is best read as genuine "
+                f"near-grazing-incidence weak backscatter, not a distinct off-vertical water "
+                f"column."
+            )
+        elif implied_angle_deg_std is not None and implied_angle_deg_std <= max_consistent_std_deg:
+            classification = "water_column_tilted_beam"
+            notes.append(
+                f"Cross-ping implied angle: median {implied_angle_deg_median:.1f} deg from "
+                f"vertical (std {implied_angle_deg_std:.1f} deg, "
+                f"{implied_angle_valid_fraction:.0%} of pings/channels valid) -- consistent "
+                f"with a genuinely tilted beam. The Stage 2 weak zone is best read as *water "
+                f"column*, not weak bottom backscatter: the beam isn't illuminating that "
+                f"range at all until its own footprint reaches the seafloor."
+            )
+        else:
+            classification = "ambiguous"
+            notes.append(
+                f"Cross-ping implied angle is inconsistent (median "
+                f"{implied_angle_deg_median:.1f} deg, std {implied_angle_deg_std:.1f} deg "
+                f"across {implied_angle_valid_fraction:.0%} valid pings/channels) -- neither "
+                f"a clean tilted-beam nor a clean straight-down interpretation is well "
+                f"supported for this survey."
+            )
+
     metrics = {
         "ping_idx": ping_idx,
         "altitude_m": altitude,
         "candidates": candidates,
         "implied": implied,
+        "implied_angle_deg_median": implied_angle_deg_median,
+        "implied_angle_deg_std": implied_angle_deg_std,
+        "implied_angle_valid_fraction": implied_angle_valid_fraction,
     }
-    return StageResult(stage="stage2_5_beam_geometry", metrics=metrics, notes=notes)
+    return StageResult(stage="stage2_5_beam_geometry", metrics=metrics, classification=classification, notes=notes)
 
 
 # ============================================================

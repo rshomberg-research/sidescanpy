@@ -186,6 +186,23 @@ class TestStage2Nadir:
         assert first_bottom.shape == (20, 2)
         assert np.all(np.isfinite(first_bottom))
 
+    def test_all_nan_ground_range_names_short_recorded_window_cause(self):
+        """Regression test for a real project-b finding: a channel
+        recorded with too short a range window for the vehicle's actual
+        altitude never geometrically reaches bottom anywhere -- the
+        resulting all-NaN ground_range_m note should name that specific,
+        diagnosable cause (slant_range never exceeds altitude) rather
+        than a generic 'no finite values', so a hands-off pipeline run
+        is self-diagnosing. n_samples=10 -> max slant_range = 9*0.75 =
+        6.75m, well under the fixture's altitude=10.0m."""
+        ds = _make_raw_dataset(n_pings=10, n_samples=10)
+        ds = compute_geometric_ranges(ds)
+        assert not np.isfinite(ds["ground_range_m"].values).any()  # confirms the setup
+
+        result = stage2_nadir(ds, nadir_n_samples=2)
+
+        assert any("never reaches the vehicle's own altitude" in n for n in result.notes)
+
     def test_strong_return_boundary_too_close_to_start_skips_step_check(self):
         """Constant backscatter everywhere: detect_first_strong_return
         correctly reports the strong return starting essentially at
@@ -295,6 +312,77 @@ class TestStage2_5BeamGeometry:
         for entry in result.metrics["implied"].values():
             assert entry["angle_from_vertical_deg"] is None
         assert any("geometrically" in n for n in result.notes)
+
+    @staticmethod
+    def _make_angle_ds(angle_deg_per_ping: np.ndarray, *, altitude: float = 10.0) -> tuple[xr.Dataset, StageResult]:
+        """Directly construct slant_range_m so the implied angle at
+        boundary sample 0 is exactly `angle_deg_per_ping[p]` for every
+        ping/channel -- bypasses compute_geometric_ranges' coarse
+        (0.75m/sample) discretization, which can't hit small target
+        angles at an integer sample boundary."""
+        n_pings = angle_deg_per_ping.shape[0]
+        n_channels, n_samples = 2, 5
+        slant_at_zero = altitude / np.cos(np.deg2rad(angle_deg_per_ping))
+        slant = np.ones((n_pings, n_channels, n_samples), dtype=np.float64) * 1000.0
+        slant[:, :, 0] = slant_at_zero[:, None]
+        across = np.zeros((n_pings, n_channels, n_samples), dtype=np.float64)
+        ds = xr.Dataset(
+            {
+                "slant_range_m": (("ping", "channel", "sample"), slant),
+                "across_track_m": (("ping", "channel", "sample"), across),
+                "altitude_m": (("ping",), np.full(n_pings, altitude)),
+            }
+        )
+        boundary = np.zeros((n_pings, n_channels))
+        stage2 = StageResult(stage="stage2_nadir", metrics={}, data={"first_strong_return_sample": boundary})
+        return ds, stage2
+
+    def test_classification_water_column_tilted_beam(self):
+        angles = np.full(40, 30.0)  # consistent, clearly nonzero tilt
+        ds, stage2 = self._make_angle_ds(angles)
+
+        result = stage2_5_beam_geometry(ds, stage2)
+
+        assert result.classification == "water_column_tilted_beam"
+        assert result.metrics["implied_angle_deg_median"] == pytest.approx(30.0, abs=0.1)
+        assert result.metrics["implied_angle_valid_fraction"] == pytest.approx(1.0)
+
+    def test_classification_near_grazing_weak_backscatter(self):
+        angles = np.full(40, 2.0)  # near-vertical
+        ds, stage2 = self._make_angle_ds(angles)
+
+        result = stage2_5_beam_geometry(ds, stage2)
+
+        assert result.classification == "near_grazing_weak_backscatter"
+        assert result.metrics["implied_angle_deg_median"] == pytest.approx(2.0, abs=0.1)
+
+    def test_classification_ambiguous_when_inconsistent(self):
+        rng = np.random.default_rng(11)
+        angles = rng.uniform(5.0, 85.0, size=60)  # wide spread -> high std
+        ds, stage2 = self._make_angle_ds(angles)
+
+        result = stage2_5_beam_geometry(ds, stage2)
+
+        assert result.classification == "ambiguous"
+        assert result.metrics["implied_angle_deg_std"] > 15.0
+
+    def test_classification_undetermined_when_mostly_invalid(self):
+        n_pings, n_channels, n_samples = 20, 2, 5
+        # slant_range_m < altitude everywhere -- every entry geometrically impossible.
+        ds = xr.Dataset(
+            {
+                "slant_range_m": (("ping", "channel", "sample"), np.full((n_pings, n_channels, n_samples), 1.0)),
+                "across_track_m": (("ping", "channel", "sample"), np.zeros((n_pings, n_channels, n_samples))),
+                "altitude_m": (("ping",), np.full(n_pings, 10.0)),
+            }
+        )
+        boundary = np.zeros((n_pings, n_channels))
+        stage2 = StageResult(stage="stage2_nadir", metrics={}, data={"first_strong_return_sample": boundary})
+
+        result = stage2_5_beam_geometry(ds, stage2)
+
+        assert result.classification == "undetermined"
+        assert result.metrics["implied_angle_valid_fraction"] == pytest.approx(0.0)
 
 
 class TestStage3UsableRange:

@@ -1130,6 +1130,108 @@ it).
   masks before boundary/leaves rest untouched, only masks vars present,
   doesn't mutate the input dataset). Full suite: 1187 passing / 36
   skipped.
+- ✅ **Stage 2.5 now classifies the weak zone's physical interpretation
+  automatically, computed across every ping, not left implicit
+  (2026-08-23, user pushback: "you are still referring to the water
+  column as a weak zone... this may not be the case in other datasets,
+  the automated pipeline should spit that out").** `stage2_5_beam_geometry()`
+  gained a `classification` (`"water_column_tilted_beam"` /
+  `"near_grazing_weak_backscatter"` / `"ambiguous"` /
+  `"undetermined"`), based on the cross-ping median/std of the implied
+  angle (vectorized across every ping's own
+  `first_strong_return_sample`, not just the single `ping_idx` used for
+  the diagram plot — a single ping's detector noise is a weak basis for
+  a survey-wide conclusion). Surfaced in `InvestigationResult.summary_row()`
+  as `weak_zone_physical`/`weak_zone_implied_angle_deg`, so it shows up
+  in the CLI's printed summary and `summary.json` without digging into
+  a specific stage's metrics. Real-data re-run on `survey-a`:
+  median implied angle 64.6°/73.0° from vertical (std 0.8°/1.0° across
+  8000 pings, 100% valid) → `water_column_tilted_beam` both channels —
+  matches the earlier single-ping 25°/18°-from-horizontal finding
+  almost exactly (`90 - 64.6 = 25.4`, `90 - 73.0 = 17.0`), confirming
+  the aggregate computation is consistent with the original manual
+  read. Tests: `TestStage2_5BeamGeometry` gained 4 classification tests
+  (one per outcome, using a new `_make_angle_ds` helper that directly
+  constructs `slant_range_m` for an exact target angle, bypassing
+  `compute_geometric_ranges`' coarse 0.75m/sample discretization which
+  can't hit small target angles). Full suite: 1191 passing / 36
+  skipped.
+- ✅ **Battle-tested the pipeline hands-off across 6 more real surveys
+  beyond `survey-a` (2026-08-23)** — 2 more `project-a` JSF
+  surveys (`unknown`, `20250417-Unknown`) and 4 `project-b` Klein SDF
+  surveys (`survey-b`, `site-c survey`,
+  `site-d`, `site-e`), 14 frequency-channel runs
+  total, **zero crashes**, both raw `.jsf`/`.sdf` files (never
+  converted) and already-converted `.ss.h5` accepted directly with no
+  manual intervention — the CLI already supported this
+  (`_load_channel_dataset` dispatches on extension), confirmed for the
+  first time on genuinely fresh files this session. Real findings, not
+  hypothetical:
+  - **JSF (`project-a`, nadir=`gap`) generalizes cleanly**: both new
+    surveys reproduce `survey-a`'s shape almost exactly —
+    `water_column_tilted_beam`, clean monotonic usable-range decay,
+    sensible `usable_range_m` (34m/26m and 28m/46m). The tilted-beam
+    finding isn't a one-survey fluke; it's an EdgeTech-hardware-wide
+    characteristic on every JSF survey checked so far.
+  - **Klein SDF (`project-b`, nadir=`bright_spike` on every survey
+    checked) is a genuinely different animal, not just a cosmetic
+    nadir-handling difference — confirms the user's suspicion.**
+    `detect_first_strong_return`'s core assumption (weak near range,
+    strong far range, detect the transition) is violated by a bright
+    nadir: the very first samples are the *brightest* part of the
+    ping (a real specular return, confirmed by direct inspection of
+    `stage2/nadir_zoom.png`), so the detector fires at sample ≈0 on
+    nearly every ping — not a real "first bottom contact," a spurious
+    trigger on the nadir spike itself. **The existing safety nets
+    correctly catch this rather than silently drawing a wrong
+    conclusion**: the "impossible geometry" check (sample-0's slant
+    range is always less than altitude) flags nearly every ping, so
+    `implied_angle_valid_fraction` stays under the 20% threshold and
+    Stage 2.5 correctly reports `undetermined` rather than a false
+    `water_column_tilted_beam`/`near_grazing_weak_backscatter`. Treat
+    any `first_strong_return_sample ≈ 0` finding on bright-nadir data
+    as suspect by default, not confirmation that real bottom starts at
+    nadir.
+  - **`usable_range_m` came back `None` on all 6 Klein SDF
+    frequency-channels tested — a real, reproducible format
+    characteristic, confirmed root-caused, not a bug:** two distinct
+    mechanisms, both found by direct inspection, not guessed.
+    (1) One channel (`site-b`/900kHz) had **zero** finite
+    `ground_range_m` samples — its recorded window's max slant range
+    (13.4m) never reaches the vehicle's own altitude (17-31m) at *any*
+    sample, so geometrically nothing in that channel ever reaches
+    bottom (a short-range acquisition setting mismatched to how high
+    the vehicle was actually flying that pass, not a processing bug).
+    `stage2_nadir`'s all-NaN-`ground_range_m` note now names this
+    specific cause automatically when detectable, instead of a generic
+    "no finite values" (`TestStage2Nadir.test_all_nan_ground_range_names_short_recorded_window_cause`).
+    (2) On every other Klein channel, per-range-bin **median** stays
+    essentially flat/pinned at a single value across the *entire*
+    recorded window regardless of range (real numbers: 64.0 exactly,
+    repeated identically across three unrelated surveys/locations for
+    the 455kHz channel) — Stage 3's SNR calc is hardcoded to `median`
+    (`stage3_usable_range`, unlike Stage 4 which already has
+    `fit_value_col`), so `binned["median"] - noise_floor` is ~0
+    everywhere and SNR never crosses threshold. Checked whether `mean`
+    would do better (direct binning, with and without
+    `reject_outliers`): it doesn't — mean stays similarly flat
+    (69-91 across 56m) once outlier-contaminated far-range spikes are
+    stripped, so this isn't a value_col fix waiting to happen, it's
+    consistent with Klein's real-time AGC (independently confirmed
+    active via `_gain_factor`-style evidence — see Known Issue #6's
+    "2026-08-12 follow-up" above) having already flattened backscatter
+    within these particular short-range survey segments. **Not fixed
+    (correctly, by the user's own scope instruction this session: "you
+    should not be doing work on the actual pipeline... if that doesn't
+    work fix it" — investigated, root-caused, confirmed not a bug, so
+    left alone)** — if a real Klein-SDF usable-range need comes up
+    later, the fix is a `stage3_usable_range` `value_col` param
+    mirroring Stage 4's, not yet built since there's no evidence a
+    different statistic would actually help on the data checked so
+    far.
+  - Result artifact (cross-format comparison, all 7 surveys/14 runs):
+    see the `sidescan-data-investigation` skill's "Validated real-data
+    run" section for the link.
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
