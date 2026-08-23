@@ -1232,6 +1232,110 @@ it).
   - Result artifact (cross-format comparison, all 7 surveys/14 runs):
     see the `sidescan-data-investigation` skill's "Validated real-data
     run" section for the link.
+- ✅ **Terminology correction + a real nadir-noise-blanking fix + Stage
+  2.5 redesign (2026-08-23, same day, user physics correction: "you are
+  still messing some stuff up").** The battle test above surfaced a
+  genuinely wrong mental model, not just a naming nitpick — the user
+  corrected it directly:
+  - **"Geometric bottom contact" is actually just altitude** — slant
+    range crossing altitude isn't a bottom-contact boundary, it's
+    altitude re-expressed in sample units. Renamed throughout:
+    `geometric_bottom_contact_sample_*` → `altitude_sample_*`,
+    `first_strong_return_sample_*` → `first_bottom_return_sample_*`
+    (the detector was correctly finding the real bottom echo all
+    along, the old name undersold it), `geometric_to_strong_gap_sample_median`
+    → `altitude_to_bottom_gap_sample_median`. `detect_first_strong_return`
+    → `detect_first_bottom_return`.
+  - **The span between altitude and the first bottom return isn't
+    "weak near-grazing backscatter" — it's part of the nadir gap.** A
+    real beam's near edge is never at 0° from vertical, so that span
+    is simply never illuminated at all, same underlying reason as the
+    acquisition-blanking gap at the very start of the ping, not a
+    separate physical phenomenon. `mask_weak_zone()` → `mask_nadir_gap()`,
+    `weak_zone_n_excluded` → `nadir_gap_n_excluded`,
+    `exclude_weak_zone` → `exclude_nadir_gap` (all in
+    `analysis/investigation.py` and `investigation.py`).
+  - **New real processing step: `analysis/investigation.py: blank_nadir_noise()`
+    + `detect_nadir_noise_extent()`.** A high-noise burst sits right at
+    nadir on some hardware — pure electronics/ringdown noise, not a
+    return. EdgeTech already zeros this before a JSF file is written
+    (confirmed: JSF's nadir has always read as an exact-zero `gap`).
+    Klein/SDF doesn't, and — this was the user's key correction — what
+    the pipeline had been calling a bright-nadir "specular return" was
+    actually just this un-blanked noise, not a real echo.
+    `detect_nadir_noise_extent()` is the mirror image of
+    `detect_first_bottom_return` (finds where an initially strong
+    signal falls to a sustained low level, instead of where a weak
+    signal rises to a sustained high one), narrowed to a
+    `search_window` near the very start of the ping so a bright real
+    bottom return much further out can't inflate the threshold and
+    mask a genuinely short burst. `blank_nadir_noise()` zeros the
+    detected extent — verified idempotent (a no-op) on already-zero
+    JSF data via the same math (peak=0 → threshold=0 → sustained from
+    sample 0 → boundary=0). `run_investigation()` now calls this
+    automatically, before every other stage, no toggle (matches
+    `reconstruct_raw`/`compute_geometric_ranges`'s "always-on
+    preprocessing" convention, not a debatable option like
+    `reject_outliers`).
+  - **Stage 2.5 completely redesigned**: no longer sweeps a fixed
+    candidate-angle set (0/15/30/45/60/70/80° from vertical) and asks
+    which fits best. Now triangulates the beam's real **near edge**
+    (from the first bottom return + altitude, cross-ping median/std)
+    and real **far edge** (from Stage 3's `usable_range_m` + altitude
+    — `arctan(usable_range_m / altitude)`), reporting
+    `near_angle_deg_median`, `far_angle_deg`, `beam_center_angle_deg`
+    (mean of the two), and `beam_width_deg` (far minus near) directly.
+    Requires `stage3` as a new positional arg —
+    `run_investigation()`'s stage order changed accordingly (**Stage 3
+    now runs before Stage 2.5**, since the far edge needs
+    `usable_range_m` already computed). `classification` dropped the
+    old `water_column_tilted_beam`/`near_grazing_weak_backscatter`
+    dichotomy entirely — that distinction assumed two different
+    physical stories were possible (weak-but-real backscatter vs. true
+    water column), and the user's correction established there's only
+    one: the near-nadir span is never illuminated, full stop, regardless
+    of how small the measured near angle happens to be. `classification`
+    now reports measurement confidence only: `"determined"` /
+    `"ambiguous"` / `"undetermined"`. `viz.investigation.plot_stage2_5_beam_geometry()`
+    redrawn to match — one near ray (solid), one far ray (dashed), the
+    wedge between them shaded as the beam's actual illuminated span,
+    instead of 7 candidate rays.
+  - **Re-ran the same 7-survey/14-run battle test with all of the
+    above in place — the finding changed, not just the label.** Every
+    Klein SDF survey's nadir classification flipped from `bright_spike`
+    to `gap` (confirmed visually: the ~40,000-amplitude spike at
+    sample 0 in site-c/900kHz's `nadir_zoom.png` is now flat zero,
+    real terrain clearly visible on both sides starting further out).
+    Several channels that were `beam_geometry: undetermined` before
+    blanking now report `determined` with a real near-angle
+    measurement (e.g. site-c/455kHz: 73.4°, site-e/900kHz:
+    79.3°) — blanking fixed the specific noise-burst failure mode, not
+    every source of per-ping detector noise on this hardware, so some
+    channels remain `undetermined`. `usable_range_m` is still `None`
+    on every SDF channel — confirmed unrelated to nadir noise (root
+    cause is the separate per-bin-median-pinned-flat / recorded-window
+    mechanisms documented above), unaffected by this fix, correctly
+    unchanged.
+  - Tests: `TestStage2Nadir` renamed/updated
+    (`test_altitude_sample_matches_geometry`,
+    `test_altitude_and_bottom_boundaries_diverge_generates_note`),
+    `TestStage2_5BeamGeometry` rewritten around near/far rays
+    (`test_near_and_far_ray_match_known_geometry`,
+    `test_far_ray_angle_at_45_degrees_when_usable_range_equals_altitude`,
+    `test_far_ray_none_when_usable_range_none`,
+    `test_classification_determined_even_at_near_zero_angle` — locks in
+    the dropped near-grazing/water-column dichotomy), new
+    `TestDetectNadirNoiseExtent` (4 tests) and `TestBlankNadirNoise` (3
+    tests), `TestMaskNadirGap` (renamed from `TestMaskWeakZone`). Full
+    suite: 1200 passing / 36 skipped.
+  - The 7-survey battle-test comparison artifact (same URL as above)
+    republished in place with corrected terminology and the re-run
+    findings. The original `survey-a`-only report's underlying
+    data was regenerated (confirms numbers unchanged: `usable_range_m`
+    36.0/46.0, `absorption_only`/`spreading_only`) but its own HTML
+    prose was **not** rebuilt this session — it still uses the old
+    "geometric bottom contact"/"weak zone" language if read directly;
+    treat the battle-test report as the current source for terminology.
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 

@@ -218,21 +218,21 @@ def plot_stage2_nadir_zoom(
     ax: Axes | None = None,
 ) -> tuple[Figure, Axes]:
     """Cross-track profile around nadir, zoomed to actually include the
-    water-column-to-bottom transition, not just the narrow acquisition
-    blanking gap.
+    full nadir gap through to the real bottom return, not just the
+    narrow acquisition blanking window.
 
     Without `stage2` (a `stage2_nadir()` result), this only has
     `nadir_n_samples` to go on and zooms to `nadir_n_samples *
     zoom_factor` — usually far too narrow to reach the real bottom
     return. Pass `stage2` so the window widens to actually include the
-    detected boundaries and both get marked: the **geometric** boundary
-    (dotted, thin — where the beam mathematically first reaches
-    flat-bottom range) and the **strong-return** boundary (solid, bold
-    — where backscatter actually rises to a real echo; real-data check
+    detected boundaries and both get marked: **altitude** (dotted,
+    thin — the vehicle's own altitude re-expressed in sample units, not
+    a real boundary) and the **first bottom return** (solid, bold —
+    where backscatter actually rises to a real echo; real-data check
     found these can differ by 2x+, see `stage2_nadir`'s docstring). The
-    region between them is shaded separately from the true water column
-    — real, physically genuine near-grazing-incidence signal, just too
-    weak to treat as flat-bottom for curve fitting.
+    region between them is shaded as part of the nadir gap — the beam's
+    near edge is never at 0 deg from vertical, so this span is simply
+    not illuminated, not weak-but-real backscatter.
     """
     n_pings = ds.sizes["ping"]
     ping_idx = ping_idx if ping_idx is not None else n_pings // 2
@@ -241,12 +241,12 @@ def plot_stage2_nadir_zoom(
     x, y = _cross_track_profile(ds, value_var, ping_idx)
 
     window = nadir_n_samples * zoom_factor
-    geo_p90 = None
-    strong_p90 = None
+    altitude_p90 = None
+    bottom_p90 = None
     if stage2 is not None:
-        geo_p90 = stage2.metrics.get("geometric_bottom_contact_sample_p90")
-        strong_p90 = stage2.metrics.get("first_strong_return_sample_p90")
-        widen_to = strong_p90 if strong_p90 is not None else geo_p90
+        altitude_p90 = stage2.metrics.get("altitude_sample_p90")
+        bottom_p90 = stage2.metrics.get("first_bottom_return_sample_p90")
+        widen_to = bottom_p90 if bottom_p90 is not None else altitude_p90
         if widen_to is not None:
             window = max(window, int(widen_to * 1.3))
 
@@ -255,23 +255,23 @@ def plot_stage2_nadir_zoom(
     ax.axvline(0, color="k", linewidth=0.5, alpha=0.5)
     ax.axvspan(-nadir_n_samples, nadir_n_samples, color="orange", alpha=0.15, label="nadir gap window")
 
-    if geo_p90 is not None or strong_p90 is not None:
-        first_bottom = stage2.data.get("first_bottom_sample")
-        first_strong = stage2.data.get("first_strong_return_sample")
-        geo_this = first_bottom[ping_idx, 0] if first_bottom is not None and ping_idx < first_bottom.shape[0] else np.nan
-        strong_this = first_strong[ping_idx, 0] if first_strong is not None and ping_idx < first_strong.shape[0] else np.nan
-        geo_b = geo_this if np.isfinite(geo_this) else geo_p90
-        strong_b = strong_this if np.isfinite(strong_this) else strong_p90
+    if altitude_p90 is not None or bottom_p90 is not None:
+        altitude_arr = stage2.data.get("altitude_sample")
+        bottom_arr = stage2.data.get("first_bottom_return_sample")
+        altitude_this = altitude_arr[ping_idx, 0] if altitude_arr is not None and ping_idx < altitude_arr.shape[0] else np.nan
+        bottom_this = bottom_arr[ping_idx, 0] if bottom_arr is not None and ping_idx < bottom_arr.shape[0] else np.nan
+        altitude_b = altitude_this if np.isfinite(altitude_this) else altitude_p90
+        bottom_b = bottom_this if np.isfinite(bottom_this) else bottom_p90
 
-        if geo_b is not None:
-            for sign, label in ((-1, None), (1, "geometric bottom contact")):
-                ax.axvline(sign * geo_b, color="#8B8B3A", linestyle=":", linewidth=1.3, label=label)
-        if strong_b is not None:
-            for sign, label in ((-1, None), (1, "first strong return")):
-                ax.axvline(sign * strong_b, color="#2E7D74", linestyle="--", linewidth=1.6, label=label)
-        if geo_b is not None and strong_b is not None and strong_b > geo_b:
-            ax.axvspan(-strong_b, -geo_b, color="#B5482E", alpha=0.08)
-            ax.axvspan(geo_b, strong_b, color="#B5482E", alpha=0.08, label="weak near-grazing zone")
+        if altitude_b is not None:
+            for sign, label in ((-1, None), (1, "altitude")):
+                ax.axvline(sign * altitude_b, color="#8B8B3A", linestyle=":", linewidth=1.3, label=label)
+        if bottom_b is not None:
+            for sign, label in ((-1, None), (1, "first bottom return")):
+                ax.axvline(sign * bottom_b, color="#2E7D74", linestyle="--", linewidth=1.6, label=label)
+        if altitude_b is not None and bottom_b is not None and bottom_b > altitude_b:
+            ax.axvspan(-bottom_b, -altitude_b, color="#B5482E", alpha=0.08)
+            ax.axvspan(altitude_b, bottom_b, color="#B5482E", alpha=0.08, label="nadir gap (not illuminated)")
 
     ax.set_xlabel("Sample index (port ← | → starboard)")
     ax.set_ylabel(value_var)
@@ -298,19 +298,19 @@ def plot_stage2_waterfall(
     Pass `stage2` (a `stage2_nadir()` result) to overlay both detected
     boundaries as traced lines on both sides — the most direct way to
     see whether either tracks the real signal structure across the
-    whole survey, not just one ping. The **strong-return** boundary
-    (solid) is the one that matters for excluding weak/water-column
-    samples from curve fitting; the **geometric** boundary (dotted) is
-    shown too since real data can show a large, informative gap
-    between the two (see `stage2_nadir`'s docstring).
+    whole survey, not just one ping. The **first bottom return** (solid)
+    is the one that matters for excluding the nadir gap from curve
+    fitting; **altitude** (dotted) is shown too since real data can show
+    a large, informative gap between the two (see `stage2_nadir`'s
+    docstring).
     """
     fig, ax = _new_fig_ax(ax, figsize=(12, 6))
     aliased = ds.assign(backscatter_intensity=ds[value_var])
     plot_waterfall(aliased, x_axis="sample", ax=ax, title=f"Stage 2 — waterfall ({value_var})", **waterfall_kwargs)
 
     if stage2 is not None:
-        first_bottom = stage2.data.get("first_bottom_sample")
-        first_strong = stage2.data.get("first_strong_return_sample")
+        altitude_arr = stage2.data.get("altitude_sample")
+        bottom_arr = stage2.data.get("first_bottom_return_sample")
 
         def _trace(boundary, color, style, label, lw):
             n_pings = boundary.shape[0]
@@ -320,11 +320,11 @@ def plot_stage2_waterfall(
             ax.plot(-port_b[valid_port], y[valid_port], color=color, linestyle=style, linewidth=lw, alpha=0.85)
             ax.plot(stbd_b[valid_stbd], y[valid_stbd], color=color, linestyle=style, linewidth=lw, alpha=0.85, label=label)
 
-        if first_bottom is not None:
-            _trace(first_bottom, "#8B8B3A", ":", "geometric bottom contact", 1.0)
-        if first_strong is not None:
-            _trace(first_strong, "#2E7D74", "-", "first strong return", 1.3)
-        if first_bottom is not None or first_strong is not None:
+        if altitude_arr is not None:
+            _trace(altitude_arr, "#8B8B3A", ":", "altitude", 1.0)
+        if bottom_arr is not None:
+            _trace(bottom_arr, "#2E7D74", "-", "first bottom return", 1.3)
+        if altitude_arr is not None or bottom_arr is not None:
             ax.legend(fontsize=8, loc="upper right")
 
     return fig, ax
@@ -334,9 +334,6 @@ def plot_stage2_waterfall(
 # STAGE 2.5 — BEAM GEOMETRY
 # ============================================================
 
-_CANDIDATE_COLORS = ("#7A7A7A", "#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B2", "#937860")
-
-
 def plot_stage2_5_beam_geometry(
     ds: xr.Dataset,
     stage2_5: StageResult,
@@ -344,38 +341,43 @@ def plot_stage2_5_beam_geometry(
     range_var: str = "across_track_m",
 ) -> tuple[Figure, tuple[Axes, Axes]]:
     """Axial (side-view) beam-geometry diagram directly above a
-    ground-range single-ping profile, sharing one x-axis, so candidate
-    beam-tilt angles can be checked by eye against where the real
-    signal actually starts.
+    ground-range single-ping profile, sharing one x-axis: the beam's
+    real near edge (from the first bottom return) and far edge (from
+    Stage 3's usable range), triangulated against altitude, not a set
+    of arbitrary candidate angles.
 
-    Top panel: towfish, flat seafloor at the ping's own altitude, one
-    straight ray per candidate angle (from `stage2_5_beam_geometry`),
-    and the angle implied by the data itself (thicker, dashed).
-    Bottom panel: the actual ping (`value_var` vs. `range_var`), with
-    the same candidate positions as vertical lines and the empirically
-    observed first-strong-return point marked, so a candidate that
-    lines up with where the signal actually starts is directly visible
-    rather than argued from a table of numbers.
+    Top panel: towfish, flat seafloor at the ping's own altitude, the
+    near ray (solid — the beam's own lower edge, empirically measured)
+    and the far ray (dashed — where Stage 3 found the signal becomes
+    unusable), with the wedge between them shaded as the beam's actual
+    illuminated span. Bottom panel: the same ping's real backscatter
+    (`value_var` vs. `range_var`), with the same two boundaries marked
+    as vertical lines, so the geometry can be checked directly against
+    where the real signal starts and ends.
     """
     ping_idx = stage2_5.metrics.get("ping_idx", 0)
     altitude = stage2_5.metrics.get("altitude_m")
-    candidates = stage2_5.metrics.get("candidates", [])
-    implied = stage2_5.metrics.get("implied", {})
+    near_ray = stage2_5.metrics.get("near_ray", {})
+    far_ray = stage2_5.metrics.get("far_ray", {})
+    beam_center = stage2_5.metrics.get("beam_center_angle_deg")
+    beam_width = stage2_5.metrics.get("beam_width_deg")
 
     fig, (ax_geo, ax_ping) = plt.subplots(
         2, 1, figsize=(10, 8), sharex=True, gridspec_kw={"height_ratios": [1, 1.3]}
     )
 
-    if altitude is None or not candidates:
+    if altitude is None:
         ax_geo.set_title(f"Stage 2.5 — beam geometry unavailable (ping {ping_idx})")
         return fig, (ax_geo, ax_ping)
 
-    max_reach = max(c["predicted_across_track_m"] for c in candidates)
-    for entry in implied.values():
-        across = entry.get("observed_across_track_m")
-        if across is not None:
-            max_reach = max(max_reach, abs(across))
-    max_reach = max(max_reach, altitude) * 1.15
+    max_reach = altitude
+    for ray in (near_ray, far_ray):
+        for entry in ray.values():
+            for key in ("observed_across_track_m", "predicted_across_track_m"):
+                v = entry.get(key)
+                if v is not None:
+                    max_reach = max(max_reach, abs(v))
+    max_reach *= 1.15
 
     # ----- top panel: axial geometry -----
     ax_geo.plot(0, 0, marker="v", markersize=14, color="#142029", zorder=5)
@@ -385,27 +387,39 @@ def plot_stage2_5_beam_geometry(
                 ha="right", va="bottom", fontsize=8, color="#8B5A2B")
     ax_geo.axvline(0, color="k", linewidth=0.5, alpha=0.4, linestyle=":")
 
-    for i, c in enumerate(candidates):
-        color = _CANDIDATE_COLORS[i % len(_CANDIDATE_COLORS)]
-        x = c["predicted_across_track_m"]
-        label = f"{c['angle_from_vertical_deg']:.0f}° from vertical ({c['angle_from_horizontal_deg']:.0f}° from horiz.)"
-        for sign in (-1, 1):
-            ax_geo.plot([0, sign * x], [0, -altitude], color=color, linewidth=1.3, alpha=0.85,
-                        label=label if sign == -1 else None)
-
-    for label, entry in implied.items():
+    for label, entry in near_ray.items():
         angle = entry.get("angle_from_vertical_deg")
         across = entry.get("observed_across_track_m")
         if angle is not None and across is not None:
-            ax_geo.plot([0, across], [0, -altitude], color="#B5482E", linewidth=2.4, linestyle="--",
-                        alpha=0.9, label=f"implied by data ({label}): {angle:.0f}° from vertical" if label == "port" else None)
-            ax_geo.plot(across, -altitude, marker="o", markersize=6, color="#B5482E", zorder=6)
+            ax_geo.plot([0, across], [0, -altitude], color="#2E7D74", linewidth=2.2,
+                        alpha=0.9, label=f"near edge ({label}): {angle:.0f}° from vertical" if label == "port" else None)
+            ax_geo.plot(across, -altitude, marker="o", markersize=6, color="#2E7D74", zorder=6)
+
+    for label, entry in far_ray.items():
+        angle = entry.get("angle_from_vertical_deg")
+        across = entry.get("predicted_across_track_m")
+        if angle is not None and across is not None:
+            ax_geo.plot([0, across], [0, -altitude], color="#B5482E", linewidth=2.2, linestyle="--",
+                        alpha=0.9, label=f"far edge (usable range): {angle:.0f}° from vertical" if label == "port" else None)
+
+    # Shade the beam's actual illuminated span between near and far edges.
+    for sign in (-1, 1):
+        near_x = next((e.get("observed_across_track_m") for e in near_ray.values() if e.get("observed_across_track_m") is not None), None)
+        far_x = next((e.get("predicted_across_track_m") for e in far_ray.values() if e.get("predicted_across_track_m") is not None), None)
+        if near_x is not None and far_x is not None:
+            ax_geo.fill(
+                [0, sign * near_x, sign * far_x], [0, -altitude, -altitude],
+                color="#2E7D74", alpha=0.08,
+            )
 
     ax_geo.set_ylim(-altitude * 1.3, altitude * 0.6)
     ax_geo.set_xlim(-max_reach, max_reach)
     ax_geo.set_ylabel("Depth below towfish (m)")
-    ax_geo.set_title(f"Stage 2.5 — beam geometry, ping {ping_idx} (straight-angle candidates)")
-    ax_geo.legend(fontsize=7, loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.55))
+    title = f"Stage 2.5 — beam geometry, ping {ping_idx}"
+    if beam_center is not None and beam_width is not None:
+        title += f" (center {beam_center:.0f}°, width {beam_width:.0f}° from vertical)"
+    ax_geo.set_title(title)
+    ax_geo.legend(fontsize=8, loc="lower center", ncol=2, bbox_to_anchor=(0.5, -0.5))
 
     # ----- bottom panel: real ping profile on the same x-axis -----
     port = np.asarray(ds[value_var].isel(ping=ping_idx, channel=0).values, dtype=np.float64)
@@ -418,19 +432,19 @@ def plot_stage2_5_beam_geometry(
         order = np.argsort(x[valid])
         ax_ping.plot(x[valid][order], y[valid][order], color="#2E4057", linewidth=0.7, alpha=0.9)
 
-    for i, c in enumerate(candidates):
-        color = _CANDIDATE_COLORS[i % len(_CANDIDATE_COLORS)]
-        for sign in (-1, 1):
-            ax_ping.axvline(sign * c["predicted_across_track_m"], color=color, linewidth=1.0, alpha=0.7)
-
-    for entry in implied.values():
+    for entry in near_ray.values():
         across = entry.get("observed_across_track_m")
         if across is not None:
+            ax_ping.axvline(across, color="#2E7D74", linewidth=1.8, alpha=0.9)
+    for entry in far_ray.values():
+        across = entry.get("predicted_across_track_m")
+        if across is not None:
             ax_ping.axvline(across, color="#B5482E", linewidth=1.8, linestyle="--", alpha=0.9)
+            ax_ping.axvline(-across, color="#B5482E", linewidth=1.8, linestyle="--", alpha=0.9)
 
     ax_ping.set_xlabel("Across-track distance (m)  (port ← | → starboard)")
     ax_ping.set_ylabel(value_var)
-    ax_ping.set_title("Same ping, real backscatter (candidate positions marked)")
+    ax_ping.set_title("Same ping, real backscatter (near/far beam edges marked)")
 
     fig.tight_layout()
     return fig, (ax_geo, ax_ping)

@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 
 from sidescanpy.analysis.investigation import (
     StageResult,
+    blank_nadir_noise,
     stage1_5_outlier_comparison,
     stage1_characterize,
     stage2_5_beam_geometry,
@@ -92,8 +93,9 @@ class InvestigationResult:
             "freq_key": self.freq_key,
             "dtype": s1.metrics.get("dtype") if s1 else None,
             "nadir": s2.classification if s2 else None,
-            "weak_zone_physical": s2_5.classification if s2_5 else None,
-            "weak_zone_implied_angle_deg": s2_5.metrics.get("implied_angle_deg_median") if s2_5 else None,
+            "beam_geometry": s2_5.classification if s2_5 else None,
+            "near_angle_deg": s2_5.metrics.get("near_angle_deg_median") if s2_5 else None,
+            "beam_width_deg": s2_5.metrics.get("beam_width_deg") if s2_5 else None,
             "usable_range_m": s3.metrics.get("usable_range_m") if s3 else None,
             "best_fit_model": s4.metrics.get("best_candidate") if s4 else None,
             "tvg_status": s4.classification if s4 else None,
@@ -126,7 +128,7 @@ def run_investigation(
     stage4_bin_width_m: float = 5.0,
     stage4_db_reference_percentile: float = 99.0,
     snr_threshold: float = 3.0,
-    exclude_weak_zone: bool = True,
+    exclude_nadir_gap: bool = True,
     reject_outliers: bool = False,
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
@@ -164,23 +166,33 @@ def run_investigation(
         does not affect Stage 4's classification, only what an
         intermediate absolute dB number would mean if reported
         directly.
-    exclude_weak_zone : bool, default True
-        Stage 2's `first_strong_return_sample` (an amplitude-based
+    Before any stage runs, `analysis.investigation.blank_nadir_noise()`
+    always applies to `backscatter_raw`/`backscatter_intensity` (a
+    real, no-toggle preprocessing step, like `reconstruct_raw`/
+    `compute_geometric_ranges` above — not a debatable option). Zeros
+    each ping's leading electronic-noise burst right at nadir — a
+    no-op on hardware that already does this itself (EdgeTech/JSF,
+    confirmed), but necessary on hardware that doesn't (Klein/SDF,
+    confirmed on real data: this burst is bright and sustained enough
+    to otherwise fool Stage 2's first-bottom-return detector into
+    reporting sample 0 as the real bottom, on nearly every ping).
+    exclude_nadir_gap : bool, default True
+        Stage 2's `first_bottom_return_sample` (an amplitude-based
         detector — see `analysis.investigation.stage2_nadir`'s
         docstring) is used as an early masking step before Stage 3/4's
         binning, at **two different granularities for two different
         reasons** (real-data checking on `survey-a` drove both
         choices, not just the first):
         - **Stage 3** gets the exact **per-ping** boundary directly —
-          "remove every sample that's nadir or water column, run the
-          analysis only on actual bottom hits," as literally as
-          possible. A single survey-wide cutoff necessarily
-          under-masks whichever pings' true boundary exceeds it; real
-          data showed this leaves a thin, contaminated near-range bin
-          (an anomalous near-zero first point on the usable-range
-          plot) — exact per-ping masking removes it entirely. Stage 3
-          does no aggregate max-search across bins, so per-ping
-          precision here has no downside.
+          "remove every sample that's nadir gap, run the analysis only
+          on actual bottom hits," as literally as possible. A single
+          survey-wide cutoff necessarily under-masks whichever pings'
+          true boundary exceeds it; real data showed this leaves a
+          thin, contaminated near-range bin (an anomalous near-zero
+          first point on the usable-range plot) — exact per-ping
+          masking removes it entirely. Stage 3 does no aggregate
+          max-search across bins, so per-ping precision here has no
+          downside.
         - **Stage 4** gets a single conservative value from
           `analysis.investigation.uniform_exclusion_boundary` instead.
           Its reference-range auto-selection *does* do a max-mean
@@ -194,10 +206,12 @@ def run_investigation(
         On by default — unlike `reject_outliers` below, this isn't a
         debatable aggressiveness tradeoff, it's excluding samples that
         real-data checking confirmed are not yet flat-bottom-like
-        (`survey-a`: geometric boundary ~140 samples, real
-        strong return doesn't start until ~300-330). Set False to
-        reproduce the older behavior (geometric exclusion only, both
-        stages).
+        (`survey-a`: altitude sample ~140, real first bottom
+        return doesn't start until ~300-330 — the beam's near edge is
+        never at 0 deg from vertical, so this span is never
+        illuminated at all, not weak-but-real backscatter). Set False
+        to reproduce the older behavior (altitude-crossing exclusion
+        only, both stages).
     reject_outliers : bool, default False
         If True, Stage 3's noise-floor estimate and Stage 4's decay fit
         both run `analysis.investigation.reject_range_outliers` first —
@@ -234,6 +248,8 @@ def run_investigation(
         logger.info("Dataset is processing_level=%r; reconstructing raw for investigation", ds.attrs.get("processing_level"))
         ds = reconstruct_raw(ds)
 
+    ds = blank_nadir_noise(ds)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
+
     if "ground_range_m" not in ds:
         ds = compute_geometric_ranges(ds)
 
@@ -245,7 +261,7 @@ def run_investigation(
         "stage4_bin_width_m": stage4_bin_width_m,
         "stage4_db_reference_percentile": stage4_db_reference_percentile,
         "snr_threshold": snr_threshold,
-        "exclude_weak_zone": exclude_weak_zone,
+        "exclude_nadir_gap": exclude_nadir_gap,
         "reject_outliers": reject_outliers,
         "outlier_mad_k": outlier_mad_k,
         "outlier_min_bin_count": outlier_min_bin_count,
@@ -258,11 +274,10 @@ def run_investigation(
         outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
     )
     stage2 = stage2_nadir(ds, value_var=value_var, nadir_n_samples=nadir_n_samples)
-    stage2_5 = stage2_5_beam_geometry(ds, stage2, value_var=value_var)
     exclude_before_sample_stage3 = None
     exclude_before_sample_stage4 = None
-    if exclude_weak_zone:
-        per_ping_boundary = stage2.data.get("first_strong_return_sample")
+    if exclude_nadir_gap:
+        per_ping_boundary = stage2.data.get("first_bottom_return_sample")
         if per_ping_boundary is not None:
             # Deliberately different granularity per stage -- see
             # run_investigation's docstring and
@@ -273,7 +288,7 @@ def run_investigation(
             # (percentile-based) cutoff necessarily under-masks
             # whichever pings' true boundary exceeds that percentile --
             # real-data check found this leaves a thin, contaminated
-            # near-range bin (leftover weak-zone samples from the
+            # near-range bin (leftover nadir-gap samples from the
             # under-masked tail), visible as an anomalous near-zero
             # first point on the usable-range plot. Stage 3 doesn't do
             # any aggregate max-search across bins, so per-ping
@@ -292,6 +307,10 @@ def run_investigation(
         exclude_before_sample=exclude_before_sample_stage3,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
     )
+    # Stage 2.5 runs after Stage 3, not before -- its far edge is
+    # triangulated from stage3's usable_range_m, so it needs that
+    # result already computed.
+    stage2_5 = stage2_5_beam_geometry(ds, stage2, stage3, value_var=value_var)
     stage4 = stage4_decay(
         ds, value_var=value_var, bin_width_m=stage4_bin_width_m,
         db_reference_percentile=stage4_db_reference_percentile,

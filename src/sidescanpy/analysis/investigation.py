@@ -161,7 +161,7 @@ def reject_range_outliers(
     return v_flat.reshape(shape)
 
 
-def detect_first_strong_return(
+def detect_first_bottom_return(
     value_arr: np.ndarray,
     *,
     smooth_window: int = 10,
@@ -169,24 +169,38 @@ def detect_first_strong_return(
     min_run: int = 10,
 ) -> np.ndarray:
     """
-    Vectorized, per-(ping, channel) amplitude-based detection of where
-    backscatter actually rises to a strong return — a genuine signal
-    detector, not a geometric computation.
+    Vectorized, per-(ping, channel) amplitude-based detection of the
+    real first bottom return — a genuine signal detector, not a
+    geometric computation.
 
-    Exists because the geometric water-column boundary (`ground_range_m`
-    becoming finite, i.e. `slant_range_m > altitude_m`) is **not** the
-    same thing as "where the real bottom echo begins," and an earlier
-    version of this stage conflated the two. Real-data check
-    (`survey-a`, HF, ping 4000): the geometric crossing lands
-    at sample 141, but amplitude stays weak (0.05-0.4 out of a ~22
-    peak) all the way out to sample ~300 — a real, physically genuine
-    near-grazing-incidence return, not the strong signal a "flat sandy
-    bottom" curve fit should be built from. Direct sample-by-sample
-    inspection confirmed the actual step to strong return in that ping
-    happens at sample ~325-330 — over twice the geometric boundary,
-    and much closer to a human's direct visual read of the same
-    waterfall (an independent check that caught this discrepancy in
-    the first place) than the geometric number was.
+    Exists because `slant_range_m > altitude_m` (the condition
+    `processing.geometric.compute_geometric_ranges` uses for
+    `ground_range_m` to go finite) is **not** "where the real bottom
+    echo begins" — it's just the sample where slant range crosses the
+    vehicle's own altitude, i.e. altitude re-expressed in sample units,
+    nothing more. A real sidescan beam is mounted at some angle from
+    vertical and has a nonzero width; its near (lower) edge is what
+    actually determines where the beam first reaches bottom, and that
+    edge is never at 0° from vertical — so the real first bottom return
+    always lands at a *larger* slant range than the altitude crossing.
+    Everything in between isn't weak backscatter, it's simply not
+    illuminated at all — part of the same nadir gap as the acquisition
+    blanking at the very start of the ping, not a separate physical
+    zone. An earlier version of this stage conflated the altitude
+    crossing with "the boundary," which a direct real-data check (a
+    human visually reading the raw waterfall) caught as substantially
+    wrong. Real-data check (`survey-a`, HF, ping 4000): the
+    altitude crossing lands at sample 141, but amplitude stays at
+    genuine noise-floor level (0.05-0.4 out of a ~22 peak) all the way
+    out to sample ~300 — not illuminated, not weak signal. Direct
+    sample-by-sample inspection confirmed the actual step to the real
+    first bottom return in that ping happens at sample ~325-330 — over
+    twice the altitude-crossing sample, and much closer to a human's
+    direct visual read of the same waterfall (an independent check that
+    caught this discrepancy in the first place) than the altitude
+    number was. The angle implied by this real boundary (see Stage
+    2.5) is the beam's own near/lower-edge angle — a real, measurable
+    hardware property, not a "grazing incidence" explanation.
 
     Algorithm: smooth with a `smooth_window`-sample rolling mean (raw
     per-sample noise would trigger or miss on individual spikes), then
@@ -240,24 +254,160 @@ def detect_first_strong_return(
     return first
 
 
-def _mask_before_sample(values: np.ndarray, boundary: np.ndarray) -> np.ndarray:
+def detect_nadir_noise_extent(
+    value_arr: np.ndarray,
+    *,
+    search_window: int = 100,
+    smooth_window: int = 5,
+    threshold_fraction: float = 0.2,
+    min_run: int = 10,
+) -> np.ndarray:
+    """
+    Vectorized, per-(ping, channel) detection of a high-noise burst
+    right at the very start of each ping (near-zero slant range) --
+    electronic/transmit-ringdown noise, not a real echo, and not the
+    same thing as the beam-geometry null zone `detect_first_bottom_return`
+    finds the far edge of.
+
+    EdgeTech (JSF) hardware already zeros this burst out before a file
+    ever reaches `sidescanpy` -- it's why JSF's nadir reads as an exact
+    `gap` (Stage 2). Klein (SDF) hardware leaves it in unprocessed.
+    Confirmed on real `project-b` data: this burst is both bright and
+    sustained enough to fool `detect_first_bottom_return` into
+    reporting sample 0 as the first bottom return -- it's the noise
+    burst, not bottom. `blank_nadir_noise` (this module) uses this
+    detector's output to zero the burst out before any other stage
+    runs, matching the EdgeTech convention, so `detect_first_bottom_return`
+    then sees the same three-zone structure (blanked noise -> quiet
+    null zone -> real bottom return) regardless of hardware.
+
+    Mirror image of `detect_first_bottom_return`: instead of finding
+    where a weak signal rises to a sustained strong level, finds where
+    an initially strong (noisy) signal falls to a sustained low level.
+
+    Parameters
+    ----------
+    value_arr : np.ndarray
+        Shape (ping, channel, sample), linear amplitude.
+    search_window : int, default 100
+        Only the first `search_window` samples set the noise burst's
+        own peak reference -- deliberately narrow so a bright real
+        bottom return much further out (which can be brighter than the
+        noise burst itself) doesn't inflate the threshold and mask a
+        genuinely short burst.
+    smooth_window, threshold_fraction, min_run
+        Same meaning as `detect_first_bottom_return`, applied in the
+        opposite direction (falling below threshold, not rising above
+        it).
+
+    Returns
+    -------
+    np.ndarray
+        Shape (ping, channel) -- sample index where the noise burst
+        ends. 0 where the leading samples are already at/near zero
+        (nothing to blank -- the normal EdgeTech case). NaN only for
+        pings too short to evaluate, or where the signal never
+        sustains a drop (treat conservatively -- caller should not
+        blank an unbounded extent).
+    """
+    arr = np.asarray(value_arr, dtype=np.float64)
+    n_samples = arr.shape[-1]
+    if n_samples <= smooth_window + min_run:
+        return np.full(arr.shape[:-1], np.nan)
+
+    csum = np.cumsum(np.insert(arr, 0, 0.0, axis=-1), axis=-1)
+    roll = (csum[..., smooth_window:] - csum[..., :-smooth_window]) / smooth_window
+
+    window = max(min(search_window, n_samples) - smooth_window, 1)
+    peak = np.nanmax(roll[..., :window], axis=-1, keepdims=True)
+    threshold = threshold_fraction * peak
+    below = (roll <= threshold).astype(np.int32)
+
+    csum2 = np.cumsum(np.insert(below, 0, 0, axis=-1), axis=-1)
+    run_sum = csum2[..., min_run:] - csum2[..., :-min_run]
+    sustained = run_sum >= min_run
+
+    has_any = sustained.any(axis=-1)
+    first = np.argmax(sustained, axis=-1).astype(np.float64)
+    first[~has_any] = np.nan
+    return first
+
+
+def blank_nadir_noise(
+    ds: xr.Dataset,
+    *,
+    value_vars: tuple[str, ...] = ("backscatter_raw", "backscatter_intensity"),
+    detector_value_var: str = "backscatter_raw",
+    search_window: int = 100,
+    smooth_window: int = 5,
+    threshold_fraction: float = 0.2,
+    min_run: int = 10,
+) -> xr.Dataset:
+    """Return a copy of `ds` with each ping's leading nadir-noise burst
+    (`detect_nadir_noise_extent`) set to exactly 0.0 in each of
+    `value_vars` -- a real processing step meant to match the
+    convention EdgeTech hardware already applies before `sidescanpy`
+    ever sees a JSF file, not a display-only mask (contrast
+    `mask_nadir_gap`, which NaNs for display/export instead). A no-op
+    on data where the burst is already zero (its own detected extent
+    comes out 0 samples), so safe to always run regardless of format.
+
+    `run_investigation()` calls this early, before Stage 1, so every
+    downstream stage (nadir classification, first-bottom-return
+    detection, beam geometry, usable range, decay fit) sees consistent
+    data regardless of whether the source hardware already blanked
+    this burst or not.
+
+    Parameters
+    ----------
+    value_vars : tuple of str, default ("backscatter_raw", "backscatter_intensity")
+        Every var present in `ds` gets zeroed identically. Vars not
+        present are skipped rather than raising.
+    detector_value_var : str, default "backscatter_raw"
+        Which variable `detect_nadir_noise_extent` computes the
+        boundary from.
+
+    Returns
+    -------
+    xr.Dataset
+        Copy of `ds`; unmodified if none of `value_vars` are present.
+    """
+    boundary = detect_nadir_noise_extent(
+        np.asarray(ds[detector_value_var].values),
+        search_window=search_window,
+        smooth_window=smooth_window,
+        threshold_fraction=threshold_fraction,
+        min_run=min_run,
+    )
+    out = ds.copy()
+    for var in value_vars:
+        if var in out.data_vars:
+            dtype = out[var].dtype
+            zeroed = _mask_before_sample(out[var].values, boundary, fill_value=0.0)
+            out[var] = (out[var].dims, zeroed.astype(dtype))
+    return out
+
+
+def _mask_before_sample(values: np.ndarray, boundary: np.ndarray, *, fill_value: float = np.nan) -> np.ndarray:
     """Return a copy of `values` (..., sample) with every sample before
-    `boundary` (..., matching the leading dims) set to NaN. A NaN entry
-    in `boundary` (no detection for that row) masks nothing for that
-    row, rather than masking everything or raising.
+    `boundary` (..., matching the leading dims) set to `fill_value`
+    (NaN by default -- exclusion from stats; `blank_nadir_noise` passes
+    0.0 -- real zeroing, matching what EdgeTech hardware already does).
+    A NaN entry in `boundary` (no detection for that row) masks nothing
+    for that row, rather than masking everything or raising.
     """
     n_samples = values.shape[-1]
     sample_idx = np.arange(n_samples, dtype=np.float64)
     before = sample_idx < boundary[..., None]
     before = np.where(np.isfinite(boundary)[..., None], before, False)
     out = np.asarray(values, dtype=np.float64).copy()
-    out[before] = np.nan
+    out[before] = fill_value
     return out
 
 
 def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float = 90.0) -> np.ndarray:
     """Collapse a per-(ping, channel) boundary (e.g.
-    `stage2_nadir()`'s `data["first_strong_return_sample"]`) into a
+    `stage2_nadir()`'s `data["first_bottom_return_sample"]`) into a
     single conservative value, broadcast back to the same shape, for
     use as `stage4_decay`'s `exclude_before_sample`.
 
@@ -284,7 +434,7 @@ def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float 
     applies uniformly, so every bin's contributing pings are the same
     regardless of range — no selection bias. Verified on the same real
     survey to restore `r_ref_m` to its un-excluded value (7.5m /
-    12.5m for HF/LF) while still meaningfully excluding the weak zone.
+    12.5m for HF/LF) while still meaningfully excluding the nadir gap.
 
     Parameters
     ----------
@@ -292,7 +442,7 @@ def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float 
         Shape (ping, channel), as returned by `stage2_nadir`.
     percentile : float, default 90.0
         Conservative on purpose — a lower percentile would still leave
-        some pings' weak zones only partially excluded.
+        some pings' nadir gaps only partially excluded.
 
     Returns
     -------
@@ -309,7 +459,7 @@ def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float 
     return np.full_like(per_ping_boundary, value)
 
 
-def mask_weak_zone(
+def mask_nadir_gap(
     ds: xr.Dataset,
     *,
     value_vars: tuple[str, ...] = ("backscatter_raw", "backscatter_intensity"),
@@ -318,19 +468,29 @@ def mask_weak_zone(
     threshold_fraction: float = 0.2,
     min_run: int = 10,
 ) -> xr.Dataset:
-    """Return a copy of `ds` with the nadir gap + weak near-grazing zone
-    (everything before `detect_first_strong_return`'s per-(ping, channel)
-    boundary) set to NaN in each of `value_vars`, for display/export --
-    not curve fitting, which stays exact via `stage2_nadir`/`stage3_usable_range`/
-    `stage4_decay`'s own `exclude_before_sample` plumbing instead of
-    mutating the dataset (see `uniform_exclusion_boundary`'s docstring
-    for why Stage 3 and Stage 4 need different granularities of this
-    same boundary internally -- this function always uses the exact
-    per-ping one, appropriate for a display copy since there's no
-    aggregate binning downstream to bias).
+    """Return a copy of `ds` with the full nadir gap (everything before
+    `detect_first_bottom_return`'s per-(ping, channel) boundary --
+    acquisition blanking *and* the beam-geometry null zone the beam's
+    own near edge doesn't illuminate at all, not two separate
+    phenomena) set to NaN in each of `value_vars`, for display/export
+    -- not curve fitting, which stays exact via
+    `stage2_nadir`/`stage3_usable_range`/`stage4_decay`'s own
+    `exclude_before_sample` plumbing instead of mutating the dataset
+    (see `uniform_exclusion_boundary`'s docstring for why Stage 3 and
+    Stage 4 need different granularities of this same boundary
+    internally -- this function always uses the exact per-ping one,
+    appropriate for a display copy since there's no aggregate binning
+    downstream to bias).
+
+    **Not the same thing as `blank_nadir_noise`** -- that's a real
+    processing step (zeros a genuine electronic-noise burst, applied
+    early so every stage sees consistent data). This is display-only
+    (NaN, not zero, and includes the much larger un-illuminated span
+    out to the real first bottom return, not just the noise burst at
+    the very start of it).
 
     Exists because the earlier fix (Stage 3/4 no longer *fit* against
-    the weak zone) left it still visible in the final waterfall
+    this span) left it still visible in the final waterfall
     exports/plots -- a real gap the user caught directly on the
     `survey-a` progression figure: the recommended
     absorption-only + geometric panel still showed the water-column
@@ -341,11 +501,11 @@ def mask_weak_zone(
     value_vars : tuple of str, default ("backscatter_raw", "backscatter_intensity")
         Every var present in `ds` gets masked identically (same
         boundary, both raw and TVG-corrected data occupy the same
-        water column). Vars not present in `ds` are skipped rather
-        than raising, so this works whether or not TVG has been applied
-        yet.
+        un-illuminated span). Vars not present in `ds` are skipped
+        rather than raising, so this works whether or not TVG has been
+        applied yet.
     detector_value_var : str, default "backscatter_raw"
-        Which variable `detect_first_strong_return` computes the
+        Which variable `detect_first_bottom_return` computes the
         boundary from -- raw amplitude, deliberately, so masking is
         identical regardless of which `value_vars` are present or what
         TVG has already been applied to them.
@@ -355,7 +515,7 @@ def mask_weak_zone(
     xr.Dataset
         Copy of `ds`; unmodified if none of `value_vars` are present.
     """
-    boundary = detect_first_strong_return(
+    boundary = detect_first_bottom_return(
         np.asarray(ds[detector_value_var].values),
         smooth_window=smooth_window,
         threshold_fraction=threshold_fraction,
@@ -488,39 +648,50 @@ def stage2_nadir(
     `viz.waterfall`'s "sample" x-axis mode) is represented: gap,
     bright_spike, noisy, or clean.
 
-    Also surfaces **two distinct water-column-related boundaries** —
-    an early version of this function conflated them, which a direct
-    real-data check (a human visually reading the raw waterfall) caught
-    as substantially wrong:
+    Also surfaces **two genuinely different reference points near
+    nadir** — an early version of this function called both of them
+    "boundaries" and conflated what they mean, which a direct real-data
+    check (a human visually reading the raw waterfall) caught as
+    substantially wrong:
 
-    - `geometric_bottom_contact_sample_*` — **not** a new detection
-      algorithm, an explicit readout of the condition
+    - `altitude_sample_*` — **not a boundary of anything, just the
+      vehicle's own altitude re-expressed in sample units.** An
+      explicit readout of the condition
       `processing.geometric.compute_geometric_ranges` already applies
-      (`range_var` is NaN wherever `slant_range_m <= altitude_m`).
-      This is where the beam mathematically first reaches flat-bottom
-      range, *not* where the return is actually strong.
-    - `first_strong_return_sample_*` — a genuine amplitude-based
-      detector (`detect_first_strong_return`, see that function's
-      docstring), finding where backscatter actually rises to a
-      sustained strong return. **This is the one that matters for
-      excluding the water column from curve fitting.** Real-data check
-      (`survey-a`, HF): the geometric boundary landed at
-      sample ~141, but backscatter stayed weak (0.05-0.4 out of a ~22
-      peak) all the way to sample ~300 — a real, physically genuine
-      near-grazing-incidence return, not yet the strong signal a "flat
-      sandy bottom" fit should be built from. The actual step to
-      strong return in that ping was independently confirmed (direct
-      sample inspection) at ~325-330 — over 2x the geometric boundary,
-      reported in `geometric_to_strong_gap_sample_median` when the two
-      disagree by more than `2 * nadir_n_samples`.
+      (`range_var` goes finite wherever `slant_range_m > altitude_m`).
+      A real sidescan beam is mounted at some angle from vertical with
+      a nonzero width; its near (lower) edge is never at 0° from
+      vertical, so the beam's real footprint never starts this close
+      in. Everything between here and `first_bottom_return_sample_*`
+      below isn't a separate physical zone — it's simply not
+      illuminated at all, the same underlying reason as the nadir gap
+      itself.
+    - `first_bottom_return_sample_*` — the real first bottom return: a
+      genuine amplitude-based detector (`detect_first_bottom_return`,
+      see that function's docstring), finding where backscatter
+      actually rises to a sustained strong return. **This is the one
+      that matters for excluding the un-illuminated span from curve
+      fitting**, and its implied angle (Stage 2.5) is the beam's own
+      near-edge angle from vertical — a real hardware property, not a
+      "grazing incidence" story. Real-data check (`survey-a`,
+      HF): the altitude sample landed at ~141, but backscatter stayed
+      at noise-floor level (0.05-0.4 out of a ~22 peak) all the way to
+      sample ~300 — not illuminated, not weak signal. The actual step
+      to the real first bottom return in that ping was independently
+      confirmed (direct sample inspection) at ~325-330 — over 2x the
+      altitude sample, reported in `altitude_to_bottom_gap_sample_median`
+      when the two disagree by more than `2 * nadir_n_samples`.
 
     Conflating "the nadir gap" (a short, near-zero acquisition
-    blanking artifact, ~50 samples) with either of the above (which
-    can run several times longer) was a real gap in earlier Stage 2
-    output — all three are now distinct metrics.
+    blanking artifact, ~50 samples, plus on some hardware a noise burst
+    right at the very start -- see `blank_nadir_noise`) with either of
+    the above (which together, once the beam-geometry null zone is
+    included, can run several times longer) was a real gap in earlier
+    Stage 2 output — all now distinct metrics, not merged into one
+    "boundary."
 
     A corroborating check is also computed against
-    `first_strong_return_sample`: does `value_var` actually step up
+    `first_bottom_return_sample`: does `value_var` actually step up
     across that boundary on a representative ping? Should reliably
     show a clear step by construction (the detector is defined by that
     step); a note is added if it doesn't, since that would mean this
@@ -529,18 +700,18 @@ def stage2_nadir(
     Parameters
     ----------
     range_var : str, default "ground_range_m"
-        If present in `ds`, used to compute the geometric boundary. If
-        absent (geometric ranges not yet computed), that boundary is
-        skipped with a note, but `first_strong_return_sample` (which
-        doesn't need it) is still computed — this function still runs
-        and classifies the nadir gap either way, unlike Stage 3/4 which
+        If present in `ds`, used to compute `altitude_sample_*`. If
+        absent (geometric ranges not yet computed), that's skipped with
+        a note, but `first_bottom_return_sample` (which doesn't need
+        it) is still computed — this function still runs and
+        classifies the nadir gap either way, unlike Stage 3/4 which
         require `range_var`.
     water_column_post_window : int, default 20
-        Sample window on each side of `first_strong_return_sample` used
+        Sample window on each side of `first_bottom_return_sample` used
         for the signal-step corroboration check.
     strong_return_smooth_window, strong_return_threshold_fraction,
     strong_return_min_run
-        Passed through to `detect_first_strong_return` — see that
+        Passed through to `detect_first_bottom_return` — see that
         function's docstring for what they mean and why the defaults
         were chosen.
     """
@@ -589,8 +760,8 @@ def stage2_nadir(
         },
     }
     notes: list[str] = []
-    first_bottom_sample = None  # geometric (weaker, earlier) boundary — kept for backward compat
-    first_strong_sample = None  # amplitude-detected (real bottom echo) boundary — the one that matters for exclusion
+    altitude_sample = None  # slant_range == altitude, in sample units -- not a real boundary, see docstring
+    first_bottom_sample = None  # amplitude-detected real first bottom return -- the one that matters for exclusion
 
     if range_var in ds:
         range_arr = np.asarray(ds[range_var].values, dtype=np.float64)  # (ping, channel, sample)
@@ -598,15 +769,15 @@ def stage2_nadir(
         has_any = finite_mask.any(axis=-1)
         first_idx = np.argmax(finite_mask, axis=-1).astype(np.float64)  # first True per (ping, channel)
         first_idx[~has_any] = np.nan
-        first_bottom_sample = first_idx
+        altitude_sample = first_idx
 
         finite_first = first_idx[np.isfinite(first_idx)]
         if finite_first.size:
-            metrics["geometric_bottom_contact_sample_median"] = float(np.median(finite_first))
-            metrics["geometric_bottom_contact_sample_p10"] = float(np.percentile(finite_first, 10))
-            metrics["geometric_bottom_contact_sample_p90"] = float(np.percentile(finite_first, 90))
+            metrics["altitude_sample_median"] = float(np.median(finite_first))
+            metrics["altitude_sample_p10"] = float(np.percentile(finite_first, 10))
+            metrics["altitude_sample_p90"] = float(np.percentile(finite_first, 90))
         else:
-            note = f"{range_var!r} present but has no finite values — geometric boundary not computed."
+            note = f"{range_var!r} present but has no finite values — altitude sample not computed."
             if "slant_range_m" in ds and "altitude_m" in ds:
                 slant_max = float(np.nanmax(ds["slant_range_m"].values)) if np.isfinite(ds["slant_range_m"].values).any() else float("nan")
                 altitude_min = float(np.nanmin(ds["altitude_m"].values)) if np.isfinite(ds["altitude_m"].values).any() else float("nan")
@@ -620,39 +791,39 @@ def stage2_nadir(
                     )
             notes.append(note)
     else:
-        notes.append(f"{range_var!r} not found — geometric boundary not computed (run compute_geometric_ranges first).")
+        notes.append(f"{range_var!r} not found — altitude sample not computed (run compute_geometric_ranges first).")
 
-    first_strong_sample = detect_first_strong_return(
+    first_bottom_sample = detect_first_bottom_return(
         arr,
         smooth_window=strong_return_smooth_window,
         threshold_fraction=strong_return_threshold_fraction,
         min_run=strong_return_min_run,
     )
-    finite_strong = first_strong_sample[np.isfinite(first_strong_sample)]
-    if finite_strong.size:
-        metrics["first_strong_return_sample_median"] = float(np.median(finite_strong))
-        metrics["first_strong_return_sample_p10"] = float(np.percentile(finite_strong, 10))
-        metrics["first_strong_return_sample_p90"] = float(np.percentile(finite_strong, 90))
+    finite_bottom = first_bottom_sample[np.isfinite(first_bottom_sample)]
+    if finite_bottom.size:
+        metrics["first_bottom_return_sample_median"] = float(np.median(finite_bottom))
+        metrics["first_bottom_return_sample_p10"] = float(np.percentile(finite_bottom, 10))
+        metrics["first_bottom_return_sample_p90"] = float(np.percentile(finite_bottom, 90))
 
-        if first_bottom_sample is not None:
-            both_finite = np.isfinite(first_bottom_sample) & np.isfinite(first_strong_sample)
+        if altitude_sample is not None:
+            both_finite = np.isfinite(altitude_sample) & np.isfinite(first_bottom_sample)
             if both_finite.any():
-                gap = (first_strong_sample - first_bottom_sample)[both_finite]
-                metrics["geometric_to_strong_gap_sample_median"] = float(np.median(gap))
+                gap = (first_bottom_sample - altitude_sample)[both_finite]
+                metrics["altitude_to_bottom_gap_sample_median"] = float(np.median(gap))
                 if np.median(gap) > 2 * nadir_n_samples:
                     notes.append(
-                        f"The geometric bottom-contact boundary and the amplitude-detected strong-"
-                        f"return boundary disagree by a median of {np.median(gap):.0f} samples — "
-                        f"real, expected physics (grazing angle just past the geometric crossing is "
-                        f"shallow, so backscatter stays weak for a while before ramping up), not a "
-                        f"bug in either detector. Use `first_strong_return_sample_*` for anything "
-                        f"downstream that needs to avoid this weak near-grazing zone — the geometric "
-                        f"boundary alone underestimates where usable flat-bottom signal starts."
+                        f"The altitude sample and the amplitude-detected first bottom return "
+                        f"disagree by a median of {np.median(gap):.0f} samples — real, expected "
+                        f"physics (the beam's near edge is set at a nonzero angle from vertical, so "
+                        f"it never illuminates all the way in to the altitude crossing), not a bug in "
+                        f"either detector. Use `first_bottom_return_sample_*` for anything downstream "
+                        f"that needs to avoid this un-illuminated span — the altitude sample alone "
+                        f"underestimates where usable flat-bottom signal starts."
                     )
 
         rep_ping = arr.shape[0] // 2
         rep_ch = 0
-        b_val = first_strong_sample[rep_ping, rep_ch]
+        b_val = first_bottom_sample[rep_ping, rep_ch]
         w = water_column_post_window
         if np.isfinite(b_val) and b_val >= w:
             b = int(round(b_val))
@@ -669,24 +840,25 @@ def stage2_nadir(
             if np.isfinite(step_ratio) and step_ratio < 1.2:
                 notes.append(
                     f"Signal doesn't clearly step up in the {w} samples right at the detected "
-                    f"strong-return boundary (post/pre mean ratio={step_ratio:.2f} on ping "
+                    f"first bottom return (post/pre mean ratio={step_ratio:.2f} on ping "
                     f"{rep_ping}) — unexpected given how this boundary is defined; worth checking "
                     f"this survey's data directly rather than trusting the detector blindly here."
                 )
         elif np.isfinite(b_val):
             notes.append(
-                f"Strong-return boundary detected at sample {b_val:.0f} on ping {rep_ping} — too "
-                f"close to the start of the ping for a {w}-sample pre/post step check (no water "
-                f"column before it to compare against, which on its own is a reasonable finding)."
+                f"First bottom return detected at sample {b_val:.0f} on ping {rep_ping} — too "
+                f"close to the start of the ping for a {w}-sample pre/post step check (no "
+                f"un-illuminated span before it to compare against, which on its own is a "
+                f"reasonable finding)."
             )
     else:
-        notes.append("No sustained strong return detected in any ping — detect_first_strong_return found nothing.")
+        notes.append("No sustained first bottom return detected in any ping — detect_first_bottom_return found nothing.")
 
     return StageResult(
         stage="stage2_nadir", metrics=metrics, classification=classification, notes=notes,
         data={
-            "first_bottom_sample": first_bottom_sample,  # geometric boundary — kept for compat
-            "first_strong_return_sample": first_strong_sample,  # amplitude boundary — use this one
+            "altitude_sample": altitude_sample,  # slant_range == altitude, not a real boundary
+            "first_bottom_return_sample": first_bottom_sample,  # amplitude-detected -- use this one
         },
     )
 
@@ -699,143 +871,111 @@ def stage2_nadir(
 def stage2_5_beam_geometry(
     ds: xr.Dataset,
     stage2: StageResult,
+    stage3: StageResult,
     value_var: str = "backscatter_raw",
     range_var: str = "across_track_m",
     slant_range_var: str = "slant_range_m",
     *,
     ping_idx: int | None = None,
-    candidate_angles_from_vertical_deg: tuple[float, ...] = (0.0, 15.0, 30.0, 45.0, 60.0, 70.0, 80.0),
-    near_vertical_threshold_deg: float = 5.0,
-    max_consistent_std_deg: float = 15.0,
+    near_angle_max_std_deg: float = 15.0,
     min_valid_fraction: float = 0.2,
 ) -> StageResult:
     """
-    Test a competing explanation for the Stage 2 "weak zone" (the gap
-    between the geometric bottom-contact boundary and the empirical
-    first-strong-return boundary): **not** near-grazing-incidence
-    scattering that gradually strengthens (Stage 2's working
-    assumption, which implicitly took the beam as pointing straight
-    down at nadir — a 0-degrees-from-vertical candidate, one of several
-    tested here), but a sidescan beam mounted at a genuine tilt that
-    simply doesn't illuminate anywhere near directly below the towfish
-    at all. If that's right, the "weak zone" isn't weak backscatter —
-    it's the sonar looking at nothing (or noise) until the beam's own
-    footprint reaches the seafloor.
+    Empirically determines the sidescan beam's own near-edge angle,
+    far-edge angle, center angle, and width — from two real boundaries
+    this pipeline already computes, not by sweeping arbitrary candidate
+    angles and asking which one looks closest.
 
-    Purely geometric, flat-bottom, "straight angles for now" (no real
-    beam-pattern/directivity modeling, no roll, small-pitch assumed) —
-    deliberately simple. For each candidate depression angle (measured
-    from vertical/nadir; 0 = straight down), computes where a ray at
-    that angle from the towfish would first intersect a flat seafloor
-    at the ping's own `altitude_m`:
+    - **Near edge**: the beam's lower edge — never at 0 deg from
+      vertical for a real beam, which is why the un-illuminated span
+      described in `stage2_nadir` exists at all. Implied by the real
+      first bottom return (`stage2`'s `first_bottom_return_sample`)
+      and the vehicle's own altitude:
 
-        predicted_across_track_m = altitude_m * tan(angle_from_vertical)
-        predicted_slant_range_m  = altitude_m / cos(angle_from_vertical)
+          near_angle_from_vertical = arccos(altitude_m / slant_range_m_at_first_bottom_return)
 
-    Also back-calculates the angle **implied** by the actual data: given
-    the empirically detected `first_strong_return_sample` (from
-    `stage2_nadir`) and that sample's real `slant_range_var` value,
+      Computed across every ping (not just `ping_idx`) for a robust
+      median/std — a single ping's detector noise is a weak basis for
+      a survey-wide number.
+    - **Far edge**: where the beam's illumination stops mattering in
+      practice — `stage3`'s `usable_range_m` (where SNR drops below
+      threshold), not a hardware limit:
 
-        implied_angle_from_vertical = arccos(altitude_m / observed_slant_range_m)
+          far_angle_from_vertical = arctan(usable_range_m / altitude_m)
 
-    If that implied angle lands in a physically ordinary sidescan tilt
-    range, that's evidence for the "tilted beam" explanation. If it
-    comes out absurd (e.g. within a degree or two of 90, or undefined
-    because `observed_slant_range_m < altitude_m`), that's evidence
-    against it here — or evidence that `altitude_m` itself is wrong,
-    which this function cannot distinguish on its own (no independent
-    depth/altitude truth source is used) — see the returned notes.
+      A single survey-aggregate number, since `usable_range_m` already
+      is one.
+    - **Beam center angle** = (near + far) / 2, **beam width** = far -
+      near.
 
-    **Reports a `classification` for this, computed across every ping
-    in `ds` (not just `ping_idx`), not left implicit** — the earlier
-    `survey-a` finding (25 deg HF / 18 deg LF, i.e. genuinely
-    tilted) is one dataset's answer, not a property of this stage or a
-    default assumption; a different survey's hardware/mounting can
-    come out the other way, and the automated pipeline needs to say
-    which one it found rather than requiring a human to re-read the
-    diagnostic plot every time:
+    Replaces an earlier version of this stage that swept a fixed set of
+    candidate angles (0/15/30/45/60/70/80 deg from vertical) and asked
+    "which one best matches" — once both real edges are already
+    measured from data this pipeline computes anyway, there's no reason
+    to guess at candidates instead of triangulating the real answer
+    directly.
 
-    - `"water_column_tilted_beam"` — median implied angle is clearly
-      nonzero (>= `near_vertical_threshold_deg`) and consistent across
-      pings/channels (std <= `max_consistent_std_deg`). The Stage 2
-      "weak zone" is best read as *water column*, not weak bottom
-      backscatter — the beam simply isn't illuminating that range at
-      all, until its own footprint reaches the seafloor.
-    - `"near_grazing_weak_backscatter"` — median implied angle is near
-      0 (beam close to straight down). The weak zone is best read as
-      genuine near-grazing-incidence weak backscatter, not a distinct
-      off-vertical water column — Stage 2's original assumption holds
-      here.
-    - `"ambiguous"` — implied angle is inconsistent across pings/
-      channels (high std) or too close to horizontal to trust; neither
-      reading is well supported.
-    - `"undetermined"` — too few pings/channels yielded a valid implied
-      angle (bad altitude, mostly-impossible geometry) to classify at
-      all.
+    **The near-edge measurement is what `classification` reports
+    confidence in** (`"determined"` / `"ambiguous"` / `"undetermined"`)
+    — it's the one derived per-ping from real amplitude detections, so
+    its consistency across pings is a meaningful confidence signal. The
+    far edge is a single number already vetted by Stage 3's own SNR
+    logic; if `usable_range_m` is `None` there (a real, documented
+    outcome on some hardware — see `stage3_usable_range`'s docstring),
+    the far edge/beam width/center angle come back `None` too, with a
+    note explaining why, rather than silently omitted.
 
-    This is a heuristic over straight-line geometry with no real
-    beam-pattern modeling — treat it as a strong prior to report and
-    look at, not a substitute for a human checking
-    `viz.investigation.plot_stage2_5_beam_geometry` on a genuinely
-    unfamiliar dataset.
-
-    Nadir convention note: this survey's nadir reads as a *gap*
-    (Stage 2). A survey where nadir instead reads *bright* implies a
-    different beam geometry near nadir (e.g. a beam that does
-    illuminate close to vertical, or overlapping port/starboard
-    coverage there) — the candidate angle set and the resulting
-    picture would look different; don't reuse this survey's numbers
-    for a differently-behaved one without re-running this stage.
+    Nadir convention note: a survey where nadir reads *bright* rather
+    than *gap* (Stage 2) implies a genuinely different near-nadir beam
+    geometry — re-run this stage on that survey's own data rather than
+    reusing another survey's angle numbers. **Also make sure
+    `blank_nadir_noise` has run first** on any hardware that doesn't
+    already zero its own nadir noise (Klein/SDF, confirmed on real
+    data) — otherwise the near-edge measurement above is corrupted by
+    the noise burst itself, not the beam's real near edge, and this
+    stage should (and does) report `"undetermined"` rather than a
+    confident wrong number.
 
     Parameters
     ----------
     ds : xr.Dataset
     stage2 : StageResult
-        A `stage2_nadir()` result — supplies `first_strong_return_sample`.
+        A `stage2_nadir()` result — supplies `first_bottom_return_sample`.
+    stage3 : StageResult
+        A `stage3_usable_range()` result — supplies `usable_range_m`
+        for the far edge.
     value_var : str, default "backscatter_raw"
     range_var : str, default "across_track_m"
         Signed cross-track distance (port negative, starboard
         positive) — the natural shared x-axis between the geometry
         diagram and the ping profile.
     slant_range_var : str, default "slant_range_m"
-        Attitude-invariant range, used for the implied-angle
+        Attitude-invariant range, used for the near-angle
         back-calculation.
     ping_idx : int, optional
-        Which single ping's implied angle/geometry to report in
-        `metrics["implied"]` for the diagram plot. Defaults to the
-        middle ping, matching Stage 2's other single-ping plots — the
-        `classification` below is independent of this choice, computed
-        across every ping instead.
-    candidate_angles_from_vertical_deg : tuple of float
-        Straight-line depression angles to test, measured from
-        vertical (0 = nadir-pointing, matching Stage 2's original
-        assumption; larger = more tilted toward the horizon).
-    near_vertical_threshold_deg : float, default 5.0
-        Median cross-ping implied angle below this counts as
-        "near-vertical" (`near_grazing_weak_backscatter`), at or above
-        it counts as a genuine tilt.
-    max_consistent_std_deg : float, default 15.0
-        Cross-ping implied-angle std-dev above this is "too
-        inconsistent to trust" (`ambiguous`), regardless of the median.
+        Which single ping's near/far ray geometry to report for the
+        diagram plot. Defaults to the middle ping, matching Stage 2's
+        other single-ping plots — `classification` and the cross-ping
+        near-angle stats below are independent of this choice.
+    near_angle_max_std_deg : float, default 15.0
+        Cross-ping near-angle std-dev above this is "too inconsistent
+        to trust" (`ambiguous`), regardless of the median.
     min_valid_fraction : float, default 0.2
-        Fraction of (ping, channel) pairs that must yield a valid
-        implied angle (finite altitude, `slant_range >= altitude`,
-        `first_strong_return_sample` detected) before classifying at
-        all — below this, `"undetermined"`.
+        Fraction of (ping, channel) pairs that must yield a valid near
+        angle (finite altitude, `slant_range >= altitude`,
+        `first_bottom_return_sample` detected) before reporting a
+        confident measurement at all — below this, `"undetermined"`.
 
     Returns
     -------
     StageResult
-        `metrics["candidates"]` is a list of dicts (one per candidate
-        angle): `angle_from_vertical_deg`, `angle_from_horizontal_deg`,
-        `predicted_across_track_m`, `predicted_slant_range_m`.
-        `metrics["implied"]` holds the back-calculated angle for
-        `ping_idx` only, per channel (`None` where undefined) — for the
-        diagram plot. `metrics["implied_angle_deg_median"]`,
-        `["implied_angle_deg_std"]`, `["implied_angle_valid_fraction"]`
-        are the cross-ping aggregate this stage's `classification` is
-        actually based on. `data` carries nothing extra — the plotting
-        layer reads `ds`/`stage2` directly.
+        `metrics["near_angle_deg_median"]`, `["near_angle_deg_std"]`,
+        `["near_angle_valid_fraction"]` — the cross-ping measurement
+        `classification` is based on. `metrics["far_angle_deg"]`,
+        `["beam_center_angle_deg"]`, `["beam_width_deg"]` — `None` if
+        `usable_range_m` is `None`. `metrics["near_ray"]`/`["far_ray"]`
+        hold the single-`ping_idx` geometry the diagram plot draws (per
+        channel, `None` where undefined).
     """
     for required in (range_var, slant_range_var, "altitude_m"):
         if required not in ds:
@@ -854,25 +994,15 @@ def stage2_5_beam_geometry(
             notes=notes,
         )
 
-    candidates = []
-    for angle_deg in candidate_angles_from_vertical_deg:
-        angle_rad = np.deg2rad(angle_deg)
-        candidates.append({
-            "angle_from_vertical_deg": angle_deg,
-            "angle_from_horizontal_deg": 90.0 - angle_deg,
-            "predicted_across_track_m": float(altitude * np.tan(angle_rad)),
-            "predicted_slant_range_m": float(altitude / np.cos(angle_rad)),
-        })
-
-    first_strong = stage2.data.get("first_strong_return_sample")
-    implied: dict[str, dict] = {}
+    first_bottom = stage2.data.get("first_bottom_return_sample")
+    near_ray: dict[str, dict] = {}
     for ch, label in ((0, "port"), (1, "starboard")):
         entry = {
             "observed_sample": None, "observed_slant_range_m": None,
             "observed_across_track_m": None, "angle_from_vertical_deg": None,
             "angle_from_horizontal_deg": None,
         }
-        b_val = first_strong[ping_idx, ch] if first_strong is not None and ping_idx < first_strong.shape[0] else np.nan
+        b_val = first_bottom[ping_idx, ch] if first_bottom is not None and ping_idx < first_bottom.shape[0] else np.nan
         if np.isfinite(b_val):
             b = int(round(b_val))
             n_samples = ds.sizes["sample"]
@@ -889,39 +1019,60 @@ def stage2_5_beam_geometry(
                     entry["angle_from_horizontal_deg"] = 90.0 - angle_from_vertical
                     if angle_from_vertical > 88.0:
                         notes.append(
-                            f"{label}: implied angle ({angle_from_vertical:.1f} deg from vertical) is "
-                            f"within 2 deg of horizontal — physically implausible for a real beam tilt; "
-                            f"more likely altitude_m is wrong for this ping, or the detected strong-"
-                            f"return sample is itself unreliable, than that the beam is genuinely "
-                            f"almost-horizontal."
+                            f"{label}: near-edge angle ({angle_from_vertical:.1f} deg from vertical) "
+                            f"is within 2 deg of horizontal — physically implausible for a real beam "
+                            f"edge; more likely altitude_m is wrong for this ping, or the detected "
+                            f"first bottom return is itself unreliable, than that the beam's near "
+                            f"edge is genuinely almost-horizontal."
                         )
                 elif np.isfinite(slant):
                     notes.append(
                         f"{label}: observed slant range ({slant:.2f}m) is less than altitude_m "
-                        f"({altitude:.2f}m) at the detected strong-return sample — geometrically "
+                        f"({altitude:.2f}m) at the detected first bottom return — geometrically "
                         f"impossible for any real beam angle, suggesting altitude_m or the detection "
                         f"itself is unreliable for this ping/channel."
                     )
-        implied[label] = entry
+        near_ray[label] = entry
 
-    # Cross-ping classification -- the single ping_idx entry above is
-    # for the diagram plot only; the classification the automated
-    # pipeline reports is based on every ping, not one, since a single
-    # ping's detector noise is a weak basis for "is this survey's beam
-    # tilted or not."
-    implied_angle_deg_median = None
-    implied_angle_deg_std = None
-    implied_angle_valid_fraction = 0.0
+    usable_range_m = stage3.metrics.get("usable_range_m") if stage3 else None
+    far_ray: dict[str, dict] = {}
+    for ch, label in ((0, "port"), (1, "starboard")):
+        entry = {
+            "predicted_across_track_m": None, "predicted_slant_range_m": None,
+            "angle_from_vertical_deg": None, "angle_from_horizontal_deg": None,
+        }
+        if usable_range_m is not None and usable_range_m > 0:
+            angle_from_vertical = float(np.degrees(np.arctan2(usable_range_m, altitude)))
+            entry["predicted_across_track_m"] = float(usable_range_m)
+            entry["predicted_slant_range_m"] = float(np.hypot(usable_range_m, altitude))
+            entry["angle_from_vertical_deg"] = angle_from_vertical
+            entry["angle_from_horizontal_deg"] = 90.0 - angle_from_vertical
+        far_ray[label] = entry
+    if usable_range_m is None:
+        notes.append(
+            "stage3's usable_range_m is None (SNR never reached the far-range threshold on this "
+            "survey -- a real, documented outcome on some hardware, see stage3_usable_range's "
+            "docstring) -- the far edge, beam width, and beam center angle can't be computed."
+        )
+
+    # Cross-ping near-angle measurement -- the single ping_idx entry
+    # above is for the diagram plot only; the classification the
+    # automated pipeline reports is based on every ping, not one, since
+    # a single ping's detector noise is a weak basis for a survey-wide
+    # measurement.
+    near_angle_deg_median = None
+    near_angle_deg_std = None
+    near_angle_valid_fraction = 0.0
     classification = "undetermined"
 
-    if first_strong is not None:
-        n_p, n_c = first_strong.shape
+    if first_bottom is not None:
+        n_p, n_c = first_bottom.shape
         n_samples = ds.sizes["sample"]
         altitude_all = ds["altitude_m"].values.astype(np.float64)  # (ping,)
         altitude_valid = np.isfinite(altitude_all) & (altitude_all > 0)
 
-        boundary_valid = np.isfinite(first_strong) & altitude_valid[:, None]
-        b_idx = np.where(boundary_valid, np.round(first_strong), 0).astype(int)
+        boundary_valid = np.isfinite(first_bottom) & altitude_valid[:, None]
+        b_idx = np.where(boundary_valid, np.round(first_bottom), 0).astype(int)
         b_idx = np.clip(b_idx, 0, n_samples - 1)
 
         slant_arr = ds[slant_range_var].values  # (ping, channel, sample)
@@ -938,56 +1089,59 @@ def stage2_5_beam_geometry(
         angle_from_vertical_all = np.where(geom_valid, angle_from_vertical_all, np.nan)
 
         finite_angles = angle_from_vertical_all[np.isfinite(angle_from_vertical_all)]
-        implied_angle_valid_fraction = float(finite_angles.size / angle_from_vertical_all.size)
+        near_angle_valid_fraction = float(finite_angles.size / angle_from_vertical_all.size)
         if finite_angles.size > 0:
-            implied_angle_deg_median = float(np.median(finite_angles))
-            implied_angle_deg_std = float(np.std(finite_angles))
+            near_angle_deg_median = float(np.median(finite_angles))
+            near_angle_deg_std = float(np.std(finite_angles))
 
-        if implied_angle_deg_median is None or implied_angle_valid_fraction < min_valid_fraction:
+        if near_angle_deg_median is None or near_angle_valid_fraction < min_valid_fraction:
             classification = "undetermined"
             notes.append(
-                f"Only {implied_angle_valid_fraction:.0%} of (ping, channel) pairs yielded a "
-                f"valid implied angle -- too few to classify the weak zone's physical nature "
-                f"(need >= {min_valid_fraction:.0%})."
+                f"Only {near_angle_valid_fraction:.0%} of (ping, channel) pairs yielded a valid "
+                f"near-edge angle -- too few to report a confident beam-geometry measurement "
+                f"(need >= {min_valid_fraction:.0%}). If this is bright-nadir hardware, check "
+                f"whether blank_nadir_noise ran first -- an un-blanked noise burst fools "
+                f"first_bottom_return_sample into firing at sample~0 on nearly every ping, which "
+                f"looks exactly like this."
             )
-        elif implied_angle_deg_median < near_vertical_threshold_deg:
-            classification = "near_grazing_weak_backscatter"
+        elif near_angle_deg_std is not None and near_angle_deg_std <= near_angle_max_std_deg:
+            classification = "determined"
             notes.append(
-                f"Cross-ping implied angle: median {implied_angle_deg_median:.1f} deg from "
-                f"vertical (std {implied_angle_deg_std:.1f} deg, "
-                f"{implied_angle_valid_fraction:.0%} of pings/channels valid) -- close to "
-                f"straight down. The Stage 2 weak zone here is best read as genuine "
-                f"near-grazing-incidence weak backscatter, not a distinct off-vertical water "
-                f"column."
-            )
-        elif implied_angle_deg_std is not None and implied_angle_deg_std <= max_consistent_std_deg:
-            classification = "water_column_tilted_beam"
-            notes.append(
-                f"Cross-ping implied angle: median {implied_angle_deg_median:.1f} deg from "
-                f"vertical (std {implied_angle_deg_std:.1f} deg, "
-                f"{implied_angle_valid_fraction:.0%} of pings/channels valid) -- consistent "
-                f"with a genuinely tilted beam. The Stage 2 weak zone is best read as *water "
-                f"column*, not weak bottom backscatter: the beam isn't illuminating that "
-                f"range at all until its own footprint reaches the seafloor."
+                f"Cross-ping near-edge angle: median {near_angle_deg_median:.1f} deg from vertical "
+                f"(std {near_angle_deg_std:.1f} deg, {near_angle_valid_fraction:.0%} of "
+                f"pings/channels valid) -- consistent measurement."
             )
         else:
             classification = "ambiguous"
             notes.append(
-                f"Cross-ping implied angle is inconsistent (median "
-                f"{implied_angle_deg_median:.1f} deg, std {implied_angle_deg_std:.1f} deg "
-                f"across {implied_angle_valid_fraction:.0%} valid pings/channels) -- neither "
-                f"a clean tilted-beam nor a clean straight-down interpretation is well "
-                f"supported for this survey."
+                f"Cross-ping near-edge angle is inconsistent (median {near_angle_deg_median:.1f} "
+                f"deg, std {near_angle_deg_std:.1f} deg across {near_angle_valid_fraction:.0%} "
+                f"valid pings/channels) -- not a confident single measurement for this survey."
             )
+
+    far_angle_deg = None
+    beam_center_angle_deg = None
+    beam_width_deg = None
+    if usable_range_m is not None and usable_range_m > 0:
+        altitude_finite = ds["altitude_m"].values[np.isfinite(ds["altitude_m"].values)]
+        altitude_median = float(np.median(altitude_finite)) if altitude_finite.size else altitude
+        far_angle_deg = float(np.degrees(np.arctan2(usable_range_m, altitude_median)))
+        if near_angle_deg_median is not None:
+            beam_center_angle_deg = (near_angle_deg_median + far_angle_deg) / 2.0
+            beam_width_deg = far_angle_deg - near_angle_deg_median
 
     metrics = {
         "ping_idx": ping_idx,
         "altitude_m": altitude,
-        "candidates": candidates,
-        "implied": implied,
-        "implied_angle_deg_median": implied_angle_deg_median,
-        "implied_angle_deg_std": implied_angle_deg_std,
-        "implied_angle_valid_fraction": implied_angle_valid_fraction,
+        "near_ray": near_ray,
+        "far_ray": far_ray,
+        "near_angle_deg_median": near_angle_deg_median,
+        "near_angle_deg_std": near_angle_deg_std,
+        "near_angle_valid_fraction": near_angle_valid_fraction,
+        "far_angle_deg": far_angle_deg,
+        "beam_center_angle_deg": beam_center_angle_deg,
+        "beam_width_deg": beam_width_deg,
+        "usable_range_m": usable_range_m,
     }
     return StageResult(stage="stage2_5_beam_geometry", metrics=metrics, classification=classification, notes=notes)
 
@@ -1021,7 +1175,7 @@ def stage3_usable_range(
         Shape (ping, channel) — for each ping/channel, mask samples
         before this sample index to NaN before binning, on top of
         whatever `range_var` already excludes geometrically. Meant to
-        be `stage2_nadir()`'s `data["first_strong_return_sample"]`: the
+        be `stage2_nadir()`'s `data["first_bottom_return_sample"]`: the
         geometric water-column mask alone only excludes the earliest,
         weakest part of the near-grazing zone — real data
         (`survey-a`) shows genuine backscatter stays weak
@@ -1049,11 +1203,11 @@ def stage3_usable_range(
     range_finite = np.isfinite(np.asarray(ds[range_var].values))
     n_water_column_excluded = int(np.sum(value_finite & ~range_finite))
 
-    n_weak_zone_excluded = 0
+    n_nadir_gap_excluded = 0
     if exclude_before_sample is not None:
         original = ds[value_var]
         masked = _mask_before_sample(original.values, exclude_before_sample)
-        n_weak_zone_excluded = int(np.sum(np.isfinite(original.values) & range_finite & ~np.isfinite(masked)))
+        n_nadir_gap_excluded = int(np.sum(np.isfinite(original.values) & range_finite & ~np.isfinite(masked)))
         ds = ds.assign(**{value_var: (original.dims, masked)})
 
     n_outliers_rejected = 0
@@ -1074,7 +1228,7 @@ def stage3_usable_range(
             metrics={
                 "usable_range_m": None,
                 "water_column_n_excluded": n_water_column_excluded,
-                "weak_zone_n_excluded": n_weak_zone_excluded,
+                "nadir_gap_n_excluded": n_nadir_gap_excluded,
             },
             notes=["No finite samples to bin — usable range undetermined."],
             data={"binned": binned},
@@ -1113,7 +1267,7 @@ def stage3_usable_range(
         "far_range_median": float(binned["median"].iloc[-1]),
         "max_range_m": float(binned["range_max_m"].iloc[-1]),
         "water_column_n_excluded": n_water_column_excluded,
-        "weak_zone_n_excluded": n_weak_zone_excluded,
+        "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,
         "outlier_mad_k": outlier_mad_k if reject_outliers else None,
         "outlier_n_rejected": n_outliers_rejected,
@@ -1213,7 +1367,7 @@ def stage4_decay(
         Shape (ping, channel) — mask samples before this sample index
         to NaN (in dB space, after conversion) before binning, on top
         of whatever `range_var` already excludes geometrically. Meant
-        to be `stage2_nadir()`'s `data["first_strong_return_sample"]`
+        to be `stage2_nadir()`'s `data["first_bottom_return_sample"]`
         — see `stage3_usable_range`'s identical parameter for why the
         geometric mask alone isn't enough. `None` (default) applies no
         additional exclusion.
@@ -1278,11 +1432,11 @@ def stage4_decay(
             db_reference = {"method": "percentile", "percentile": db_reference_percentile, "value": x_ref}
         db_da = 20.0 * np.log10((np.abs(arr) + _MIN_LINEAR) / x_ref)
 
-    n_weak_zone_excluded = 0
+    n_nadir_gap_excluded = 0
     if exclude_before_sample is not None:
         db_before = np.asarray(db_da.values)
         db_masked = _mask_before_sample(db_before, exclude_before_sample)
-        n_weak_zone_excluded = int(np.sum(np.isfinite(db_before) & ~np.isfinite(db_masked)))
+        n_nadir_gap_excluded = int(np.sum(np.isfinite(db_before) & ~np.isfinite(db_masked)))
         db_da = xr.DataArray(db_masked, dims=db_da.dims, coords=db_da.coords)
 
     n_outliers_rejected = 0
@@ -1305,7 +1459,7 @@ def stage4_decay(
             metrics={
                 "freq_hz": freq_hz, "db_reference": db_reference,
                 "water_column_n_excluded": n_water_column_excluded,
-                "weak_zone_n_excluded": n_weak_zone_excluded,
+                "nadir_gap_n_excluded": n_nadir_gap_excluded,
                 "reject_outliers": reject_outliers,
                 "outlier_mad_k": outlier_mad_k if reject_outliers else None,
                 "outlier_n_rejected": n_outliers_rejected,
@@ -1352,7 +1506,7 @@ def stage4_decay(
         "ambiguous_rel_tol": ambiguous_rel_tol,
         "candidates": {c.name: {"scale": c.scale, "rmse_db": c.rmse_db} for c in fit_result.candidates},
         "water_column_n_excluded": n_water_column_excluded,
-        "weak_zone_n_excluded": n_weak_zone_excluded,
+        "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,
         "outlier_mad_k": outlier_mad_k if reject_outliers else None,
         "outlier_n_rejected": n_outliers_rejected,
