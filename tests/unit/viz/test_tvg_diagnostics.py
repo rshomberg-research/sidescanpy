@@ -175,6 +175,7 @@ class TestPlotCandidateFit:
                 ax=ax,
                 show_observed=(i == 0),
             )
-        # 1 observed line + 4 candidate lines, not 4 observed + 4 candidate.
-        assert len(ax.get_lines()) == 5
+        # 1 observed line + 1 reference-range vline + 4 candidate lines,
+        # not 4 observed + 4 vlines + 4 candidate.
+        assert len(ax.get_lines()) == 6
         plt.close(fig)

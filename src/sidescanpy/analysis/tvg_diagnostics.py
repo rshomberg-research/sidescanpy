@@ -334,6 +334,7 @@ def fit_hardware_tvg_curve(
     min_count_for_r_ref: int = 30,
     fit_fraction: float = 0.6,
     r_ref_search_fraction: float = 0.5,
+    value_col: str = "mean",
 ) -> TVGCandidateFitResult:
     """
     Fit four candidate hardware-correction models against an observed
@@ -438,6 +439,19 @@ def fit_hardware_tvg_curve(
         `r_ref_m`'s docstring above for the failure mode this prevents.
         Falls back to the full range if no eligible bin falls in that
         window (shouldn't happen with realistic range coverage).
+    value_col : str, default "mean"
+        Which of `binned`'s per-bin aggregate columns to fit against —
+        `"mean"` (the original behavior, unchanged for every existing
+        caller) or `"median"`. Added for pairing with aggressive
+        per-bin outlier rejection upstream (e.g.
+        `analysis.investigation.reject_range_outliers`), on the theory
+        that a plain arithmetic mean isn't distribution-neutral on a
+        right-skewed population the way a median is. **That theory
+        didn't hold up cleanly on real data** — see
+        `analysis.investigation.stage4_decay`'s `fit_value_col`
+        docstring for the actual (mixed, dataset-dependent) result.
+        Internal variable names below still say `means` for a minimal
+        diff; they hold whichever column `value_col` selects.
 
     Returns
     -------
@@ -452,7 +466,7 @@ def fit_hardware_tvg_curve(
         raise ValueError("fit_hardware_tvg_curve: `binned` has no rows")
 
     range_centers = ((binned["range_min_m"] + binned["range_max_m"]) / 2.0).to_numpy()
-    means = binned["mean"].to_numpy()
+    means = binned[value_col].to_numpy()
     counts = binned["count"].to_numpy()
 
     order = np.argsort(range_centers)

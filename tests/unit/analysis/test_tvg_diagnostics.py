@@ -422,6 +422,21 @@ class TestFitHardwareTvgCurve:
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
 
+    def test_value_col_selects_median_column(self):
+        """`mean` and `median` deliberately diverge: `mean` is corrupted
+        to a flat curve (would pick candidate "flat"), `median` carries
+        the true absorption_only curve. value_col="median" must fit
+        against `median`, not silently fall back to `mean`."""
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        binned["mean"] = binned["mean"].iloc[0]  # corrupt to flat
+
+        result_mean = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result_median = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, value_col="median")
+
+        assert result_mean.best.name == "flat"
+        assert result_median.best.name == "absorption_only"
+        assert result_median.best.rmse_db == pytest.approx(0.0, abs=1e-6)
+
     def test_full_physics_curve_picks_full_physics(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=_ABSORPTION))
         result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)

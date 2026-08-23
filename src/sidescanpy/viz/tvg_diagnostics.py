@@ -233,22 +233,30 @@ def plot_candidate_fit(
     """
     fig, ax = _new_fig_ax(ax)
 
+    # x-axis is distance *from the reference range* (r_ref_m — the
+    # post-outlier-rejection max-mean bin the fit and dB conversion are
+    # both anchored to), not absolute range, so x=0 always marks the
+    # reference point the curve is normalized against.
+    rel_range_m = observed_range_m - fit.r_ref_m
+
     if show_observed:
         ax.plot(
-            observed_range_m, observed_loss_db,
-            ".", color="black", markersize=3, alpha=0.5, label="observed",
+            rel_range_m, observed_loss_db,
+            "o", color="black", markersize=7, markerfacecolor="none",
+            markeredgewidth=1.3, alpha=0.7, label="observed",
         )
+        ax.axvline(0, color="k", linewidth=0.8, alpha=0.4)
 
     model_curve = tvg_gain_db(np.clip(observed_range_m, fit.params.min_range_m, None), fit.params)
     i_ref = int(np.argmin(np.abs(observed_range_m - fit.r_ref_m)))
     model_loss = fit.scale * (model_curve - model_curve[i_ref])
     ax.plot(
-        observed_range_m, model_loss, "--", color=color,
+        rel_range_m, model_loss, "--", color=color,
         label=f"{fit.name} (scale={fit.scale:.2f}, RMSE={fit.rmse_db:.2f}dB)",
     )
-    ax.axvspan(fit.r_ref_m, fit.r_fit_max_m, alpha=0.05, color=color)
+    ax.axvspan(0, fit.r_fit_max_m - fit.r_ref_m, alpha=0.05, color=color)
 
-    ax.set_xlabel("Range (m)")
+    ax.set_xlabel(f"Distance from reference range (r_ref={fit.r_ref_m:.1f}m) (m)")
     ax.set_ylabel(f"Loss relative to {fit.r_ref_m:.1f}m (dB)")
     if title:
         ax.set_title(title)

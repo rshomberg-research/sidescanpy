@@ -223,3 +223,54 @@ def run_pipeline(survey: SideScanSurvey, target: str) -> SideScanSurvey:
             f"target must be one of {VALID_PROCESS_LEVELS}, got {target!r}"
         )
     return run_correction_steps(survey, _LADDER_STEPS[target])
+
+
+_GEOMETRY_VARS_TO_DROP = (
+    "ground_range_m",
+    "across_track_m",
+    "along_track_m",
+    "slant_range_m",
+    "vertical_offset_m",
+    "depth_per_sample_m",
+    "latitude_per_sample",
+    "longitude_per_sample",
+)
+
+
+def reconstruct_raw(ds: xr.Dataset) -> xr.Dataset:
+    """Rebuild a ``processing_level == "raw"`` dataset from one that has
+    already been through some or all of the correction pipeline.
+
+    Relies on ``backscatter_raw`` being immutable through every
+    correction step (``apply_tvg`` only ever reads/writes
+    ``backscatter_intensity`` — see this module's own step-order
+    comment above) — copies it back into ``backscatter_intensity`` and
+    drops the downstream-computed geometry variables so a later
+    ``compute_geometric_ranges`` call recomputes them fresh rather than
+    silently reusing stale ones. Promoted here from a helper duplicated
+    across two `project-a` debug scripts
+    (``tvg_range_residual_diagnostic.py``, ``fit_tvg_hardware_curve.py``)
+    plus this library's own investigation tooling
+    (``sidescanpy.investigation``) — a third independent copy would have
+    been one duplicate too many.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Single frequency channel dataset, any ``processing_level``.
+
+    Returns
+    -------
+    xr.Dataset
+        New dataset (input not modified) with ``processing_level =
+        "raw"``, empty ``processing_history``, and no downstream
+        geometry variables.
+    """
+    out = ds.copy(deep=False)
+    out["backscatter_intensity"] = out["backscatter_raw"]
+    drop_vars = [v for v in _GEOMETRY_VARS_TO_DROP if v in out]
+    out = out.drop_vars(drop_vars)
+    out.attrs = dict(out.attrs)
+    out.attrs["processing_level"] = "raw"
+    out.attrs["processing_history"] = "[]"
+    return out

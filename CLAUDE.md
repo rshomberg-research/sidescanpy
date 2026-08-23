@@ -678,6 +678,459 @@ question stays open.
   independently zero-able; this work is entirely about exposing that
   capability and adding tooling to decide *when* to use it.
 
+### v0.14.0 — Data Investigation Pipeline (Complete)
+
+**Status:** Implemented 2026-08-23, from an external handoff doc (a
+generic 5-stage investigation framework drafted outside this repo) that
+asked for it to be built reusing existing tooling wherever possible.
+Answers "what does this unknown/unfamiliar data source actually
+contain" — units, TVG status, nadir handling, usable range — as a
+repeatable pipeline, distinct from `tvg_diagnostics.py`'s
+investigate-one-specific-residual scope (this module *uses*
+`tvg_diagnostics.py`'s binning/fitting directly rather than duplicating
+it).
+
+- ✅ `analysis/investigation.py` (matplotlib-free, mirrors
+  `tvg_diagnostics.py`'s analysis/viz split) — `StageResult` dataclass
+  + `stage1_characterize`/`stage2_nadir`/`stage3_usable_range`/
+  `stage4_decay`/`stage5_units`. Stage 3 reuses
+  `mean_backscatter_vs_range`; Stage 4 reuses that plus
+  `fit_hardware_tvg_curve` — the candidate-name → TVG-status mapping is
+  deliberately inverted (candidate names describe what's still
+  *present* in raw data, status describes what's already been
+  *removed*) and spelled out explicitly in `_TVG_CANDIDATE_TO_STATUS`
+  to avoid silently flipping the whole stage's conclusion.
+  `stage4_decay`'s linear→dB conversion (`db_reference_percentile`,
+  default 99th) is deliberately **not** the same "dB re 1" convention
+  `analysis/tvg_diagnostics.py: _linear_to_db`/`apply_tvg()` use — this
+  stage self-references to the channel's own signal level instead
+  (no vendor calibration is ever available for this data, so an
+  absolute dB reference is arbitrary; a documented relative one is
+  reproducible). Provably inert to classification (every downstream
+  number is a dB *difference*, which cancels a constant reference
+  shift) — see the docstring and
+  `test_classification_invariant_to_db_reference` for the proof this
+  actually holds in the implementation, not just in theory. Also
+  gained `db_reference_value` (overrides the percentile-computed
+  reference with an exact linear value, e.g. `1.0` to reproduce the
+  "dB re 1" convention directly) — added specifically to empirically
+  run all three reference options from the strategy doc (99th
+  percentile / fixed dB-re-1 / median) side by side on real data for
+  the investigation report's "Final results" section; all three agreed
+  to 6+ significant figures on both channels, confirming the proof
+  above in practice, not just in the abstract.
+- ✅ **Outlier rejection for Stage 3/4 (2026-08-23, user-requested):**
+  `reject_range_outliers()` — per-range-bin, median/MAD-based rejection
+  (deliberately aggressive default `mad_k=2.5`, deliberately willing to
+  discard genuine hard-target/complex-terrain returns) so Stage 3's
+  noise floor and Stage 4's decay fit can target a flat,
+  sandy-bottom-like population instead of being pulled around by real
+  but calibration-irrelevant returns. Opt-in only
+  (`reject_outliers=False` default on both stages, plus the CLI's
+  `--reject-outliers`) — explicitly **not** the right default for
+  anything display/export-facing, where those same bright returns are
+  usually genuine signal worth keeping (see this same session's "why is
+  LF's range so high" investigation-report finding, which argues the
+  opposite call for that use case). Tests:
+  `tests/unit/analysis/test_investigation.py::TestRejectRangeOutliers`
+  (4 tests) plus one integration test each on Stage 3/Stage 4 showing
+  the option actually changes their output on injected-spike synthetic
+  data. Full suite (through the `value_col` follow-up below too):
+  1163 passing / 36 skipped (was 1155).
+  **Real-data check, mixed result, worth knowing before reaching for
+  this by default:** on `survey-a` at `mad_k=2.5`, ~4-5% of
+  samples get rejected per channel (not just the ~0.0001%-rare true
+  point-target population the earlier LF-outlier investigation found —
+  a MAD threshold this aggressive on right-skewed backscatter trims a
+  meaningful slice of ordinary speckle too, which is expected given how
+  aggressive `mad_k=2.5` deliberately is). Stage 3's usable-range
+  estimate benefited clearly (LF: noise_std 1.67→1.14, usable range
+  46m→52m). **Stage 4's fit RMSE got measurably *worse*, not better**
+  (HF: 0.22→0.39dB; LF: 0.28→0.38dB).
+- ✅ **`fit_hardware_tvg_curve(..., value_col="mean"|"median")` +
+  `stage4_decay(..., fit_value_col=...)` (2026-08-23, follow-up to the
+  RMSE regression above) — tried, did NOT reliably fix it.** Theory:
+  symmetric MAD-based trimming isn't distribution-neutral on a
+  right-skewed population, so it shifts the plain arithmetic `mean`
+  `fit_hardware_tvg_curve` fits against; `median` should be robust to
+  that. **Real-data result was mixed, not a clean win:** switching
+  `"mean"`→`"median"` under `reject_outliers=True` improved HF (0.39→
+  0.35dB, still worse than the 0.22dB no-rejection baseline) but made
+  LF *worse* (0.38→0.66dB). **What stayed stable across every
+  configuration tested (both `value_col` choices, rejection on or
+  off): the winning candidate and TVG-status classification** — only
+  the RMSE number moved around. Treat Stage 4's RMSE as noisy/
+  unreliable under `reject_outliers=True` regardless of `value_col`;
+  treat the classification as the trustworthy output. Left both
+  options in (real, useful, well-tested capabilities — `value_col` is
+  also a clean, zero-risk addition to `fit_hardware_tvg_curve` in its
+  own right, opt-in default `"mean"` preserves every existing caller's
+  behavior exactly) but documented the honest result in both
+  functions' docstrings rather than claim a fix that didn't
+  materialize. This survey also has very little genuine target/terrain
+  contamination to begin with (same finding above), so none of this
+  may generalize to a survey that actually needs the option — revisit
+  if/when one comes up.
+- ✅ **2026-08-23 same-day follow-up, user pushback ("maybe I rejected
+  too aggressively") — retuned `mad_k` default 2.5→3.5** (the
+  commonly-cited Iglewicz & Hoaglin "definite outlier" threshold —
+  literature-backed, not arbitrary). Real-data rejection dropped from
+  ~4-5% to **1.6% (HF) / 2.4% (LF)** per channel — much closer to a
+  genuine tail-trim. Stage 3 benefit still holds at the new default
+  (LF noise_std 1.67→1.31, usable range 46m→50m). **Re-ran the
+  `fit_value_col` comparison at the new default and found something
+  worse than the earlier "mixed RMSE" result: pairing
+  `reject_outliers=True` with `fit_value_col="median"` flipped LF's
+  classification itself**, from `spreading_only` to `ambiguous` (best
+  candidate changed `absorption_only`→`full_physics`, runner-up gap
+  closed enough to trip the ambiguous threshold) — the earlier
+  "classification always stays stable regardless of value_col" claim
+  in this same file was true at `mad_k=2.5` but **is not true in
+  general** and has been corrected in both this entry and
+  `stage4_decay`'s own docstring. Updated guidance:
+  `reject_outliers=True` paired with the `"mean"` default preserved
+  classification in every real-data case tried; pairing with
+  `"median"` did not — don't reach for `"median"` as a default fix,
+  treat it as an experimental option to sanity-check against `"mean"`.
+- ✅ **Stage 2 water-column boundary made explicit (2026-08-23,
+  user-requested — "I do not think you are identifying the water
+  column"). Superseded same day — see the follow-up entry below; the
+  geometric-only boundary this entry describes turned out to be
+  substantially wrong, not just incomplete. Left for historical
+  record.** `stage2_nadir()` gained a `range_var` param (default
+  `"ground_range_m"`): surfaces the water-column boundary that
+  `compute_geometric_ranges()` already encodes (`ground_range_m` is
+  NaN wherever `slant_range_m <= altitude_m`) as explicit per-ping
+  metrics (`water_column_end_sample_median`/`p10`/`p90`) and a
+  `first_bottom_sample` array in `.data`, rather than leaving it an
+  invisible side effect of NaN masking. Also computes a corroborating
+  signal-step check (does `value_var` actually step up across the
+  boundary on a representative ping?) — **real-data result itself is
+  informative, not just confirmatory**: LF shows a clear step (1.35×,
+  no note), HF doesn't (0.95×, essentially flat, generates a note).
+  Not a bug — the geometric crossing marks where grazing angle first
+  becomes nonzero, not where backscatter has ramped up to a strong
+  echo, which can build gradually further out. Confirmed via the new
+  waterfall boundary overlay (below) that the boundary sits safely
+  inside the dark/empty region on both channels, well before the
+  visible bright signal wall — conservative, not permissive, which is
+  the safe direction for Stage 3/4's fitting.
+  - **Confirmed structurally (not a new behavior, just newly visible):
+    Stage 3/4 already excluded water-column samples from curve
+    fitting before this session** — both bin by `ground_range_m`,
+    and `mean_backscatter_vs_range`'s own `isfinite` check already
+    drops NaN ranges. Both stages now report this explicitly via a
+    new `water_column_n_excluded` metric (real data: ~2.36M HF /
+    ~1.39M LF samples, ~3.1%/~2.2% of each channel) instead of it
+    being invisible. Directly answers the user's ask ("we do not want
+    to include the water column in our curve fitting... I think we
+    want that water column return to get pushed to near zero or just
+    identified and removed entirely") — it already was, now provably so.
+  - `viz/investigation.py`: `plot_stage2_nadir_zoom()` gained a
+    `stage2` param — widens its zoom window to actually reach the
+    detected boundary (previously fixed at `nadir_n_samples *
+    zoom_factor`, e.g. ±100 samples, vs. a real median boundary of
+    ~130-190 samples — far too narrow to show the transition at all,
+    which was the direct cause of the user's "I'm not confident"
+    concern) and marks the boundary with a shaded region + line.
+    `plot_stage2_waterfall()` gained the same param — traces the
+    per-ping boundary as an overlaid line across the full survey, the
+    most direct way to visually audit it against the real signal
+    structure (see the confirmation above).
+  - Tests: 5 new (`test_water_column_boundary_skipped_without_range_var`,
+    `test_water_column_boundary_matches_geometry`,
+    `test_signal_step_note_when_no_real_step`,
+    `test_signal_step_no_note_with_real_step`,
+    `test_water_column_n_excluded_matches_geometry`). Full suite: 1170
+    passing / 36 skipped.
+- ✅ **Same-day correction: the geometric boundary above was itself
+  substantially wrong — caught by a direct human read of the raw
+  waterfall, not by any tooling.** The user disputed the reported
+  boundary directly: *"Your estimate of the water-column boundary is
+  off by an order of magnitude... I would guess for ping 4000 it
+  starts at about sample 250."* Precise sample-by-sample inspection
+  confirmed it: HF ping 4000's geometric crossing is genuinely at
+  sample 141, but amplitude stays weak (0.05-0.4 vs. a ~22 peak) all
+  the way to ~sample 300, then jumps sharply by ~sample 325-330 — the
+  geometric crossing (`slant_range > altitude`) marks where the beam
+  *mathematically* reaches bottom, not where the return is actually
+  *strong*; grazing angle right at that crossing is still too shallow.
+  **New:** `detect_first_strong_return()` — a genuine amplitude-based
+  detector (rolling-mean smoothing + a per-ping-relative threshold +
+  sustained-run confirmation, vectorized, no per-ping Python loop),
+  validated against the same ping (lands at sample 320-333 across
+  `threshold_fraction` 0.1-0.3, matching the manually-confirmed ~325-330
+  onset). `stage2_nadir()` now reports **both** boundaries, clearly
+  named and distinguished (`geometric_bottom_contact_sample_*` vs.
+  `first_strong_return_sample_*`), plus their gap
+  (`geometric_to_strong_gap_sample_median`) and a signal-step check
+  re-anchored on the *strong* boundary — real data now shows a clean
+  step there on both channels (HF 9.4×, LF 6.0×; the old
+  geometric-anchored check had read 0.95×/1.35×, which in hindsight
+  was itself the tell that something was off).
+  - **`stage3_usable_range`/`stage4_decay` gained `exclude_before_sample`**
+    (a `(ping, channel)` NaN mask applied before binning, layered on
+    top of the existing geometric exclusion) and
+    `run_investigation()` wires it in by default
+    (`exclude_weak_zone=True`) using `stage2`'s
+    `first_strong_return_sample`. **Second bug found while wiring this
+    in, same day:** feeding the raw *per-ping* boundary straight into
+    aggregate binning is wrong — pings' boundary location correlates
+    with their own near-field amplitude (shallower altitude -> both an
+    earlier onset and a stronger near return), so per-ping masking
+    selectively keeps only the strongest, earliest-onset pings' data
+    in near-range bins. On HF this produced a spurious near-field spike
+    (mean 6.3 vs. 2.9 in the next bin out) that `fit_hardware_tvg_curve`'s
+    max-mean `r_ref_m` auto-selection picked up, moving the reference
+    from a physically sensible 7.5m to 2.5m and nearly quadrupling
+    RMSE (0.22dB -> 0.87dB). **Fixed:** new
+    `uniform_exclusion_boundary()` collapses the per-ping array to one
+    conservative, survey-wide value (90th percentile) before masking —
+    `r_ref_m` returned to exactly 7.5m/12.5m (matching the pre-exclusion
+    values), confirming the fix. Real-data RMSE after both fixes: HF
+    0.70dB, LF 0.37dB (higher than the original un-excluded 0.22/0.28dB
+    — expected and correct, since the fit is now against a properly
+    cleaned curve, not a regression). Classification unchanged
+    (`spreading_only` both channels).
+  - **This also resolved the earlier `reject_outliers`/`fit_value_col`
+    "mixed result" writeup above (2026-08-23 mad_k retune entry) —
+    that check was confounded by the per-ping exclusion bug just
+    described, not a real property of `reject_outliers` or
+    `fit_value_col`.** Re-run against the corrected uniform-boundary
+    baseline: `reject_outliers=True` *improves* RMSE on both channels
+    (HF 0.70->0.36-0.39dB, LF 0.37->0.30-0.38dB depending on
+    `fit_value_col`), and classification stays `spreading_only` in
+    every combination tried, `"mean"` or `"median"` — no ambiguous
+    flip. Both functions' docstrings updated to record this as a
+    caution about verifying a surprising result isn't a symptom of a
+    different bug before writing it down as a property of the thing
+    under test.
+  - `viz/investigation.py`: `plot_stage2_nadir_zoom()`/
+    `plot_stage2_waterfall()` now mark and label both boundaries
+    distinctly (dotted olive = geometric, solid teal = strong-return)
+    and shade the weak near-grazing zone between them.
+  - Tests: 9 new/rewritten (`TestDetectFirstStrongReturn` — 4,
+    `TestUniformExclusionBoundary` — 3 including a synthetic
+    reproduction of the selection-bias bug, plus 2 Stage 2/Stage 3
+    integration tests). Full suite: 1179 passing / 36 skipped.
+- ✅ **New Stage 2.5 — beam geometry (2026-08-23, user pushback on the
+  interpretation, not just the numbers).** After the boundary-detector
+  fix above, the user offered a competing physical explanation for the
+  weak zone: not gradual near-grazing-incidence scattering (Stage 2's
+  implicit assumption — a beam pointed straight down at nadir), but a
+  sidescan beam mounted at a genuine tilt that simply doesn't
+  illuminate anywhere near directly below the towfish — "the weak zone
+  isn't weak backscatter, it's the sonar looking at nothing." Also
+  raised a second, harder-to-rule-out alternative: `altitude_m` itself
+  could simply be wrong. Built a real diagnostic rather than argue
+  from priors: `stage2_5_beam_geometry()` — for a set of candidate
+  beam-tilt angles (straight lines, no real directivity/beam-pattern
+  modeling — deliberately simple per the user's own "just straight
+  angles for now" scope), computes where each would first intersect a
+  flat seafloor at the ping's own `altitude_m`, and back-calculates the
+  angle *implied* by where the real signal actually starts
+  (`arccos(altitude_m / observed_slant_range_m)` at
+  `first_strong_return_sample`). `viz.investigation.plot_stage2_5_beam_geometry()`
+  draws this as an axial (side-view) diagram directly above the real
+  single-ping profile on a shared across-track-distance x-axis, so
+  candidates can be checked by eye, not just by a table of numbers.
+  - **Real-data result favors the tilted-beam explanation clearly:**
+    implied angle 25° below horizontal (HF) / 18° (LF) — both
+    ordinary, physically unremarkable sidescan mounting angles, not
+    extreme values — and the implied-angle line lands almost exactly
+    on the visible boundary between the flat/near-zero region and the
+    real signal on both channels. This is evidence against Stage 2's
+    original 0°-from-vertical framing, not just an alternative that
+    also fits.
+  - **Cannot rule out the altitude-is-wrong alternative from this
+    survey's data alone** — a wrong `altitude_m` shifts every
+    candidate ray (and the implied angle) together without changing
+    which one fits best relative to the others. Said so explicitly in
+    both the docstring and the report rather than overclaim the tilted-
+    beam explanation as proven; an independent altitude/depth source
+    (DVL, chart depth, a second sensor) would be needed to separate the
+    two hypotheses.
+  - **Deliberately not hardcoded to this survey's beam pattern** — the
+    user flagged that other datasets show nadir as *bright* rather than
+    a *gap*, implying a genuinely different near-nadir beam geometry
+    that would need a different candidate angle set and produce a
+    different-looking picture; the function takes
+    `candidate_angles_from_vertical_deg` as a parameter for exactly
+    this reason, and the skill doc says explicitly not to reuse one
+    survey's angle numbers for a differently-behaved one.
+  - **Real bug caught by a test, not by inspection:** the "impossible
+    geometry" check (observed slant range less than altitude) only
+    tested `slant > 0`, not `slant >= altitude` — so a genuinely
+    impossible case (slant < altitude) silently produced `angle = 0°`
+    via `arccos(clip(ratio, -1, 1))` instead of being flagged. Fixed;
+    regression test added.
+  - Tests: `TestStage2_5BeamGeometry` (4 tests, including one that
+    isolates the angle math from `detect_first_strong_return`'s own
+    smoothing imprecision by feeding a hand-built `StageResult` with an
+    exact known boundary, rather than conflating two things worth
+    testing separately). Full suite: 1183 passing / 36 skipped.
+- ✅ **Stage 1.5 linear-panel readability fix (2026-08-23,
+  user-requested).** `plot_stage1_5_before_after()`'s linear-scale
+  panel previously let matplotlib auto-scale independently per `hist()`
+  call — with `before` spanning the full range (up to 1280 on LF), the
+  entire readable bulk distribution (before *and* after) collapsed
+  into an unreadable sliver at the left edge. Fixed: both panels now
+  use one shared set of bin edges (matplotlib picks different edges
+  per call otherwise, silently misrepresenting the overlay), and the
+  linear panel's x-axis is capped at the `before` population's 99.5th
+  percentile (`linear_xlim_percentile` param) rather than its true
+  max, with an annotation reporting how many/how-large the off-screen
+  values are — nothing is dropped from the underlying data, just the
+  view.
+- ✅ **Stage 1.5 (`stage1_5_outlier_comparison` + `plot_stage1_5_before_after`,
+  2026-08-23, user-requested)** — re-runs Stage 1's characterization
+  before/after `reject_range_outliers`, always computed by
+  `run_investigation()` regardless of whether `reject_outliers` is on
+  for Stage 3/4 (a preview, not gated behind that flag). Real-data
+  check: both channels show a visible trim across the upper-middle of
+  the distribution, not just the extreme tail — consistent with (and a
+  good visual confirmation of) the ~4-5%-of-samples-rejected finding
+  above, not a bug. Tests:
+  `TestStage1_5OutlierComparison` (2 tests). Full suite: 1165 passing.
+- ✅ `viz/tvg_diagnostics.py: plot_candidate_fit()` — "observed" markers
+  changed from tiny filled dots (`markersize=3`) to larger open circles
+  (`"o"`, `markersize=7`, unfilled) per user request, for legibility
+  against the dashed candidate-fit lines. Purely cosmetic, no test
+  asserted the old style.
+- ✅ `viz/investigation.py` — one plot function per stage's qualitative
+  output; reuses `viz.waterfall.plot_waterfall` (via aliasing
+  `value_var` onto `backscatter_intensity` on a shallow copy, since
+  that function reads a fixed variable name) and
+  `viz.tvg_diagnostics.plot_candidate_fit` directly rather than
+  reimplementing either.
+- ✅ `investigation.py` (new top-level module) — `run_investigation()`,
+  the library-level orchestrator the handoff asked for: loads a
+  `.ss.h5`/`.jsf`/`.sdf` file, reconstructs raw if needed, computes
+  geometric ranges if missing, runs all five stages, and (if
+  `output_dir` given) saves one PNG per stage plus `metrics.json`.
+  Meant to be reused as-is by any consumer, including a future
+  field port — the actual CLI wrapper stays in the consumer
+  project (`project-a/scripts/investigate_dataset.py`), per this
+  file's own "domain logic in the library, CLI/script orchestration in
+  the consumer project" convention — `run_investigation()` itself isn't
+  a CLI, so it's the one exception living here rather than there.
+- ✅ `processing/pipeline.py: reconstruct_raw()` — promoted from a
+  helper duplicated across two `project-a` debug scripts
+  (`tvg_range_residual_diagnostic.py`, `fit_tvg_hardware_curve.py`);
+  this module's own need for it would have been a third independent
+  copy.
+- ✅ Tests: `tests/unit/analysis/test_investigation.py` (15 tests, small
+  synthetic fixtures per TDD convention) — includes a regression guard
+  documenting `fit_hardware_tvg_curve`'s own near-flat-data
+  fit-degeneracy behavior (a truly flat+noise curve can have a
+  non-`flat` candidate technically edge out `flat` on RMSE by
+  overfitting the noise; the test asserts "no real decay detected"
+  rather than a specific winning candidate name — see that test's
+  docstring) and `test_classification_invariant_to_db_reference`
+  (proves the dB-reference choice above is actually inert to
+  classification, not just in theory). Full suite: 1155 passing / 36
+  skipped (was 1140 — zero
+  regressions).
+- **Real-data validation** (`project-a`'s `survey-a`
+  survey, both frequencies, 8000 pings, blind on `backscatter_raw`):
+  independently reproduced three things this project had previously
+  found by hand for this exact survey — units (`raw_counts`, matching
+  the recorded `processing_history` metadata), TVG status (spreading
+  already removed / absorption remaining, matching the v0.13.0 finding
+  above almost exactly), and nadir (`gap`, matching Known Issue #5's
+  documented leading zero-run).
+- **New, previously-undocumented finding surfaced by this validation
+  run:** `apply_tvg()`'s logged `processing_history` metadata
+  (`radiometric.py:404`) hardcodes `"raw_format": "linear_amplitude
+  (0-81)"` for every channel regardless of that channel's actual range
+  — confirmed wrong for `survey-a`'s LF channel
+  (`hz_547500`), whose real raw range is 0-1280. Cosmetic only (the
+  string isn't used in the conversion math), but actively misdescribes
+  the data to anyone who trusts that field later. **Not fixed** — flagged
+  as a recommendation in the investigation's report artifact, not
+  addressed in this session (out of scope for what was asked).
+- Skill: `sidescan-data-investigation`
+  (`<workspace>/.claude/skills/sidescan-data-investigation/SKILL.md`,
+  family-root-scoped like `sidescan-sonar`) documents the pipeline and
+  how to invoke/extend it — separate from `sidescan-sonar`, which stays
+  the domain-physics reference.
+- ✅ **Stage 3/4 exclusion-boundary split — per-ping for Stage 3,
+  uniform for Stage 4 (2026-08-23, user-caught real artifact).** After
+  the Stage 2.5 beam-geometry finding above confirmed
+  `first_strong_return_sample` as a real, working detector, the user
+  asked for an early masking step that removes every nadir/water-column
+  sample before Stage 3/4 run at all ("only run the analysis on actual
+  bottom hits"). First implementation fed
+  `uniform_exclusion_boundary()`'s single survey-wide (p90) cutoff into
+  *both* stages (reusing the value already needed for Stage 4's
+  near-field selection-bias fix, above). The user caught a real
+  consequence directly off the regenerated plot: LF's usable-range
+  curve had an anomalous near-zero first point. Root cause: a uniform
+  cutoff under-masks whichever ~10% of pings' true boundary exceeds it;
+  because ground range at a fixed sample index depends on that ping's
+  own altitude, those pings' still-invalid leaked samples can land in a
+  *different* (nearer) range bin than where the rest of the survey's
+  valid signal starts — confirmed on real data by comparing bin
+  contents directly: the uniform boundary left a `range=8-10m,
+  count=30, median=0.39` bin (thin and near-zero — contamination),
+  while the exact per-ping boundary's nearest bin was `range=2-4m,
+  count=305, median=14.75` (thin but genuinely valid — a few pings'
+  real near boundary, not leaked invalid samples). Fixed in
+  `run_investigation()`: Stage 3 now gets the exact per-ping
+  `first_strong_return_sample` array directly (safe — Stage 3 does no
+  aggregate max-search across bins, so per-ping precision has no
+  downside there); Stage 4 keeps the uniform boundary (still needed —
+  its `r_ref_m` auto-selection *does* do a max-mean search, which is
+  exactly what per-ping masking was found to bias in the original
+  near-field selection-bias fix, above). Real-data re-run: LF/HF
+  classification unchanged (`usable_range_m` 46.0/36.0,
+  `best_fit_model=absorption_only`, `tvg_status=spreading_only`); LF's
+  usable-range plot no longer shows the near-zero artifact. Regression
+  test: `TestStage3UsableRange.test_per_ping_boundary_avoids_thin_contaminated_near_bin_vs_uniform`
+  (synthetic repro using the same correlated-boundary/altitude physics
+  pattern as `test_avoids_near_field_selection_bias_vs_per_ping_boundary`,
+  adapted for Stage 3's opposite conclusion). Full suite: 1184 passing
+  / 36 skipped.
+- ✅ **Stage 4 decay-fit plots now use distance-from-reference on the
+  x-axis, not absolute range (2026-08-23, user-requested).** The y-axis
+  was already "loss relative to r_ref" but the x-axis stayed absolute
+  range in meters — inconsistent, and made it harder to read the curve
+  as "how much loss accumulates past the point we normalized against."
+  `viz/tvg_diagnostics.py: plot_candidate_fit()` and
+  `viz/investigation.py: plot_stage4_residuals()` both now plot against
+  `range_m - r_ref_m`, with a vertical line and the shaded fit-window
+  span anchored at `x=0`; the x-axis label states `r_ref` explicitly
+  (`"Distance from reference range (r_ref=7.5m) (m)"`). The reference
+  vline is drawn once per `ax` (on `show_observed=True`), matching the
+  existing "draw the observed curve once, overlay each candidate"
+  calling convention, not once per candidate. Test updated
+  (`test_repeated_calls_show_observed_once`: 5→6 expected lines, for
+  the added vline). Full suite: 1184 passing / 36 skipped.
+- ✅ **New `analysis/investigation.py: mask_weak_zone()` — water column
+  now NaN'ed in displayed/exported waterfalls, not just excluded from
+  curve fitting (2026-08-23, user-caught gap).** The Stage 3/4 fixes
+  above stopped *fitting* against the nadir gap + weak near-grazing
+  zone, but corrected/recommended waterfall exports kept *displaying*
+  it — caught directly on the report's processing-step progression
+  figure, where the panel captioned "the version to actually use
+  downstream" still showed the water-column return. `mask_weak_zone(ds,
+  value_vars=("backscatter_raw", "backscatter_intensity"))` reuses
+  `detect_first_strong_return` (the same amplitude-based boundary
+  Stage 2/3 already validated) and NaNs every sample before it, per
+  (ping, channel), in whichever of `value_vars` are present — skips
+  vars not present rather than raising, so it works whether or not TVG
+  has been applied yet; always uses the exact per-ping boundary (no
+  aggregation-bias risk for a display copy — see
+  `uniform_exclusion_boundary`'s docstring for why Stage 3 vs Stage 4
+  need different granularities of this same boundary internally, which
+  doesn't apply here). Applied to the report's progression figure
+  (panels 2–4, the corrected/recommended views); panel 1 (raw)
+  deliberately left unmasked since it exists specifically to show what
+  the sensor actually recorded. Tests: `TestMaskWeakZone` (3 tests —
+  masks before boundary/leaves rest untouched, only masks vars present,
+  doesn't mutate the input dataset). Full suite: 1187 passing / 36
+  skipped.
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)

@@ -1,0 +1,812 @@
+"""
+Unit tests for sidescanpy.analysis.investigation.
+
+Small synthetic fixtures with known, hand-constructed signal shapes
+(gap at nadir, exponential decay, injected physics-model curves) —
+per this project's TDD convention, not real survey data.
+
+2026 rshomberg@uri.edu
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+import xarray as xr
+
+from sidescanpy.analysis.investigation import (
+    StageResult,
+    detect_first_strong_return,
+    mask_weak_zone,
+    reject_range_outliers,
+    stage1_5_outlier_comparison,
+    stage1_characterize,
+    stage2_5_beam_geometry,
+    stage2_nadir,
+    stage3_usable_range,
+    stage4_decay,
+    stage5_units,
+    uniform_exclusion_boundary,
+)
+from sidescanpy.processing.geometric import compute_geometric_ranges
+from sidescanpy.processing.pipeline import reconstruct_raw
+from sidescanpy.processing.radiometric import TVGParams, absorption_for_frequency, tvg_gain_db
+
+
+def _make_raw_dataset(
+    *,
+    n_pings: int = 20,
+    n_samples: int = 200,
+    sample_rate_hz: float = 1000.0,
+    backscatter: np.ndarray | None = None,
+    freq_hz: float = 1_495_000,
+) -> xr.Dataset:
+    """Minimal valid raw sidescan dataset — mirrors
+    test_tvg_diagnostics.py's `_make_test_dataset` helper."""
+    if backscatter is None:
+        backscatter = np.ones((n_pings, 2, n_samples), dtype=np.float32)
+    else:
+        n_pings, _, n_samples = backscatter.shape
+
+    coords = {
+        "ping": np.arange(n_pings),
+        "channel": np.arange(2),
+        "sample": np.arange(n_samples),
+        "ping_number": (["ping"], np.arange(n_pings, dtype=np.int32)),
+        "time": (["ping"], pd.date_range("2026-01-01", periods=n_pings, freq="1s").values),
+        "channel_id": (["channel"], ["port", "starboard"]),
+    }
+
+    data_vars = {
+        "backscatter_intensity": (["ping", "channel", "sample"], backscatter.astype(np.float32)),
+        "backscatter_raw": (["ping", "channel", "sample"], backscatter.astype(np.float32)),
+        "latitude": (["ping"], np.full(n_pings, 41.5, dtype=np.float32)),
+        "longitude": (["ping"], np.full(n_pings, -71.5, dtype=np.float32)),
+        "heading_deg": (["ping"], np.full(n_pings, 90.0, dtype=np.float32)),
+        "pitch_deg": (["ping"], np.zeros(n_pings, dtype=np.float32)),
+        "roll_deg": (["ping"], np.zeros(n_pings, dtype=np.float32)),
+        "depth_m": (["ping"], np.full(n_pings, 50.0, dtype=np.float32)),
+        "altitude_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
+        "fathometer_reading_m": (["ping"], np.full(n_pings, 10.0, dtype=np.float32)),
+        "heave_m": (["ping"], np.zeros(n_pings, dtype=np.float32)),
+        "sound_vel_ms": (["ping"], np.full(n_pings, 1500.0, dtype=np.float32)),
+    }
+    attrs = {
+        "freq_hz_start": freq_hz,
+        "freq_hz_end": freq_hz,
+        "sample_rate_hz": sample_rate_hz,
+        "pulse_length_us": 100.0,
+        "processing_level": "raw",
+        "processing_history": "[]",
+    }
+    return xr.Dataset(data_vars, coords, attrs)
+
+
+class TestStage1Characterize:
+    def test_basic_metrics(self):
+        bs = np.zeros((5, 2, 10), dtype=np.float32)
+        bs[..., 5:] = 4.0  # half zeros, half value=4
+        ds = _make_raw_dataset(n_pings=5, n_samples=10, backscatter=bs)
+
+        result = stage1_characterize(ds)
+
+        assert result.metrics["dtype"] == "float32"
+        assert result.metrics["min"] == 0.0
+        assert result.metrics["max"] == 4.0
+        assert np.isclose(result.metrics["mean"], 2.0)
+        assert np.isclose(result.metrics["pct_zero"], 50.0)
+        assert result.metrics["pct_negative"] == 0.0
+
+    def test_negative_values_detected(self):
+        bs = np.full((3, 2, 10), -5.0, dtype=np.float32)
+        ds = _make_raw_dataset(n_pings=3, n_samples=10, backscatter=bs)
+        result = stage1_characterize(ds)
+        assert result.metrics["pct_negative"] == 100.0
+
+
+class TestStage1_5OutlierComparison:
+    def test_before_after_metrics_reflect_rejection(self):
+        n_pings, n_samples = 30, 300
+        rng = np.random.default_rng(4)
+        # Small baseline noise is required: with a perfectly constant
+        # baseline, non-spike bins have MAD=0 and reject_range_outliers
+        # deliberately leaves those bins unfiltered (see
+        # TestRejectRangeOutliers.test_degenerate_zero_mad_bin_left_unfiltered).
+        bs = (5.0 + rng.normal(0, 0.1, size=(n_pings, 2, n_samples))).astype(np.float32)
+        spike_idx = rng.choice(bs.size, size=50, replace=False)
+        bs.flat[spike_idx] += 500.0
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage1_5_outlier_comparison(ds, bin_width_m=5.0)
+
+        assert result.metrics["outlier_n_rejected"] > 0
+        # Not every spike is guaranteed rejected (edge bins, spike
+        # clustering) -- check the bulk of the population was cleaned
+        # rather than requiring a specific residual max.
+        assert result.metrics["before"]["max"] > 400.0
+        assert result.metrics["before"]["pct_negative"] == result.metrics["after"]["pct_negative"] == 0.0
+        assert result.metrics["outlier_n_rejected"] >= 40  # most of the 50 injected spikes
+        assert result.data["filtered_array"].shape == bs.shape
+
+    def test_missing_range_var_raises(self):
+        ds = _make_raw_dataset()
+        with pytest.raises(ValueError, match="ground_range_m"):
+            stage1_5_outlier_comparison(ds)
+
+
+class TestStage2Nadir:
+    def test_detects_gap(self):
+        bs = np.full((5, 2, 200), 1.0, dtype=np.float32)
+        bs[..., :50] = 0.0  # leading zero run on every ping/channel
+        ds = _make_raw_dataset(n_pings=5, n_samples=200, backscatter=bs)
+
+        result = stage2_nadir(ds, nadir_n_samples=50)
+
+        assert result.classification == "gap"
+        assert result.metrics["nadir_pct_zero"] == 100.0
+
+    def test_detects_bright_spike(self):
+        bs = np.full((5, 2, 200), 1.0, dtype=np.float32)
+        bs[..., :50] = 10.0  # bright near-range return, no zeros
+        ds = _make_raw_dataset(n_pings=5, n_samples=200, backscatter=bs)
+
+        result = stage2_nadir(ds, nadir_n_samples=50)
+
+        assert result.classification == "bright_spike"
+
+    def test_detects_clean(self):
+        bs = np.full((5, 2, 200), 1.0, dtype=np.float32)
+        ds = _make_raw_dataset(n_pings=5, n_samples=200, backscatter=bs)
+        result = stage2_nadir(ds, nadir_n_samples=50)
+        assert result.classification == "clean"
+
+    def test_water_column_boundary_skipped_without_range_var(self):
+        """Must still run and classify the nadir gap even when geometric
+        ranges haven't been computed -- water-column metrics are a bonus,
+        not a requirement, for backward compatibility."""
+        ds = _make_raw_dataset(n_pings=5, n_samples=200)
+        result = stage2_nadir(ds, nadir_n_samples=50)
+
+        assert result.classification is not None
+        assert "geometric_bottom_contact_sample_median" not in result.metrics
+        assert any("ground_range_m" in n for n in result.notes)
+
+    def test_geometric_boundary_matches_geometry(self):
+        """altitude_m=10.0, sound_vel_ms=1500.0, sample_rate_hz=1000.0
+        (fixture defaults) -> slant_range = sample_idx * 0.75m ->
+        geometric bottom contact once slant_range > altitude, i.e.
+        sample index > 13.33 -> first finite ground_range sample = 14."""
+        ds = _make_raw_dataset(n_pings=20, n_samples=200)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage2_nadir(ds, nadir_n_samples=5)
+
+        assert result.metrics["geometric_bottom_contact_sample_median"] == pytest.approx(14.0, abs=1.0)
+        first_bottom = result.data["first_bottom_sample"]
+        assert first_bottom.shape == (20, 2)
+        assert np.all(np.isfinite(first_bottom))
+
+    def test_strong_return_boundary_too_close_to_start_skips_step_check(self):
+        """Constant backscatter everywhere: detect_first_strong_return
+        correctly reports the strong return starting essentially at
+        sample 0 (there's no water column to distinguish it from) --
+        too close to the ping start for a pre/post step check, which
+        should be flagged as such rather than silently computing NaN."""
+        ds = _make_raw_dataset(n_pings=20, n_samples=200)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage2_nadir(ds, nadir_n_samples=5)
+
+        assert result.metrics["first_strong_return_sample_median"] < 20
+        assert "signal_step_ratio" not in result.metrics
+        assert any("too close to the start" in n for n in result.notes)
+
+    def test_signal_step_no_note_with_real_step(self):
+        n_pings, n_samples = 20, 300
+        bs = np.full((n_pings, 2, n_samples), 1.0, dtype=np.float32)
+        bs[..., :100] = 0.01  # weak water column, long enough for a pre/post window
+        bs[..., 100:] = 5.0   # strong bottom return
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage2_nadir(ds, nadir_n_samples=5)
+
+        assert result.metrics["signal_step_ratio"] > 1.2
+        assert not any("doesn't clearly step up" in n for n in result.notes)
+
+    def test_geometric_and_strong_boundaries_diverge_generates_note(self):
+        """Weak-but-nonzero returns for a long stretch before the real
+        strong return -- the geometric crossing (from range_var) lands
+        early, the amplitude detector correctly lands much later, and
+        the gap between them should be flagged."""
+        n_pings, n_samples = 20, 300
+        bs = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)  # weak "near-grazing" zone
+        bs[..., 150:] = 5.0  # real strong return starts far past the geometric crossing (~14)
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage2_nadir(ds, nadir_n_samples=5)
+
+        assert result.metrics["geometric_bottom_contact_sample_median"] < 20
+        assert result.metrics["first_strong_return_sample_median"] > 100
+        assert result.metrics["geometric_to_strong_gap_sample_median"] > 100
+        assert any("disagree by a median of" in n for n in result.notes)
+
+
+class TestStage2_5BeamGeometry:
+    def test_implied_angle_matches_known_geometry(self):
+        """Isolates stage2_5's own angle math from
+        detect_first_strong_return's inherent smoothing imprecision
+        (covered separately in TestDetectFirstStrongReturn) by feeding
+        a hand-built StageResult with an exact, known boundary sample,
+        rather than relying on detection to find it. altitude=10.0
+        (fixture default); sample 27 with sound_vel=1500,
+        sample_rate=1000 -> slant_range = 27*0.75 = 20.25m ->
+        angle_from_vertical = arccos(10/20.25) ~= 60.4deg."""
+        n_pings, n_samples = 20, 100
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        fake_boundary = np.full((n_pings, 2), 27.0)
+        fake_stage2 = StageResult(
+            stage="stage2_nadir", metrics={}, data={"first_strong_return_sample": fake_boundary}
+        )
+        result = stage2_5_beam_geometry(ds, fake_stage2)
+
+        for entry in result.metrics["implied"].values():
+            assert entry["observed_sample"] == 27
+            assert entry["angle_from_vertical_deg"] == pytest.approx(60.4, abs=0.5)
+        assert result.metrics["candidates"][0]["angle_from_vertical_deg"] == 0.0
+        assert result.metrics["candidates"][0]["predicted_across_track_m"] == pytest.approx(0.0, abs=1e-9)
+
+    def test_zero_angle_candidate_predicts_zero_across_track(self):
+        ds = _make_raw_dataset(n_pings=5, n_samples=100)
+        ds = compute_geometric_ranges(ds)
+        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+
+        result = stage2_5_beam_geometry(ds, stage2, candidate_angles_from_vertical_deg=(0.0, 45.0))
+
+        zero_deg = result.metrics["candidates"][0]
+        assert zero_deg["predicted_across_track_m"] == pytest.approx(0.0, abs=1e-9)
+        forty_five = result.metrics["candidates"][1]
+        assert forty_five["predicted_across_track_m"] == pytest.approx(10.0, rel=1e-6)  # altitude * tan(45)
+
+    def test_missing_required_var_raises(self):
+        ds = _make_raw_dataset()  # no geometric ranges computed
+        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+        with pytest.raises(ValueError, match="across_track_m"):
+            stage2_5_beam_geometry(ds, stage2)
+
+    def test_impossible_geometry_flagged(self):
+        """A boundary sample whose slant range is less than altitude
+        (fixture default 10.0; sample 5 -> slant_range=3.75m) is
+        geometrically impossible for any real beam angle -- should be
+        flagged, not silently produce a bogus angle."""
+        n_pings, n_samples = 20, 100
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        fake_boundary = np.full((n_pings, 2), 5.0)
+        fake_stage2 = StageResult(
+            stage="stage2_nadir", metrics={}, data={"first_strong_return_sample": fake_boundary}
+        )
+        result = stage2_5_beam_geometry(ds, fake_stage2)
+
+        for entry in result.metrics["implied"].values():
+            assert entry["angle_from_vertical_deg"] is None
+        assert any("geometrically" in n for n in result.notes)
+
+
+class TestStage3UsableRange:
+    def test_finds_usable_range_before_noise_floor(self):
+        n_pings, n_samples = 50, 200
+        rng = np.random.default_rng(0)
+        sample_idx = np.arange(n_samples)
+        # Strong signal 0-100 samples, near-zero noise floor beyond.
+        decay = np.where(sample_idx < 100, 50.0 * np.exp(-sample_idx / 30.0), 0.0)
+        bs = np.broadcast_to(decay, (n_pings, 2, n_samples)).copy()
+        bs += rng.normal(0, 0.01, size=bs.shape)
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0)
+
+        assert result.metrics["usable_range_m"] is not None
+        # Signal decays to near-nothing well before the far range edge.
+        assert result.metrics["usable_range_m"] < ds["ground_range_m"].max().item()
+
+    def test_missing_range_var_raises(self):
+        ds = _make_raw_dataset()
+        with pytest.raises(ValueError, match="ground_range_m"):
+            stage3_usable_range(ds)
+
+    def test_water_column_n_excluded_matches_geometry(self):
+        """Same physics as TestStage2Nadir.test_geometric_boundary_matches_geometry:
+        altitude=10.0, sound_vel=1500.0, sample_rate=1000.0 -> water
+        column ends at sample 14 -> 14 excluded samples per (ping, channel)."""
+        n_pings, n_samples = 50, 200
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage3_usable_range(ds, bin_width_m=1.0)
+
+        assert result.metrics["water_column_n_excluded"] == 14 * n_pings * 2
+
+    def test_exclude_before_sample_masks_weak_zone(self):
+        """exclude_before_sample should additionally exclude samples
+        the geometric mask alone doesn't catch."""
+        n_pings, n_samples = 20, 200
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        boundary = np.full((n_pings, 2), 50.0)  # well past the geometric boundary (~14)
+        result = stage3_usable_range(ds, bin_width_m=1.0, exclude_before_sample=boundary)
+
+        assert result.metrics["weak_zone_n_excluded"] == (50 - 14) * n_pings * 2
+
+    def test_reject_outliers_lowers_far_range_noise_std(self):
+        """Inject bright spikes into the far-range 'noise floor' region
+        (simulating a target sitting past the real signal cutoff).
+        `noise_floor` (a median of bin medians) is already fairly
+        robust to a sparse handful of spikes -- `noise_std` (a mean of
+        bin std-devs) is not, and is where the effect should show up
+        clearly."""
+        n_pings, n_samples = 50, 200
+        rng = np.random.default_rng(3)
+        sample_idx = np.arange(n_samples)
+        decay = np.where(sample_idx < 100, 50.0 * np.exp(-sample_idx / 30.0), 0.0)
+        bs = np.broadcast_to(decay, (n_pings, 2, n_samples)).copy()
+        bs += rng.normal(0, 0.01, size=bs.shape)
+
+        spike_idx = rng.choice(n_pings * 2 * (n_samples - 120), size=15, replace=False)
+        far_region = bs[:, :, 120:]
+        far_flat = far_region.reshape(-1)
+        far_flat[spike_idx] += 20.0
+        bs[:, :, 120:] = far_flat.reshape(far_region.shape)
+
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        with_spikes = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0)
+        cleaned = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, reject_outliers=True)
+
+        assert cleaned.metrics["outlier_n_rejected"] > 0
+        assert cleaned.metrics["noise_std"] < with_spikes.metrics["noise_std"]
+
+    def test_per_ping_boundary_avoids_thin_contaminated_near_bin_vs_uniform(self):
+        """Regression test for the real survey-a LF bug: a
+        single survey-wide (`uniform_exclusion_boundary`) exclusion
+        boundary under-masks whichever pings' true per-ping boundary
+        exceeds it. Because ground range at a fixed sample index
+        depends on a ping's own altitude, those under-masked pings'
+        still-invalid (water-column) samples can land in a different,
+        nearer range bin than where the rest of the survey's valid
+        signal starts -- producing a thin, near-zero "first point"
+        artifact on the usable-range plot (confirmed on real HF/LF
+        data: a uniform boundary left an anomalous count=30,
+        median=0.39 bin at 8-10m; the exact per-ping boundary removes
+        it entirely). `run_investigation` now passes the exact
+        per-ping array to Stage 3 for this reason -- this test locks
+        that choice in."""
+        n_pings, n_samples = 60, 300
+        rng = np.random.default_rng(7)
+
+        # 90% shallow pings (boundary=100, range grid 0-30m); 10% deep
+        # pings (boundary=250, range grid 0-10m -- larger altitude
+        # compresses ground range at a given sample, same direction as
+        # real geometry). `uniform_exclusion_boundary` collapses to
+        # ~the shallow group's boundary since it dominates by count,
+        # under-masking the deep group by ~150 samples.
+        is_deep = np.zeros(n_pings, dtype=bool)
+        is_deep[:6] = True
+        rng.shuffle(is_deep)
+
+        boundary = np.broadcast_to(np.where(is_deep, 250.0, 100.0)[:, None], (n_pings, 2)).astype(np.float64)
+
+        sample_idx = np.arange(n_samples)
+        range_grid = np.where(is_deep[:, None], sample_idx[None, :] / 30.0, sample_idx[None, :] / 10.0)
+        ranges = np.broadcast_to(range_grid[:, None, :], (n_pings, 2, n_samples)).astype(np.float64).copy()
+
+        valid = 20.0 * np.exp(-(sample_idx[None, None, :] - boundary[:, :, None]) / 80.0)
+        arr = np.where(sample_idx[None, None, :] >= boundary[:, :, None], valid, 0.01)
+        arr = arr + rng.normal(0, 0.02, arr.shape)
+
+        ds = xr.Dataset(
+            {"_v": (("ping", "channel", "sample"), arr), "_r": (("ping", "channel", "sample"), ranges)}
+        )
+
+        uniform = uniform_exclusion_boundary(boundary, percentile=90.0)
+        s3_per_ping = stage3_usable_range(ds, "_v", range_var="_r", bin_width_m=1.0, exclude_before_sample=boundary)
+        s3_uniform = stage3_usable_range(ds, "_v", range_var="_r", bin_width_m=1.0, exclude_before_sample=uniform)
+
+        per_ping_binned = s3_per_ping.data["binned"]
+        uniform_binned = s3_uniform.data["binned"]
+
+        # Exact per-ping masking: no valid signal exists below ~8m for
+        # any ping, so no near-zero contamination bin appears there.
+        assert not ((per_ping_binned["range_min_m"] < 8.0) & (per_ping_binned["median"] < 1.0)).any()
+
+        # Uniform boundary: the deep group's still-invalid samples leak
+        # through in [100, 250) at their own (compressed) range grid,
+        # landing below 8m where no valid data exists -- a thin,
+        # near-zero contaminated bin the per-ping boundary doesn't have.
+        contaminated = uniform_binned[(uniform_binned["range_min_m"] < 8.0) & (uniform_binned["median"] < 1.0)]
+        assert not contaminated.empty
+
+
+class TestStage4Decay:
+    def test_full_physics_curve_classified_as_none(self):
+        """Raw data that follows the uncompensated physics model
+        end-to-end should classify as TVG status 'none'."""
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+
+        result = stage4_decay(ds, bin_width_m=2.0)
+
+        assert result.classification == "none"
+        assert result.metrics["best_candidate"] == "full_physics"
+
+    def test_classification_invariant_to_db_reference(self):
+        """The self-referenced dB conversion's reference percentile is
+        a constant offset in dB space, which cancels out of every
+        loss/residual computation `fit_hardware_tvg_curve` does — so
+        changing it must not change any classification output, only
+        `metrics["db_reference"]["value"]` itself."""
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+
+        low_ref = stage4_decay(ds, bin_width_m=2.0, db_reference_percentile=50.0)
+        high_ref = stage4_decay(ds, bin_width_m=2.0, db_reference_percentile=99.9)
+
+        assert low_ref.metrics["db_reference"]["value"] != high_ref.metrics["db_reference"]["value"]
+        assert low_ref.classification == high_ref.classification
+        assert low_ref.metrics["best_candidate"] == high_ref.metrics["best_candidate"]
+        # float32 backscatter + the +eps offset means the two reference
+        # choices aren't bit-identical, just equal well past float32
+        # precision -- rtol chosen loose enough to absorb that, tight
+        # enough that a real reference-dependence bug would still fail it.
+        assert np.isclose(low_ref.metrics["best_scale"], high_ref.metrics["best_scale"], rtol=1e-4)
+        assert np.isclose(low_ref.metrics["best_rmse_db"], high_ref.metrics["best_rmse_db"], rtol=1e-4, atol=1e-4)
+
+    def test_flat_curve_yields_negligible_residual(self):
+        """Raw data with no range-dependent decay at all (hardware
+        already fully compensated): every candidate's fitted scale
+        collapses toward 0 with tiny RMSE -- with only noise left to
+        fit, `spreading_only`/`absorption_only`/`full_physics` can
+        occasionally out-fit `flat` by chance (their free scale
+        overfits the noise itself), which is exactly the
+        near-flat-data fit-degeneracy `fit_hardware_tvg_curve` already
+        documents (see that function's `r_ref_m` docstring). So this
+        checks "no real decay detected" (uniformly tiny RMSE, status
+        reads as no-correction-needed-or-ambiguous), not a specific
+        winning candidate name."""
+        n_pings, n_samples = 30, 300
+        bs = np.full((n_pings, 2, n_samples), 5.0, dtype=np.float32)
+        rng = np.random.default_rng(1)
+        bs += rng.normal(0, 0.05, size=bs.shape).astype(np.float32)
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage4_decay(ds, bin_width_m=2.0)
+
+        assert result.classification in ("full", "ambiguous")
+        assert result.metrics["best_rmse_db"] < 0.1
+        assert all(c["rmse_db"] < 0.1 for c in result.metrics["candidates"].values())
+
+    def test_missing_range_var_raises(self):
+        ds = _make_raw_dataset()
+        with pytest.raises(ValueError, match="ground_range_m"):
+            stage4_decay(ds)
+
+    def test_reject_outliers_recovers_clean_fit_from_target_corrupted_curve(self):
+        """Same full_physics curve as test_full_physics_curve_classified_as_none,
+        but with a handful of huge point-target-like spikes injected --
+        reject_outliers=False should be measurably degraded by them,
+        reject_outliers=True should recover close to the clean fit."""
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+
+        rng = np.random.default_rng(2)
+        n_spikes = 40
+        flat_idx = rng.choice(amplitude.size, size=n_spikes, replace=False)
+        amplitude.flat[flat_idx] *= 50.0  # simulated hard-target/complex-terrain returns
+
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+
+        with_spikes = stage4_decay(ds, bin_width_m=2.0)
+        cleaned = stage4_decay(ds, bin_width_m=2.0, reject_outliers=True)
+
+        assert cleaned.metrics["outlier_n_rejected"] > 0
+        assert cleaned.metrics["best_rmse_db"] < with_spikes.metrics["best_rmse_db"]
+        assert cleaned.classification == "none"
+
+    def test_fit_value_col_median_wired_through_and_recorded(self):
+        """Contract test only -- real-data checking found `"median"`
+        does NOT reliably improve RMSE over `"mean"` under
+        reject_outliers=True (see stage4_decay's fit_value_col
+        docstring), so this doesn't assert an RMSE direction, just that
+        the parameter actually reaches fit_hardware_tvg_curve and gets
+        recorded, and that classification stays correct either way."""
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+
+        result = stage4_decay(ds, bin_width_m=2.0, reject_outliers=True, fit_value_col="median")
+
+        assert result.metrics["fit_value_col"] == "median"
+        assert result.classification == "none"
+        assert result.metrics["best_candidate"] == "full_physics"
+
+
+class TestDetectFirstStrongReturn:
+    def test_detects_step_location(self):
+        n_pings, n_channels, n_samples = 5, 2, 500
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., 300:] = 20.0  # sharp step to strong return at sample 300
+
+        result = detect_first_strong_return(arr, smooth_window=10, threshold_fraction=0.2, min_run=10)
+
+        assert result.shape == (n_pings, n_channels)
+        # Detector is smoothed (smooth_window=10), so it lands within a
+        # window's width of the true step, not sample-exact.
+        assert np.all(np.abs(result - 300) <= 15)
+
+    def test_no_step_returns_nan_or_start(self):
+        """Flat signal with no real step: the whole ping trivially
+        clears the threshold from the start (nothing to distinguish),
+        which is a legitimate, documented outcome -- not a crash."""
+        arr = np.full((3, 2, 200), 1.0)
+        result = detect_first_strong_return(arr)
+        assert result.shape == (3, 2)
+        assert np.all(result < 20)  # detected essentially at the start, not NaN, not far out
+
+    def test_short_ping_returns_all_nan(self):
+        arr = np.full((2, 2, 5), 1.0)  # shorter than smooth_window + min_run
+        result = detect_first_strong_return(arr, smooth_window=10, min_run=10)
+        assert result.shape == (2, 2)
+        assert np.all(np.isnan(result))
+
+    def test_threshold_fraction_is_not_knife_edge(self):
+        """Real-data check found the detected index barely moves across
+        threshold_fraction=0.1-0.3 -- reproduce that robustness on a
+        synthetic step, matching the docstring's claim."""
+        arr = np.full((1, 1, 500), 0.1)
+        arr[..., 300:] = 20.0
+        results = [
+            detect_first_strong_return(arr, threshold_fraction=tf)[0, 0]
+            for tf in (0.1, 0.15, 0.2, 0.25, 0.3)
+        ]
+        assert max(results) - min(results) <= 15
+
+
+class TestMaskWeakZone:
+    def test_masks_before_boundary_leaves_rest_untouched(self):
+        n_pings, n_samples = 5, 500
+        arr = np.full((n_pings, 2, n_samples), 0.1, dtype=np.float32)
+        arr[..., 300:] = 20.0  # sharp step to strong return at sample 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+
+        out = mask_weak_zone(ds)
+
+        raw = out["backscatter_raw"].values
+        intensity = out["backscatter_intensity"].values
+        # Well before the detected boundary: masked in both vars.
+        assert np.all(np.isnan(raw[:, :, :50]))
+        assert np.all(np.isnan(intensity[:, :, :50]))
+        # Well past it: untouched, original strong-return value intact.
+        assert np.all(raw[:, :, 450:] == 20.0)
+        assert np.all(intensity[:, :, 450:] == 20.0)
+
+    def test_only_masks_vars_present(self):
+        n_pings, n_samples = 3, 500
+        arr = np.full((n_pings, 2, n_samples), 0.1, dtype=np.float32)
+        arr[..., 300:] = 20.0
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+        ds = ds.drop_vars("backscatter_intensity")
+
+        out = mask_weak_zone(ds)  # default value_vars includes backscatter_intensity
+
+        assert "backscatter_intensity" not in out.data_vars
+        assert np.any(np.isnan(out["backscatter_raw"].values[:, :, :50]))
+
+    def test_original_dataset_not_mutated(self):
+        n_pings, n_samples = 3, 500
+        arr = np.full((n_pings, 2, n_samples), 0.1, dtype=np.float32)
+        arr[..., 300:] = 20.0
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+
+        mask_weak_zone(ds)
+
+        assert not np.any(np.isnan(ds["backscatter_raw"].values))
+
+
+class TestUniformExclusionBoundary:
+    def test_collapses_to_single_percentile_value(self):
+        per_ping = np.array([[10.0, 20.0], [30.0, 40.0], [50.0, 60.0], [70.0, 80.0], [90.0, 100.0]])
+        result = uniform_exclusion_boundary(per_ping, percentile=90.0)
+
+        assert result.shape == per_ping.shape
+        assert np.all(result == result[0, 0])  # single value everywhere
+        assert result[0, 0] == pytest.approx(np.percentile(per_ping, 90.0))
+
+    def test_all_nan_input_stays_all_nan(self):
+        per_ping = np.full((3, 2), np.nan)
+        result = uniform_exclusion_boundary(per_ping)
+        assert result.shape == (3, 2)
+        assert np.all(np.isnan(result))
+
+    def test_avoids_near_field_selection_bias_vs_per_ping_boundary(self):
+        """The actual bug this function exists to fix: real backscatter
+        physics correlates a ping's boundary location with its own
+        near-field amplitude (shallower altitude -> both an earlier
+        strong-return onset AND a stronger near-field signal). Feeding
+        a per-ping-varying boundary straight into aggregate range
+        binning then selectively keeps only the strong,
+        early-boundary pings' data in near-range bins, inflating their
+        mean above the survey's true (decaying) level -- a real
+        artifact found via real-data testing, reproduced here with
+        correlated synthetic physics. A uniform boundary should not
+        exhibit it."""
+        n_pings, n_channels, n_samples = 40, 2, 400
+        rng = np.random.default_rng(5)
+
+        # Each ping's own "true" near-field amplitude is inversely tied
+        # to its own boundary sample (shallower altitude -> earlier
+        # boundary -> stronger near return), matching real physics.
+        boundary = rng.integers(100, 300, size=(n_pings, n_channels)).astype(np.float64)
+        near_field_level = 1000.0 / boundary  # smaller boundary -> larger amplitude
+
+        sample_idx = np.arange(n_samples)
+        decay = np.exp(-sample_idx / 150.0)  # generic range decay, same shape for every ping
+        arr = near_field_level[..., None] * decay[None, None, :]
+        arr += rng.normal(0, 0.02, arr.shape)
+        arr[sample_idx[None, None, :] < boundary[..., None]] = 0.01  # weak zone, per-ping varying extent
+
+        ranges = np.broadcast_to(np.linspace(0, 40, n_samples), arr.shape).copy()
+
+        from sidescanpy.analysis.investigation import _mask_before_sample
+        from sidescanpy.analysis.tvg_diagnostics import mean_backscatter_vs_range
+        import xarray as xr
+
+        def _bin(masked):
+            ds = xr.Dataset(
+                {"_v": (("ping", "channel", "sample"), masked), "_r": (("ping", "channel", "sample"), ranges)}
+            )
+            return mean_backscatter_vs_range(ds, value_var="_v", range_var="_r", bin_width_m=2.0)
+
+        per_ping_binned = _bin(_mask_before_sample(arr, boundary))
+        uniform_binned = _bin(_mask_before_sample(arr, uniform_exclusion_boundary(boundary, percentile=90.0)))
+
+        # With the per-ping boundary, the first non-empty near-range bin
+        # is populated only by the strongest (earliest-boundary) pings,
+        # so its mean is far above the next bin out -- not monotonic.
+        per_ping_nonempty = per_ping_binned[per_ping_binned["count"] > 0].reset_index(drop=True)
+        assert per_ping_nonempty.loc[0, "mean"] > per_ping_nonempty.loc[1, "mean"]  # non-monotonic: the bug
+
+        # With a uniform boundary, no ping contributes to a bin its own
+        # boundary hasn't cleared -- the surviving near bins reflect a
+        # smooth decay instead of a selection-biased spike.
+        uniform_nonempty = uniform_binned[uniform_binned["count"] > 0].reset_index(drop=True)
+        assert uniform_nonempty["mean"].is_monotonic_decreasing
+
+
+class TestRejectRangeOutliers:
+    def test_flags_injected_spikes_leaves_normal_values(self):
+        rng = np.random.default_rng(0)
+        n = 2000
+        ranges = rng.uniform(0, 100, size=n)
+        values = 10.0 + rng.normal(0, 0.5, size=n)  # flat "sandy bottom" signal
+
+        spike_idx = rng.choice(n, size=20, replace=False)
+        values[spike_idx] += 500.0  # far outside the local population
+
+        cleaned = reject_range_outliers(values, ranges, bin_width_m=10.0, mad_k=2.5)
+
+        assert np.all(np.isnan(cleaned[spike_idx]))
+        non_spike = np.setdiff1d(np.arange(n), spike_idx)
+        # Overwhelming majority of the clean population should survive --
+        # a small amount of edge-case rejection near bin boundaries is
+        # expected and fine, a mass rejection would not be.
+        assert np.isfinite(cleaned[non_spike]).mean() > 0.95
+
+    def test_small_bins_left_unfiltered(self):
+        ranges = np.array([1.0, 1.0, 1.0])  # below min_bin_count
+        values = np.array([1.0, 2.0, 1000.0])
+        cleaned = reject_range_outliers(values, ranges, bin_width_m=10.0, mad_k=2.5, min_bin_count=5)
+        np.testing.assert_array_equal(cleaned, values)
+
+    def test_degenerate_zero_mad_bin_left_unfiltered(self):
+        ranges = np.full(10, 5.0)
+        values = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1000.0])
+        cleaned = reject_range_outliers(values, ranges, bin_width_m=10.0, mad_k=2.5, min_bin_count=5)
+        # Median of the mostly-identical bin has MAD=0 -- no scale to
+        # reject against, so nothing gets flagged even though 1000.0
+        # is visibly anomalous. Documents the known limitation rather
+        # than silently disagreeing with it.
+        np.testing.assert_array_equal(cleaned, values)
+
+    def test_shape_preserved(self):
+        rng = np.random.default_rng(1)
+        values = rng.uniform(0, 10, size=(4, 2, 50))
+        ranges = rng.uniform(0, 60, size=(4, 2, 50))
+        cleaned = reject_range_outliers(values, ranges, bin_width_m=5.0)
+        assert cleaned.shape == values.shape
+
+
+class TestStage5Units:
+    def test_db_like_values_classified_as_db(self):
+        s1 = stage1_characterize(
+            _make_raw_dataset(backscatter=np.full((3, 2, 10), -40.0, dtype=np.float32))
+        )
+        result = stage5_units(s1)
+        assert result.classification == "dB"
+
+    def test_raw_counts_classified(self):
+        bs = np.zeros((3, 2, 10), dtype=np.float32)
+        bs[..., 5:] = 81.0
+        s1 = stage1_characterize(_make_raw_dataset(backscatter=bs))
+        result = stage5_units(s1)
+        assert result.classification == "raw_counts"
+
+    def test_normalized_classified(self):
+        bs = np.full((3, 2, 10), 0.5, dtype=np.float32)
+        s1 = stage1_characterize(_make_raw_dataset(backscatter=bs))
+        result = stage5_units(s1)
+        assert result.classification == "normalized"
+
+
+class TestReconstructRaw:
+    def test_restores_raw_backscatter_and_drops_geometry(self):
+        ds = _make_raw_dataset()
+        ds = compute_geometric_ranges(ds)
+        ds.attrs["processing_level"] = "radiometric"
+        ds["backscatter_intensity"] = ds["backscatter_intensity"] * 0.0 + 999.0  # simulate TVG having run
+
+        restored = reconstruct_raw(ds)
+
+        assert restored.attrs["processing_level"] == "raw"
+        assert restored.attrs["processing_history"] == "[]"
+        np.testing.assert_array_equal(
+            restored["backscatter_intensity"].values, restored["backscatter_raw"].values
+        )
+        assert "ground_range_m" not in restored
