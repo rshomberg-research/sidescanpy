@@ -805,6 +805,68 @@ class TestStage4Decay:
         assert result.classification == "none"
         assert result.metrics["best_candidate"] == "full_physics"
 
+    def test_r_ref_m_override_is_used_instead_of_auto_selection(self):
+        """Passing r_ref_m should reach fit_hardware_tvg_curve and pin
+        the reported reference range exactly, not just influence it --
+        on a clean full_physics curve the classification should stay
+        correct at a manually-chosen mid-field reference too."""
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+
+        auto = stage4_decay(ds, bin_width_m=2.0)
+        explicit_r_ref_m = auto.metrics["r_ref_m"] + 5.0
+        overridden = stage4_decay(ds, bin_width_m=2.0, r_ref_m=explicit_r_ref_m)
+
+        assert overridden.metrics["r_ref_m"] == pytest.approx(explicit_r_ref_m)
+        assert overridden.metrics["r_ref_m_override"] == pytest.approx(explicit_r_ref_m)
+        assert overridden.metrics["r_ref_m"] != auto.metrics["r_ref_m"]
+        assert overridden.metrics["best_candidate"] == "full_physics"
+
+    def test_r_ref_m_override_defaults_to_none_when_auto_selecting(self):
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage4_decay(ds, bin_width_m=2.0)
+
+        assert result.metrics["r_ref_m_override"] is None
+
+    def test_r_ref_search_fraction_wired_through_to_fit(self):
+        """Contract test: r_ref_search_fraction reaches
+        fit_hardware_tvg_curve's own identically-named parameter (whose
+        behavior is tested directly in test_tvg_diagnostics.py) --
+        widening it away from the 0.5 default should be able to change
+        the auto-selected r_ref_m on a curve with more than one local
+        peak, without raising or otherwise misbehaving."""
+        n_pings, n_samples = 30, 300
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+
+        narrow = stage4_decay(ds, bin_width_m=2.0, r_ref_search_fraction=0.1)
+        wide = stage4_decay(ds, bin_width_m=2.0, r_ref_search_fraction=1.0)
+
+        assert narrow.metrics["best_candidate"] == "full_physics"
+        assert wide.metrics["best_candidate"] == "full_physics"
+
 
 class TestDetectFirstBottomReturn:
     def test_detects_step_location(self):

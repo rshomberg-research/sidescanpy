@@ -1604,6 +1604,8 @@ def stage4_decay(
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
     fit_value_col: str = "mean",
+    r_ref_m: float | None = None,
+    r_ref_search_fraction: float = 0.5,
 ) -> StageResult:
     """Fit the four `fit_hardware_tvg_curve` candidate models against
     `value_var` vs. `range_var` and classify what TVG (if any) the data
@@ -1690,6 +1692,30 @@ def stage4_decay(
     outlier_mad_k, outlier_min_bin_count
         Passed through to `reject_range_outliers` when
         `reject_outliers=True`; ignored otherwise.
+    r_ref_m : float, optional
+        Passed straight through to `fit_hardware_tvg_curve` — pins the
+        loss reference to this exact range instead of letting it
+        auto-select the near-field max-mean bin. Use this when the
+        RMSE-best candidate is unstable between runs/files on the same
+        survey (a real, observed failure mode on at least one real
+        survey this session: two different representative files from
+        the same mission picked different winning candidates, one of
+        them within ~1% of tripping `ambiguous_rel_tol`) — the
+        near-field auto-pick sits close to the still-transitioning edge
+        of the illuminated beam, where per-ping noise is highest, not
+        because the heuristic is wrong in general but because that
+        particular survey's near field is thin. Picking a point further
+        into the beam's well-illuminated middle (definitely past the
+        nadir gap, comfortably before the usable-range/noise-floor
+        edge) is expected to be more stable — not yet confirmed as a
+        universal rule, and deliberately not the new default: this
+        remains a per-survey judgment call the caller makes by eye
+        (`viz.tvg_diagnostics.plot_candidate_fit`), same as every other
+        override in this module.
+    r_ref_search_fraction : float, default 0.5
+        Passed straight through to `fit_hardware_tvg_curve` — only
+        matters when `r_ref_m` is `None` (auto-select). See that
+        function's own docstring.
     """
     if range_var not in ds:
         raise ValueError(f"stage4_decay: {range_var!r} not found — compute geometric ranges first")
@@ -1757,8 +1783,8 @@ def stage4_decay(
 
     absorption_db_per_m = absorption_for_frequency(freq_hz)
     fit_result = fit_hardware_tvg_curve(
-        binned, absorption_db_per_m=absorption_db_per_m, r_fit_max_m=usable_range_m,
-        value_col=fit_value_col,
+        binned, absorption_db_per_m=absorption_db_per_m, r_ref_m=r_ref_m, r_fit_max_m=usable_range_m,
+        r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
     )
 
     ranked = sorted(fit_result.candidates, key=lambda c: c.rmse_db)
@@ -1783,6 +1809,7 @@ def stage4_decay(
         "absorption_db_per_m": absorption_db_per_m,
         "bin_width_m": bin_width_m,
         "r_ref_m": best.r_ref_m,
+        "r_ref_m_override": r_ref_m,
         "r_fit_max_m": best.r_fit_max_m,
         "n_bins_used": best.n_bins_used,
         "best_candidate": best.name,

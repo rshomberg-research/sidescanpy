@@ -138,6 +138,8 @@ def run_investigation(
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
     stage4_fit_value_col: str = "mean",
+    stage4_r_ref_m: float | None = None,
+    stage4_r_ref_search_fraction: float = 0.5,
 ) -> InvestigationResult:
     """
     Run all five investigation stages against one frequency channel.
@@ -269,6 +271,14 @@ def run_investigation(
         `"median"` alongside `reject_outliers=True`, see that function's
         docstring for why (real-data check found the `"mean"` pairing
         makes the fit measurably worse, not better).
+    stage4_r_ref_m, stage4_r_ref_search_fraction
+        Passed straight through to `analysis.investigation.stage4_decay`
+        as `r_ref_m`/`r_ref_search_fraction` — see that function's
+        docstring, including a real observed case (two different
+        representative files from the same real survey/mission picked
+        different winning candidates by RMSE, one within ~1% of the
+        ambiguous threshold) motivating `stage4_r_ref_m` as a manual
+        override when the auto-picked reference range looks unstable.
 
     Returns
     -------
@@ -309,6 +319,8 @@ def run_investigation(
         "outlier_mad_k": outlier_mad_k,
         "outlier_min_bin_count": outlier_min_bin_count,
         "stage4_fit_value_col": stage4_fit_value_col,
+        "stage4_r_ref_m": stage4_r_ref_m,
+        "stage4_r_ref_search_fraction": stage4_r_ref_search_fraction,
     }
 
     stage1 = stage1_characterize(ds, value_var=value_var)
@@ -366,6 +378,7 @@ def run_investigation(
         exclude_before_sample=exclude_before_sample_stage4,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
         fit_value_col=stage4_fit_value_col,
+        r_ref_m=stage4_r_ref_m, r_ref_search_fraction=stage4_r_ref_search_fraction,
     )
     stage5 = stage5_units(stage1, stage4)
 
