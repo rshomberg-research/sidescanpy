@@ -167,6 +167,7 @@ def detect_first_bottom_return(
     smooth_window: int = 10,
     threshold_fraction: float = 0.2,
     min_run: int = 10,
+    min_sample: np.ndarray | float | None = None,
 ) -> np.ndarray:
     """
     Vectorized, per-(ping, channel) amplitude-based detection of the
@@ -225,6 +226,25 @@ def detect_first_bottom_return(
         independently confirmed at ~325-330 by direct inspection) —
         not a knife-edge parameter.
     min_run : int, default 10
+    min_sample : array-like or float, optional
+        Per-(ping, channel) (or scalar) hard floor — samples before it
+        never count toward the peak reference or the sustained-rise
+        search, enforcing the one absolute physical law this problem
+        has: **the real first bottom return can never land before the
+        vehicle's own altitude** (`stage2_nadir`'s `altitude_sample`).
+        Real-data check that found this was necessary, not optional:
+        on a real `project-b` Klein survey, without this floor the
+        detector returned sample ~36 — *less than* the nadir-noise
+        burst's own detected extent (~43) and far short of
+        `altitude_sample` (~451) — a physically impossible chain
+        (bottom before noise-burst-end before altitude). Residual
+        noise past the blanked burst (not every source of per-ping
+        noise is caught by `blank_nadir_noise`) or a thin, non-bottom
+        noise line (a real `project-b`-specific positioning artifact,
+        unrelated to nadir noise) can otherwise pull the "peak"
+        reference down and let a short, unsustained bump satisfy the
+        relative threshold well before real bottom.
+        `stage2_nadir` always passes its own `altitude_sample` here.
 
     Returns
     -------
@@ -240,9 +260,24 @@ def detect_first_bottom_return(
 
     csum = np.cumsum(np.insert(arr, 0, 0.0, axis=-1), axis=-1)
     roll = (csum[..., smooth_window:] - csum[..., :-smooth_window]) / smooth_window
-    peak = np.nanmax(roll, axis=-1, keepdims=True)
+    n_roll = roll.shape[-1]
+
+    valid_roll = None
+    if min_sample is not None:
+        min_sample_arr = np.broadcast_to(np.asarray(min_sample, dtype=np.float64), arr.shape[:-1])
+        roll_idx = np.arange(n_roll, dtype=np.float64).reshape((1,) * min_sample_arr.ndim + (n_roll,))
+        valid_roll = roll_idx >= min_sample_arr[..., None]
+        # No floor for a row with an unknown (NaN) min_sample -- don't
+        # treat "we don't know the floor" as "nothing is ever valid".
+        valid_roll = np.where(np.isfinite(min_sample_arr)[..., None], valid_roll, True)
+
+    roll_for_peak = np.where(valid_roll, roll, np.nan) if valid_roll is not None else roll
+    peak = np.nanmax(roll_for_peak, axis=-1, keepdims=True)
     threshold = threshold_fraction * peak
-    above = (roll >= threshold).astype(np.int32)
+    above = roll >= threshold
+    if valid_roll is not None:
+        above = above & valid_roll
+    above = above.astype(np.int32)
 
     csum2 = np.cumsum(np.insert(above, 0, 0, axis=-1), axis=-1)
     run_sum = csum2[..., min_run:] - csum2[..., :-min_run]
@@ -464,6 +499,7 @@ def mask_nadir_gap(
     *,
     value_vars: tuple[str, ...] = ("backscatter_raw", "backscatter_intensity"),
     detector_value_var: str = "backscatter_raw",
+    range_var: str = "ground_range_m",
     smooth_window: int = 10,
     threshold_fraction: float = 0.2,
     min_run: int = 10,
@@ -509,17 +545,32 @@ def mask_nadir_gap(
         boundary from -- raw amplitude, deliberately, so masking is
         identical regardless of which `value_vars` are present or what
         TVG has already been applied to them.
+    range_var : str, default "ground_range_m"
+        If present, used to compute the altitude sample and pass it as
+        `detect_first_bottom_return`'s `min_sample` floor -- the real
+        first bottom return can never land closer than the vehicle's
+        own altitude (see that function's docstring for the real bug
+        this floor fixes). Skipped with no floor if absent, matching
+        `stage2_nadir`'s own graceful degradation.
 
     Returns
     -------
     xr.Dataset
         Copy of `ds`; unmodified if none of `value_vars` are present.
     """
+    altitude_sample = None
+    if range_var in ds:
+        finite_mask = np.isfinite(np.asarray(ds[range_var].values))
+        has_any = finite_mask.any(axis=-1)
+        altitude_sample = np.argmax(finite_mask, axis=-1).astype(np.float64)
+        altitude_sample[~has_any] = np.nan
+
     boundary = detect_first_bottom_return(
         np.asarray(ds[detector_value_var].values),
         smooth_window=smooth_window,
         threshold_fraction=threshold_fraction,
         min_run=min_run,
+        min_sample=altitude_sample,
     )
     out = ds.copy()
     for var in value_vars:
@@ -798,6 +849,7 @@ def stage2_nadir(
         smooth_window=strong_return_smooth_window,
         threshold_fraction=strong_return_threshold_fraction,
         min_run=strong_return_min_run,
+        min_sample=altitude_sample,  # physical floor: bottom can never be closer than altitude
     )
     finite_bottom = first_bottom_sample[np.isfinite(first_bottom_sample)]
     if finite_bottom.size:

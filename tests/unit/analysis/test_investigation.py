@@ -252,6 +252,26 @@ class TestStage2Nadir:
         assert result.metrics["altitude_to_bottom_gap_sample_median"] > 100
         assert any("disagree by a median of" in n for n in result.notes)
 
+    def test_pre_altitude_spike_does_not_win_as_first_bottom_return(self):
+        """Integration-level regression test for the real project-b
+        bug: stage2_nadir must pass its own altitude_sample through to
+        detect_first_bottom_return as a floor, not just compute it and
+        ignore it. altitude=10.0 (fixture default) -> altitude sample
+        ~14 (0.75m/sample). A bright, sustained pre-altitude spike
+        (residual nadir noise) must not win over a later, real bottom
+        return."""
+        n_pings, n_samples = 20, 200
+        bs = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        bs[..., 5:12] = 20.0   # bright spike well before altitude (~14) -- physically impossible as bottom
+        bs[..., 100:] = 15.0   # real bottom return, well past altitude
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        result = stage2_nadir(ds, nadir_n_samples=5, strong_return_smooth_window=3)
+
+        assert result.metrics["first_bottom_return_sample_median"] >= 14
+        assert result.metrics["first_bottom_return_sample_median"] > 50
+
 
 class TestStage2_5BeamGeometry:
     def test_near_and_far_ray_match_known_geometry(self):
@@ -744,6 +764,49 @@ class TestDetectFirstBottomReturn:
         ]
         assert max(results) - min(results) <= 15
 
+    def test_min_sample_floor_skips_pre_altitude_spike(self):
+        """Regression test for a real project-b bug: a bright,
+        sustained-enough spike before the vehicle's own altitude
+        (residual nadir noise, or a thin non-bottom noise line) was
+        winning as "first bottom return" -- physically impossible,
+        confirmed on real data (detected sample 36, less than the
+        nadir-noise burst's own detected extent of 43, and far short
+        of the real altitude sample ~451). min_sample enforces the one
+        absolute physical law: bottom can never be closer than
+        altitude."""
+        n_pings, n_channels, n_samples = 3, 2, 1000
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., 100:130] = 20.0  # bright pre-altitude spike (residual noise)
+        arr[..., 600:] = 15.0     # real sustained bottom return, well past altitude
+
+        no_floor = detect_first_bottom_return(arr, smooth_window=5, min_run=10)
+        assert np.all(no_floor < 200)  # confirms the setup: without a floor, it's fooled
+
+        altitude = np.full((n_pings, n_channels), 400.0)
+        with_floor = detect_first_bottom_return(arr, smooth_window=5, min_run=10, min_sample=altitude)
+        assert np.all(with_floor >= 400)
+        assert np.all(np.abs(with_floor - 600) <= 15)
+
+    def test_min_sample_scalar_applies_to_every_row(self):
+        arr = np.full((2, 2, 500), 0.1)
+        arr[..., 50:80] = 20.0   # before the scalar floor
+        arr[..., 300:] = 15.0    # real return, past the floor
+
+        result = detect_first_bottom_return(arr, smooth_window=5, min_run=10, min_sample=200.0)
+
+        assert np.all(result >= 200)
+        assert np.all(np.abs(result - 300) <= 15)
+
+    def test_min_sample_nan_row_gets_no_floor(self):
+        """A row with an unknown altitude (NaN) shouldn't be treated as
+        'nothing is ever valid' -- falls back to no floor for that row."""
+        arr = np.full((1, 1, 500), 0.1)
+        arr[..., 50:80] = 20.0
+
+        result = detect_first_bottom_return(arr, smooth_window=5, min_run=10, min_sample=np.array([[np.nan]]))
+
+        assert np.abs(result[0, 0] - 50) <= 15
+
 
 class TestDetectNadirNoiseExtent:
     def test_detects_burst_extent(self):
@@ -864,6 +927,25 @@ class TestMaskNadirGap:
         mask_nadir_gap(ds)
 
         assert not np.any(np.isnan(ds["backscatter_raw"].values))
+
+    def test_pre_altitude_spike_does_not_win_the_boundary(self):
+        """mask_nadir_gap computes its own boundary independently of
+        stage2_nadir -- must apply the same altitude floor, not just
+        stage2_nadir. altitude=10.0 (fixture default) -> altitude
+        sample ~14."""
+        n_pings, n_samples = 10, 200
+        arr = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        arr[..., 5:12] = 20.0   # bright pre-altitude spike
+        arr[..., 100:] = 15.0   # real bottom return
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+        ds = compute_geometric_ranges(ds)
+
+        out = mask_nadir_gap(ds, smooth_window=3)
+
+        # The pre-altitude spike itself should be masked (NaN), not
+        # left as the boundary the rest of the ping is measured from.
+        assert np.all(np.isnan(out["backscatter_raw"].values[:, :, 5:12]))
+        assert np.all(out["backscatter_raw"].values[:, :, 150:] == 15.0)
 
 
 class TestUniformExclusionBoundary:

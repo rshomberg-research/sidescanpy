@@ -1336,6 +1336,61 @@ it).
     prose was **not** rebuilt this session — it still uses the old
     "geometric bottom contact"/"weak zone" language if read directly;
     treat the battle-test report as the current source for terminology.
+- ✅ **A second real bug, caught by the user reviewing the report above,
+  same day: `detect_first_bottom_return` had no floor tied to the one
+  absolute physical law in this whole problem — the real first bottom
+  return can never land closer than the vehicle's own altitude.** Even
+  after `blank_nadir_noise`, the detector could (and on real
+  `project-b` data, did) return a boundary *before* altitude —
+  confirmed directly: sample 36, which is *less than* the nadir-noise
+  burst's own detected extent (43) and far short of the altitude
+  sample (~451) on a real site-c/900kHz ping — a physically
+  impossible chain (bottom before noise-burst-end before altitude).
+  User's diagnosis was precise and directly falsifiable: "the actual
+  first bottom return is close to sample 1000, at its closest in a
+  small spot close to 500" — matched almost exactly once fixed
+  (median 891, p10 599).
+  - **Fix**: `detect_first_bottom_return` gained a `min_sample`
+    parameter (per-(ping,channel) or scalar) — samples before it are
+    excluded from both the peak reference *and* the sustained-rise
+    search, not just clamped after the fact. `stage2_nadir` now always
+    passes its own `altitude_sample` here. `mask_nadir_gap` (which
+    recomputes the boundary independently, not via `stage2_nadir`)
+    gained the same floor via a new `range_var` parameter, computing
+    its own altitude sample the same way — same bug existed there
+    too, same fix applied.
+  - **Real-data re-run, all 14 frequency-channels**: JSF numbers
+    unchanged (never affected — EdgeTech's noise is already zeroed, so
+    the detector was never finding a pre-altitude spike there). Klein
+    SDF: `beam_geometry` outcomes now vary genuinely by channel rather
+    than uniformly — site-c/900kHz `determined` at 59° (matches the
+    hand-verified case above), site-d/900kHz `determined` at
+    11°, most 455kHz channels `ambiguous` (a small 2-4° median angle
+    but high ping-to-ping std — first bottom return often lands right
+    at the altitude floor rather than consistently further out).
+    **Left as an open question, not resolved**: whether that reflects
+    a real near-vertical beam edge on 455kHz specifically, or a
+    detector still not fully robust to this hardware's near-floor
+    noise on some channels — the classification system is doing its
+    job either way (reporting low confidence instead of a
+    clean-looking but unreliable number), so no further tuning applied
+    without more evidence.
+  - Tests: `TestDetectFirstBottomReturn` gained 3 tests
+    (`test_min_sample_floor_skips_pre_altitude_spike` reproduces the
+    exact real-data bug shape, `test_min_sample_scalar_applies_to_every_row`,
+    `test_min_sample_nan_row_gets_no_floor`); `TestStage2Nadir` gained
+    `test_pre_altitude_spike_does_not_win_as_first_bottom_return`
+    (integration-level: confirms `stage2_nadir` actually wires the
+    floor through, not just that the underlying detector supports it);
+    `TestMaskNadirGap` gained
+    `test_pre_altitude_spike_does_not_win_the_boundary` (same check for
+    the independent `mask_nadir_gap` codepath). Full suite: 1205
+    passing / 36 skipped.
+  - The battle-test comparison artifact (same URL as above) republished
+    again with the corrected numbers and this fix's writeup; the
+    original `survey-a`-only report was not touched (still
+    not rebuilt since the terminology-correction commit above — its
+    numbers are unaffected by this fix since it's JSF-only).
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
