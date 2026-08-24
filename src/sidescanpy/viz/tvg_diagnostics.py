@@ -18,7 +18,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from sidescanpy.analysis.tvg_diagnostics import TVGCandidateFit
-from sidescanpy.processing.radiometric import tvg_gain_db
+from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,19 @@ def plot_altitude_bin_comparison(
     return fig, ax
 
 
+def _params_label(params: TVGParams) -> str:
+    """Human-readable summary of a candidate's literal, uncalibrated
+    coefficients -- e.g. "spreading=20.0dB, absorption=0.20dB/m" -- for
+    `plot_candidate_fit`'s legend. Only non-zero terms are listed
+    (`flat` has neither, so this returns an empty string for it)."""
+    parts = []
+    if params.spreading_loss_db:
+        parts.append(f"spreading={params.spreading_loss_db:.1f}dB")
+    if params.absorption_db_per_m:
+        parts.append(f"absorption={params.absorption_db_per_m:.2f}dB/m")
+    return ", ".join(parts)
+
+
 def plot_candidate_fit(
     fit: TVGCandidateFit,
     observed_range_m: np.ndarray,
@@ -245,6 +258,7 @@ def plot_candidate_fit(
     show_observed: bool = True,
     title: str | None = None,
     use_fixed_scale: bool = True,
+    model_n_points: int = 200,
 ) -> tuple[Figure, Axes]:
     """
     Overlay one `analysis.tvg_diagnostics.fit_hardware_tvg_curve()`
@@ -277,6 +291,15 @@ def plot_candidate_fit(
         draws the old free-fit-scaled line instead, for diagnostic
         comparison against the fixed-scale one -- e.g. to see by how
         much a candidate needed to cheat to look competitive.
+    model_n_points : int, default 200
+        The model line is drawn over its own dense, evenly-spaced range
+        array from 0 to `observed_range_m`'s max — not just at the bin
+        centers `observed_range_m` happens to have — so the curve's
+        shape reads smoothly all the way back to near-zero range for
+        reference, including where no observed data exists (e.g. inside
+        the excluded nadir gap). Purely a display domain; the fit
+        itself was never evaluated there and this draws no new
+        conclusion about that span.
     """
     fig, ax = _new_fig_ax(ax)
 
@@ -298,23 +321,21 @@ def plot_candidate_fit(
             label=f"reference (r_ref={fit.r_ref_m:.1f}m)",
         )
 
-    model_curve = tvg_gain_db(np.clip(observed_range_m, fit.params.min_range_m, None), fit.params)
-    i_ref = int(np.argmin(np.abs(observed_range_m - fit.r_ref_m)))
+    model_range_m = np.linspace(0.0, float(np.max(observed_range_m)), model_n_points)
+    model_curve = tvg_gain_db(np.clip(model_range_m, fit.params.min_range_m, None), fit.params)
+    ref_gain = float(tvg_gain_db(np.clip(np.array([fit.r_ref_m]), fit.params.min_range_m, None), fit.params)[0])
     plotted_scale = 1.0 if use_fixed_scale else fit.scale
-    model_loss = plotted_scale * (model_curve - model_curve[i_ref])
+    model_loss = plotted_scale * (model_curve - ref_gain)
     # Every candidate's model_loss is exactly 0 at r_ref by construction
-    # (see i_ref above) and negative for r < r_ref (nearer than the
-    # reference implies less loss than at the reference) -- the model
-    # line already spans the observed data's full near-to-far range, so
-    # that crossing is visible without any extrapolation beyond what
-    # was actually fit against.
+    # (evaluated directly at r_ref_m, not snapped to a bin) and negative
+    # for r < r_ref (nearer than the reference implies less loss than at
+    # the reference) -- the model line now spans 0 to the full observed
+    # range regardless of where real bins start, so both that crossing
+    # and the curve's near-zero-range shape are visible for reference.
     rmse_shown = fit.fixed_scale_rmse_db if use_fixed_scale else fit.rmse_db
-    label = (
-        f"{fit.name} (RMSE={rmse_shown:.2f}dB, free-fit scale={fit.scale:.2f})"
-        if use_fixed_scale
-        else f"{fit.name} (scale={fit.scale:.2f}, RMSE={rmse_shown:.2f}dB)"
-    )
-    ax.plot(observed_range_m, model_loss, "--", color=color, label=label)
+    params_label = _params_label(fit.params)
+    label = f"{fit.name} (RMSE={rmse_shown:.2f}dB{', ' + params_label if params_label else ''})"
+    ax.plot(model_range_m, model_loss, "--", color=color, label=label)
     fit_range_label = f"fit range ({fit.r_ref_m:.1f}–{fit.r_fit_max_m:.1f}m)" if show_observed else None
     ax.axvspan(fit.r_ref_m, fit.r_fit_max_m, alpha=0.05, color=color, label=fit_range_label)
 
