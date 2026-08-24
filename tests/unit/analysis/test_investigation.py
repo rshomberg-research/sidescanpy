@@ -1223,6 +1223,39 @@ class TestMaskNadirGap:
         assert np.all(np.isnan(out["backscatter_raw"].values[:, :, 5:12]))
         assert np.all(out["backscatter_raw"].values[:, :, 150:] == 15.0)
 
+    def test_min_first_bottom_return_sample_widens_the_mask(self):
+        """Regression coverage for the downstream-project finding (2026-08-24):
+        the sweep/ping-profile charts there need mask_nadir_gap's
+        boundary to respect the same explicit floor stage2_nadir/
+        detect_first_bottom_return already support, so the two stay
+        consistent when called with the same override."""
+        n_pings, n_samples = 10, 400
+        arr = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        arr[..., 20:60] = 20.0   # residual noise, would otherwise win as the boundary
+        arr[..., 200:] = 15.0    # real bottom return
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+
+        without_floor = mask_nadir_gap(ds, smooth_window=5)
+        assert not np.all(np.isnan(without_floor["backscatter_raw"].values[:, :, 20:60]))  # confirms setup
+
+        with_floor = mask_nadir_gap(ds, smooth_window=5, min_first_bottom_return_sample=150.0)
+        assert np.all(np.isnan(with_floor["backscatter_raw"].values[:, :, :150]))
+        assert np.all(with_floor["backscatter_raw"].values[:, :, 250:] == 15.0)
+
+    def test_min_sample_buffer_and_peak_percentile_are_no_ops_by_default(self):
+        """0.0 / 100.0 must reproduce this function's exact prior
+        behavior -- confirmed by identity against a call that doesn't
+        pass them at all."""
+        n_pings, n_samples = 5, 300
+        arr = np.full((n_pings, 2, n_samples), 0.1, dtype=np.float32)
+        arr[..., 150:] = 10.0
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+
+        default = mask_nadir_gap(ds)
+        explicit = mask_nadir_gap(ds, min_sample_buffer=0.0, peak_percentile=100.0)
+
+        assert np.array_equal(default["backscatter_raw"].values, explicit["backscatter_raw"].values, equal_nan=True)
+
 
 class TestUniformExclusionBoundary:
     def test_collapses_to_single_percentile_value(self):

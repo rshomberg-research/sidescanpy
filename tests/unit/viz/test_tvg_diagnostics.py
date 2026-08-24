@@ -97,6 +97,28 @@ class TestPlotMeanVsRange:
         assert ax.get_xlabel() == "Sample index"
         plt.close(fig)
 
+    def test_default_linewidth_matches_matplotlib_default(self, sample_binned_df):
+        """1.5 is matplotlib's own default -- must be a no-op for every
+        existing caller that never passed linewidth."""
+        fig, ax = plot_mean_vs_range(sample_binned_df)
+        assert ax.get_lines()[0].get_linewidth() == pytest.approx(1.5)
+        plt.close(fig)
+
+    def test_linewidth_override_applies(self, sample_binned_df):
+        fig, ax = plot_mean_vs_range(sample_binned_df, linewidth=3.0)
+        assert ax.get_lines()[0].get_linewidth() == pytest.approx(3.0)
+        plt.close(fig)
+
+    def test_default_zorder_sits_above_a_typical_prior_layer(self, sample_binned_df):
+        """3.0 default should sit above plot_per_ping_profiles' own
+        lines, which don't set an explicit zorder (matplotlib default
+        for the first line drawn on an axis is 2.0)."""
+        fig, ax = plt.subplots()
+        ax.plot([0, 1], [0, 1])  # a stand-in "background" layer, default zorder
+        plot_mean_vs_range(sample_binned_df, ax=ax)
+        assert ax.get_lines()[-1].get_zorder() > ax.get_lines()[0].get_zorder()
+        plt.close(fig)
+
 
 class TestPlotTvgGainCurve:
     def test_returns_fig_ax(self, sample_ds_with_gain):

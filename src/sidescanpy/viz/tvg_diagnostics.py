@@ -39,6 +39,8 @@ def plot_mean_vs_range(
     band: tuple[str, str] = ("p10", "p90"),
     label: str | None = None,
     color: str | None = None,
+    linewidth: float = 1.5,
+    zorder: float = 3.0,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
     """
@@ -57,6 +59,19 @@ def plot_mean_vs_range(
     show_band : bool, default True
         Shade the region between `band`'s two percentile columns.
     band : (str, str), default ("p10", "p90")
+    linewidth : float, default 1.5
+        Matplotlib's own default is 1.5, so this default is a no-op for
+        existing callers -- pass a larger value (e.g. when overlaying
+        on top of `plot_per_ping_profiles`' dense low-alpha spaghetti,
+        which can otherwise visually bury a thin mean line even with a
+        distinct color) to make the mean line read clearly on top.
+    zorder : float, default 3.0
+        Matplotlib draws in call order by default (zorder 1, 2, 3, ...
+        as each `ax.plot`/`fill_between` call happens) -- 3.0 is chosen
+        to sit above a typical single prior `plot_per_ping_profiles`
+        call (which doesn't set its own zorder, so defaults to 1) even
+        if draw order alone wouldn't guarantee it. Raise further if
+        overlaying on top of more layers.
     """
     fig, ax = _new_fig_ax(ax)
 
@@ -64,10 +79,13 @@ def plot_mean_vs_range(
     max_col = "range_max_m" if "range_max_m" in binned.columns else "sample_max"
     x = (binned[range_col] + binned[max_col]) / 2.0
 
-    line, = ax.plot(x, binned["mean"], label=label, color=color, marker="o", markersize=3)
+    line, = ax.plot(
+        x, binned["mean"], label=label, color=color, marker="o", markersize=3,
+        linewidth=linewidth, zorder=zorder,
+    )
     if show_band and band[0] in binned.columns and band[1] in binned.columns:
         ax.fill_between(
-            x, binned[band[0]], binned[band[1]], alpha=0.2, color=line.get_color()
+            x, binned[band[0]], binned[band[1]], alpha=0.2, color=line.get_color(), zorder=zorder - 0.5,
         )
 
     ax.set_xlabel("Range (m)" if range_col == "range_min_m" else "Sample index")

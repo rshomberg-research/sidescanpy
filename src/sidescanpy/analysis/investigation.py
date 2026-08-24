@@ -649,6 +649,9 @@ def mask_nadir_gap(
     smooth_window: int = 10,
     threshold_fraction: float = 0.2,
     min_run: int = 10,
+    min_sample_buffer: float = 0.0,
+    peak_percentile: float = 100.0,
+    min_first_bottom_return_sample: float | None = None,
     boundary_smoothing_window: int = 15,
 ) -> xr.Dataset:
     """Return a copy of `ds` with the full nadir gap (everything before
@@ -699,6 +702,16 @@ def mask_nadir_gap(
         own altitude (see that function's docstring for the real bug
         this floor fixes). Skipped with no floor if absent, matching
         `stage2_nadir`'s own graceful degradation.
+    min_sample_buffer, peak_percentile, min_first_bottom_return_sample
+        Passed straight through to `detect_first_bottom_return` -- see
+        that function's docstring. All three default to no-ops (0.0 /
+        100.0 / None) that reproduce this function's exact prior
+        behavior. Set them to keep this function's masking boundary
+        consistent with a `stage2_nadir()`/`run_investigation()` call
+        using the same overrides elsewhere on the same data -- both
+        calls are deterministic given identical inputs, so passing the
+        same values here as there is sufficient for consistency without
+        needing to thread a precomputed boundary array between them.
     boundary_smoothing_window : int, default 15
         Passed to `smooth_boundary_across_pings` — see `stage2_nadir`'s
         same-named parameter. `<= 1` disables smoothing.
@@ -715,12 +728,23 @@ def mask_nadir_gap(
         altitude_sample = np.argmax(finite_mask, axis=-1).astype(np.float64)
         altitude_sample[~has_any] = np.nan
 
+    effective_min_sample = altitude_sample
+    if min_first_bottom_return_sample is not None:
+        if altitude_sample is None:
+            effective_min_sample = np.full(
+                np.asarray(ds[detector_value_var].values).shape[:-1], float(min_first_bottom_return_sample),
+            )
+        else:
+            effective_min_sample = np.fmax(altitude_sample, min_first_bottom_return_sample)
+
     boundary = detect_first_bottom_return(
         np.asarray(ds[detector_value_var].values),
         smooth_window=smooth_window,
         threshold_fraction=threshold_fraction,
         min_run=min_run,
-        min_sample=altitude_sample,
+        min_sample=effective_min_sample,
+        min_sample_buffer=min_sample_buffer,
+        peak_percentile=peak_percentile,
     )
     if boundary_smoothing_window > 1:
         boundary = smooth_boundary_across_pings(boundary, window=boundary_smoothing_window)
