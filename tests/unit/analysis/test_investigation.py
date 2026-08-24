@@ -709,6 +709,57 @@ class TestStage4Decay:
         assert result.classification == "none"
         assert result.metrics["best_candidate"] == "full_physics"
 
+    def test_classification_ranked_by_fixed_scale_rmse_not_free_fit_rmse(self, monkeypatch):
+        """Isolates stage4_decay's own ranking logic from
+        fit_hardware_tvg_curve's real fitting behavior entirely --
+        injects a hand-built TVGCandidateFitResult where free-fit
+        rmse_db and fixed_scale_rmse_db disagree about the winner by
+        construction, and confirms stage4_decay's classification
+        follows fixed_scale_rmse_db (2026-08-24 change)."""
+        import sidescanpy.analysis.investigation as inv_mod
+        from sidescanpy.analysis.tvg_diagnostics import TVGCandidateFit, TVGCandidateFitResult
+
+        ds = _make_raw_dataset(n_pings=10, n_samples=100)
+        ds = compute_geometric_ranges(ds)
+
+        # "absorption_only" wins on free-fit rmse_db (0.1, lowest) but
+        # needs an implausible scale=5.0 to get there; "full_physics"
+        # wins on fixed_scale_rmse_db (0.2, lowest) with a free-fit
+        # scale of 1.02 -- close to the literal, uncalibrated model.
+        candidates = [
+            TVGCandidateFit(name="flat", params=TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0),
+                             scale=0.0, rmse_db=10.0, fixed_scale_rmse_db=10.0,
+                             r_ref_m=5.0, r_fit_max_m=40.0, n_bins_used=20),
+            TVGCandidateFit(name="spreading_only", params=TVGParams(absorption_db_per_m=0.0),
+                             scale=1.5, rmse_db=3.0, fixed_scale_rmse_db=5.0,
+                             r_ref_m=5.0, r_fit_max_m=40.0, n_bins_used=20),
+            TVGCandidateFit(name="absorption_only", params=TVGParams(spreading_loss_db=0.0),
+                             scale=5.0, rmse_db=0.1, fixed_scale_rmse_db=8.0,
+                             r_ref_m=5.0, r_fit_max_m=40.0, n_bins_used=20),
+            TVGCandidateFit(name="full_physics", params=TVGParams(),
+                             scale=1.02, rmse_db=1.0, fixed_scale_rmse_db=0.2,
+                             r_ref_m=5.0, r_fit_max_m=40.0, n_bins_used=20),
+        ]
+        fake_result = TVGCandidateFitResult(
+            candidates=candidates,
+            best=min(candidates, key=lambda c: c.fixed_scale_rmse_db),
+            observed_range_m=np.array([5.0, 40.0]),
+            observed_loss_db=np.array([0.0, 10.0]),
+        )
+        monkeypatch.setattr(inv_mod, "fit_hardware_tvg_curve", lambda *a, **kw: fake_result)
+
+        result = inv_mod.stage4_decay(ds, bin_width_m=2.0)
+
+        assert result.metrics["best_candidate"] == "full_physics"
+        assert result.metrics["best_rmse_db"] == pytest.approx(0.2)
+        assert result.metrics["best_free_fit_scale"] == pytest.approx(1.02)
+        assert result.metrics["best_free_fit_rmse_db"] == pytest.approx(1.0)
+        assert result.metrics["candidates"]["absorption_only"]["fixed_scale_rmse_db"] == pytest.approx(8.0)
+        # runner-up by fixed_scale_rmse_db is spreading_only (5.0), not
+        # absorption_only (8.0) -- confirms the whole ranking, not just best
+        assert result.classification == "none"  # _TVG_CANDIDATE_TO_STATUS["full_physics"]
+        assert "spreading_only" in result.notes[0]
+
     def test_classification_invariant_to_db_reference(self):
         """The self-referenced dB conversion's reference percentile is
         a constant offset in dB space, which cancels out of every

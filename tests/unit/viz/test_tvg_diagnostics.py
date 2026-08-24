@@ -288,6 +288,60 @@ class TestPlotCandidateFit:
         assert any(label.startswith("fit range (") for label in labels)
         plt.close(fig)
 
+    def test_use_fixed_scale_default_draws_literal_unscaled_model(self):
+        """Default (use_fixed_scale=True) must draw the model at
+        scale=1.0, not the free-fit scale -- matches what
+        stage4_decay's classification is now actually based on
+        (2026-08-24 change). Uses a deliberately scaled curve (true
+        scale 2.4) so the two lines are visibly, checkably different,
+        unlike an exact-match fixture where they'd coincide."""
+        r = np.arange(1.0, 40.0, 1.0)
+        true_scale = 2.4
+        params = TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.15)
+        mean = 50.0 - true_scale * tvg_gain_db(r, params)
+        binned = pd.DataFrame({
+            "range_min_m": r - 0.5, "range_max_m": r + 0.5,
+            "mean": mean, "count": np.full_like(r, 1000, dtype=int),
+        })
+        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=1.5, r_fit_max_m=39.5)
+        absorption_only = next(c for c in fit_result.candidates if c.name == "absorption_only")
+        assert absorption_only.scale == pytest.approx(true_scale, abs=1e-3)  # sanity: fixture behaves as intended
+
+        fig_fixed, ax_fixed = plot_candidate_fit(
+            absorption_only, fit_result.observed_range_m, fit_result.observed_loss_db, use_fixed_scale=True,
+        )
+        fig_free, ax_free = plot_candidate_fit(
+            absorption_only, fit_result.observed_range_m, fit_result.observed_loss_db, use_fixed_scale=False,
+        )
+        model_fixed = next(l for l in ax_fixed.get_lines() if l.get_label().startswith("absorption_only"))
+        model_free = next(l for l in ax_free.get_lines() if l.get_label().startswith("absorption_only"))
+        assert not np.allclose(model_fixed.get_ydata(), model_free.get_ydata())
+        # at the far edge the fixed (unscaled) line should be much
+        # closer to zero loss than the free-fit (2.4x scaled) line,
+        # which tracks the (also 2.4x) observed curve closely
+        assert abs(model_fixed.get_ydata()[-1]) < abs(model_free.get_ydata()[-1])
+        plt.close(fig_fixed)
+        plt.close(fig_free)
+
+    def test_use_fixed_scale_legend_shows_fixed_scale_rmse(self):
+        r = np.arange(1.0, 40.0, 1.0)
+        params = TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.15)
+        mean = 50.0 - 2.4 * tvg_gain_db(r, params)
+        binned = pd.DataFrame({
+            "range_min_m": r - 0.5, "range_max_m": r + 0.5,
+            "mean": mean, "count": np.full_like(r, 1000, dtype=int),
+        })
+        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=1.5, r_fit_max_m=39.5)
+        absorption_only = next(c for c in fit_result.candidates if c.name == "absorption_only")
+
+        fig, ax = plot_candidate_fit(
+            absorption_only, fit_result.observed_range_m, fit_result.observed_loss_db, use_fixed_scale=True,
+        )
+        label = next(l.get_label() for l in ax.get_lines() if l.get_label().startswith("absorption_only"))
+        assert f"RMSE={absorption_only.fixed_scale_rmse_db:.2f}dB" in label
+        assert f"free-fit scale={absorption_only.scale:.2f}" in label
+        plt.close(fig)
+
     def test_model_line_crosses_zero_at_r_ref(self):
         """Every candidate's model_loss is 0 exactly at r_ref by
         construction -- confirms the model line is drawn in absolute

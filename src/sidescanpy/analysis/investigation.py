@@ -1619,6 +1619,17 @@ def stage4_decay(
     already carries: none, spreading_only, absorption_only, full, or
     ambiguous (winner not clearly separated from the runner-up).
 
+    Classification is ranked by each candidate's **fixed-scale** RMSE
+    (`TVGCandidateFit.fixed_scale_rmse_db` — the literal, uncalibrated
+    physics model, scale pinned to 1.0), not the free-fit RMSE
+    (2026-08-24 change; see `TVGCandidateFit`'s own docstring for the
+    full rationale and the real-data case that motivated it). Both
+    numbers are still reported per candidate in `metrics["candidates"]`,
+    and `metrics["best_free_fit_scale"]`/`["best_free_fit_rmse_db"]`
+    carry the free-fit values for the winning candidate specifically —
+    `metrics["best_rmse_db"]` itself now means the fixed-scale RMSE
+    that actually decided the winner, not the free-fit one.
+
     dB reference convention
     ------------------------
     Without genuine sensor/system calibration (never available for this
@@ -1794,21 +1805,32 @@ def stage4_decay(
         r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
     )
 
-    ranked = sorted(fit_result.candidates, key=lambda c: c.rmse_db)
+    # Ranked by fixed_scale_rmse_db (literal, uncalibrated physics
+    # model, scale pinned to 1.0), not the free-fit rmse_db -- a
+    # 2026-08-24 change. A free scale on one term can chase a low RMSE
+    # by absorbing whatever's left over (beam pattern, AGC roll-off,
+    # turbidity, anything roughly range-linear), not just genuine
+    # absorption -- see TVGCandidateFit's docstring for the real-data
+    # case that motivated this (a candidate needing a ~2.4x scale to
+    # "win" while another's free-fit scale independently landed within
+    # 3% of 1.0 unscaled). Comparing literal models is harder to fool.
+    ranked = sorted(fit_result.candidates, key=lambda c: c.fixed_scale_rmse_db)
     best = ranked[0]
     second = ranked[1] if len(ranked) > 1 else None
 
     notes: list[str] = []
-    if second is not None and best.rmse_db > 0 and (second.rmse_db - best.rmse_db) / best.rmse_db < ambiguous_rel_tol:
+    if second is not None and best.fixed_scale_rmse_db > 0 and (
+        second.fixed_scale_rmse_db - best.fixed_scale_rmse_db
+    ) / best.fixed_scale_rmse_db < ambiguous_rel_tol:
         classification = "ambiguous"
         notes.append(
-            f"Best ({best.name}, RMSE={best.rmse_db:.2f}dB) not clearly separated from "
-            f"runner-up ({second.name}, RMSE={second.rmse_db:.2f}dB)."
+            f"Best ({best.name}, RMSE={best.fixed_scale_rmse_db:.2f}dB) not clearly separated from "
+            f"runner-up ({second.name}, RMSE={second.fixed_scale_rmse_db:.2f}dB)."
         )
     else:
         classification = _TVG_CANDIDATE_TO_STATUS[best.name]
         if second is not None:
-            notes.append(f"Runner-up: {second.name} (RMSE={second.rmse_db:.2f}dB).")
+            notes.append(f"Runner-up: {second.name} (RMSE={second.fixed_scale_rmse_db:.2f}dB).")
 
     metrics = {
         "freq_hz": freq_hz,
@@ -1821,9 +1843,16 @@ def stage4_decay(
         "n_bins_used": best.n_bins_used,
         "best_candidate": best.name,
         "best_scale": best.scale,
-        "best_rmse_db": best.rmse_db,
+        "best_rmse_db": best.fixed_scale_rmse_db,
+        "best_free_fit_scale": best.scale,
+        "best_free_fit_rmse_db": best.rmse_db,
         "ambiguous_rel_tol": ambiguous_rel_tol,
-        "candidates": {c.name: {"scale": c.scale, "rmse_db": c.rmse_db} for c in fit_result.candidates},
+        "candidates": {
+            c.name: {
+                "scale": c.scale, "rmse_db": c.rmse_db, "fixed_scale_rmse_db": c.fixed_scale_rmse_db,
+            }
+            for c in fit_result.candidates
+        },
         "water_column_n_excluded": n_water_column_excluded,
         "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,

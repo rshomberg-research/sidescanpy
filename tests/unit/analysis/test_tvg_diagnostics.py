@@ -451,6 +451,87 @@ class TestFitHardwareTvgCurve:
             "flat", "spreading_only", "absorption_only", "full_physics",
         ]
 
+    def test_flat_curve_fixed_scale_rmse_equals_free_fit_rmse(self):
+        """flat has no scale to begin with (model is identically zero) --
+        pinning a nonexistent scale to 1.0 must be a no-op."""
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        flat = next(c for c in result.candidates if c.name == "flat")
+        assert flat.fixed_scale_rmse_db == pytest.approx(flat.rmse_db)
+
+    def test_exact_match_curve_has_zero_fixed_scale_rmse(self):
+        """A curve built exactly from the literal (scale=1.0) model
+        should have fixed_scale_rmse_db == 0 for the matching candidate
+        -- same as the free-fit rmse_db here, since the true scale
+        already is 1.0."""
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        absorption_only = next(c for c in result.candidates if c.name == "absorption_only")
+        assert absorption_only.fixed_scale_rmse_db == pytest.approx(0.0, abs=1e-6)
+
+    def test_scaled_curve_has_nonzero_fixed_scale_rmse_but_near_zero_free_fit_rmse(self):
+        """The real case this change exists for: a curve that's the
+        absorption_only model scaled 2.4x (mirrors a real observed
+        scale from real-data checking) fits *almost perfectly* if a
+        free scale is allowed (rmse_db ~ 0), but is clearly wrong at
+        the literal, uncalibrated scale of 1.0 -- fixed_scale_rmse_db
+        should be large and reflect exactly that gap, not be
+        near-zero too."""
+        true_scale = 2.4
+        binned = _make_binned_curve(
+            TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION * true_scale)
+        )
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        absorption_only = next(c for c in result.candidates if c.name == "absorption_only")
+        assert absorption_only.scale == pytest.approx(true_scale, abs=1e-6)
+        assert absorption_only.rmse_db == pytest.approx(0.0, abs=1e-6)
+        assert absorption_only.fixed_scale_rmse_db > 1.0, (
+            "fixed-scale RMSE should clearly show the literal (unscaled) model "
+            "doesn't match this curve, even though the free-fit RMSE is ~0"
+        )
+
+    def test_best_is_ranked_by_fixed_scale_rmse_not_free_fit_rmse(self):
+        """Direct proof the ranking criterion changed, on a genuine
+        disagreement case (not just a clean exact-match curve, where
+        both criteria trivially agree): a noisy full_physics-shaped
+        curve, over a narrow fit window relative to r_ref -- the same
+        conditions (real noise, a fit window only a few multiples of
+        r_ref) that produced a real observed disagreement on real
+        survey data during the investigation that motivated this
+        change. Found by search over seeds, not hand-derived -- fixed
+        here as a reproducible regression fixture.
+
+        Under the old (free-fit rmse_db) ranking, full_physics would
+        "win" (rmse=1.96, lowest) even though its own free-fit scale
+        (0.855) is reasonably close to 1.0. Under fixed-scale ranking,
+        spreading_only wins instead (fixed_rmse=3.67 vs full_physics's
+        4.16) -- this test only asserts the ranking mechanism picks the
+        fixed-scale winner, not that either answer is "more correct"
+        for this specific synthetic curve; the real point is that the
+        two criteria genuinely disagree here and `result.best` follows
+        `fixed_scale_rmse_db`.
+        """
+        r_min, r_max, step = 1.0, 38.0, 1.0
+        r = np.arange(r_min, r_max, step)
+        rng = np.random.default_rng(3)
+        true_params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=_ABSORPTION)
+        mean = 50.0 - tvg_gain_db(r, true_params) + rng.normal(0, 1.5, size=r.shape)
+        binned = pd.DataFrame({
+            "range_min_m": r - step / 2, "range_max_m": r + step / 2,
+            "mean": mean, "median": mean, "std": np.full_like(mean, 1.5),
+            "p10": mean, "p90": mean, "count": np.full_like(r, 1000, dtype=int),
+        })
+
+        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, r_ref_m=2.5, r_fit_max_m=38.0)
+
+        free_fit_winner = min(result.candidates, key=lambda c: c.rmse_db).name
+        assert free_fit_winner == "full_physics"
+        assert result.best.name == "spreading_only"
+        assert result.best.name != free_fit_winner, (
+            "fixture no longer produces a genuine disagreement between the two "
+            "ranking criteria -- this test needs a different seed/window to be meaningful"
+        )
+
     def test_r_ref_auto_selection_skips_low_count_bins(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
         # First bin (r~1) has too few samples; second (r~2) is fine.

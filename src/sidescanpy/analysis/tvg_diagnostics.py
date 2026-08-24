@@ -302,13 +302,36 @@ class TVGCandidateFit:
     signal decays exactly like uncompensated absorption loss alone, as
     if hardware had already removed spreading loss); close to 0.0 means
     that term contributes essentially nothing to what's observed, i.e.
-    hardware likely already compensated for it.
+    hardware likely already compensated for it. `rmse_db` is this
+    free-fit scale's residual — kept as a diagnostic (a scale far from
+    1.0 is itself informative, e.g. real survey checks found
+    `absorption_only` scales of ~2-2.4 alongside a near-1.0
+    `full_physics` scale — worth seeing, not hidden) but **not** what
+    `stage4_decay`'s classification is based on (see `fixed_scale_rmse_db`).
+
+    `fixed_scale_rmse_db` is the residual with the scale pinned to
+    exactly 1.0 — the literal, uncalibrated physics model, no fitting
+    at all. This is what `stage4_decay` actually ranks candidates by
+    (2026-08-24 change). Real-data testing found the free-fit RMSE
+    ranking exploitable: a single free multiplier on one term can chase
+    down a low RMSE by absorbing whatever residual is left over — beam
+    pattern effects, AGC roll-off, turbidity, anything with a roughly
+    range-linear shape — not just genuine absorption, the same
+    collinearity risk this module's own joint-fit precedent already
+    warns about (see the module-level comment above `_TVG_CANDIDATE_NAMES`).
+    Comparing literal models instead is harder to fool: a candidate
+    only wins by actually matching the physics as specified, not by
+    however much free scaling happens to minimize residual within one
+    fit window. `flat`'s value is identical to `rmse_db` — it has no
+    scale to begin with (its model is identically zero), so pinning the
+    (nonexistent) scale changes nothing.
     """
 
     name: str  # one of _TVG_CANDIDATE_NAMES
     params: TVGParams  # TVGParams used to generate this candidate's model curve
     scale: float
     rmse_db: float
+    fixed_scale_rmse_db: float
     r_ref_m: float
     r_fit_max_m: float
     n_bins_used: int
@@ -316,7 +339,10 @@ class TVGCandidateFit:
 
 @dataclass(frozen=True)
 class TVGCandidateFitResult:
-    """All four candidate fits for one raw-vs-range curve, plus the winner."""
+    """All four candidate fits for one raw-vs-range curve, plus the
+    winner. `best` is ranked by `fixed_scale_rmse_db` (literal,
+    uncalibrated model), not the free-fit `rmse_db` -- see
+    `TVGCandidateFit`'s docstring."""
 
     candidates: list[TVGCandidateFit]  # fixed order: _TVG_CANDIDATE_NAMES
     best: TVGCandidateFit
@@ -535,17 +561,25 @@ def fit_hardware_tvg_curve(
         if name == "flat":
             # Model is identically zero everywhere -- no free scale to
             # fit (scale*0 == 0 for any scale), so report scale=0.0 and
-            # RMSE directly against the observed loss itself.
+            # RMSE directly against the observed loss itself. Fixed-scale
+            # residual is identical -- pinning a nonexistent scale to 1.0
+            # changes nothing (1.0*0 == 0.0*0).
             scale = 0.0
             residual = observed_loss_db[fit_mask]
+            fixed_residual = residual
         else:
             m = model_loss[fit_mask]
             o = observed_loss_db[fit_mask]
             denom = np.dot(m, m)
             scale = float(np.dot(m, o) / denom) if denom > 0 else 0.0
             residual = scale * m - o
+            # scale pinned to exactly 1.0 -- the literal, uncalibrated
+            # physics model. See TVGCandidateFit's docstring for why
+            # stage4_decay ranks candidates by this, not `rmse_db`.
+            fixed_residual = m - o
 
         rmse_db = float(np.sqrt(np.mean(residual**2))) if residual.size else float("nan")
+        fixed_scale_rmse_db = float(np.sqrt(np.mean(fixed_residual**2))) if fixed_residual.size else float("nan")
 
         candidates.append(
             TVGCandidateFit(
@@ -553,13 +587,17 @@ def fit_hardware_tvg_curve(
                 params=params,
                 scale=scale,
                 rmse_db=rmse_db,
+                fixed_scale_rmse_db=fixed_scale_rmse_db,
                 r_ref_m=r_ref_m,
                 r_fit_max_m=r_fit_max_m,
                 n_bins_used=n_bins_used,
             )
         )
 
-    best = min(candidates, key=lambda c: c.rmse_db)
+    # Ranked by fixed_scale_rmse_db (literal, uncalibrated model), not
+    # the free-fit rmse_db -- matches stage4_decay's own ranking
+    # criterion (2026-08-24 change; see TVGCandidateFit's docstring).
+    best = min(candidates, key=lambda c: c.fixed_scale_rmse_db)
 
     return TVGCandidateFitResult(
         candidates=candidates,

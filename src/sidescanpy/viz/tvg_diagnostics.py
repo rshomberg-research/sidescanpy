@@ -244,6 +244,7 @@ def plot_candidate_fit(
     color: str | None = None,
     show_observed: bool = True,
     title: str | None = None,
+    use_fixed_scale: bool = True,
 ) -> tuple[Figure, Axes]:
     """
     Overlay one `analysis.tvg_diagnostics.fit_hardware_tvg_curve()`
@@ -269,6 +270,13 @@ def plot_candidate_fit(
     show_observed : bool, default True
         Plot the observed curve itself. Set `False` on repeat calls
         against the same `ax` to avoid redrawing it once per candidate.
+    use_fixed_scale : bool, default True
+        Draw the literal, uncalibrated model (scale pinned to 1.0) --
+        matches what `stage4_decay` actually ranks candidates by
+        (2026-08-24 change; see `TVGCandidateFit`'s docstring). `False`
+        draws the old free-fit-scaled line instead, for diagnostic
+        comparison against the fixed-scale one -- e.g. to see by how
+        much a candidate needed to cheat to look competitive.
     """
     fig, ax = _new_fig_ax(ax)
 
@@ -292,17 +300,21 @@ def plot_candidate_fit(
 
     model_curve = tvg_gain_db(np.clip(observed_range_m, fit.params.min_range_m, None), fit.params)
     i_ref = int(np.argmin(np.abs(observed_range_m - fit.r_ref_m)))
-    model_loss = fit.scale * (model_curve - model_curve[i_ref])
+    plotted_scale = 1.0 if use_fixed_scale else fit.scale
+    model_loss = plotted_scale * (model_curve - model_curve[i_ref])
     # Every candidate's model_loss is exactly 0 at r_ref by construction
     # (see i_ref above) and negative for r < r_ref (nearer than the
     # reference implies less loss than at the reference) -- the model
     # line already spans the observed data's full near-to-far range, so
     # that crossing is visible without any extrapolation beyond what
     # was actually fit against.
-    ax.plot(
-        observed_range_m, model_loss, "--", color=color,
-        label=f"{fit.name} (scale={fit.scale:.2f}, RMSE={fit.rmse_db:.2f}dB)",
+    rmse_shown = fit.fixed_scale_rmse_db if use_fixed_scale else fit.rmse_db
+    label = (
+        f"{fit.name} (RMSE={rmse_shown:.2f}dB, free-fit scale={fit.scale:.2f})"
+        if use_fixed_scale
+        else f"{fit.name} (scale={fit.scale:.2f}, RMSE={rmse_shown:.2f}dB)"
     )
+    ax.plot(observed_range_m, model_loss, "--", color=color, label=label)
     fit_range_label = f"fit range ({fit.r_ref_m:.1f}–{fit.r_fit_max_m:.1f}m)" if show_observed else None
     ax.axvspan(fit.r_ref_m, fit.r_fit_max_m, alpha=0.05, color=color, label=fit_range_label)
 
