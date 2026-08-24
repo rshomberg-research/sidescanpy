@@ -58,7 +58,7 @@ def plot_stage1_histograms(
     ax_log.set_ylabel("Count")
     ax_log.set_title("Log scale")
 
-    fig.suptitle(f"Stage 1 — value distribution ({value_var})")
+    fig.suptitle(f"Value distribution ({value_var})")
     fig.tight_layout()
     return fig, (ax_lin, ax_log)
 
@@ -77,7 +77,7 @@ def plot_stage1_sample_ping(
         ax.set_xlabel("Sample index")
         ax.set_title(label)
     ax_port.set_ylabel(value_var)
-    fig.suptitle(f"Stage 1 — sample ping {ping_idx}")
+    fig.suptitle(f"Sample ping {ping_idx}")
     fig.tight_layout()
     return fig, (ax_port, ax_stbd)
 
@@ -169,7 +169,7 @@ def plot_stage1_5_before_after(
     n_rejected = stage1_5.metrics.get("outlier_n_rejected")
     pct_rejected = stage1_5.metrics.get("outlier_pct_rejected")
     suffix = f" — {n_rejected} rejected ({pct_rejected:.2f}%)" if n_rejected is not None else ""
-    fig.suptitle(f"Stage 1.5 — distribution before/after outlier rejection ({value_var}){suffix}")
+    fig.suptitle(f"Distribution before/after outlier rejection ({value_var}){suffix}")
     fig.tight_layout()
     return fig, (ax_lin, ax_log)
 
@@ -203,7 +203,7 @@ def plot_stage2_cross_track_profile(
     ax.axvline(0, color="k", linewidth=0.5, alpha=0.5)
     ax.set_xlabel("Sample index (port ← | → starboard)")
     ax.set_ylabel(value_var)
-    ax.set_title(f"Stage 2 — cross-track profile, ping {ping_idx}")
+    ax.set_title(f"Cross-track profile, ping {ping_idx}")
     return fig, ax
 
 
@@ -229,10 +229,17 @@ def plot_stage2_nadir_zoom(
     thin — the vehicle's own altitude re-expressed in sample units, not
     a real boundary) and the **first bottom return** (solid, bold —
     where backscatter actually rises to a real echo; real-data check
-    found these can differ by 2x+, see `stage2_nadir`'s docstring). The
-    region between them is shaded as part of the nadir gap — the beam's
-    near edge is never at 0 deg from vertical, so this span is simply
-    not illuminated, not weak-but-real backscatter.
+    found these can differ by 2x+, see `stage2_nadir`'s docstring).
+
+    Everything from nadir (x=0) out to the first bottom return — the
+    acquisition-blanking burst *and* the beam-geometry null zone beyond
+    it — is shaded as one continuous span labeled "water column
+    returns": the beam's near edge is never at 0 deg from vertical, so
+    nothing in this span is a real bottom echo, whether the sample was
+    electronically blanked or simply never illuminated. Not two
+    separately-colored regions — that distinction mattered while this
+    boundary was still being debugged, but both are the same thing from
+    a "should this be treated as bottom signal" standpoint.
     """
     n_pings = ds.sizes["ping"]
     ping_idx = ping_idx if ping_idx is not None else n_pings // 2
@@ -253,8 +260,9 @@ def plot_stage2_nadir_zoom(
     mask = np.abs(x) <= window
     ax.plot(x[mask], y[mask], marker="o", markersize=2.5, linewidth=0.6)
     ax.axvline(0, color="k", linewidth=0.5, alpha=0.5)
-    ax.axvspan(-nadir_n_samples, nadir_n_samples, color="orange", alpha=0.15, label="nadir gap window")
 
+    altitude_b = None
+    bottom_b = None
     if altitude_p90 is not None or bottom_p90 is not None:
         altitude_arr = stage2.data.get("altitude_sample")
         bottom_arr = stage2.data.get("first_bottom_return_sample")
@@ -263,19 +271,23 @@ def plot_stage2_nadir_zoom(
         altitude_b = altitude_this if np.isfinite(altitude_this) else altitude_p90
         bottom_b = bottom_this if np.isfinite(bottom_this) else bottom_p90
 
-        if altitude_b is not None:
-            for sign, label in ((-1, None), (1, "altitude")):
-                ax.axvline(sign * altitude_b, color="#8B8B3A", linestyle=":", linewidth=1.3, label=label)
-        if bottom_b is not None:
-            for sign, label in ((-1, None), (1, "first bottom return")):
-                ax.axvline(sign * bottom_b, color="#2E7D74", linestyle="--", linewidth=1.6, label=label)
-        if altitude_b is not None and bottom_b is not None and bottom_b > altitude_b:
-            ax.axvspan(-bottom_b, -altitude_b, color="#B5482E", alpha=0.08)
-            ax.axvspan(altitude_b, bottom_b, color="#B5482E", alpha=0.08, label="nadir gap (not illuminated)")
+    if bottom_b is not None:
+        ax.axvspan(-bottom_b, bottom_b, color="#B5482E", alpha=0.08, label="water column returns")
+    else:
+        # No stage2 boundary available -- fall back to the raw blanking
+        # window alone, the only nadir-gap information available.
+        ax.axvspan(-nadir_n_samples, nadir_n_samples, color="#B5482E", alpha=0.08, label="water column returns")
+
+    if altitude_b is not None:
+        for sign, label in ((-1, None), (1, "altitude")):
+            ax.axvline(sign * altitude_b, color="#8B8B3A", linestyle=":", linewidth=1.3, label=label)
+    if bottom_b is not None:
+        for sign, label in ((-1, None), (1, "first bottom return")):
+            ax.axvline(sign * bottom_b, color="#2E7D74", linestyle="--", linewidth=1.6, label=label)
 
     ax.set_xlabel("Sample index (port ← | → starboard)")
     ax.set_ylabel(value_var)
-    ax.set_title(f"Stage 2 — nadir zoom, ping {ping_idx}")
+    ax.set_title(f"Nadir zoom, ping {ping_idx}")
     ax.legend(fontsize=7.5, loc="upper right")
     return fig, ax
 
@@ -306,7 +318,7 @@ def plot_stage2_waterfall(
     """
     fig, ax = _new_fig_ax(ax, figsize=(12, 6))
     aliased = ds.assign(backscatter_intensity=ds[value_var])
-    plot_waterfall(aliased, x_axis="sample", ax=ax, title=f"Stage 2 — waterfall ({value_var})", **waterfall_kwargs)
+    plot_waterfall(aliased, x_axis="sample", ax=ax, title=f"Waterfall ({value_var})", **waterfall_kwargs)
 
     if stage2 is not None:
         altitude_arr = stage2.data.get("altitude_sample")
@@ -367,7 +379,7 @@ def plot_stage2_5_beam_geometry(
     )
 
     if altitude is None:
-        ax_geo.set_title(f"Stage 2.5 — beam geometry unavailable (ping {ping_idx})")
+        ax_geo.set_title(f"Beam geometry unavailable (ping {ping_idx})")
         return fig, (ax_geo, ax_ping)
 
     max_reach = altitude
@@ -402,20 +414,24 @@ def plot_stage2_5_beam_geometry(
             ax_geo.plot([0, across], [0, -altitude], color="#B5482E", linewidth=2.2, linestyle="--",
                         alpha=0.9, label=f"far edge (usable range): {angle:.0f}° from vertical" if label == "port" else None)
 
-    # Shade the beam's actual illuminated span between near and far edges.
-    for sign in (-1, 1):
-        near_x = next((e.get("observed_across_track_m") for e in near_ray.values() if e.get("observed_across_track_m") is not None), None)
-        far_x = next((e.get("predicted_across_track_m") for e in far_ray.values() if e.get("predicted_across_track_m") is not None), None)
+    # Shade the beam's actual illuminated span between near and far edges,
+    # per side, using each side's own (already-signed) coordinates --
+    # not a magnitude re-signed by an external multiplier, which
+    # previously double-applied the sign whenever the picked near_x was
+    # already negative (port) and inverted the fill onto the wrong side.
+    for label in ("port", "starboard"):
+        near_x = near_ray.get(label, {}).get("observed_across_track_m")
+        far_x = far_ray.get(label, {}).get("predicted_across_track_m")
         if near_x is not None and far_x is not None:
             ax_geo.fill(
-                [0, sign * near_x, sign * far_x], [0, -altitude, -altitude],
+                [0, near_x, far_x], [0, -altitude, -altitude],
                 color="#2E7D74", alpha=0.08,
             )
 
     ax_geo.set_ylim(-altitude * 1.3, altitude * 0.6)
     ax_geo.set_xlim(-max_reach, max_reach)
     ax_geo.set_ylabel("Depth below towfish (m)")
-    title = f"Stage 2.5 — beam geometry, ping {ping_idx}"
+    title = f"Beam geometry, ping {ping_idx}"
     if beam_center is not None and beam_width is not None:
         title += f" (center {beam_center:.0f}°, width {beam_width:.0f}° from vertical)"
     ax_geo.set_title(title)
@@ -440,7 +456,6 @@ def plot_stage2_5_beam_geometry(
         across = entry.get("predicted_across_track_m")
         if across is not None:
             ax_ping.axvline(across, color="#B5482E", linewidth=1.8, linestyle="--", alpha=0.9)
-            ax_ping.axvline(-across, color="#B5482E", linewidth=1.8, linestyle="--", alpha=0.9)
 
     ax_ping.set_xlabel("Across-track distance (m)  (port ← | → starboard)")
     ax_ping.set_ylabel(value_var)
@@ -462,14 +477,14 @@ def plot_stage3_usable_range(stage3: StageResult) -> tuple[Figure, tuple[Axes, A
     fig, (ax_med, ax_std) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
 
     if binned is None or binned.empty:
-        ax_med.set_title("Stage 3 — no binned data")
+        ax_med.set_title("No binned data")
         return fig, (ax_med, ax_std)
 
     x = (binned["range_min_m"] + binned["range_max_m"]) / 2.0
     ax_med.plot(x, binned["median"], marker="o", markersize=3)
     ax_med.fill_between(x, binned["p10"], binned["p90"], alpha=0.2)
     ax_med.set_ylabel("Median backscatter")
-    ax_med.set_title("Stage 3 — usable range")
+    ax_med.set_title("Usable range")
 
     ax_std.plot(x, binned["std"], marker="o", markersize=3, color="C1")
     ax_std.set_ylabel("Std dev")
@@ -506,7 +521,7 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
     fit_result = stage4.data.get("fit_result")
     fig, ax = plt.subplots(figsize=(9, 6))
     if fit_result is None:
-        ax.set_title("Stage 4 — no fit available")
+        ax.set_title("No fit available")
         return fig, ax
 
     colors = {"flat": "C0", "spreading_only": "C1", "absorption_only": "C2", "full_physics": "C3"}
@@ -518,7 +533,7 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
             ax=ax,
             color=colors.get(candidate.name),
             show_observed=(i == 0),
-            title=f"Stage 4 — decay model fit (best: {stage4.metrics.get('best_candidate')})",
+            title=f"Decay model fit (best: {stage4.metrics.get('best_candidate')})",
         )
     return fig, ax
 
@@ -531,7 +546,7 @@ def plot_stage4_residuals(stage4: StageResult) -> tuple[Figure, Axes]:
     fit_result = stage4.data.get("fit_result")
     fig, ax = plt.subplots(figsize=(9, 5))
     if fit_result is None:
-        ax.set_title("Stage 4 — no fit available")
+        ax.set_title("No fit available")
         return fig, ax
 
     ranges = fit_result.observed_range_m
@@ -556,7 +571,7 @@ def plot_stage4_residuals(stage4: StageResult) -> tuple[Figure, Axes]:
     ax.axhline(0, color="k", linewidth=0.5, alpha=0.5)
     ax.set_xlabel("Distance from reference range (m)")
     ax.set_ylabel("Residual, model - observed (dB)")
-    ax.set_title("Stage 4 — fit residuals")
+    ax.set_title("Fit residuals")
     ax.legend(fontsize=8)
     return fig, ax
 
@@ -573,5 +588,5 @@ def plot_stage5_distribution(
     shared rather than duplicated, since Stage 5's unit call is read
     directly off Stage 1's value-range signature."""
     fig, axes = plot_stage1_histograms(ds, value_var, bins=bins)
-    fig.suptitle(f"Stage 5 — distribution shape ({value_var})")
+    fig.suptitle(f"Distribution shape ({value_var})")
     return fig, axes

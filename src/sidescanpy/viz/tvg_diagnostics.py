@@ -272,30 +272,41 @@ def plot_candidate_fit(
     """
     fig, ax = _new_fig_ax(ax)
 
-    # x-axis is distance *from the reference range* (r_ref_m — the
-    # post-outlier-rejection max-mean bin the fit and dB conversion are
-    # both anchored to), not absolute range, so x=0 always marks the
-    # reference point the curve is normalized against.
-    rel_range_m = observed_range_m - fit.r_ref_m
-
+    # x-axis is absolute range -- the y-axis (loss relative to r_ref)
+    # already carries the "relative" framing; putting distance on an
+    # r_ref-centered axis too made it hard to read the fit's actual
+    # extent in real range, and hid where each candidate's line crosses
+    # into negative relative loss (nearer than r_ref, where the model
+    # predicts *less* loss than at the reference) at a glance.
     if show_observed:
         ax.plot(
-            rel_range_m, observed_loss_db,
+            observed_range_m, observed_loss_db,
             "o", color="black", markersize=7, markerfacecolor="none",
             markeredgewidth=1.3, alpha=0.7, label="observed",
         )
-        ax.axvline(0, color="k", linewidth=0.8, alpha=0.4)
+        ax.axhline(0, color="k", linewidth=0.6, alpha=0.3)
+        ax.axvline(
+            fit.r_ref_m, color="k", linewidth=0.8, alpha=0.4, linestyle=":",
+            label=f"reference (r_ref={fit.r_ref_m:.1f}m)",
+        )
 
     model_curve = tvg_gain_db(np.clip(observed_range_m, fit.params.min_range_m, None), fit.params)
     i_ref = int(np.argmin(np.abs(observed_range_m - fit.r_ref_m)))
     model_loss = fit.scale * (model_curve - model_curve[i_ref])
+    # Every candidate's model_loss is exactly 0 at r_ref by construction
+    # (see i_ref above) and negative for r < r_ref (nearer than the
+    # reference implies less loss than at the reference) -- the model
+    # line already spans the observed data's full near-to-far range, so
+    # that crossing is visible without any extrapolation beyond what
+    # was actually fit against.
     ax.plot(
-        rel_range_m, model_loss, "--", color=color,
+        observed_range_m, model_loss, "--", color=color,
         label=f"{fit.name} (scale={fit.scale:.2f}, RMSE={fit.rmse_db:.2f}dB)",
     )
-    ax.axvspan(0, fit.r_fit_max_m - fit.r_ref_m, alpha=0.05, color=color)
+    fit_range_label = f"fit range ({fit.r_ref_m:.1f}–{fit.r_fit_max_m:.1f}m)" if show_observed else None
+    ax.axvspan(fit.r_ref_m, fit.r_fit_max_m, alpha=0.05, color=color, label=fit_range_label)
 
-    ax.set_xlabel(f"Distance from reference range (r_ref={fit.r_ref_m:.1f}m) (m)")
+    ax.set_xlabel("Range (m)")
     ax.set_ylabel(f"Loss relative to {fit.r_ref_m:.1f}m (dB)")
     if title:
         ax.set_title(title)

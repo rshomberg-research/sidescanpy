@@ -381,9 +381,12 @@ class TestStage2_5BeamGeometry:
         for entry in result.metrics["near_ray"].values():
             assert entry["observed_sample"] == 27
             assert entry["angle_from_vertical_deg"] == pytest.approx(60.4, abs=0.5)
-        for entry in result.metrics["far_ray"].values():
+        for label, entry in result.metrics["far_ray"].items():
             assert entry["angle_from_vertical_deg"] == pytest.approx(78.7, abs=0.5)
-            assert entry["predicted_across_track_m"] == pytest.approx(50.0)
+            expected_sign = -1.0 if label == "port" else 1.0
+            assert entry["predicted_across_track_m"] == pytest.approx(expected_sign * 50.0)
+            # slant range is a true distance (hypotenuse), never signed
+            assert entry["predicted_slant_range_m"] == pytest.approx(np.hypot(50.0, 10.0))
         assert result.metrics["beam_width_deg"] == pytest.approx(78.7 - 60.4, abs=1.0)
 
     def test_far_ray_angle_at_45_degrees_when_usable_range_equals_altitude(self):
@@ -394,9 +397,29 @@ class TestStage2_5BeamGeometry:
 
         result = stage2_5_beam_geometry(ds, stage2, stage3)
 
-        for entry in result.metrics["far_ray"].values():
+        for label, entry in result.metrics["far_ray"].items():
             assert entry["angle_from_vertical_deg"] == pytest.approx(45.0, abs=1e-6)
-            assert entry["predicted_across_track_m"] == pytest.approx(10.0)
+            expected_sign = -1.0 if label == "port" else 1.0
+            assert entry["predicted_across_track_m"] == pytest.approx(expected_sign * 10.0)
+
+    def test_far_ray_port_and_starboard_are_oppositely_signed(self):
+        """Regression test: usable_range_m is a single survey-aggregate
+        magnitude, not per-channel -- an earlier version stored it
+        unsigned for both "port" and "starboard" far_ray entries, which
+        meant the beam-geometry diagram only ever drew a far ray toward
+        the starboard side (both entries carried the same positive
+        value), never port. across_track_m's convention (port negative,
+        starboard positive) must be applied here the same way it's
+        already inherent in near_ray's real per-channel values."""
+        ds = _make_raw_dataset(n_pings=5, n_samples=100)
+        ds = compute_geometric_ranges(ds)
+        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+        stage3 = StageResult(stage="stage3_usable_range", metrics={"usable_range_m": 25.0})
+
+        result = stage2_5_beam_geometry(ds, stage2, stage3)
+
+        assert result.metrics["far_ray"]["port"]["predicted_across_track_m"] == pytest.approx(-25.0)
+        assert result.metrics["far_ray"]["starboard"]["predicted_across_track_m"] == pytest.approx(25.0)
 
     def test_far_ray_none_when_usable_range_none(self):
         """A real, documented outcome on some hardware (see

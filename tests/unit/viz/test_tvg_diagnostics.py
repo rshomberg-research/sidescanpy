@@ -259,7 +259,57 @@ class TestPlotCandidateFit:
                 ax=ax,
                 show_observed=(i == 0),
             )
-        # 1 observed line + 1 reference-range vline + 4 candidate lines,
-        # not 4 observed + 4 vlines + 4 candidate.
-        assert len(ax.get_lines()) == 6
+        # 1 observed line + 1 zero-loss hline + 1 reference-range vline
+        # + 4 candidate lines, not 4x each of the observed/hline/vline.
+        assert len(ax.get_lines()) == 7
+        plt.close(fig)
+
+    def test_x_axis_is_absolute_range_not_relative_to_r_ref(self, sample_fit_result):
+        """r_ref_m is not 0 for this fixture -- if the x-axis were still
+        relative (range_m - r_ref_m) the observed points would be
+        shifted left of their true range values."""
+        fig, ax = plot_candidate_fit(
+            sample_fit_result.best,
+            sample_fit_result.observed_range_m,
+            sample_fit_result.observed_loss_db,
+        )
+        observed_line = next(l for l in ax.get_lines() if l.get_label() == "observed")
+        assert sample_fit_result.best.r_ref_m != 0.0
+        assert np.allclose(observed_line.get_xdata(), sample_fit_result.observed_range_m)
+        plt.close(fig)
+
+    def test_legend_includes_fit_range_entry(self, sample_fit_result):
+        fig, ax = plot_candidate_fit(
+            sample_fit_result.best,
+            sample_fit_result.observed_range_m,
+            sample_fit_result.observed_loss_db,
+        )
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert any(label.startswith("fit range (") for label in labels)
+        plt.close(fig)
+
+    def test_model_line_crosses_zero_at_r_ref(self):
+        """Every candidate's model_loss is 0 exactly at r_ref by
+        construction -- confirms the model line is drawn in absolute
+        range terms (not relative) and that the near-side (r < r_ref)
+        portion, where relative loss goes negative, is present. Uses an
+        explicit mid-range r_ref_m (the sample_fit_result fixture's own
+        auto-selected r_ref happens to land on the very first/nearest
+        bin, which has no near side to check)."""
+        r = np.arange(1.0, 80.0, 1.0)
+        params = TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.15)
+        mean = 50.0 - tvg_gain_db(r, params)
+        binned = pd.DataFrame({
+            "range_min_m": r - 0.5, "range_max_m": r + 0.5,
+            "mean": mean, "count": np.full_like(r, 1000, dtype=int),
+        })
+        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=40.0)
+
+        fig, ax = plot_candidate_fit(fit_result.best, fit_result.observed_range_m, fit_result.observed_loss_db)
+        model_line = next(l for l in ax.get_lines() if l.get_label().startswith(fit_result.best.name))
+        x, y = model_line.get_xdata(), model_line.get_ydata()
+        i_ref = int(np.argmin(np.abs(x - fit_result.best.r_ref_m)))
+        assert y[i_ref] == pytest.approx(0.0, abs=1e-6)
+        assert np.any(x < fit_result.best.r_ref_m), "expected near-side (r < r_ref) points on the model line"
+        assert np.any(y[x < fit_result.best.r_ref_m] < 0), "expected negative relative loss on the near side"
         plt.close(fig)

@@ -1327,8 +1327,15 @@ def stage2_5_beam_geometry(
             "angle_from_vertical_deg": None, "angle_from_horizontal_deg": None,
         }
         if usable_range_m is not None and usable_range_m > 0:
+            # usable_range_m is a single survey-aggregate magnitude (not
+            # per-channel) -- across_track_m's own sign convention (port
+            # negative, starboard positive) is applied here so both
+            # sides actually get a far ray, not just whichever sign this
+            # magnitude happened to carry. slant range is a true
+            # distance (hypotenuse), never signed.
+            sign = -1.0 if label == "port" else 1.0
             angle_from_vertical = float(np.degrees(np.arctan2(usable_range_m, altitude)))
-            entry["predicted_across_track_m"] = float(usable_range_m)
+            entry["predicted_across_track_m"] = sign * float(usable_range_m)
             entry["predicted_slant_range_m"] = float(np.hypot(usable_range_m, altitude))
             entry["angle_from_vertical_deg"] = angle_from_vertical
             entry["angle_from_horizontal_deg"] = 90.0 - angle_from_vertical

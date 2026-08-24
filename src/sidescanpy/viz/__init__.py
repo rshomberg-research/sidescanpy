@@ -7,7 +7,7 @@ or customize them further.
 Public functions
 ----------------
 - :func:`plot_waterfall` — port+starboard waterfall image with configurable
-  x-axis (sample, ground_range, across_track) and y-axis (ping, time,
+  x-axis (sample, ground_range, across_track, slant_range) and y-axis (ping, time,
   along_track) modes.
 - :func:`plot_survey_overview` — compressed, whole-survey waterfall
   (strided ping axis) with optional break markers at caller-supplied

@@ -2,7 +2,7 @@
 Waterfall plotting for SideScan sonar.
 
 Plots a port+starboard combined waterfall image with configurable x-axis
-(sample, ground_range, across_track) and y-axis (ping, time, along_track)
+(sample, ground_range, across_track, slant_range) and y-axis (ping, time, along_track)
 modes. Returns the matplotlib Axes for further customization.
 
 2026 rshomberg@uri.edu
@@ -21,7 +21,7 @@ from matplotlib.ticker import FuncFormatter
 logger = logging.getLogger(__name__)
 
 
-XAxisMode = Literal["sample", "ground_range", "across_track"]
+XAxisMode = Literal["sample", "ground_range", "across_track", "slant_range"]
 YAxisMode = Literal["ping", "time", "along_track"]
 
 
@@ -74,7 +74,7 @@ def plot_waterfall(
         First ping index to include.
     stop : int, optional
         One past last ping index. Defaults to all pings.
-    x_axis : {"sample", "ground_range", "across_track"}
+    x_axis : {"sample", "ground_range", "across_track", "slant_range"}
         How to interpret the x-axis.
 
         - ``"sample"``: sample number, port mirrored (-N to +N).
@@ -84,6 +84,13 @@ def plot_waterfall(
           ``compute_geometric_ranges``.
         - ``"across_track"``: signed across-track in platform frame
           (already negative for port). Requires ``across_track_m``.
+        - ``"slant_range"``: attitude-invariant time-of-flight range,
+          signed by channel (port = negative) the same way as
+          ``"ground_range"``. Unlike ground range, always finite (never
+          NaN in the water column) — useful when the water column
+          itself needs to stay visible/maskable by a caller rather than
+          being NaN'd out by the range variable's own geometry.
+          Requires ``slant_range_m``.
 
     y_axis : {"ping", "time", "along_track"}
         How to interpret the y-axis.
@@ -209,7 +216,7 @@ def plot_waterfall(
     ax.set_ylabel(_y_axis_label(y_axis))
 
     # Vertical line at center (port|starboard divide for sample/ground_range)
-    if x_axis in ("sample", "ground_range", "across_track"):
+    if x_axis in ("sample", "ground_range", "across_track", "slant_range"):
         ax.axvline(x=0, color="white", linestyle="-",
                    linewidth=0.5, alpha=0.5)
 
@@ -399,6 +406,17 @@ def _compute_x_values(
         x_stbd = at[:, 1, :]   # starboard is already positive
         return x_port, x_stbd
 
+    if x_axis == "slant_range":
+        if "slant_range_m" not in ds.data_vars:
+            raise ValueError(
+                "x_axis='slant_range' requires 'slant_range_m'. "
+                "Run compute_geometric_ranges first."
+            )
+        sr = ds["slant_range_m"].values  # (pings, channel, sample), always unsigned/finite
+        x_port = -sr[:, 0, :]
+        x_stbd = +sr[:, 1, :]
+        return x_port, x_stbd
+
     raise ValueError(f"Unknown x_axis: {x_axis}")
 
 
@@ -500,6 +518,8 @@ def _x_axis_label(x_axis: XAxisMode) -> str:
         return "Ground range (m)  (port ← | → starboard)"
     if x_axis == "across_track":
         return "Across-track distance (m)  (port ← | → starboard)"
+    if x_axis == "slant_range":
+        return "Slant range (m)  (port ← | → starboard)"
     return ""
 
 

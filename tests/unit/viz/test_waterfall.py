@@ -305,3 +305,49 @@ class TestPlotSurveyOverview:
             assert ax.get_title() == "My Survey"
         finally:
             plt.close(fig)
+
+
+class TestPlotWaterfallSlantRangeAxis:
+    """x_axis='slant_range' -- always finite (unlike ground_range, which
+    is NaN in the water column), signed by channel matching
+    ground_range's own port-negative/starboard-positive convention."""
+
+    def _ds_with_slant_range(self):
+        from sidescanpy.processing.geometric import compute_geometric_ranges
+
+        ds = make_minimal_sidescan_dataset()
+        return compute_geometric_ranges(ds)
+
+    def test_missing_slant_range_m_raises(self):
+        ds = make_minimal_sidescan_dataset()
+        fig, ax = plt.subplots()
+        try:
+            with pytest.raises(ValueError, match="slant_range"):
+                plot_waterfall(ds, x_axis="slant_range", ax=ax)
+        finally:
+            plt.close(fig)
+
+    def test_renders_without_error(self):
+        ds = self._ds_with_slant_range()
+        fig, ax = plt.subplots()
+        try:
+            plot_waterfall(ds, x_axis="slant_range", ax=ax)
+            assert "Slant range" in ax.get_xlabel()
+        finally:
+            plt.close(fig)
+
+    def test_port_and_starboard_offsets_are_oppositely_signed(self):
+        """Same construction as _compute_x_values' ground_range branch --
+        port's plotted x-range must be entirely <= 0, starboard's
+        entirely >= 0, mirroring the convention slant_range_m itself
+        does not carry (it's always a positive magnitude)."""
+        from sidescanpy.viz.waterfall import _compute_x_values
+
+        ds = self._ds_with_slant_range()
+        x_port, x_stbd = _compute_x_values(ds, "slant_range")
+        assert np.all(x_port <= 0)
+        assert np.all(x_stbd >= 0)
+        # magnitudes match the underlying (always-positive) slant_range_m
+        sr = ds["slant_range_m"].values
+        np.testing.assert_allclose(-x_port, sr[:, 0, :])
+        np.testing.assert_allclose(x_stbd, sr[:, 1, :])
