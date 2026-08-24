@@ -116,6 +116,7 @@ def plot_per_ping_profiles(
     ax: Axes | None = None,
     alpha: float = 0.08,
     *,
+    channel_idx: int = 0,
     seed: int = 0,
     title: str | None = None,
 ) -> tuple[Figure, Axes]:
@@ -126,6 +127,15 @@ def plot_per_ping_profiles(
     Visual density shows ping-to-ping consistency/variance directly —
     complementary to `plot_mean_vs_range`'s percentile band, which
     summarizes spread but averages away periodic per-ping artifacts.
+
+    Parameters
+    ----------
+    channel_idx : int, default 0
+        Which channel to plot (0 = port, 1 = starboard per this
+        schema's convention) — call twice with `channel_idx=0` and
+        `channel_idx=1` on separate axes for a side-by-side port/
+        starboard comparison. Previously hardcoded to 0; the default
+        preserves that exact behavior for existing callers.
     """
     fig, ax = _new_fig_ax(ax)
 
@@ -134,7 +144,6 @@ def plot_per_ping_profiles(
     n_pick = min(n_pings, n_total)
     ping_idx = rng.choice(n_total, size=n_pick, replace=False)
 
-    channel_idx = 0
     for p in ping_idx:
         sel = dict(ping=p, channel=channel_idx)
         r = np.asarray(ds[range_var].isel(**sel).values, dtype=np.float64)

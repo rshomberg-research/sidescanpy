@@ -210,6 +210,43 @@ class TestStage2Nadir:
         with_buffer = stage2_nadir(ds, nadir_n_samples=5, strong_return_min_sample_buffer=150.0)
         assert with_buffer.metrics["first_bottom_return_sample_median"] == pytest.approx(300, abs=15)
 
+    def test_min_first_bottom_return_sample_floors_past_a_weak_altitude_floor(self):
+        """min_first_bottom_return_sample is an explicit, user-supplied
+        floor independent of the altitude-derived one -- here the
+        altitude crossing (~14 samples, this fixture's default geometry)
+        is far too weak on its own to keep the detector off residual
+        near-nadir noise; the explicit floor does what the altitude
+        floor alone can't."""
+        n_pings, n_samples = 20, 600
+        bs = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        bs[..., 20:50] = 20.0   # residual noise, past altitude but before the explicit floor
+        bs[..., 300:] = 15.0    # real sustained bottom return
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        without_floor = stage2_nadir(ds, nadir_n_samples=5)
+        assert without_floor.metrics["first_bottom_return_sample_median"] < 100  # confirms the setup
+
+        with_floor = stage2_nadir(ds, nadir_n_samples=5, min_first_bottom_return_sample=200.0)
+        assert with_floor.metrics["first_bottom_return_sample_median"] == pytest.approx(300, abs=15)
+
+    def test_min_first_bottom_return_sample_works_without_range_var(self):
+        """altitude_sample is None when range_var/geometric ranges
+        aren't available -- the explicit floor must still work as a
+        standalone floor in that case, not silently do nothing."""
+        n_pings, n_samples = 10, 400
+        bs = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        bs[..., 5:30] = 20.0    # near-start noise, no altitude info available to exclude it
+        bs[..., 200:] = 15.0    # real sustained bottom return
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        # deliberately no compute_geometric_ranges(ds) -- range_var absent
+
+        without_floor = stage2_nadir(ds, nadir_n_samples=5)
+        assert without_floor.metrics["first_bottom_return_sample_median"] < 100  # confirms the setup
+
+        with_floor = stage2_nadir(ds, nadir_n_samples=5, min_first_bottom_return_sample=150.0)
+        assert with_floor.metrics["first_bottom_return_sample_median"] == pytest.approx(200, abs=15)
+
     def test_all_nan_ground_range_names_short_recorded_window_cause(self):
         """Regression test for a real project-b finding: a channel
         recorded with too short a range window for the vehicle's actual
@@ -1023,6 +1060,40 @@ class TestDetectNadirNoiseExtent:
         result = detect_nadir_noise_extent(arr, smooth_window=10, min_run=10, margin_samples=15)
         assert np.all(np.isnan(result))
 
+    def test_min_extent_samples_raises_a_smaller_detection(self):
+        n_pings, n_channels, n_samples = 4, 2, 500
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., :20] = 20.0  # detected extent will land near 20
+
+        base = detect_nadir_noise_extent(arr, search_window=100, smooth_window=5, threshold_fraction=0.2, min_run=10)
+        assert np.all(base < 30)  # confirms the setup
+
+        floored = detect_nadir_noise_extent(
+            arr, search_window=100, smooth_window=5, threshold_fraction=0.2, min_run=10, min_extent_samples=100.0,
+        )
+        assert np.all(floored == 100.0)
+
+    def test_min_extent_samples_does_not_lower_a_larger_detection(self):
+        n_pings, n_channels, n_samples = 4, 2, 500
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., :40] = 20.0
+
+        base = detect_nadir_noise_extent(arr, search_window=100, smooth_window=5, threshold_fraction=0.2, min_run=10)
+        floored = detect_nadir_noise_extent(
+            arr, search_window=100, smooth_window=5, threshold_fraction=0.2, min_run=10, min_extent_samples=10.0,
+        )
+        assert np.array_equal(base, floored)  # floor is below the real detection, no effect
+
+    def test_min_extent_samples_overrides_nan_rows_unlike_margin_samples(self):
+        """The one deliberate behavioral difference from margin_samples:
+        a user-configured minimum reflects known hardware behavior and
+        should apply even when nothing was detected at all."""
+        arr = np.full((2, 2, 5), 1.0)  # too short -- base result is all-NaN
+
+        result = detect_nadir_noise_extent(arr, smooth_window=10, min_run=10, min_extent_samples=3.0)
+
+        assert np.all(result == 3.0)
+
 
 class TestBlankNadirNoise:
     def test_zeros_burst_leaves_rest_untouched(self):
@@ -1077,6 +1148,20 @@ class TestBlankNadirNoise:
         raw = out["backscatter_raw"].values
         assert np.all(raw[:, :, :50] == 0.0)  # the residual band at 42:45 is now zeroed too
         assert np.all(raw[:, :, 55:] == pytest.approx(0.05))
+
+    def test_min_extent_samples_zeros_at_least_that_many_samples(self):
+        n_pings, n_samples = 3, 500
+        arr = np.full((n_pings, 2, n_samples), 20.0, dtype=np.float32)
+        arr[..., 20:] = 0.05  # real detection would land near sample 20
+
+        out = blank_nadir_noise(
+            _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy()),
+            min_extent_samples=80.0,
+        )
+
+        raw = out["backscatter_raw"].values
+        assert np.all(raw[:, :, :80] == 0.0)
+        assert np.all(raw[:, :, 85:] == pytest.approx(0.05))
 
 
 class TestMaskNadirGap:

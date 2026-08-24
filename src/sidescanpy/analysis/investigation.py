@@ -394,6 +394,7 @@ def detect_nadir_noise_extent(
     threshold_fraction: float = 0.2,
     min_run: int = 10,
     margin_samples: int = 0,
+    min_extent_samples: float = 0.0,
 ) -> np.ndarray:
     """
     Vectorized, per-(ping, channel) detection of a high-noise burst
@@ -448,6 +449,18 @@ def detect_nadir_noise_extent(
         it there without a reason). Start small and check
         `nadir_zoom.png` for a visibly cleaner blanked region before
         trusting a specific value on new hardware.
+    min_extent_samples : float, default 0.0
+        Hard floor on the returned extent, applied last (after
+        `margin_samples`) -- unlike `margin_samples`, this **does**
+        override a NaN row (nothing detected) rather than leaving it
+        alone. The two params answer different questions:
+        `margin_samples` widens whatever was actually found (a
+        detection-quality fix); `min_extent_samples` asserts a known
+        hardware fact ("this channel always has at least N samples of
+        nadir junk, whether or not the detector finds a sustained drop
+        this particular ping") that should apply even when detection
+        fails entirely. 0.0 preserves every prior caller's exact
+        behavior, including NaN rows staying NaN.
 
     Returns
     -------
@@ -457,12 +470,16 @@ def detect_nadir_noise_extent(
         (nothing to blank -- the normal EdgeTech case). NaN only for
         pings too short to evaluate, or where the signal never
         sustains a drop (treat conservatively -- caller should not
-        blank an unbounded extent).
+        blank an unbounded extent) -- unless `min_extent_samples` is
+        set, in which case NaN rows are floored to it too.
     """
     arr = np.asarray(value_arr, dtype=np.float64)
     n_samples = arr.shape[-1]
     if n_samples <= smooth_window + min_run:
-        return np.full(arr.shape[:-1], np.nan)
+        first = np.full(arr.shape[:-1], np.nan)
+        if min_extent_samples:
+            first = np.full(arr.shape[:-1], float(min_extent_samples))
+        return first
 
     csum = np.cumsum(np.insert(arr, 0, 0.0, axis=-1), axis=-1)
     roll = (csum[..., smooth_window:] - csum[..., :-smooth_window]) / smooth_window
@@ -481,6 +498,8 @@ def detect_nadir_noise_extent(
     first[~has_any] = np.nan
     if margin_samples:
         first = np.where(np.isfinite(first), first + margin_samples, first)
+    if min_extent_samples:
+        first = np.where(np.isfinite(first), np.maximum(first, min_extent_samples), min_extent_samples)
     return first
 
 
@@ -494,6 +513,7 @@ def blank_nadir_noise(
     threshold_fraction: float = 0.2,
     min_run: int = 10,
     margin_samples: int = 0,
+    min_extent_samples: float = 0.0,
 ) -> xr.Dataset:
     """Return a copy of `ds` with each ping's leading nadir-noise burst
     (`detect_nadir_noise_extent`) set to exactly 0.0 in each of
@@ -521,6 +541,10 @@ def blank_nadir_noise(
     margin_samples : int, default 0
         Passed through to `detect_nadir_noise_extent` -- see that
         function's docstring. 0 preserves existing behavior exactly.
+    min_extent_samples : float, default 0.0
+        Passed through to `detect_nadir_noise_extent` -- see that
+        function's docstring. 0.0 preserves existing behavior exactly,
+        including leaving a no-detection row unblanked.
 
     Returns
     -------
@@ -534,6 +558,7 @@ def blank_nadir_noise(
         threshold_fraction=threshold_fraction,
         min_run=min_run,
         margin_samples=margin_samples,
+        min_extent_samples=min_extent_samples,
     )
     out = ds.copy()
     for var in value_vars:
@@ -822,6 +847,7 @@ def stage2_nadir(
     strong_return_min_run: int = 10,
     strong_return_min_sample_buffer: float = 0.0,
     strong_return_peak_percentile: float = 100.0,
+    min_first_bottom_return_sample: float | None = None,
     boundary_smoothing_window: int = 15,
 ) -> StageResult:
     """Classify how nadir (sample 0..`nadir_n_samples` of each channel,
@@ -902,6 +928,22 @@ def stage2_nadir(
         alternating between the altitude floor and the real value
         across pings, not smoothly tracking terrain) shows residual
         near-nadir noise is still winning past `blank_nadir_noise`.
+    min_first_bottom_return_sample : float, optional
+        An explicit, user-supplied floor on `first_bottom_return_sample`,
+        independent of and in addition to the altitude-derived floor
+        above -- combined via element-wise `max(altitude_sample,
+        min_first_bottom_return_sample)` before being passed to
+        `detect_first_bottom_return` as `min_sample`. `None` (default)
+        preserves exact prior behavior (altitude-only floor). Exists
+        for a case the altitude floor alone can't cover: a survey/
+        hardware combination where the real first bottom return is
+        known (from direct inspection) to sit well past what altitude
+        alone would predict, but per-ping altitude noise or a short
+        recorded window makes that per-ping floor too weak on its own
+        to keep the detector off residual near-nadir noise. A single
+        scalar, not per-ping -- this is a known, roughly-constant
+        hardware/survey property being asserted, not a per-ping
+        computation.
     boundary_smoothing_window : int, default 15
         Passed to `smooth_boundary_across_pings` as `window` — a
         rolling median across pings applied to
@@ -989,12 +1031,23 @@ def stage2_nadir(
     else:
         notes.append(f"{range_var!r} not found — altitude sample not computed (run compute_geometric_ranges first).")
 
+    effective_min_sample = altitude_sample
+    if min_first_bottom_return_sample is not None:
+        if altitude_sample is None:
+            effective_min_sample = np.full(arr.shape[:-1], float(min_first_bottom_return_sample))
+        else:
+            # np.fmax (not np.maximum): a NaN altitude_sample for one
+            # ping/channel means "altitude unknown here," not "no
+            # explicit floor either" -- fmax falls back to whichever
+            # operand is a real number instead of propagating NaN.
+            effective_min_sample = np.fmax(altitude_sample, min_first_bottom_return_sample)
+
     first_bottom_sample = detect_first_bottom_return(
         arr,
         smooth_window=strong_return_smooth_window,
         threshold_fraction=strong_return_threshold_fraction,
         min_run=strong_return_min_run,
-        min_sample=altitude_sample,  # physical floor: bottom can never be closer than altitude
+        min_sample=effective_min_sample,  # physical floor: bottom can never be closer than altitude (or the explicit override, whichever is stricter)
         min_sample_buffer=strong_return_min_sample_buffer,
         peak_percentile=strong_return_peak_percentile,
     )

@@ -121,6 +121,32 @@ class TestPlotPerPingProfiles:
         )
         plt.close(fig)
 
+    def test_channel_idx_default_zero_matches_prior_behavior(self, sample_ds_with_gain):
+        fig, ax = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1,
+        )
+        fig_explicit, ax_explicit = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1, channel_idx=0,
+        )
+        default_data = [line.get_ydata() for line in ax.get_lines()]
+        explicit_data = [line.get_ydata() for line in ax_explicit.get_lines()]
+        assert all(np.array_equal(a, b) for a, b in zip(default_data, explicit_data))
+        plt.close(fig)
+        plt.close(fig_explicit)
+
+    def test_channel_idx_one_selects_a_different_channel(self, sample_ds_with_gain):
+        fig0, ax0 = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1, channel_idx=0,
+        )
+        fig1, ax1 = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1, channel_idx=1,
+        )
+        data0 = [line.get_ydata() for line in ax0.get_lines()]
+        data1 = [line.get_ydata() for line in ax1.get_lines()]
+        assert not all(np.array_equal(a, b) for a, b in zip(data0, data1))
+        plt.close(fig0)
+        plt.close(fig1)
+
 
 class TestPlotMultiFrequencyComparison:
     def test_returns_fig_ax_with_legend(self, sample_binned_df):

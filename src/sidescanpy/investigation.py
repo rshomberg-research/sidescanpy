@@ -125,8 +125,10 @@ def run_investigation(
     output_dir: str | Path | None = None,
     nadir_n_samples: int = 50,
     nadir_margin_samples: int = 0,
+    nadir_min_extent_samples: float = 0.0,
     strong_return_min_sample_buffer: float = 0.0,
     strong_return_peak_percentile: float = 100.0,
+    min_first_bottom_return_sample: float | None = None,
     stage3_bin_width_m: float = 2.0,
     stage4_bin_width_m: float = 5.0,
     stage4_db_reference_percentile: float = 99.0,
@@ -191,6 +193,14 @@ def run_investigation(
         them. See `strong_return_min_sample_buffer`/
         `strong_return_peak_percentile` below for the second,
         complementary line of defense against the same failure mode.
+    nadir_min_extent_samples : float, default 0.0
+        Passed to `blank_nadir_noise` as `min_extent_samples` — a hard
+        floor on the blanked nadir-noise extent, applied even where
+        `detect_nadir_noise_extent` finds nothing (unlike
+        `nadir_margin_samples`, which only widens an actual detection).
+        0.0 preserves exact prior behavior. Use when a channel/survey
+        is known to always carry at least N samples of nadir junk
+        regardless of per-ping detection.
     strong_return_min_sample_buffer, strong_return_peak_percentile
         Passed to `analysis.investigation.stage2_nadir` (which passes
         them to `detect_first_bottom_return` as `min_sample_buffer`/
@@ -198,6 +208,12 @@ def run_investigation(
         default to no-ops (0.0 / 100.0); like `nadir_margin_samples`
         above, only found necessary so far on real vendor-format data, not
         on any JSF/SDF survey checked this session.
+    min_first_bottom_return_sample : float, optional
+        Passed to `analysis.investigation.stage2_nadir` — an explicit
+        floor on `first_bottom_return_sample`, independent of the
+        altitude-derived one, combined via element-wise max. `None`
+        (default) preserves exact prior behavior. See that function's
+        docstring for when the altitude floor alone isn't enough.
     exclude_nadir_gap : bool, default True
         Stage 2's `first_bottom_return_sample` (an amplitude-based
         detector — see `analysis.investigation.stage2_nadir`'s
@@ -270,7 +286,7 @@ def run_investigation(
         logger.info("Dataset is processing_level=%r; reconstructing raw for investigation", ds.attrs.get("processing_level"))
         ds = reconstruct_raw(ds)
 
-    ds = blank_nadir_noise(ds, margin_samples=nadir_margin_samples)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
+    ds = blank_nadir_noise(ds, margin_samples=nadir_margin_samples, min_extent_samples=nadir_min_extent_samples)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
 
     if "ground_range_m" not in ds:
         ds = compute_geometric_ranges(ds)
@@ -280,8 +296,10 @@ def run_investigation(
         "ping_range": list(ping_range),
         "nadir_n_samples": nadir_n_samples,
         "nadir_margin_samples": nadir_margin_samples,
+        "nadir_min_extent_samples": nadir_min_extent_samples,
         "strong_return_min_sample_buffer": strong_return_min_sample_buffer,
         "strong_return_peak_percentile": strong_return_peak_percentile,
+        "min_first_bottom_return_sample": min_first_bottom_return_sample,
         "stage3_bin_width_m": stage3_bin_width_m,
         "stage4_bin_width_m": stage4_bin_width_m,
         "stage4_db_reference_percentile": stage4_db_reference_percentile,
@@ -302,6 +320,7 @@ def run_investigation(
         ds, value_var=value_var, nadir_n_samples=nadir_n_samples,
         strong_return_min_sample_buffer=strong_return_min_sample_buffer,
         strong_return_peak_percentile=strong_return_peak_percentile,
+        min_first_bottom_return_sample=min_first_bottom_return_sample,
     )
     exclude_before_sample_stage3 = None
     exclude_before_sample_stage4 = None
