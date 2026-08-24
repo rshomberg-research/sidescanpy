@@ -124,6 +124,9 @@ def run_investigation(
     ping_range: tuple[int, int | None] = (0, None),
     output_dir: str | Path | None = None,
     nadir_n_samples: int = 50,
+    nadir_margin_samples: int = 0,
+    strong_return_min_sample_buffer: float = 0.0,
+    strong_return_peak_percentile: float = 100.0,
     stage3_bin_width_m: float = 2.0,
     stage4_bin_width_m: float = 5.0,
     stage4_db_reference_percentile: float = 99.0,
@@ -176,6 +179,25 @@ def run_investigation(
     confirmed on real data: this burst is bright and sustained enough
     to otherwise fool Stage 2's first-bottom-return detector into
     reporting sample 0 as the real bottom, on nearly every ping).
+    nadir_margin_samples : int, default 0
+        Passed to `blank_nadir_noise` as `margin_samples`. 0 preserves
+        exact prior behavior on JSF/SDF (already validated clean at
+        0). Set nonzero when `first_bottom_return_sample` visibly
+        alternates between the altitude floor and a plausible real
+        value across pings on a new data source — found necessary on
+        real vendor-format data (2026-08-24): a handful of bright points
+        right at the blanked boundary's edge weren't fully zeroed and
+        were sustained/bright enough to fool Stage 2 into locking onto
+        them. See `strong_return_min_sample_buffer`/
+        `strong_return_peak_percentile` below for the second,
+        complementary line of defense against the same failure mode.
+    strong_return_min_sample_buffer, strong_return_peak_percentile
+        Passed to `analysis.investigation.stage2_nadir` (which passes
+        them to `detect_first_bottom_return` as `min_sample_buffer`/
+        `peak_percentile`) — see those functions' docstrings. Both
+        default to no-ops (0.0 / 100.0); like `nadir_margin_samples`
+        above, only found necessary so far on real vendor-format data, not
+        on any JSF/SDF survey checked this session.
     exclude_nadir_gap : bool, default True
         Stage 2's `first_bottom_return_sample` (an amplitude-based
         detector — see `analysis.investigation.stage2_nadir`'s
@@ -248,7 +270,7 @@ def run_investigation(
         logger.info("Dataset is processing_level=%r; reconstructing raw for investigation", ds.attrs.get("processing_level"))
         ds = reconstruct_raw(ds)
 
-    ds = blank_nadir_noise(ds)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
+    ds = blank_nadir_noise(ds, margin_samples=nadir_margin_samples)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
 
     if "ground_range_m" not in ds:
         ds = compute_geometric_ranges(ds)
@@ -257,6 +279,9 @@ def run_investigation(
         "value_var": value_var,
         "ping_range": list(ping_range),
         "nadir_n_samples": nadir_n_samples,
+        "nadir_margin_samples": nadir_margin_samples,
+        "strong_return_min_sample_buffer": strong_return_min_sample_buffer,
+        "strong_return_peak_percentile": strong_return_peak_percentile,
         "stage3_bin_width_m": stage3_bin_width_m,
         "stage4_bin_width_m": stage4_bin_width_m,
         "stage4_db_reference_percentile": stage4_db_reference_percentile,
@@ -273,7 +298,11 @@ def run_investigation(
         ds, value_var=value_var, bin_width_m=stage3_bin_width_m,
         outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
     )
-    stage2 = stage2_nadir(ds, value_var=value_var, nadir_n_samples=nadir_n_samples)
+    stage2 = stage2_nadir(
+        ds, value_var=value_var, nadir_n_samples=nadir_n_samples,
+        strong_return_min_sample_buffer=strong_return_min_sample_buffer,
+        strong_return_peak_percentile=strong_return_peak_percentile,
+    )
     exclude_before_sample_stage3 = None
     exclude_before_sample_stage4 = None
     if exclude_nadir_gap:

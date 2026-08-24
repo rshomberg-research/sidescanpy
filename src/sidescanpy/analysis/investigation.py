@@ -169,6 +169,8 @@ def detect_first_bottom_return(
     threshold_fraction: float = 0.2,
     min_run: int = 10,
     min_sample: np.ndarray | float | None = None,
+    min_sample_buffer: float = 0.0,
+    peak_percentile: float = 100.0,
 ) -> np.ndarray:
     """
     Vectorized, per-(ping, channel) amplitude-based detection of the
@@ -246,6 +248,40 @@ def detect_first_bottom_return(
         reference down and let a short, unsustained bump satisfy the
         relative threshold well before real bottom.
         `stage2_nadir` always passes its own `altitude_sample` here.
+    min_sample_buffer : float, default 0.0
+        Added on top of `min_sample` before it's used as the floor
+        (i.e. the effective floor is `min_sample + min_sample_buffer`,
+        not just `min_sample` itself) — a second, independent line of
+        defense against residual near-nadir noise that survives
+        `blank_nadir_noise`, found necessary on real vendor-format data
+        (2026-08-24): even with the `min_sample` floor at
+        `altitude_sample` already in place, a handful of bright points
+        `blank_nadir_noise` didn't fully zero (right at its own
+        boundary) still occasionally satisfied the sustained-rise
+        check immediately past that floor, producing a per-ping trace
+        that visibly alternates between "stuck near nadir" and "the
+        real bottom return" rather than tracking the terrain smoothly
+        — `smooth_boundary_across_pings`'s median filter can't recover
+        from this because the bad fraction is too large a share of
+        pings to be an "outlier." Pushing the search's effective start
+        further out, past where this residual noise typically lingers,
+        is a direct, low-risk fix (0 preserves every prior caller's
+        behavior exactly). No universal default — how large a buffer
+        is safe depends on how close a real beam's near edge can
+        legitimately be to altitude on the hardware in question; start
+        small and check the result against a visual read of the
+        waterfall before trusting a specific value.
+    peak_percentile : float, default 100.0
+        Percentile (not maximum) of the valid smoothed values used as
+        the "peak" the relative threshold is computed from. 100.0 is
+        exactly `np.nanmax` (the original, still-default behavior) —
+        lowering it (e.g. 99.0) makes the peak reference, and so the
+        threshold, robust to a single unusually bright residual sample
+        dominating it. Complementary to `min_sample_buffer`, not a
+        substitute for it: this only helps when the residual noise is
+        a small minority of the valid range: a sustained noisy region
+        wide enough to itself become the requested percentile isn't
+        fixed by this alone.
 
     Returns
     -------
@@ -266,6 +302,8 @@ def detect_first_bottom_return(
     valid_roll = None
     if min_sample is not None:
         min_sample_arr = np.broadcast_to(np.asarray(min_sample, dtype=np.float64), arr.shape[:-1])
+        if min_sample_buffer:
+            min_sample_arr = min_sample_arr + min_sample_buffer
         roll_idx = np.arange(n_roll, dtype=np.float64).reshape((1,) * min_sample_arr.ndim + (n_roll,))
         valid_roll = roll_idx >= min_sample_arr[..., None]
         # No floor for a row with an unknown (NaN) min_sample -- don't
@@ -273,7 +311,12 @@ def detect_first_bottom_return(
         valid_roll = np.where(np.isfinite(min_sample_arr)[..., None], valid_roll, True)
 
     roll_for_peak = np.where(valid_roll, roll, np.nan) if valid_roll is not None else roll
-    peak = np.nanmax(roll_for_peak, axis=-1, keepdims=True)
+    if peak_percentile >= 100.0:
+        peak = np.nanmax(roll_for_peak, axis=-1, keepdims=True)
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN slice (e.g. too-short ping) -> NaN, not an error here
+            peak = np.nanpercentile(roll_for_peak, peak_percentile, axis=-1, keepdims=True)
     threshold = threshold_fraction * peak
     above = roll >= threshold
     if valid_roll is not None:
@@ -350,6 +393,7 @@ def detect_nadir_noise_extent(
     smooth_window: int = 5,
     threshold_fraction: float = 0.2,
     min_run: int = 10,
+    margin_samples: int = 0,
 ) -> np.ndarray:
     """
     Vectorized, per-(ping, channel) detection of a high-noise burst
@@ -388,6 +432,22 @@ def detect_nadir_noise_extent(
         Same meaning as `detect_first_bottom_return`, applied in the
         opposite direction (falling below threshold, not rising above
         it).
+    margin_samples : int, default 0
+        Added to the detected extent before returning (only where a
+        boundary was actually found -- a NaN row stays NaN, not
+        `NaN + margin`). Found necessary on real vendor-format data
+        (2026-08-24): the detected boundary itself is accurate on
+        average, but the samples right at its edge aren't always
+        cleanly below the noise floor -- a handful of residual bright
+        points there survived blanking and were bright/sustained
+        enough to fool `detect_first_bottom_return` into locking onto
+        them instead of continuing out to the real bottom return. 0
+        preserves every prior caller's exact behavior (this burst
+        already reads as an exact `gap` with 0 margin on both JSF and
+        the Klein surveys checked earlier this session -- don't widen
+        it there without a reason). Start small and check
+        `nadir_zoom.png` for a visibly cleaner blanked region before
+        trusting a specific value on new hardware.
 
     Returns
     -------
@@ -419,6 +479,8 @@ def detect_nadir_noise_extent(
     has_any = sustained.any(axis=-1)
     first = np.argmax(sustained, axis=-1).astype(np.float64)
     first[~has_any] = np.nan
+    if margin_samples:
+        first = np.where(np.isfinite(first), first + margin_samples, first)
     return first
 
 
@@ -431,6 +493,7 @@ def blank_nadir_noise(
     smooth_window: int = 5,
     threshold_fraction: float = 0.2,
     min_run: int = 10,
+    margin_samples: int = 0,
 ) -> xr.Dataset:
     """Return a copy of `ds` with each ping's leading nadir-noise burst
     (`detect_nadir_noise_extent`) set to exactly 0.0 in each of
@@ -455,6 +518,9 @@ def blank_nadir_noise(
     detector_value_var : str, default "backscatter_raw"
         Which variable `detect_nadir_noise_extent` computes the
         boundary from.
+    margin_samples : int, default 0
+        Passed through to `detect_nadir_noise_extent` -- see that
+        function's docstring. 0 preserves existing behavior exactly.
 
     Returns
     -------
@@ -467,6 +533,7 @@ def blank_nadir_noise(
         smooth_window=smooth_window,
         threshold_fraction=threshold_fraction,
         min_run=min_run,
+        margin_samples=margin_samples,
     )
     out = ds.copy()
     for var in value_vars:
@@ -753,6 +820,8 @@ def stage2_nadir(
     strong_return_smooth_window: int = 10,
     strong_return_threshold_fraction: float = 0.2,
     strong_return_min_run: int = 10,
+    strong_return_min_sample_buffer: float = 0.0,
+    strong_return_peak_percentile: float = 100.0,
     boundary_smoothing_window: int = 15,
 ) -> StageResult:
     """Classify how nadir (sample 0..`nadir_n_samples` of each channel,
@@ -822,10 +891,17 @@ def stage2_nadir(
         Sample window on each side of `first_bottom_return_sample` used
         for the signal-step corroboration check.
     strong_return_smooth_window, strong_return_threshold_fraction,
-    strong_return_min_run
-        Passed through to `detect_first_bottom_return` — see that
-        function's docstring for what they mean and why the defaults
-        were chosen.
+    strong_return_min_run, strong_return_min_sample_buffer,
+    strong_return_peak_percentile
+        Passed through to `detect_first_bottom_return` (as
+        `min_sample_buffer`/`peak_percentile` for the last two) — see
+        that function's docstring for what they mean and why the
+        defaults were chosen. The two buffer/percentile params default
+        to 0.0/100.0 (no-ops, exact prior behavior) — set them when a
+        real-data check (e.g. `first_bottom_return_sample` visibly
+        alternating between the altitude floor and the real value
+        across pings, not smoothly tracking terrain) shows residual
+        near-nadir noise is still winning past `blank_nadir_noise`.
     boundary_smoothing_window : int, default 15
         Passed to `smooth_boundary_across_pings` as `window` — a
         rolling median across pings applied to
@@ -919,6 +995,8 @@ def stage2_nadir(
         threshold_fraction=strong_return_threshold_fraction,
         min_run=strong_return_min_run,
         min_sample=altitude_sample,  # physical floor: bottom can never be closer than altitude
+        min_sample_buffer=strong_return_min_sample_buffer,
+        peak_percentile=strong_return_peak_percentile,
     )
     if boundary_smoothing_window > 1:
         # detect_first_bottom_return runs independently per ping --

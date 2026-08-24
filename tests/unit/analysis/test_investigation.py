@@ -190,6 +190,26 @@ class TestStage2Nadir:
         assert altitude_arr.shape == (20, 2)
         assert np.all(np.isfinite(altitude_arr))
 
+    def test_strong_return_min_sample_buffer_skips_residual_noise_past_altitude(self):
+        """Integration-level regression test for the real vendor-format
+        finding (2026-08-24): residual noise right past the altitude
+        floor won as first_bottom_return_sample instead of the real
+        bottom return further out. strong_return_min_sample_buffer
+        (wired through to detect_first_bottom_return's min_sample_buffer)
+        fixes it at the stage2_nadir level, not just the unit level."""
+        n_pings, n_samples = 20, 600
+        bs = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        bs[..., 20:50] = 20.0   # residual noise just past altitude (~14)
+        bs[..., 300:] = 15.0    # real sustained bottom return
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        without_buffer = stage2_nadir(ds, nadir_n_samples=5)
+        assert without_buffer.metrics["first_bottom_return_sample_median"] < 100  # confirms the setup
+
+        with_buffer = stage2_nadir(ds, nadir_n_samples=5, strong_return_min_sample_buffer=150.0)
+        assert with_buffer.metrics["first_bottom_return_sample_median"] == pytest.approx(300, abs=15)
+
     def test_all_nan_ground_range_names_short_recorded_window_cause(self):
         """Regression test for a real project-b finding: a channel
         recorded with too short a range window for the vehicle's actual
@@ -832,6 +852,62 @@ class TestDetectFirstBottomReturn:
 
         assert np.abs(result[0, 0] - 50) <= 15
 
+    def test_min_sample_buffer_skips_residual_noise_right_past_the_floor(self):
+        """Regression test for a real vendor-format finding (2026-08-24): even
+        with min_sample=altitude in place, a handful of bright points
+        blank_nadir_noise didn't fully zero right at its own boundary's
+        edge survived just past the floor -- bright/sustained enough to
+        win as "first bottom return" instead of the real one further
+        out, producing a per-ping trace that alternates between the
+        floor and the real value rather than tracking smoothly.
+        min_sample_buffer pushes the search past this residual band."""
+        n_pings, n_channels, n_samples = 3, 2, 1000
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., 100:140] = 20.0  # residual noise straddling the floor
+        arr[..., 400:] = 15.0     # real sustained bottom return, well past the residual band
+
+        floor = np.full((n_pings, n_channels), 100.0)
+        no_buffer = detect_first_bottom_return(arr, smooth_window=5, min_run=10, min_sample=floor)
+        assert np.all(no_buffer < 200)  # confirms the setup: residual noise wins without a buffer
+
+        with_buffer = detect_first_bottom_return(
+            arr, smooth_window=5, min_run=10, min_sample=floor, min_sample_buffer=200.0,
+        )
+        assert np.all(with_buffer >= 300)
+        assert np.all(np.abs(with_buffer - 400) <= 15)
+
+    def test_peak_percentile_100_is_exact_prior_behavior(self):
+        """peak_percentile's default (100.0) must be bit-for-bit
+        equivalent to the pre-existing nanmax-based behavior -- every
+        prior caller's results must not shift."""
+        n_pings, n_channels, n_samples = 4, 2, 400
+        rng = np.random.default_rng(7)
+        arr = rng.uniform(0.05, 0.3, size=(n_pings, n_channels, n_samples))
+        arr[..., 250:] = 10.0
+
+        default = detect_first_bottom_return(arr, smooth_window=5, min_run=10)
+        explicit_100 = detect_first_bottom_return(arr, smooth_window=5, min_run=10, peak_percentile=100.0)
+
+        assert np.array_equal(default, explicit_100, equal_nan=True)
+
+    def test_peak_percentile_below_100_is_robust_to_one_extreme_outlier_sample(self):
+        """A single very bright, non-sustained outlier sample can
+        dominate a plain nanmax peak reference enough that the real
+        sustained region no longer clears threshold_fraction * peak --
+        a lower peak_percentile excludes that outlier from the
+        reference instead."""
+        n_pings, n_channels, n_samples = 2, 2, 600
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., 300:500] = 15.0     # real sustained bottom return
+        arr[..., 350] = 5000.0       # one extreme, isolated outlier sample within it
+
+        with_outlier_default = detect_first_bottom_return(arr, smooth_window=5, min_run=10)
+        assert np.all(np.isnan(with_outlier_default))  # confirms the setup: the outlier breaks detection entirely
+
+        robust = detect_first_bottom_return(arr, smooth_window=5, min_run=10, peak_percentile=95.0)
+        assert np.all(np.isfinite(robust))
+        assert np.all(np.abs(robust - 300) <= 15)
+
 
 class TestSmoothBoundaryAcrossPings:
     def test_rejects_isolated_outlier_ping(self):
@@ -930,6 +1006,23 @@ class TestDetectNadirNoiseExtent:
         assert result.shape == (2, 2)
         assert np.all(np.isnan(result))
 
+    def test_margin_samples_extends_the_detected_extent(self):
+        n_pings, n_channels, n_samples = 4, 2, 500
+        arr = np.full((n_pings, n_channels, n_samples), 0.1)
+        arr[..., :40] = 20.0
+
+        base = detect_nadir_noise_extent(arr, search_window=100, smooth_window=5, threshold_fraction=0.2, min_run=10)
+        widened = detect_nadir_noise_extent(
+            arr, search_window=100, smooth_window=5, threshold_fraction=0.2, min_run=10, margin_samples=15,
+        )
+
+        assert np.array_equal(widened, base + 15)
+
+    def test_margin_samples_does_not_touch_nan_rows(self):
+        arr = np.full((2, 2, 5), 1.0)  # too short -- base result is all-NaN
+        result = detect_nadir_noise_extent(arr, smooth_window=10, min_run=10, margin_samples=15)
+        assert np.all(np.isnan(result))
+
 
 class TestBlankNadirNoise:
     def test_zeros_burst_leaves_rest_untouched(self):
@@ -967,6 +1060,23 @@ class TestBlankNadirNoise:
         blank_nadir_noise(ds)
 
         assert np.all(ds["backscatter_raw"].values[:, :, :10] == 20.0)
+
+    def test_margin_samples_zeros_a_wider_region(self):
+        """Regression test for the real vendor-format finding motivating
+        margin_samples: a few bright points right at the detected
+        boundary's edge weren't fully zeroed by the base detection --
+        a margin sweeps them in too."""
+        n_pings, n_samples = 3, 500
+        arr = np.full((n_pings, 2, n_samples), 20.0, dtype=np.float32)
+        arr[..., 40:] = 0.05
+        arr[..., 42:45] = 8.0  # residual bright points just past the plain-detected boundary
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+
+        out = blank_nadir_noise(ds, margin_samples=10)
+
+        raw = out["backscatter_raw"].values
+        assert np.all(raw[:, :, :50] == 0.0)  # the residual band at 42:45 is now zeroed too
+        assert np.all(raw[:, :, 55:] == pytest.approx(0.05))
 
 
 class TestMaskNadirGap:
