@@ -137,6 +137,7 @@ def plot_per_ping_profiles(
     channel_idx: int = 0,
     seed: int = 0,
     title: str | None = None,
+    x_sign: float = 1.0,
 ) -> tuple[Figure, Axes]:
     """
     "Spaghetti plot": overlay `n_pings` individual ping profiles
@@ -154,6 +155,17 @@ def plot_per_ping_profiles(
         `channel_idx=1` on separate axes for a side-by-side port/
         starboard comparison. Previously hardcoded to 0; the default
         preserves that exact behavior for existing callers.
+    x_sign : float, default 1.0
+        Multiplies every plotted `range_var` value before drawing —
+        pass `-1.0` (typically for `channel_idx=0`/port) to mirror one
+        channel onto the negative side of a shared axis, so calling
+        this twice (once per channel, opposite signs) on the same `ax`
+        draws one continuous full-swath profile instead of two
+        independent one-sided ones. `range_var` itself (e.g.
+        `slant_range_m`) is always unsigned magnitude — this is a
+        display-only sign flip, not a different range computation.
+        1.0 is a no-op, preserving every existing caller's output
+        exactly.
     """
     fig, ax = _new_fig_ax(ax)
 
@@ -164,7 +176,7 @@ def plot_per_ping_profiles(
 
     for p in ping_idx:
         sel = dict(ping=p, channel=channel_idx)
-        r = np.asarray(ds[range_var].isel(**sel).values, dtype=np.float64)
+        r = np.asarray(ds[range_var].isel(**sel).values, dtype=np.float64) * x_sign
         v = np.asarray(ds[value_var].isel(**sel).values, dtype=np.float64)
         valid = np.isfinite(r) & np.isfinite(v)
         order = np.argsort(r[valid])

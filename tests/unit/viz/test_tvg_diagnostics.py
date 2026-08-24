@@ -169,6 +169,42 @@ class TestPlotPerPingProfiles:
         plt.close(fig0)
         plt.close(fig1)
 
+    def test_x_sign_default_is_a_no_op(self, sample_ds_with_gain):
+        fig, ax = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1,
+        )
+        fig_explicit, ax_explicit = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1, x_sign=1.0,
+        )
+        default_x = [line.get_xdata() for line in ax.get_lines()]
+        explicit_x = [line.get_xdata() for line in ax_explicit.get_lines()]
+        assert all(np.array_equal(a, b) for a, b in zip(default_x, explicit_x))
+        plt.close(fig)
+        plt.close(fig_explicit)
+
+    def test_x_sign_negative_mirrors_the_x_axis(self, sample_ds_with_gain):
+        """x_sign=-1 must negate every plotted x-coordinate while
+        keeping each x paired with its original y -- each line is drawn
+        sorted by its *own* (possibly negated) x, so a plain
+        element-wise zip of the two runs' raw line data isn't
+        comparable; re-sort each line by |x| first to recover the
+        shared physical (ping, sample) order before comparing."""
+        fig, ax = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1,
+        )
+        fig_mirrored, ax_mirrored = plot_per_ping_profiles(
+            sample_ds_with_gain, value_var="backscatter_db_corrected", n_pings=2, seed=1, x_sign=-1.0,
+        )
+        for line, line_mirrored in zip(ax.get_lines(), ax_mirrored.get_lines()):
+            x, y = line.get_xdata(), line.get_ydata()
+            xm, ym = line_mirrored.get_xdata(), line_mirrored.get_ydata()
+            order = np.argsort(np.abs(x))
+            order_m = np.argsort(np.abs(xm))
+            assert np.allclose(-x[order], xm[order_m])
+            assert np.array_equal(y[order], ym[order_m])
+        plt.close(fig)
+        plt.close(fig_mirrored)
+
 
 class TestPlotMultiFrequencyComparison:
     def test_returns_fig_ax_with_legend(self, sample_binned_df):
