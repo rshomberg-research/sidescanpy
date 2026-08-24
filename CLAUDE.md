@@ -1391,6 +1391,50 @@ it).
     original `survey-a`-only report was not touched (still
     not rebuilt since the terminology-correction commit above — its
     numbers are unaffected by this fix since it's JSF-only).
+- ✅ **`smooth_boundary_across_pings()` — new, same day, user feedback
+  after the altitude-floor fix: "generally correct but shows massive
+  jumps that are unexplained. Smoothing that line might help."**
+  `detect_first_bottom_return` runs independently per ping — real
+  per-ping threshold noise produces occasional large, physically
+  implausible jumps between adjacent pings even after both fixes
+  above. Confirmed on real `project-b` data (site-c/900kHz, first
+  60 pings): a smooth ~1350-sample decline over 60 pings, but with
+  single-ping spikes of 80-3466 samples that don't correspond to any
+  real terrain change (adjacent pings are meters apart). New function:
+  a per-channel NaN-aware rolling **median** across the ping axis
+  (`window=15` default) — median rather than mean specifically so it's
+  robust to a handful of outlier pings within the window without
+  smearing across a genuine multi-ping trend the way a running mean
+  would. Wired into `stage2_nadir` (`boundary_smoothing_window=15`
+  param, applied to `first_bottom_return_sample` right after
+  detection) and independently into `mask_nadir_gap` (same param name,
+  since it recomputes its own boundary rather than reusing
+  `stage2_nadir`'s). `<= 1` disables it in both.
+  - **Real-data confirmation, visual, not just numeric**: regenerated
+    `stage2/waterfall.png` for the same site-c/900kHz channel — the
+    traced first-bottom-return line now smoothly tracks the visible
+    dark/bright terrain boundary the whole way down the survey,
+    instead of the previous erratic jumps. A few short flat "shelf"
+    plateaus remain around specific ping ranges (a median filter can
+    lock onto a repeated value if enough consecutive pings genuinely
+    share a detection issue) — not fully eliminated, but a clear,
+    visually obvious improvement over the unsmoothed trace.
+  - Existing tests were unaffected by turning smoothing on by default
+    (1205→1212 passing after new tests) because nearly every existing
+    synthetic fixture uses a ping-invariant boundary (same value at
+    every ping by construction) — a median filter is a no-op on a
+    constant array, so none of those assertions needed updating; only
+    genuinely new tests were needed to cover the smoothing behavior
+    itself.
+  - Tests: `TestSmoothBoundaryAcrossPings` (6 tests — rejects an
+    isolated outlier ping, preserves a gradual monotonic trend, even
+    window rounds up to odd, `window=1` is an exact identity transform,
+    all-NaN window stays NaN, invalid window raises).
+    `TestStage2Nadir.test_smooths_isolated_per_ping_detection_outlier`
+    (integration-level: confirms `stage2_nadir` wires the smoothing
+    through and that disabling it via `boundary_smoothing_window=1`
+    reproduces the raw, unsmoothed detection). Full suite: 1212
+    passing / 36 skipped.
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 

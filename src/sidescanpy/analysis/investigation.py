@@ -19,6 +19,7 @@ split already established by `tvg_diagnostics.py`/`viz/tvg_diagnostics.py`.
 2026 rshomberg@uri.edu
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -289,6 +290,59 @@ def detect_first_bottom_return(
     return first
 
 
+def smooth_boundary_across_pings(boundary: np.ndarray, *, window: int = 15) -> np.ndarray:
+    """
+    Per-channel rolling median of a per-ping boundary array (e.g.
+    `detect_first_bottom_return`'s output) across the ping axis,
+    NaN-aware.
+
+    `detect_first_bottom_return` runs independently per ping — real
+    per-ping threshold noise (not every ping's own detection is
+    equally clean) produces occasional large, physically implausible
+    jumps between adjacent pings, confirmed on real `project-b` data:
+    a smooth ~1000-sample decline over dozens of pings punctuated by
+    single-ping spikes of 100-3000+ samples that don't correspond to
+    any real terrain change (adjacent pings are meters apart, not tens
+    of meters). A median (not mean) filter: robust to a handful of
+    outlier pings within the window without smearing across a real
+    step change the way a running mean would.
+
+    Parameters
+    ----------
+    boundary : np.ndarray
+        Shape (ping, channel).
+    window : int, default 15
+        Odd window size in pings, centered on each ping (bumped up by
+        one if given even). Real-data check: this survey's genuine
+        ping-to-ping variation (excluding the large jumps this is
+        meant to remove) has a median absolute difference of ~18
+        samples between adjacent pings — a window a few times that
+        width smooths the jumps without erasing genuine multi-ping
+        trends. Not validated as a universal default across hardware;
+        revisit if a different survey's real terrain changes faster
+        than this window can follow.
+
+    Returns
+    -------
+    np.ndarray
+        Same shape as `boundary`. A ping whose entire window is NaN
+        stays NaN.
+    """
+    if window < 1:
+        raise ValueError("smooth_boundary_across_pings: window must be >= 1")
+    if window % 2 == 0:
+        window += 1
+    if boundary.shape[0] < 2:
+        return boundary.astype(np.float64).copy()
+
+    half = window // 2
+    padded = np.pad(boundary.astype(np.float64), ((half, half), (0, 0)), mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, window, axis=0)  # (ping, channel, window)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN slice -> NaN, not an error here
+        return np.nanmedian(windows, axis=-1)
+
+
 def detect_nadir_noise_extent(
     value_arr: np.ndarray,
     *,
@@ -503,6 +557,7 @@ def mask_nadir_gap(
     smooth_window: int = 10,
     threshold_fraction: float = 0.2,
     min_run: int = 10,
+    boundary_smoothing_window: int = 15,
 ) -> xr.Dataset:
     """Return a copy of `ds` with the full nadir gap (everything before
     `detect_first_bottom_return`'s per-(ping, channel) boundary --
@@ -552,6 +607,9 @@ def mask_nadir_gap(
         own altitude (see that function's docstring for the real bug
         this floor fixes). Skipped with no floor if absent, matching
         `stage2_nadir`'s own graceful degradation.
+    boundary_smoothing_window : int, default 15
+        Passed to `smooth_boundary_across_pings` — see `stage2_nadir`'s
+        same-named parameter. `<= 1` disables smoothing.
 
     Returns
     -------
@@ -572,6 +630,8 @@ def mask_nadir_gap(
         min_run=min_run,
         min_sample=altitude_sample,
     )
+    if boundary_smoothing_window > 1:
+        boundary = smooth_boundary_across_pings(boundary, window=boundary_smoothing_window)
     out = ds.copy()
     for var in value_vars:
         if var in out.data_vars:
@@ -693,6 +753,7 @@ def stage2_nadir(
     strong_return_smooth_window: int = 10,
     strong_return_threshold_fraction: float = 0.2,
     strong_return_min_run: int = 10,
+    boundary_smoothing_window: int = 15,
 ) -> StageResult:
     """Classify how nadir (sample 0..`nadir_n_samples` of each channel,
     per this schema's near-to-far sample convention — see
@@ -765,6 +826,14 @@ def stage2_nadir(
         Passed through to `detect_first_bottom_return` — see that
         function's docstring for what they mean and why the defaults
         were chosen.
+    boundary_smoothing_window : int, default 15
+        Passed to `smooth_boundary_across_pings` as `window` — a
+        rolling median across pings applied to
+        `first_bottom_return_sample` (real-data check found the raw
+        per-ping detection has occasional large, physically implausible
+        jumps between adjacent pings; see that function's docstring).
+        Set to `1` (or any value `<= 1`) to disable and use the raw
+        per-ping detection unsmoothed.
     """
     arr = np.asarray(ds[value_var].values, dtype=np.float64)  # (ping, channel, sample)
     n_samples = arr.shape[-1]
@@ -851,6 +920,15 @@ def stage2_nadir(
         min_run=strong_return_min_run,
         min_sample=altitude_sample,  # physical floor: bottom can never be closer than altitude
     )
+    if boundary_smoothing_window > 1:
+        # detect_first_bottom_return runs independently per ping --
+        # real per-ping threshold noise produces occasional large,
+        # physically implausible jumps between adjacent pings (see
+        # smooth_boundary_across_pings' docstring for the real-data
+        # numbers). A rolling median across pings removes those without
+        # smearing across genuine multi-ping trends the way a mean
+        # filter would.
+        first_bottom_sample = smooth_boundary_across_pings(first_bottom_sample, window=boundary_smoothing_window)
     finite_bottom = first_bottom_sample[np.isfinite(first_bottom_sample)]
     if finite_bottom.size:
         metrics["first_bottom_return_sample_median"] = float(np.median(finite_bottom))

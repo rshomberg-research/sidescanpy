@@ -20,6 +20,7 @@ from sidescanpy.analysis.investigation import (
     detect_nadir_noise_extent,
     mask_nadir_gap,
     reject_range_outliers,
+    smooth_boundary_across_pings,
     stage1_5_outlier_comparison,
     stage1_characterize,
     stage2_5_beam_geometry,
@@ -271,6 +272,30 @@ class TestStage2Nadir:
 
         assert result.metrics["first_bottom_return_sample_median"] >= 14
         assert result.metrics["first_bottom_return_sample_median"] > 50
+
+    def test_smooths_isolated_per_ping_detection_outlier(self):
+        """Real per-ping detection noise can make a single ping's raw
+        boundary jump far from its neighbors, confirmed on real
+        project-b data. Default boundary_smoothing_window should pull
+        an isolated outlier ping back toward its neighbors;
+        boundary_smoothing_window=1 disables that and leaves the raw
+        detection as-is."""
+        n_pings, n_samples = 41, 300
+        bs = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        bs[..., 100:] = 15.0  # real bottom starts at sample 100 for every ping...
+        bs[20, :, 100:180] = 0.05  # ...except ping 20, where noise pushes detection to ~180
+        bs[20, :, 180:] = 15.0
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        ds = compute_geometric_ranges(ds)
+
+        smoothed = stage2_nadir(ds, nadir_n_samples=5)
+        raw = stage2_nadir(ds, nadir_n_samples=5, boundary_smoothing_window=1)
+
+        smoothed_boundary = smoothed.data["first_bottom_return_sample"]
+        raw_boundary = raw.data["first_bottom_return_sample"]
+
+        assert abs(raw_boundary[20, 0] - 180) <= 15
+        assert abs(smoothed_boundary[20, 0] - 100) <= 15
 
 
 class TestStage2_5BeamGeometry:
@@ -806,6 +831,62 @@ class TestDetectFirstBottomReturn:
         result = detect_first_bottom_return(arr, smooth_window=5, min_run=10, min_sample=np.array([[np.nan]]))
 
         assert np.abs(result[0, 0] - 50) <= 15
+
+
+class TestSmoothBoundaryAcrossPings:
+    def test_rejects_isolated_outlier_ping(self):
+        """Regression test for a real project-b finding: raw per-ping
+        detection has occasional large, physically implausible jumps
+        (one ping reads very differently from its neighbors) that a
+        median filter should reject without disturbing the surrounding
+        constant baseline."""
+        n_pings, n_channels = 41, 2
+        boundary = np.full((n_pings, n_channels), 1000.0)
+        boundary[20, :] = 4000.0  # single-ping outlier spike
+
+        result = smooth_boundary_across_pings(boundary, window=15)
+
+        assert result[20, 0] == pytest.approx(1000.0)
+        assert np.all(result[:15, :] == pytest.approx(1000.0))
+        assert np.all(result[25:, :] == pytest.approx(1000.0))
+
+    def test_preserves_gradual_monotonic_trend(self):
+        n_pings, n_channels = 100, 1
+        ramp = np.linspace(2000.0, 500.0, n_pings)
+        boundary = np.broadcast_to(ramp[:, None], (n_pings, n_channels)).copy()
+
+        result = smooth_boundary_across_pings(boundary, window=15)
+
+        # Away from the edges (where edge-padding distorts the ramp
+        # slightly), smoothing a monotonic ramp should barely move it.
+        mid = slice(30, 70)
+        assert np.allclose(result[mid, 0], boundary[mid, 0], atol=50.0)
+        assert np.all(np.diff(result[:, 0]) <= 1e-9)  # still monotonic non-increasing
+
+    def test_even_window_rounds_up_to_odd(self):
+        boundary = np.full((21, 1), 5.0)
+        boundary[10, 0] = 999.0
+        result_even = smooth_boundary_across_pings(boundary, window=14)
+        result_odd = smooth_boundary_across_pings(boundary, window=15)
+        assert np.array_equal(result_even, result_odd)
+
+    def test_window_one_is_identity(self):
+        rng = np.random.default_rng(3)
+        boundary = rng.uniform(0, 1000, size=(30, 2))
+        boundary[5, 0] = np.nan
+
+        result = smooth_boundary_across_pings(boundary, window=1)
+
+        assert np.array_equal(result, boundary, equal_nan=True)
+
+    def test_all_nan_window_stays_nan(self):
+        boundary = np.full((10, 1), np.nan)
+        result = smooth_boundary_across_pings(boundary, window=5)
+        assert np.all(np.isnan(result))
+
+    def test_invalid_window_raises(self):
+        with pytest.raises(ValueError, match="window"):
+            smooth_boundary_across_pings(np.zeros((5, 1)), window=0)
 
 
 class TestDetectNadirNoiseExtent:
