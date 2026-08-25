@@ -20,11 +20,14 @@ from sidescanpy.analysis.investigation import (
     StageResult,
     stage2_5_beam_geometry,
     stage2_nadir,
+    stage4_decay,
 )
 from sidescanpy.processing.geometric import compute_geometric_ranges
+from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 from sidescanpy.viz.investigation import (
     plot_stage2_5_beam_geometry,
     plot_stage2_nadir_zoom,
+    plot_stage4_residuals,
 )
 
 
@@ -175,3 +178,90 @@ class TestPlotStage2NadirZoom:
             assert len(spans) == 1
         finally:
             plt.close(fig)
+
+
+def _make_scaled_spreading_dataset(*, scale: float, n_pings: int = 30, n_samples: int = 300) -> xr.Dataset:
+    """Raw data that follows `spreading_only`'s decay shape exactly, but
+    amplified by `scale` relative to the literal (scale=1.0) model --
+    e.g. `scale=1.6` means the real decay is 1.6x steeper than the
+    textbook spreading-loss term alone. Built so `fit_hardware_tvg_curve`'s
+    free-fit scale for the `spreading_only` candidate converges close to
+    `scale` (a near-perfect free fit) while its fixed-scale (1.0)
+    residual stays large -- the two `plot_stage4_residuals` modes should
+    then plot visibly different data for the same candidate, which is
+    exactly the distinction the 2026-08-25 fix (`use_fixed_scale`)
+    exists to make correct."""
+    ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+    ds = compute_geometric_ranges(ds)
+    params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0)
+    ground_range = ds["ground_range_m"].values
+    loss_db = scale * tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+    ref = np.nanmin(loss_db[np.isfinite(loss_db)])
+    amplitude = 10.0 ** (-(loss_db - ref) / 20.0)
+    amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+    ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+    return ds
+
+
+class TestPlotStage4Residuals:
+    """Regression coverage for the real bug a user caught 2026-08-25:
+    this plot kept using the free-fit scale/RMSE after `plot_candidate_fit`
+    (decay_fit.png) was fixed to fixed-scale ranking the day before --
+    residuals.png and decay_fit.png silently stopped telling the same
+    story. This function had zero test coverage before this fix, which
+    is presumably how the drift went unnoticed."""
+
+    def test_no_fit_result_shows_placeholder_title_not_crash(self):
+        stage4 = StageResult(stage="stage4_decay", metrics={}, data={})
+        fig, ax = plot_stage4_residuals(stage4)
+        try:
+            assert ax.get_title() == "No fit available"
+        finally:
+            plt.close(fig)
+
+    def test_fixed_scale_default_uses_fixed_scale_rmse_in_label(self):
+        """A candidate whose free-fit scale is meaningfully off from 1.0
+        (by construction here) must show `fixed_scale_rmse_db` in its
+        legend label under the default `use_fixed_scale=True`, not the
+        free-fit `rmse_db` -- the two are picked to differ substantially
+        by this fixture's own construction, so this isn't a coincidental
+        pass."""
+        ds = _make_scaled_spreading_dataset(scale=1.6)
+        stage4 = stage4_decay(ds, bin_width_m=2.0)
+        spreading = next(c for c in stage4.data["fit_result"].candidates if c.name == "spreading_only")
+        assert abs(spreading.scale - 1.6) < 0.3  # sanity: free fit actually found the injected scale
+        assert spreading.fixed_scale_rmse_db > spreading.rmse_db + 1.0  # and the two RMSEs meaningfully differ
+
+        fig, ax = plot_stage4_residuals(stage4)
+        try:
+            labels = [line.get_label() for line in ax.get_lines() if "spreading_only" in line.get_label()]
+            assert len(labels) == 1
+            assert f"{spreading.fixed_scale_rmse_db:.2f}dB" in labels[0]
+            assert f"{spreading.rmse_db:.2f}dB" not in labels[0]
+        finally:
+            plt.close(fig)
+
+    def test_fixed_vs_free_fit_scale_plot_different_residual_values(self):
+        """Not just the label -- the actual plotted y-data must change
+        too, confirming `model_loss` is really computed at scale=1.0 by
+        default rather than `candidate.scale`."""
+        ds = _make_scaled_spreading_dataset(scale=1.6)
+        stage4 = stage4_decay(ds, bin_width_m=2.0)
+
+        fig_fixed, ax_fixed = plot_stage4_residuals(stage4, use_fixed_scale=True)
+        fig_free, ax_free = plot_stage4_residuals(stage4, use_fixed_scale=False)
+        try:
+            def _spreading_ydata(ax):
+                line = next(l for l in ax.get_lines() if "spreading_only" in l.get_label())
+                return np.asarray(line.get_ydata())
+
+            fixed_y = _spreading_ydata(ax_fixed)
+            free_y = _spreading_ydata(ax_free)
+            assert not np.allclose(fixed_y, free_y)
+            # Free fit (scale close to the injected 1.6) should track the
+            # observed curve much more closely than the fixed-scale (1.0)
+            # residual, which is deliberately under-scaled by this fixture.
+            assert np.sqrt(np.mean(fixed_y**2)) > np.sqrt(np.mean(free_y**2))
+        finally:
+            plt.close(fig_fixed)
+            plt.close(fig_free)

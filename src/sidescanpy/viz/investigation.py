@@ -538,11 +538,35 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
     return fig, ax
 
 
-def plot_stage4_residuals(stage4: StageResult) -> tuple[Figure, Axes]:
+def plot_stage4_residuals(stage4: StageResult, *, use_fixed_scale: bool = True) -> tuple[Figure, Axes]:
     """Residual (model - observed) vs. range for each candidate's fit
     window, using the same model-curve construction as
     `plot_candidate_fit` (recomputed here since `TVGCandidateFit` only
-    stores the summary RMSE, not the per-bin residual array)."""
+    stores the summary RMSE, not the per-bin residual array).
+
+    `use_fixed_scale=True` (default, 2026-08-25 fix): draws the fixed-
+    scale (1.0) residual and labels it with `fixed_scale_rmse_db` — the
+    exact numbers `fit_hardware_tvg_curve()`/`stage4_decay` actually rank
+    candidates by. **This function had silently kept using the old
+    free-fit-scaled residual/RMSE after `plot_candidate_fit` (the
+    decay_fit.png chart) was fixed to fixed-scale ranking on 2026-08-24
+    — caught by a user reviewing the two charts side by side and noticing
+    they no longer told the same story.** `use_fixed_scale=False` draws
+    the old free-fit-scaled residual instead, for explicit diagnostic
+    comparison (e.g. to see how much a candidate's scale had to move
+    from 1.0 to look competitive) — same purpose as `plot_candidate_fit`'s
+    own `use_fixed_scale` parameter, kept for symmetry.
+
+    The nearest-bin `i_ref` (rather than an exact `tvg_gain_db`
+    evaluation at `r_ref_m`, which `plot_candidate_fit`'s own *model
+    line* uses for a different reason — a denser display domain) is
+    deliberately kept here: it's not a discretization shortcut, it's the
+    literal computation `fit_hardware_tvg_curve()` itself uses to
+    produce `fixed_scale_rmse_db` — this plot's whole purpose is to show
+    the actual per-bin residuals that produced that number, so it must
+    match that function's math exactly, not a more "precise" variant of
+    it.
+    """
     fit_result = stage4.data.get("fit_result")
     fig, ax = plt.subplots(figsize=(9, 5))
     if fit_result is None:
@@ -556,16 +580,18 @@ def plot_stage4_residuals(stage4: StageResult) -> tuple[Figure, Axes]:
     for candidate in fit_result.candidates:
         model_curve = tvg_gain_db(np.clip(ranges, candidate.params.min_range_m, None), candidate.params)
         i_ref = int(np.argmin(np.abs(ranges - candidate.r_ref_m)))
-        model_loss = candidate.scale * (model_curve - model_curve[i_ref])
+        plotted_scale = 1.0 if use_fixed_scale else candidate.scale
+        model_loss = plotted_scale * (model_curve - model_curve[i_ref])
         residual = model_loss - observed
         in_window = (ranges >= candidate.r_ref_m) & (ranges <= candidate.r_fit_max_m)
+        rmse_shown = candidate.fixed_scale_rmse_db if use_fixed_scale else candidate.rmse_db
         # Same reference-relative x-axis as plot_stage4_decay_fit — see
         # that function's (plot_candidate_fit's) comment for why.
         rel_range_m = ranges - candidate.r_ref_m
         ax.plot(
             rel_range_m[in_window], residual[in_window],
             color=colors.get(candidate.name), marker=".", markersize=4,
-            label=f"{candidate.name} (RMSE={candidate.rmse_db:.2f}dB)",
+            label=f"{candidate.name} (RMSE={rmse_shown:.2f}dB)",
         )
 
     ax.axhline(0, color="k", linewidth=0.5, alpha=0.5)
