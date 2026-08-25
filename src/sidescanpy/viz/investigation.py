@@ -538,7 +538,9 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
     return fig, ax
 
 
-def plot_stage4_residuals(stage4: StageResult, *, use_fixed_scale: bool = True) -> tuple[Figure, Axes]:
+def plot_stage4_residuals(
+    stage4: StageResult, *, use_fixed_scale: bool = True, ax: Axes | None = None, relative_x: bool = True,
+) -> tuple[Figure, Axes]:
     """Residual (model - observed) vs. range for each candidate's fit
     window, using the same model-curve construction as
     `plot_candidate_fit` (recomputed here since `TVGCandidateFit` only
@@ -566,9 +568,22 @@ def plot_stage4_residuals(stage4: StageResult, *, use_fixed_scale: bool = True) 
     the actual per-bin residuals that produced that number, so it must
     match that function's math exactly, not a more "precise" variant of
     it.
+
+    `ax`, if given, draws into it instead of creating a new figure —
+    e.g. to combine this with `plot_candidate_fit` in one stacked figure
+    (fit on top, residuals below, sharing an x-axis).
+
+    `relative_x=True` (default): x-axis is distance from each
+    candidate's own `r_ref_m` — matches this function's original
+    convention. `relative_x=False`: x-axis is absolute range instead,
+    matching `plot_candidate_fit`'s *current* convention (it used to
+    also be reference-relative; that changed when the model line was
+    extended back to zero range for reference) — pass `False` when
+    stacking this under `plot_candidate_fit` on a shared x-axis, or the
+    two panels' x=0 won't mean the same thing.
     """
     fit_result = stage4.data.get("fit_result")
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = _new_fig_ax(ax, figsize=(9, 5))
     if fit_result is None:
         ax.set_title("No fit available")
         return fig, ax
@@ -585,17 +600,15 @@ def plot_stage4_residuals(stage4: StageResult, *, use_fixed_scale: bool = True) 
         residual = model_loss - observed
         in_window = (ranges >= candidate.r_ref_m) & (ranges <= candidate.r_fit_max_m)
         rmse_shown = candidate.fixed_scale_rmse_db if use_fixed_scale else candidate.rmse_db
-        # Same reference-relative x-axis as plot_stage4_decay_fit — see
-        # that function's (plot_candidate_fit's) comment for why.
-        rel_range_m = ranges - candidate.r_ref_m
+        x = ranges - candidate.r_ref_m if relative_x else ranges
         ax.plot(
-            rel_range_m[in_window], residual[in_window],
+            x[in_window], residual[in_window],
             color=colors.get(candidate.name), marker=".", markersize=4,
             label=f"{candidate.name} (RMSE={rmse_shown:.2f}dB)",
         )
 
     ax.axhline(0, color="k", linewidth=0.5, alpha=0.5)
-    ax.set_xlabel("Distance from reference range (m)")
+    ax.set_xlabel("Distance from reference range (m)" if relative_x else "Range (m)")
     ax.set_ylabel("Residual, model - observed (dB)")
     ax.set_title("Fit residuals")
     ax.legend(fontsize=8)

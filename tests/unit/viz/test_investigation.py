@@ -265,3 +265,41 @@ class TestPlotStage4Residuals:
         finally:
             plt.close(fig_fixed)
             plt.close(fig_free)
+
+    def test_relative_x_false_shifts_xdata_by_r_ref(self):
+        """relative_x=False must produce absolute-range x-data, matching
+        plot_candidate_fit's current convention -- needed for a genuinely
+        aligned shared x-axis when the two are stacked in one figure."""
+        ds = _make_scaled_spreading_dataset(scale=1.6)
+        stage4 = stage4_decay(ds, bin_width_m=2.0)
+        spreading = next(c for c in stage4.data["fit_result"].candidates if c.name == "spreading_only")
+
+        fig_rel, ax_rel = plot_stage4_residuals(stage4, relative_x=True)
+        fig_abs, ax_abs = plot_stage4_residuals(stage4, relative_x=False)
+        try:
+            def _spreading_xdata(ax):
+                line = next(l for l in ax.get_lines() if "spreading_only" in l.get_label())
+                return np.asarray(line.get_xdata())
+
+            rel_x = _spreading_xdata(ax_rel)
+            abs_x = _spreading_xdata(ax_abs)
+            assert np.allclose(abs_x - rel_x, spreading.r_ref_m)
+        finally:
+            plt.close(fig_rel)
+            plt.close(fig_abs)
+
+    def test_ax_param_draws_into_given_axes_not_a_new_figure(self):
+        """For combining with plot_candidate_fit in one stacked figure
+        (fit on top, residuals below, sharing an x-axis)."""
+        ds = _make_scaled_spreading_dataset(scale=1.6)
+        stage4 = stage4_decay(ds, bin_width_m=2.0)
+
+        fig, (ax_top, ax_bottom) = plt.subplots(2, 1)
+        try:
+            returned_fig, returned_ax = plot_stage4_residuals(stage4, ax=ax_bottom)
+            assert returned_fig is fig
+            assert returned_ax is ax_bottom
+            assert len(ax_bottom.get_lines()) > 0
+            assert len(ax_top.get_lines()) == 0  # untouched
+        finally:
+            plt.close(fig)
