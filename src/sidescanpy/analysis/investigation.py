@@ -1604,6 +1604,7 @@ def stage4_decay(
     freq_hz: float | None = None,
     bin_width_m: float = 5.0,
     usable_range_m: float | None = None,
+    min_bins: int = 6,
     ambiguous_rel_tol: float = 0.2,
     min_total_count: int = 30,
     exclude_before_sample: np.ndarray | None = None,
@@ -1734,6 +1735,31 @@ def stage4_decay(
         Passed straight through to `fit_hardware_tvg_curve` — only
         matters when `r_ref_m` is `None` (auto-select). See that
         function's own docstring.
+    min_bins : int, default 6
+        Minimum number of range bins the fit window (`r_ref_m` to
+        `usable_range_m`) must contain — `bin_width_m` is automatically
+        reduced (never increased) before binning if the requested width
+        would leave fewer than this. **Real-data motivation (2026-08-25):**
+        a survey flown very close to the bottom, with `usable_range_m`
+        as short as ~15m, left the default `bin_width_m=5.0` with only
+        2-3 bins in the fit window — barely enough points to distinguish
+        4 competing single-parameter physics models, let alone reliably.
+        `bin_width_m=5.0` was originally tuned against surveys with
+        `usable_range_m` in the 40-70m range (6-14 bins there
+        naturally), where this never mattered; it silently stopped being
+        enough once a genuinely short-range survey showed up. The
+        adjustment only ever shrinks the bin width (never widens it
+        past what was requested), so a survey with plenty of natural
+        bins is completely unaffected — verify via
+        `metrics["bin_width_m"]` (the width actually used) vs.
+        `metrics["bin_width_m_requested"]` (what the caller passed) to
+        see whether adaptation happened on a given run. The estimate is
+        necessarily approximate: it targets `min_bins` bins across the
+        *whole* range up to `usable_range_m`, not the fit window
+        specifically, since `r_ref_m`'s own auto-selection (when not
+        pinned) isn't known until after binning — a real fit window can
+        still end up with somewhat more or fewer than `min_bins`
+        depending on where `r_ref_m` lands.
     """
     if range_var not in ds:
         raise ValueError(f"stage4_decay: {range_var!r} not found — compute geometric ranges first")
@@ -1741,6 +1767,18 @@ def stage4_decay(
     n_water_column_excluded = int(np.sum(
         np.isfinite(np.asarray(ds[value_var].values)) & ~np.isfinite(np.asarray(ds[range_var].values))
     ))
+
+    # Shrink (never widen) bin_width_m so the fit window has at least
+    # min_bins bins -- see min_bins's own docstring for the real-data
+    # case (a short usable_range_m survey collapsing to 2-3 bins) this
+    # exists to fix. Computed against usable_range_m, not the (not yet
+    # known) fit window itself, since r_ref_m may still be auto-selected
+    # below.
+    bin_width_m_requested = bin_width_m
+    if usable_range_m is not None and usable_range_m > 0 and min_bins > 0:
+        min_width_for_bins = usable_range_m / min_bins
+        if min_width_for_bins < bin_width_m:
+            bin_width_m = min_width_for_bins
 
     freq_hz = float(freq_hz) if freq_hz is not None else float(ds.attrs["freq_hz_start"])
 
@@ -1793,6 +1831,8 @@ def stage4_decay(
                 "outlier_mad_k": outlier_mad_k if reject_outliers else None,
                 "outlier_n_rejected": n_outliers_rejected,
                 "fit_value_col": fit_value_col,
+                "bin_width_m": bin_width_m,
+                "bin_width_m_requested": bin_width_m_requested,
             },
             classification="ambiguous",
             notes=["Not enough binned samples to fit a decay model."],
@@ -1832,11 +1872,18 @@ def stage4_decay(
         if second is not None:
             notes.append(f"Runner-up: {second.name} (RMSE={second.fixed_scale_rmse_db:.2f}dB).")
 
+    if bin_width_m < bin_width_m_requested:
+        notes.append(
+            f"bin_width_m auto-reduced from {bin_width_m_requested:.2f}m to {bin_width_m:.2f}m "
+            f"to keep at least min_bins={min_bins} bins given usable_range_m={usable_range_m:.1f}m."
+        )
+
     metrics = {
         "freq_hz": freq_hz,
         "db_reference": db_reference,
         "absorption_db_per_m": absorption_db_per_m,
         "bin_width_m": bin_width_m,
+        "bin_width_m_requested": bin_width_m_requested,
         "r_ref_m": best.r_ref_m,
         "r_ref_m_override": r_ref_m,
         "r_fit_max_m": best.r_fit_max_m,

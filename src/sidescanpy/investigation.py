@@ -131,6 +131,7 @@ def run_investigation(
     min_first_bottom_return_sample: float | None = None,
     stage3_bin_width_m: float = 2.0,
     stage4_bin_width_m: float = 5.0,
+    stage4_min_bins: int = 6,
     stage4_db_reference_percentile: float = 99.0,
     snr_threshold: float = 3.0,
     exclude_nadir_gap: bool = True,
@@ -163,10 +164,17 @@ def run_investigation(
         If given, every stage's PNGs plus ``metrics.json`` are written
         there (one subdirectory per stage).
     nadir_n_samples, stage3_bin_width_m, stage4_bin_width_m,
-    stage4_db_reference_percentile, snr_threshold : reproducibility parameters
+    stage4_min_bins, stage4_db_reference_percentile, snr_threshold : reproducibility parameters
         Passed straight through to the corresponding stage functions —
         logged into the result's ``params`` and the JSON export so a
         re-run can reproduce them exactly.
+        ``stage4_min_bins`` (default 6) shrinks ``stage4_bin_width_m``
+        automatically when a short ``usable_range_m`` would otherwise
+        leave too few bins in the decay-fit window to reliably
+        distinguish the 4 candidate models (see
+        `analysis.investigation.stage4_decay`'s own ``min_bins``
+        docstring for the real-data case — a survey flown very close to
+        the bottom, ~15m usable range, collapsing to 2-3 bins).
         ``stage4_db_reference_percentile`` sets the self-referenced dB
         scale Stage 4 converts linear amplitude to (see
         `analysis.investigation.stage4_decay`'s docstring) — provably
@@ -312,6 +320,7 @@ def run_investigation(
         "min_first_bottom_return_sample": min_first_bottom_return_sample,
         "stage3_bin_width_m": stage3_bin_width_m,
         "stage4_bin_width_m": stage4_bin_width_m,
+        "stage4_min_bins": stage4_min_bins,
         "stage4_db_reference_percentile": stage4_db_reference_percentile,
         "snr_threshold": snr_threshold,
         "exclude_nadir_gap": exclude_nadir_gap,
@@ -372,7 +381,7 @@ def run_investigation(
     # result already computed.
     stage2_5 = stage2_5_beam_geometry(ds, stage2, stage3, value_var=value_var)
     stage4 = stage4_decay(
-        ds, value_var=value_var, bin_width_m=stage4_bin_width_m,
+        ds, value_var=value_var, bin_width_m=stage4_bin_width_m, min_bins=stage4_min_bins,
         db_reference_percentile=stage4_db_reference_percentile,
         usable_range_m=stage3.metrics.get("usable_range_m"),
         exclude_before_sample=exclude_before_sample_stage4,

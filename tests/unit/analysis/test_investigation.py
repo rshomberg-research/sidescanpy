@@ -709,6 +709,76 @@ class TestStage4Decay:
         assert result.classification == "none"
         assert result.metrics["best_candidate"] == "full_physics"
 
+    def _make_full_physics_ds(self, n_pings=60, n_samples=300):
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
+        amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        return ds
+
+    def test_short_usable_range_auto_shrinks_bin_width_to_meet_min_bins(self):
+        """Real-data motivation (2026-08-25): a survey flown very close
+        to the bottom, with usable_range_m as short as ~15m, left the
+        default bin_width_m=5.0 with only 2-3 bins in the fit window --
+        not enough to reliably distinguish 4 competing single-parameter
+        physics models. min_bins (default 6) now shrinks bin_width_m
+        automatically for a short usable_range_m."""
+        ds = self._make_full_physics_ds()
+
+        adapted = stage4_decay(ds, bin_width_m=5.0, usable_range_m=15.0)
+        unadapted = stage4_decay(ds, bin_width_m=5.0, usable_range_m=15.0, min_bins=0)
+
+        assert adapted.metrics["bin_width_m_requested"] == 5.0
+        assert adapted.metrics["bin_width_m"] == pytest.approx(15.0 / 6)
+        assert adapted.metrics["bin_width_m"] < 5.0
+        assert any("bin_width_m auto-reduced" in n for n in adapted.notes)
+        # The exact fit-window bin count depends on where r_ref_m lands
+        # (see min_bins's own docstring -- the guarantee targets the full
+        # [0, usable_range_m] span, not the fit window specifically), but
+        # it must be a real, substantial improvement over the unadapted
+        # 5.0m-bin case this real report was about.
+        assert adapted.metrics["n_bins_used"] > unadapted.metrics["n_bins_used"]
+        assert unadapted.metrics["n_bins_used"] <= 3  # reproduces the reported "only 3 bins"
+        assert adapted.metrics["n_bins_used"] >= 4
+
+    def test_wide_usable_range_leaves_bin_width_unchanged(self):
+        """The default bin_width_m=5.0 already gives well over min_bins
+        bins across a normal 40-70m-range survey -- confirms the
+        adaptation is a floor, not a universal override, and existing
+        callers with plenty of natural bins see no behavior change."""
+        ds = self._make_full_physics_ds()
+
+        result = stage4_decay(ds, bin_width_m=5.0, usable_range_m=60.0)
+
+        assert result.metrics["bin_width_m"] == 5.0
+        assert result.metrics["bin_width_m_requested"] == 5.0
+        assert not any("bin_width_m auto-reduced" in n for n in result.notes)
+
+    def test_min_bins_zero_disables_adaptation(self):
+        ds = self._make_full_physics_ds()
+
+        result = stage4_decay(ds, bin_width_m=5.0, usable_range_m=15.0, min_bins=0)
+
+        assert result.metrics["bin_width_m"] == 5.0
+        assert result.metrics["bin_width_m_requested"] == 5.0
+
+    def test_no_usable_range_m_leaves_bin_width_unchanged(self):
+        """usable_range_m=None (Stage 3 couldn't determine one) has
+        nothing to adapt against -- must not crash, must leave the
+        requested bin_width_m as-is."""
+        ds = self._make_full_physics_ds()
+
+        result = stage4_decay(ds, bin_width_m=5.0, usable_range_m=None)
+
+        assert result.metrics["bin_width_m"] == 5.0
+        assert result.metrics["bin_width_m_requested"] == 5.0
+
     def test_classification_ranked_by_fixed_scale_rmse_not_free_fit_rmse(self, monkeypatch):
         """Isolates stage4_decay's own ranking logic from
         fit_hardware_tvg_curve's real fitting behavior entirely --
