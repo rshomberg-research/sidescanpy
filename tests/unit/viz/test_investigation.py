@@ -27,6 +27,7 @@ from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 from sidescanpy.viz.investigation import (
     plot_stage2_5_beam_geometry,
     plot_stage2_nadir_zoom,
+    plot_stage2_waterfall,
     plot_stage4_residuals,
 )
 
@@ -120,6 +121,44 @@ class TestPlotStage2_5BeamGeometry:
         fig, (ax_geo, ax_ping) = plot_stage2_5_beam_geometry(ds, stage2_5)
         try:
             assert "Stage" not in ax_geo.get_title()
+        finally:
+            plt.close(fig)
+
+
+class TestPlotStage2Waterfall:
+    """ping_offset added 2026-08-31 -- a caller plotting an already-sliced
+    window (e.g. one section of a larger survey) needs the traced
+    boundary lines to land on the same real ping numbers as the
+    underlying waterfall image, not the image's own 0-based offset and
+    the trace's separate, always-0-based one silently disagreeing."""
+
+    def test_default_ping_offset_is_zero_based_unchanged(self):
+        ds = _make_raw_dataset(n_pings=5, n_samples=100)
+        ds = compute_geometric_ranges(ds)
+        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+
+        fig, ax = plot_stage2_waterfall(ds, stage2=stage2)
+        try:
+            bottom_line = next(line for line in ax.get_lines() if line.get_label() == "first bottom return")
+            assert bottom_line.get_ydata()[0] == 0
+        finally:
+            plt.close(fig)
+
+    def test_ping_offset_shifts_both_image_and_traced_boundary(self):
+        ds = _make_raw_dataset(n_pings=5, n_samples=100)
+        ds = compute_geometric_ranges(ds)
+        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+
+        fig, ax = plot_stage2_waterfall(ds, stage2=stage2, ping_offset=1000)
+        try:
+            bottom_line = next(line for line in ax.get_lines() if line.get_label() == "first bottom return")
+            # Real bug this guards: before ping_offset existed on this
+            # function, the traced line was always drawn at a 0-based
+            # np.arange(n_pings) regardless of what offset the waterfall
+            # image itself was given -- landing this at 1000 (not 0)
+            # confirms the trace and the image now agree.
+            assert bottom_line.get_ydata()[0] == 1000
+            assert ax.get_ylim()[1] >= 1000 or ax.get_ylim()[0] >= 1000  # y-axis inverted, either bound could be the max
         finally:
             plt.close(fig)
 

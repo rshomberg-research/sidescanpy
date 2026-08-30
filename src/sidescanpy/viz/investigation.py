@@ -298,6 +298,7 @@ def plot_stage2_waterfall(
     *,
     stage2: StageResult | None = None,
     ax: Axes | None = None,
+    ping_offset: int = 0,
     **waterfall_kwargs,
 ) -> tuple[Figure, Axes]:
     """Full-survey cross-track-vs-ping waterfall of `value_var`.
@@ -315,10 +316,26 @@ def plot_stage2_waterfall(
     fitting; **altitude** (dotted) is shown too since real data can show
     a large, informative gap between the two (see `stage2_nadir`'s
     docstring).
+
+    ping_offset : int, default 0
+        Added to both the waterfall's own y-axis (forwarded to
+        `plot_waterfall`) and the traced boundary lines' y-values, so a
+        caller plotting an already-sliced window (e.g. one section of
+        a larger survey) can show real, absolute ping numbers instead
+        of a 0-based index local to the slice. 0 is a no-op, preserving
+        every existing caller's exact output -- before this parameter
+        existed, the traced lines were always drawn at a 0-based
+        `np.arange(n_pings)` regardless of what `ping_offset` the
+        underlying waterfall image itself might already have been given
+        via `waterfall_kwargs`, which would have silently misaligned
+        the trace against the image the moment a caller tried that.
     """
     fig, ax = _new_fig_ax(ax, figsize=(12, 6))
     aliased = ds.assign(backscatter_intensity=ds[value_var])
-    plot_waterfall(aliased, x_axis="sample", ax=ax, title=f"Waterfall ({value_var})", **waterfall_kwargs)
+    plot_waterfall(
+        aliased, x_axis="sample", ax=ax, title=f"Waterfall ({value_var})",
+        ping_offset=ping_offset, **waterfall_kwargs,
+    )
 
     if stage2 is not None:
         altitude_arr = stage2.data.get("altitude_sample")
@@ -326,7 +343,7 @@ def plot_stage2_waterfall(
 
         def _trace(boundary, color, style, label, lw):
             n_pings = boundary.shape[0]
-            y = np.arange(n_pings)
+            y = np.arange(n_pings) + ping_offset
             port_b, stbd_b = boundary[:, 0], boundary[:, 1] if boundary.shape[1] > 1 else boundary[:, 0]
             valid_port, valid_stbd = np.isfinite(port_b), np.isfinite(stbd_b)
             ax.plot(-port_b[valid_port], y[valid_port], color=color, linestyle=style, linewidth=lw, alpha=0.85)
