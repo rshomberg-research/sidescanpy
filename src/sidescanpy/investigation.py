@@ -140,7 +140,8 @@ def run_investigation(
     outlier_min_bin_count: int = 5,
     stage4_fit_value_col: str = "mean",
     stage4_r_ref_m: float | None = None,
-    stage4_r_fit_min_m: float | None = None,
+    stage4_r_fit_min_m: float | str | None = None,
+    stage4_r_fit_min_auto_margin_m: float = 5.0,
     stage4_r_ref_search_fraction: float = 0.5,
     stage4_exclude_first_n_bins: int = 0,
 ) -> InvestigationResult:
@@ -289,7 +290,7 @@ def run_investigation(
         different winning candidates by RMSE, one within ~1% of the
         ambiguous threshold) motivating `stage4_r_ref_m` as a manual
         override when the auto-picked reference range looks unstable.
-    stage4_r_fit_min_m : float, optional
+    stage4_r_fit_min_m : float, "auto", or None
         Passed straight through to `stage4_decay` as `r_fit_min_m`.
         `None` (default) reproduces the prior one-sided fit window
         (starts at `r_ref_m`/its auto-pick). Set explicitly to fit both
@@ -304,6 +305,20 @@ def run_investigation(
         near-field peak suggests. Pair with `stage4_exclude_first_n_bins`
         and derive the near edge from the raw data's own near-field
         peak plus a real margin, not a guess.
+
+        Pass `"auto"` to have `stage4_decay` derive that near edge
+        itself (peak-plus-margin, see its own docstring) instead of
+        hand-picking one number — added specifically because a single
+        fixed value picked by eye on one mission did not generalize
+        across a dataset whose near-field ramp varies mission to
+        mission. Needs `stage4_r_ref_m` or an auto-derivable
+        `usable_range_m` (from Stage 3) to bound its search; raises if
+        neither is available. `stage4_r_fit_min_auto_margin_m` controls
+        the margin.
+    stage4_r_fit_min_auto_margin_m : float, default 5.0
+        Passed straight through to `stage4_decay` as
+        `r_fit_min_auto_margin_m`. Only matters when
+        `stage4_r_fit_min_m="auto"`.
     stage4_exclude_first_n_bins : int, default 0
         Passed straight through to `stage4_decay` — drops this many
         *bins* (not samples) from the near end of the range-binned decay
@@ -355,6 +370,7 @@ def run_investigation(
         "stage4_fit_value_col": stage4_fit_value_col,
         "stage4_r_ref_m": stage4_r_ref_m,
         "stage4_r_fit_min_m": stage4_r_fit_min_m,
+        "stage4_r_fit_min_auto_margin_m": stage4_r_fit_min_auto_margin_m,
         "stage4_r_ref_search_fraction": stage4_r_ref_search_fraction,
         "stage4_exclude_first_n_bins": stage4_exclude_first_n_bins,
     }
@@ -414,7 +430,9 @@ def run_investigation(
         exclude_before_sample=exclude_before_sample_stage4,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
         fit_value_col=stage4_fit_value_col,
-        r_ref_m=stage4_r_ref_m, r_fit_min_m=stage4_r_fit_min_m, r_ref_search_fraction=stage4_r_ref_search_fraction,
+        r_ref_m=stage4_r_ref_m, r_fit_min_m=stage4_r_fit_min_m,
+        r_fit_min_auto_margin_m=stage4_r_fit_min_auto_margin_m,
+        r_ref_search_fraction=stage4_r_ref_search_fraction,
         exclude_first_n_bins=stage4_exclude_first_n_bins,
     )
     stage5 = stage5_units(stage1, stage4)

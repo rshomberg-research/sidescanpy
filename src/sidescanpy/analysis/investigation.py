@@ -1621,6 +1621,37 @@ _TVG_CANDIDATE_TO_STATUS = {
     "full_physics": "none",
 }
 
+# Empirical safety buffer, not a physically derived value -- ported
+# 2026-09-02 from project-a's plot_official_tvg_fit.py after real
+# vendor-format data showed a fixed near-edge number doesn't transfer between
+# missions the way the *method* does (see that script's own module
+# docstring for the two-round history: a fixed bin count wasn't enough,
+# and even the raw peak alone wasn't enough margin, because the
+# *corrected* curve's transition zone runs further than the raw peak).
+_AUTO_NEAR_EDGE_MARGIN_M = 5.0
+
+
+def _auto_near_edge_m(
+    ds: xr.Dataset, value_var: str, range_var: str, bin_width_m: float,
+    search_max_m: float, margin_m: float,
+) -> float | None:
+    """Bins raw `value_var` (linear, pre-dB-conversion) by `range_var`,
+    finds the near-field peak bin (max mean) within `[0, search_max_m]`,
+    and returns its far edge plus `margin_m`. Returns `None` if there's
+    nothing to search (caller decides how to report that). See
+    `_AUTO_NEAR_EDGE_MARGIN_M` for why a fixed bin count isn't used
+    instead -- the raw near-field ramp is broad, not a narrow spike."""
+    binned_raw = mean_backscatter_vs_range(ds, value_var=value_var, range_var=range_var, bin_width_m=bin_width_m)
+    if binned_raw.empty:
+        return None
+    centers = (binned_raw["range_min_m"] + binned_raw["range_max_m"]) / 2.0
+    near = binned_raw[centers <= search_max_m]
+    if near.empty:
+        return None
+    peak_idx = near["mean"].idxmax()
+    peak_far_edge = float(near.loc[peak_idx, "range_max_m"])
+    return peak_far_edge + margin_m
+
 
 def stage4_decay(
     ds: xr.Dataset,
@@ -1643,7 +1674,8 @@ def stage4_decay(
     outlier_min_bin_count: int = 5,
     fit_value_col: str = "mean",
     r_ref_m: float | None = None,
-    r_fit_min_m: float | None = None,
+    r_fit_min_m: float | str | None = None,
+    r_fit_min_auto_margin_m: float = _AUTO_NEAR_EDGE_MARGIN_M,
     r_ref_search_fraction: float = 0.5,
 ) -> StageResult:
     """Fit the four `fit_hardware_tvg_curve` candidate models against
@@ -1796,7 +1828,7 @@ def stage4_decay(
         remains a per-survey judgment call the caller makes by eye
         (`viz.tvg_diagnostics.plot_candidate_fit`), same as every other
         override in this module.
-    r_fit_min_m : float, optional
+    r_fit_min_m : float or "auto", optional
         Passed straight through to `fit_hardware_tvg_curve` — `None`
         (default) reproduces the prior one-sided fit window (starts at
         `r_ref_m`). Set explicitly (e.g. `0.0`) to fit **both sides** of
@@ -1807,6 +1839,32 @@ def stage4_decay(
         with `exclude_first_n_bins` to drop only the handful of bins
         immediately at the first-bottom-return boundary rather than the
         whole near half of the range.
+
+        Pass the literal string `"auto"` to derive this per-call instead
+        of hand-picking a number: bins raw `value_var` by `range_var`,
+        finds the near-field peak bin (max mean) within
+        `[0, r_ref_m or r_ref_search_fraction * usable_range_m]`, and
+        uses that bin's far edge plus `r_fit_min_auto_margin_m`. **Real
+        motivation (2026-09-02):** a fixed near-edge number picked by
+        eye on one vendor-format mission did not generalize across a dataset
+        whose near-field ramp varies mission-to-mission — the *method*
+        (peak-plus-margin) is what carries over, not any specific
+        distance. Requires `r_ref_m` or `usable_range_m` to bound the
+        search (raises `ValueError` if neither is available, or if no
+        bins fall inside the search window — widen `usable_range_m`/
+        `r_ref_m` or pass an explicit number instead). The resolved
+        value is reported in `metrics["r_fit_min_m"]` either way (via
+        `fit_result`'s own `r_fit_min_m`); `metrics["r_fit_min_m_override"]`
+        keeps the literal `"auto"` you passed in, not the resolved
+        number, so the JSON/reproducibility export still shows which
+        mode produced this run.
+    r_fit_min_auto_margin_m : float, default 5.0
+        Margin added to the auto-detected near-field peak's far edge
+        when `r_fit_min_m="auto"`. Ignored otherwise. Empirical safety
+        buffer (see `_AUTO_NEAR_EDGE_MARGIN_M`'s own comment) — the
+        *corrected* curve's transition zone runs further than the raw
+        peak alone suggests, so the peak bin's edge by itself isn't
+        enough margin.
     r_ref_search_fraction : float, default 0.5
         Passed straight through to `fit_hardware_tvg_curve` — only
         matters when `r_ref_m` is `None` (auto-select). See that
@@ -1940,6 +1998,35 @@ def stage4_decay(
             data={"binned": binned},
         )
 
+    r_fit_min_m_requested = r_fit_min_m
+    r_fit_min_m_auto_note: str | None = None
+    if isinstance(r_fit_min_m, str):
+        if r_fit_min_m != "auto":
+            raise ValueError(f"stage4_decay: r_fit_min_m string values must be 'auto', got {r_fit_min_m!r}")
+        near_edge_search_max_m = r_ref_m if r_ref_m is not None else (
+            r_ref_search_fraction * usable_range_m if usable_range_m else None
+        )
+        if near_edge_search_max_m is None:
+            raise ValueError(
+                "stage4_decay: r_fit_min_m='auto' needs r_ref_m or usable_range_m to bound its "
+                "near-field search -- pass one of those, or an explicit numeric r_fit_min_m."
+            )
+        auto_value = _auto_near_edge_m(
+            ds, value_var, range_var, bin_width_m,
+            search_max_m=near_edge_search_max_m, margin_m=r_fit_min_auto_margin_m,
+        )
+        if auto_value is None:
+            raise ValueError(
+                f"stage4_decay: r_fit_min_m='auto' found no bins within [0, {near_edge_search_max_m:.2f}m] "
+                "to search -- widen usable_range_m/r_ref_m, or pass an explicit numeric r_fit_min_m."
+            )
+        r_fit_min_m = auto_value
+        r_fit_min_m_auto_note = (
+            f"r_fit_min_m='auto' resolved to {auto_value:.2f}m "
+            f"(near-field peak bin's far edge + {r_fit_min_auto_margin_m:.1f}m margin, "
+            f"searched within [0, {near_edge_search_max_m:.2f}m])."
+        )
+
     absorption_db_per_m = absorption_for_frequency(freq_hz)
     fit_result = fit_hardware_tvg_curve(
         binned, absorption_db_per_m=absorption_db_per_m, r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m,
@@ -1960,6 +2047,8 @@ def stage4_decay(
     second = ranked[1] if len(ranked) > 1 else None
 
     notes: list[str] = []
+    if r_fit_min_m_auto_note is not None:
+        notes.append(r_fit_min_m_auto_note)
     if second is not None and best.fixed_scale_rmse_db > 0 and (
         second.fixed_scale_rmse_db - best.fixed_scale_rmse_db
     ) / best.fixed_scale_rmse_db < ambiguous_rel_tol:
@@ -1996,7 +2085,8 @@ def stage4_decay(
         "r_ref_m": best.r_ref_m,
         "r_ref_m_override": r_ref_m,
         "r_fit_min_m": best.r_fit_min_m,
-        "r_fit_min_m_override": r_fit_min_m,
+        "r_fit_min_m_override": r_fit_min_m_requested,
+        "r_fit_min_auto_margin_m": r_fit_min_auto_margin_m if r_fit_min_m_requested == "auto" else None,
         "r_fit_max_m": best.r_fit_max_m,
         "n_bins_used": best.n_bins_used,
         "best_candidate": best.name,

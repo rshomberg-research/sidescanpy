@@ -1834,6 +1834,57 @@ passed it explicitly and is unaffected by this change.
   choice in the first place. Full suite: 1283 passing / 36 skipped (was
   1279).
 
+### v0.14.0 follow-up 6 — `r_fit_min_m` reaches `run_investigation()`, auto-detected near edge ported into the library (2026-09-02, same day)
+
+**Status:** Done. Two changes, both driven by getting the two-sided-fit
+recipe (follow-ups 2-5) usable from a `run_investigation()`-based caller
+on the field, not just from `project-a`'s standalone debug script:
+
+- **`run_investigation()` now threads `stage4_r_fit_min_m` and
+  `stage4_exclude_first_n_bins` through to `stage4_decay()`.** These
+  existed on `stage4_decay()` itself since follow-up 1/2 but weren't
+  reachable from the orchestrator — every consumer that calls
+  `run_investigation()` (not `stage4_decay()` directly) had no way to
+  turn on two-sided fitting at all. No test coverage exists for
+  `run_investigation()` itself in this repo's `tests/unit/` tree (only
+  the individual stage functions and viz functions are unit-tested
+  directly) — confirmed via `find`/`grep` before assuming silence meant
+  nothing needed updating.
+- **`stage4_decay(..., r_fit_min_m="auto")` — a new capability, not just
+  a passthrough.** Real motivation: a fixed near-edge number picked by
+  eye on one field mission looked fine on the first file, but the
+  broader dataset's near-field ramp varies enough mission-to-mission
+  that hand-picking one number per mission wasn't going to scale.
+  Ported `project-a/scripts/debug/plot_official_tvg_fit.py`'s
+  `_auto_near_edge_m` (bins raw `value_var`, finds the near-field peak
+  bin's far edge, adds a margin — default 5.0m, same empirical buffer
+  that script settled on) directly into `sidescanpy.analysis.investigation`
+  as `_auto_near_edge_m` + a new `r_fit_min_auto_margin_m` parameter.
+  Pass the literal string `"auto"` for `r_fit_min_m` (on `stage4_decay`
+  or `run_investigation`'s `stage4_r_fit_min_m`) instead of a number.
+  Needs `r_ref_m` or `usable_range_m` to bound the near-field search
+  (falls back to `r_ref_search_fraction * usable_range_m` when `r_ref_m`
+  isn't pinned) — raises `ValueError` with an explicit message if
+  neither is available, rather than silently picking an arbitrary bound.
+  `metrics["r_fit_min_m"]` carries the *resolved* number either way;
+  `metrics["r_fit_min_m_override"]` keeps the literal `"auto"` so the
+  JSON/reproducibility export still shows which mode produced the run.
+- **7 new tests**: `TestStage4Decay` gained 4 (`auto` resolves to a
+  numeric value and records the override correctly; raises without
+  `r_ref_m`/`usable_range_m`; falls back to `r_ref_search_fraction *
+  usable_range_m`; rejects any string other than `"auto"`). New
+  `TestAutoNearEdgeM` class gained 3, testing `_auto_near_edge_m`
+  directly against a hand-built non-monotonic ramp (distinct from the
+  pure-decay fixtures the rest of the file uses) — confirms it finds
+  the true peak bin's far edge + margin, respects a `search_max_m`
+  narrower than the true peak, and returns `None` cleanly when the
+  search window is empty. Full suite: 1290 passing / 36 skipped (was
+  1283).
+- **Version bumped 0.4.1 → 0.4.2** for this round's wheel (0.4.1 already
+  covered the follow-up 5 `range_var`/water-column fix and was
+  transferred to the field separately before this `"auto"` need
+  came up there).
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)

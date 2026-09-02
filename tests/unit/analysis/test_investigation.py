@@ -15,6 +15,7 @@ import xarray as xr
 
 from sidescanpy.analysis.investigation import (
     StageResult,
+    _auto_near_edge_m,
     blank_nadir_noise,
     detect_first_bottom_return,
     detect_nadir_noise_extent,
@@ -957,6 +958,47 @@ class TestStage4Decay:
         assert one_sided.metrics["r_fit_min_m"] == 20.0  # defaults to r_ref_m
         assert both_sides.metrics["n_bins_used"] > one_sided.metrics["n_bins_used"]
 
+    def test_r_fit_min_m_auto_resolves_to_numeric_value_and_records_which_mode_ran(self):
+        """2026-09-02: r_fit_min_m="auto" ported from project-a's
+        plot_official_tvg_fit.py -- a fixed near-edge number picked by
+        eye on one mission didn't generalize across a dataset whose
+        near-field ramp varies mission to mission. metrics["r_fit_min_m"]
+        must carry the *resolved* number (what the fit actually used);
+        metrics["r_fit_min_m_override"] must keep the literal "auto" so
+        the JSON export still shows which mode produced the run."""
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        result = stage4_decay(ds, bin_width_m=2.0, r_ref_m=20.0, r_fit_min_m="auto")
+
+        assert isinstance(result.metrics["r_fit_min_m"], float)
+        assert result.metrics["r_fit_min_m_override"] == "auto"
+        assert result.metrics["r_fit_min_auto_margin_m"] == pytest.approx(5.0)
+        assert any("r_fit_min_m='auto' resolved to" in n for n in result.notes)
+
+    def test_r_fit_min_m_auto_without_r_ref_m_or_usable_range_m_raises(self):
+        """auto mode needs something to bound its near-field search --
+        must fail loudly, not silently fall back to some default."""
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        with pytest.raises(ValueError, match="needs r_ref_m or usable_range_m"):
+            stage4_decay(ds, bin_width_m=2.0, r_fit_min_m="auto")
+
+    def test_r_fit_min_m_auto_uses_r_ref_search_fraction_of_usable_range_when_r_ref_m_none(self):
+        """r_ref_m=None + usable_range_m given: auto mode's search bound
+        falls back to r_ref_search_fraction * usable_range_m rather than
+        requiring r_ref_m to be pinned."""
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        result = stage4_decay(ds, bin_width_m=2.0, usable_range_m=60.0, r_fit_min_m="auto")
+
+        assert isinstance(result.metrics["r_fit_min_m"], float)
+
+    def test_r_fit_min_m_invalid_string_raises(self):
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        with pytest.raises(ValueError, match="must be 'auto'"):
+            stage4_decay(ds, bin_width_m=2.0, r_ref_m=20.0, r_fit_min_m="near")
+
     def test_exclude_first_n_bins_exceeding_available_bins_handled_gracefully(self):
         ds = self._make_full_physics_ds(n_pings=10, n_samples=60)
 
@@ -1693,6 +1735,63 @@ class TestReconstructRaw:
             restored["backscatter_intensity"].values, restored["backscatter_raw"].values
         )
         assert "ground_range_m" not in restored
+
+
+class TestAutoNearEdgeM:
+    """Direct tests of `_auto_near_edge_m`, the helper `stage4_decay`'s
+    `r_fit_min_m="auto"` delegates to -- ported 2026-09-02 from
+    project-a's plot_official_tvg_fit.py. Uses `mean_backscatter_vs_range`'s
+    own documented contract ("any dataset with value_var and range_var,
+    same shape, arbitrary dims") to build a minimal synthetic ramp
+    directly, rather than routing through the full raw-dataset/geometric
+    pipeline the rest of this file uses."""
+
+    def _make_ramp_ds(self) -> xr.Dataset:
+        # 1m-wide "pings" from 0 to 39m, amplitude rises to a clear peak
+        # at range 10-11m then falls -- a deliberately non-monotonic
+        # near-field ramp, distinct from the pure-decay curves the rest
+        # of this file's fixtures use.
+        range_m = np.arange(40.0) + 0.5
+        amplitude = np.where(range_m < 11.0, range_m, np.maximum(22.0 - range_m, 0.1))
+        return xr.Dataset(
+            {"value": ("sample", amplitude), "range_m": ("sample", range_m)}
+        )
+
+    def test_finds_peak_bin_far_edge_plus_margin(self):
+        ds = self._make_ramp_ds()
+
+        result = _auto_near_edge_m(
+            ds, value_var="value", range_var="range_m", bin_width_m=1.0,
+            search_max_m=40.0, margin_m=5.0,
+        )
+
+        # Peak bin covers [10, 11) -> far edge 11.0, + 5.0m margin.
+        assert result == pytest.approx(16.0)
+
+    def test_search_max_m_restricts_the_search_window(self):
+        """A search bound tighter than where the true peak sits should
+        still resolve, just against whatever's the best bin inside the
+        window -- not silently ignore the bound."""
+        ds = self._make_ramp_ds()
+
+        restricted = _auto_near_edge_m(
+            ds, value_var="value", range_var="range_m", bin_width_m=1.0,
+            search_max_m=5.0, margin_m=5.0,
+        )
+
+        # Within [0, 5], amplitude is still monotonically rising (peak
+        # is at 10-11m, outside this window) -- best bin is the last one.
+        assert restricted == pytest.approx(5.0 + 5.0)
+
+    def test_no_bins_in_search_window_returns_none(self):
+        ds = self._make_ramp_ds()
+
+        result = _auto_near_edge_m(
+            ds, value_var="value", range_var="range_m", bin_width_m=1.0,
+            search_max_m=-1.0, margin_m=5.0,
+        )
+
+        assert result is None
 
 
 class TestWaterColumnExclusionIndependentOfRangeVar:
