@@ -615,7 +615,10 @@ def plot_stage4_residuals(
         plotted_scale = 1.0 if use_fixed_scale else candidate.scale
         model_loss = plotted_scale * (model_curve - model_curve[i_ref])
         residual = model_loss - observed
-        in_window = (ranges >= candidate.r_ref_m) & (ranges <= candidate.r_fit_max_m)
+        # r_fit_min_m is None on a TVGCandidateFit built before that field
+        # existed -- falls back to r_ref_m, the prior one-sided behavior.
+        fit_min = candidate.r_fit_min_m if candidate.r_fit_min_m is not None else candidate.r_ref_m
+        in_window = (ranges >= fit_min) & (ranges <= candidate.r_fit_max_m)
         rmse_shown = candidate.fixed_scale_rmse_db if use_fixed_scale else candidate.rmse_db
         x = ranges - candidate.r_ref_m if relative_x else ranges
         ax.plot(

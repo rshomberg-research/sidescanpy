@@ -568,7 +568,7 @@ class TestStage3UsableRange:
 
     def test_missing_range_var_raises(self):
         ds = _make_raw_dataset()
-        with pytest.raises(ValueError, match="ground_range_m"):
+        with pytest.raises(ValueError, match="slant_range_m"):
             stage3_usable_range(ds)
 
     def test_water_column_n_excluded_matches_geometry(self):
@@ -731,8 +731,12 @@ class TestStage4Decay:
         automatically for a short usable_range_m."""
         ds = self._make_full_physics_ds()
 
-        adapted = stage4_decay(ds, bin_width_m=5.0, usable_range_m=15.0)
-        unadapted = stage4_decay(ds, bin_width_m=5.0, usable_range_m=15.0, min_bins=0)
+        # range_var pinned to ground_range_m: this test's numbers (and the
+        # real report it reproduces) predate stage4_decay's 2026-09-02
+        # range_var default change to slant_range_m -- pinning keeps this
+        # regression test decoupled from that unrelated default.
+        adapted = stage4_decay(ds, range_var="ground_range_m", bin_width_m=5.0, usable_range_m=15.0)
+        unadapted = stage4_decay(ds, range_var="ground_range_m", bin_width_m=5.0, usable_range_m=15.0, min_bins=0)
 
         assert adapted.metrics["bin_width_m_requested"] == 5.0
         assert adapted.metrics["bin_width_m"] == pytest.approx(15.0 / 6)
@@ -889,8 +893,79 @@ class TestStage4Decay:
 
     def test_missing_range_var_raises(self):
         ds = _make_raw_dataset()
-        with pytest.raises(ValueError, match="ground_range_m"):
+        with pytest.raises(ValueError, match="slant_range_m"):
             stage4_decay(ds)
+
+    def test_exclude_first_n_bins_zero_is_exact_prior_behavior(self):
+        ds = self._make_full_physics_ds()
+
+        default = stage4_decay(ds, bin_width_m=2.0)
+        explicit_zero = stage4_decay(ds, bin_width_m=2.0, exclude_first_n_bins=0)
+
+        assert default.metrics == explicit_zero.metrics
+        assert default.classification == explicit_zero.classification
+        assert default.metrics["exclude_first_n_bins"] == 0
+        assert default.metrics["n_bins_excluded_after_bottom"] == 0
+
+    def test_exclude_first_n_bins_moves_r_ref_away_from_a_bright_artifact_at_the_bottom_edge(self):
+        """Real-world motivation: a bright leading-edge specular
+        artifact right at the first-bottom-return boundary can itself
+        win r_ref_m's near-field max-mean auto-selection, corrupting
+        the reference (and every candidate's fit against it) --
+        distinct from the ring-down artifact at the very START of a
+        ping, which reads anomalously LOW and is already handled by
+        picking the max instead of the first bin (see
+        fit_hardware_tvg_curve's own r_ref_m docstring).
+        exclude_first_n_bins drops the artifact bin(s) before r_ref_m
+        ever sees them."""
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+        # altitude=10m, sample_rate=1000Hz, sound_vel=1500m/s -> 0.75m/
+        # sample -> water column ends ~sample 14 (slant_range > altitude,
+        # ground_range ~3.2m there). Sample 14 alone lands cleanly in
+        # the first 2m-wide bin -- inject a bright artifact there.
+        bs = ds["backscatter_raw"].values.copy()
+        bs[:, :, 14:15] *= 80.0
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], bs)
+
+        without_exclusion = stage4_decay(ds, bin_width_m=2.0)
+        with_exclusion = stage4_decay(ds, bin_width_m=2.0, exclude_first_n_bins=1)
+
+        assert without_exclusion.metrics["n_bins_excluded_after_bottom"] == 0
+        assert with_exclusion.metrics["n_bins_excluded_after_bottom"] == 1
+        assert any("Dropped 1 bin(s)" in n for n in with_exclusion.notes)
+        # the artifact should have corrupted r_ref_m's auto-selection
+        # without exclusion, and dropping it should move the pick
+        assert with_exclusion.metrics["r_ref_m"] != without_exclusion.metrics["r_ref_m"]
+        # underlying curve is still genuinely full_physics -- dropping
+        # the artifact should recover a real, better fit against it
+        assert with_exclusion.metrics["best_candidate"] == "full_physics"
+        assert with_exclusion.metrics["best_rmse_db"] < without_exclusion.metrics["best_rmse_db"]
+
+    def test_r_fit_min_m_passthrough_fits_both_sides_of_reference(self):
+        """Combined real use case (2026-09-02): r_ref_m pinned mid-swath
+        + r_fit_min_m=0.0 to fit both sides + exclude_first_n_bins to
+        drop only the near-boundary artifact bins, not the whole near
+        half of the swath."""
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        one_sided = stage4_decay(ds, bin_width_m=2.0, r_ref_m=20.0)
+        both_sides = stage4_decay(ds, bin_width_m=2.0, r_ref_m=20.0, r_fit_min_m=0.0)
+
+        assert both_sides.metrics["r_ref_m"] == 20.0  # unchanged
+        assert both_sides.metrics["r_fit_min_m"] == 0.0
+        assert one_sided.metrics["r_fit_min_m"] == 20.0  # defaults to r_ref_m
+        assert both_sides.metrics["n_bins_used"] > one_sided.metrics["n_bins_used"]
+
+    def test_exclude_first_n_bins_exceeding_available_bins_handled_gracefully(self):
+        ds = self._make_full_physics_ds(n_pings=10, n_samples=60)
+
+        result = stage4_decay(ds, bin_width_m=2.0, exclude_first_n_bins=10_000)
+
+        assert result.classification == "ambiguous"
+        assert "Not enough binned samples" in result.notes[0]
+        assert result.metrics["exclude_first_n_bins"] == 10_000
+        assert result.metrics["n_bins_excluded_after_bottom"] >= 0
 
     def test_reject_outliers_recovers_clean_fit_from_target_corrupted_curve(self):
         """Same full_physics curve as test_full_physics_curve_classified_as_none,
@@ -916,8 +991,13 @@ class TestStage4Decay:
 
         ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
 
-        with_spikes = stage4_decay(ds, bin_width_m=2.0)
-        cleaned = stage4_decay(ds, bin_width_m=2.0, reject_outliers=True)
+        # range_var pinned to ground_range_m: the injected curve above is
+        # built as an exact function of ground_range specifically, so the
+        # fit must be evaluated against that same variable regardless of
+        # stage4_decay's own (unrelated) 2026-09-02 default change to
+        # slant_range_m.
+        with_spikes = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)
+        cleaned = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0, reject_outliers=True)
 
         assert cleaned.metrics["outlier_n_rejected"] > 0
         assert cleaned.metrics["best_rmse_db"] < with_spikes.metrics["best_rmse_db"]
@@ -1613,3 +1693,76 @@ class TestReconstructRaw:
             restored["backscatter_intensity"].values, restored["backscatter_raw"].values
         )
         assert "ground_range_m" not in restored
+
+
+class TestWaterColumnExclusionIndependentOfRangeVar:
+    """2026-09-02: stage3_usable_range/stage4_decay's range_var default
+    changed from ground_range_m to slant_range_m (the physics-correct
+    choice for a TVG loss-vs-range fit -- matches what apply_tvg() itself
+    uses). But water-column exclusion must keep working regardless --
+    slant_range_m is pure time-of-flight with no NaNs of its own, so it
+    can't detect the water column the way ground_range_m's own NaN
+    pattern can. These confirm the decoupling fix actually holds (water
+    column exclusion stays keyed to ground_range_m internally), not just
+    that the range_var default flipped."""
+
+    def test_stage3_water_column_count_matches_regardless_of_range_var(self):
+        ds = _make_raw_dataset(n_pings=20, n_samples=200)
+        ds = compute_geometric_ranges(ds)
+
+        via_slant = stage3_usable_range(ds, range_var="slant_range_m")
+        via_ground = stage3_usable_range(ds, range_var="ground_range_m")
+
+        assert via_slant.metrics["water_column_n_excluded"] > 0
+        assert via_slant.metrics["water_column_n_excluded"] == via_ground.metrics["water_column_n_excluded"]
+        assert via_slant.metrics["range_var"] == "slant_range_m"
+
+    def test_stage4_water_column_count_matches_regardless_of_range_var(self):
+        ds = _make_raw_dataset(n_pings=20, n_samples=200)
+        ds = compute_geometric_ranges(ds)
+
+        via_slant = stage4_decay(ds, range_var="slant_range_m", bin_width_m=2.0)
+        via_ground = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)
+
+        assert via_slant.metrics["water_column_n_excluded"] > 0
+        assert via_slant.metrics["water_column_n_excluded"] == via_ground.metrics["water_column_n_excluded"]
+        assert via_slant.metrics["range_var"] == "slant_range_m"
+
+    def test_stage3_garbage_in_water_column_does_not_skew_noise_floor_with_slant_range_default(self):
+        """Direct behavioral proof, not just a count match: a huge
+        garbage value placed only in the water column must not appear in
+        the binned curve when range_var defaults to slant_range_m --
+        would have leaked straight in before this fix, biasing the
+        noise-floor estimate."""
+        ds = _make_raw_dataset(n_pings=20, n_samples=200)
+        ds = compute_geometric_ranges(ds)
+        water_column_mask = ~np.isfinite(ds["ground_range_m"].values)
+        assert water_column_mask.any(), "fixture must have a real water column for this test to mean anything"
+
+        bs = ds["backscatter_raw"].values.copy()
+        bs[water_column_mask] = 1e6
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+
+        result = stage3_usable_range(ds, bin_width_m=2.0)  # default range_var=slant_range_m
+        binned = result.data["binned"]
+        assert not binned.empty
+        assert binned["mean"].max() < 200.0, (
+            f"garbage water-column value leaked into the binned curve: max bin mean = {binned['mean'].max()}"
+        )
+
+    def test_stage4_garbage_in_water_column_does_not_appear_in_fit_curve_with_slant_range_default(self):
+        ds = _make_raw_dataset(n_pings=20, n_samples=200)
+        ds = compute_geometric_ranges(ds)
+        water_column_mask = ~np.isfinite(ds["ground_range_m"].values)
+        assert water_column_mask.any()
+
+        bs = ds["backscatter_raw"].values.copy()
+        bs[water_column_mask] = 1e6
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+
+        result = stage4_decay(ds, bin_width_m=2.0)  # default range_var=slant_range_m
+        binned = result.data["binned"]
+        assert not binned.empty
+        assert binned["mean"].max() < 200.0, (
+            f"garbage water-column value leaked into the fit curve: max bin mean = {binned['mean'].max()}"
+        )

@@ -335,6 +335,11 @@ class TVGCandidateFit:
     r_ref_m: float
     r_fit_max_m: float
     n_bins_used: int
+    # Near edge of the fit window -- None (default) means "not set by this
+    # caller," in which case it's equivalent to r_ref_m (the prior,
+    # one-sided-only behavior). Callers building a TVGCandidateFit by hand
+    # (e.g. test fixtures predating this field) don't need to set it.
+    r_fit_min_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +361,7 @@ def fit_hardware_tvg_curve(
     spreading_loss_db: float = 20.0,
     absorption_db_per_m: float,
     r_ref_m: float | None = None,
+    r_fit_min_m: float | None = None,
     r_fit_max_m: float | None = None,
     min_count_for_r_ref: int = 30,
     fit_fraction: float = 0.6,
@@ -434,6 +440,27 @@ def fit_hardware_tvg_curve(
         `r_fit_max_m`'s window to a single bin (see `fit_fraction`) and
         makes every candidate's fit degenerate (RMSE=0 for all of
         them). Found on a real, genuinely-flat Klein survey.
+    r_fit_min_m : float, optional
+        Start of the fit window (inclusive). `None` (default) reproduces
+        this function's original one-sided behavior: the fit window
+        starts at `r_ref_m` itself, so only bins at or beyond the
+        reference are fit. `r_ref_m` still always serves as the loss
+        reference (`observed_loss_db = means[i_ref] - means`) regardless
+        of `r_fit_min_m` — this parameter only changes which bins the
+        candidate models are actually scored against, not what "zero
+        loss" means.
+
+        Set explicitly (e.g. `0.0`, or just past a known near-boundary
+        artifact) to fit **both sides** of `r_ref_m` — matters once
+        `r_ref_m` is deliberately pinned well into the swath (e.g. the
+        middle) rather than left at its near-field auto-pick: with the
+        old one-sided window, moving `r_ref_m` out that far would throw
+        away everything nearer than it, discarding most of the usable
+        near-field data for no reason. Real motivation (2026-09-02): a
+        bright artifact sits immediately at the first-bottom-return
+        boundary (see `stage4_decay`'s `exclude_first_n_bins`) — the
+        fix for that is dropping the handful of bins nearest the
+        boundary, not the entire near half of the swath.
     r_fit_max_m : float, optional
         End of the fit window (inclusive). Auto-selected when `None`
         (see below). Bins beyond this are ignored by the fit (though
@@ -524,11 +551,13 @@ def fit_hardware_tvg_curve(
 
     if r_fit_max_m is None:
         r_fit_max_m = r_ref_m + fit_fraction * (float(range_centers.max()) - r_ref_m)
+    if r_fit_min_m is None:
+        r_fit_min_m = r_ref_m  # prior one-sided behavior, unchanged default
 
     i_ref = int(np.argmin(np.abs(range_centers - r_ref_m)))
     observed_loss_db = means[i_ref] - means
 
-    fit_mask = (range_centers >= r_ref_m) & (range_centers <= r_fit_max_m)
+    fit_mask = (range_centers >= r_fit_min_m) & (range_centers <= r_fit_max_m)
     n_bins_used = int(fit_mask.sum())
 
     param_sets = {
@@ -589,6 +618,7 @@ def fit_hardware_tvg_curve(
                 rmse_db=rmse_db,
                 fixed_scale_rmse_db=fixed_scale_rmse_db,
                 r_ref_m=r_ref_m,
+                r_fit_min_m=r_fit_min_m,
                 r_fit_max_m=r_fit_max_m,
                 n_bins_used=n_bins_used,
             )

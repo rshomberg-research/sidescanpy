@@ -574,6 +574,46 @@ class TestFitHardwareTvgCurve:
         assert result.best.r_ref_m == 10.0
         assert result.best.r_fit_max_m == 40.0
 
+    def test_r_fit_min_m_defaults_to_r_ref_m_prior_one_sided_behavior(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        result = fit_hardware_tvg_curve(
+            binned, absorption_db_per_m=_ABSORPTION, r_ref_m=40.0, r_fit_max_m=60.0,
+        )
+        assert result.best.r_fit_min_m == 40.0
+        assert result.best.n_bins_used == 21  # 40..60m inclusive at 1m step, one-sided only
+
+    def test_r_fit_min_m_explicit_fits_both_sides_of_reference(self):
+        """Real motivation (2026-09-02): once r_ref_m is deliberately
+        pinned well into the swath (e.g. the middle), the old one-sided
+        window throws away every bin nearer than it. r_fit_min_m lets a
+        caller fit both sides, keeping r_ref_m purely as the loss
+        reference."""
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
+        one_sided = fit_hardware_tvg_curve(
+            binned, absorption_db_per_m=_ABSORPTION, r_ref_m=40.0, r_fit_max_m=60.0,
+        )
+        both_sides = fit_hardware_tvg_curve(
+            binned, absorption_db_per_m=_ABSORPTION, r_ref_m=40.0, r_fit_min_m=1.0, r_fit_max_m=60.0,
+        )
+        assert both_sides.best.r_ref_m == 40.0  # loss reference unchanged
+        assert both_sides.best.r_fit_min_m == 1.0
+        assert both_sides.best.n_bins_used > one_sided.best.n_bins_used
+        assert both_sides.best.n_bins_used == 60  # 1..60m inclusive at 1m step
+
+    def test_r_fit_min_m_none_reported_as_none_not_silently_set(self):
+        """A TVGCandidateFit built without r_fit_min_m (predating this
+        field) reports it as None, not a fabricated value -- callers
+        (e.g. plot_candidate_fit) must fall back to r_ref_m themselves,
+        not assume it's already resolved."""
+        from sidescanpy.analysis.tvg_diagnostics import TVGCandidateFit
+        from sidescanpy.processing.radiometric import TVGParams as _TVGParams
+
+        fit = TVGCandidateFit(
+            name="flat", params=_TVGParams(), scale=0.0, rmse_db=0.0, fixed_scale_rmse_db=0.0,
+            r_ref_m=5.0, r_fit_max_m=40.0, n_bins_used=10,
+        )
+        assert fit.r_fit_min_m is None
+
     def test_empty_binned_raises(self):
         empty = pd.DataFrame(columns=["range_min_m", "range_max_m", "mean", "count"])
         with pytest.raises(ValueError, match="no rows"):

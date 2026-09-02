@@ -336,8 +336,11 @@ def plot_candidate_fit(
     params_label = _params_label(fit.params)
     label = f"{fit.name} (RMSE={rmse_shown:.2f}dB{', ' + params_label if params_label else ''})"
     ax.plot(model_range_m, model_loss, "--", color=color, label=label)
-    fit_range_label = f"fit range ({fit.r_ref_m:.1f}–{fit.r_fit_max_m:.1f}m)" if show_observed else None
-    ax.axvspan(fit.r_ref_m, fit.r_fit_max_m, alpha=0.05, color=color, label=fit_range_label)
+    # r_fit_min_m is None on a TVGCandidateFit built before that field
+    # existed -- falls back to r_ref_m, the prior one-sided behavior.
+    fit_min = fit.r_fit_min_m if fit.r_fit_min_m is not None else fit.r_ref_m
+    fit_range_label = f"fit range ({fit_min:.1f}–{fit.r_fit_max_m:.1f}m)" if show_observed else None
+    ax.axvspan(fit_min, fit.r_fit_max_m, alpha=0.05, color=color, label=fit_range_label)
 
     ax.set_xlabel("Range (m)")
     ax.set_ylabel(f"Loss relative to {fit.r_ref_m:.1f}m (dB)")

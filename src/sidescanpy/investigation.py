@@ -140,7 +140,9 @@ def run_investigation(
     outlier_min_bin_count: int = 5,
     stage4_fit_value_col: str = "mean",
     stage4_r_ref_m: float | None = None,
+    stage4_r_fit_min_m: float | None = None,
     stage4_r_ref_search_fraction: float = 0.5,
+    stage4_exclude_first_n_bins: int = 0,
 ) -> InvestigationResult:
     """
     Run all five investigation stages against one frequency channel.
@@ -287,6 +289,29 @@ def run_investigation(
         different winning candidates by RMSE, one within ~1% of the
         ambiguous threshold) motivating `stage4_r_ref_m` as a manual
         override when the auto-picked reference range looks unstable.
+    stage4_r_fit_min_m : float, optional
+        Passed straight through to `stage4_decay` as `r_fit_min_m`.
+        `None` (default) reproduces the prior one-sided fit window
+        (starts at `r_ref_m`/its auto-pick). Set explicitly to fit both
+        sides of `r_ref_m` instead — the natural pairing once
+        `stage4_r_ref_m` is deliberately pinned well into the swath
+        (e.g. the middle) rather than left at its near-field auto-pick,
+        so the one-sided default wouldn't otherwise throw away most of
+        the usable near-field data. 2026-09-02 real-data finding worth
+        knowing before reaching for this: a fixed near edge isn't
+        enough on its own — the real near-field transition in the
+        *corrected* data can run well past where the raw signal's own
+        near-field peak suggests. Pair with `stage4_exclude_first_n_bins`
+        and derive the near edge from the raw data's own near-field
+        peak plus a real margin, not a guess.
+    stage4_exclude_first_n_bins : int, default 0
+        Passed straight through to `stage4_decay` — drops this many
+        *bins* (not samples) from the near end of the range-binned decay
+        curve before `r_ref_m` auto-selection or fitting see them, for a
+        bright leading-edge-specular artifact right at the first-bottom-
+        return boundary (distinct from the ring-down artifact at a
+        ping's very start, already handled elsewhere). `0` (default)
+        is a no-op.
 
     Returns
     -------
@@ -329,7 +354,9 @@ def run_investigation(
         "outlier_min_bin_count": outlier_min_bin_count,
         "stage4_fit_value_col": stage4_fit_value_col,
         "stage4_r_ref_m": stage4_r_ref_m,
+        "stage4_r_fit_min_m": stage4_r_fit_min_m,
         "stage4_r_ref_search_fraction": stage4_r_ref_search_fraction,
+        "stage4_exclude_first_n_bins": stage4_exclude_first_n_bins,
     }
 
     stage1 = stage1_characterize(ds, value_var=value_var)
@@ -387,7 +414,8 @@ def run_investigation(
         exclude_before_sample=exclude_before_sample_stage4,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
         fit_value_col=stage4_fit_value_col,
-        r_ref_m=stage4_r_ref_m, r_ref_search_fraction=stage4_r_ref_search_fraction,
+        r_ref_m=stage4_r_ref_m, r_fit_min_m=stage4_r_fit_min_m, r_ref_search_fraction=stage4_r_ref_search_fraction,
+        exclude_first_n_bins=stage4_exclude_first_n_bins,
     )
     stage5 = stage5_units(stage1, stage4)
 

@@ -266,7 +266,7 @@ class TestPlotStage4Residuals:
         by this fixture's own construction, so this isn't a coincidental
         pass."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, bin_width_m=2.0)
+        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
         spreading = next(c for c in stage4.data["fit_result"].candidates if c.name == "spreading_only")
         assert abs(spreading.scale - 1.6) < 0.3  # sanity: free fit actually found the injected scale
         assert spreading.fixed_scale_rmse_db > spreading.rmse_db + 1.0  # and the two RMSEs meaningfully differ
@@ -285,7 +285,7 @@ class TestPlotStage4Residuals:
         too, confirming `model_loss` is really computed at scale=1.0 by
         default rather than `candidate.scale`."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, bin_width_m=2.0)
+        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
 
         fig_fixed, ax_fixed = plot_stage4_residuals(stage4, use_fixed_scale=True)
         fig_free, ax_free = plot_stage4_residuals(stage4, use_fixed_scale=False)
@@ -310,7 +310,7 @@ class TestPlotStage4Residuals:
         plot_candidate_fit's current convention -- needed for a genuinely
         aligned shared x-axis when the two are stacked in one figure."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, bin_width_m=2.0)
+        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
         spreading = next(c for c in stage4.data["fit_result"].candidates if c.name == "spreading_only")
 
         fig_rel, ax_rel = plot_stage4_residuals(stage4, relative_x=True)
@@ -331,7 +331,7 @@ class TestPlotStage4Residuals:
         """For combining with plot_candidate_fit in one stacked figure
         (fit on top, residuals below, sharing an x-axis)."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, bin_width_m=2.0)
+        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
 
         fig, (ax_top, ax_bottom) = plt.subplots(2, 1)
         try:

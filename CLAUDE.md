@@ -1435,6 +1435,404 @@ it).
     through and that disabling it via `boundary_smoothing_window=1`
     reproduces the raw, unsmoothed detection). Full suite: 1212
     passing / 36 skipped.
+- ✅ **2026-08-24 — three real findings from user review of the two new
+  full investigation reports (`unknown`, site-c), all confirmed
+  directly on real data. No pipeline code changed — all three are
+  investigation-methodology/report-narrative corrections, not bugs in
+  `sidescanpy` itself.**
+  - **Real methodology gap in Stage 4: RMSE-of-fitted-loss-curve does
+    not imply "this correction flattens the real data," when the
+    usable-range fit window is narrow relative to `r_ref_m`.** Found on
+    `project-a/unknown`'s HF channel (`hz_1495000`): Stage 4 picked
+    `absorption_only` by RMSE (0.31dB, beating `full_physics`'s 3.21dB)
+    over the 2.5-34m fit window. But binning the *actual corrected*
+    `backscatter_intensity` by range within that same window tells a
+    different story — `absorption_only` declines from median 20.6dB
+    (0-3m) to **-4.8dB by 30-33m** (a ~25dB fade entirely inside the
+    "usable" window); `full_physics` over the same span declines only
+    29.8dB → 25.1dB (~5dB). Root cause: over a short span (here, r/r_ref
+    ≈ 14×), a logarithmic spreading term doesn't curve enough to be
+    statistically distinguishable from a linear absorption term, so a
+    single-term model with one free scale can fit a mixed-physics
+    decay's *shape* well without actually removing the loss. **Lesson
+    for future investigations, not yet enforced in code:** treat a
+    Stage 4 RMSE win as a hypothesis, and confirm it by applying the
+    winning correction to the real data and checking for genuine
+    flatness within the fit window — especially when
+    `usable_range_m`/`r_ref_m` is small. No change made to
+    `fit_hardware_tvg_curve()` itself (RMSE-per-candidate is still a
+    reasonable first pass, just not sufficient alone); flagged here and
+    in the skill doc rather than silently trusted.
+  - **Real, confirmed sensor-quality finding on site-c's port-side
+    LF channel — not a positioning artifact as originally guessed in
+    the report.** Broken out per side (port=channel 0, starboard=
+    channel 1) instead of only looking at each channel's aggregate
+    median: HF's own port/starboard first-bottom-return ranges agree
+    closely (22.0m / 20.1m, tight std both sides) — the physical sanity
+    check ("LF and HF should see roughly the same bottom range") that
+    exposed the problem. LF-port's median (26.75m) is in the same
+    ballpark as HF, but its cross-ping std (20.1°, vs. HF's 5.7°) is
+    enormous — real detection, badly corrupted by intermittent noise.
+    LF-starboard's median (10.32m) is essentially identical to the
+    altitude sample itself — its detector isn't finding a real bottom
+    echo at all, it's pinned at the nadir-gap floor, which is why it
+    looks deceptively clean (low std) despite being physically wrong.
+    Confirmed visually too: the LF progression figure's port side shows
+    repeated horizontal white dropout streaks (tens of pings at a time)
+    completely absent from starboard. **Lesson: a smooth/low-std
+    per-ping trace is not itself evidence of a correct measurement — it
+    can mean a detector is stuck at a floor value.** When a channel's
+    aggregate beam-geometry classification comes back `ambiguous`,
+    breaking it out per side (and, where available, against another
+    frequency's same-ping measurement) can reveal that one side is
+    real-but-noisy and the other is smooth-but-wrong, rather than both
+    sides being equally uncertain.
+  - **Confirmed (not a new finding, a validated one): pings 0-500 of
+    the site-c file are a vehicle turn/deployment transient, not
+    part of the survey line.** Heading rotates ~59°→237°, altitude
+    swings 10-56m, pitch shows a real -40° excursion, all stabilizing
+    by ping ~320-500 — confirmed directly on `heading_deg`/
+    `altitude_m`/`pitch_deg`. Re-running the full investigation on pings
+    500+ only (vs. the full 0: range) moved HF's beam geometry from
+    `ambiguous` (std 15.8°) to `determined` at 60° (std 4.9°), and both
+    channels' TVG status from `ambiguous` to `spreading_only` removed —
+    matching every JSF survey's pattern. `usable_range_m` stayed `None`
+    either way (unrelated — see the existing Klein-AGC root cause
+    above). **No automatic transit-phase detector exists** —
+    `run_investigation()` takes an explicit ping range but nothing
+    flags a deployment transient within a file; this one was found and
+    excluded by direct inspection of attitude variables, not by any
+    pipeline stage. Worth building a detector someday (e.g. a
+    heading-rate or altitude-variance check over a sliding ping window)
+    if this pattern recurs, but not implemented — out of scope for what
+    was asked this round.
+  - Both full investigation report artifacts (`unknown`, site-c)
+    republished with corrected content: `unknown`'s TVG recommendation
+    changed from `absorption_only` to `full_physics` for both channels
+    (with the methodology-gap writeup above included in the report
+    itself); site-c rebuilt entirely on the pings-500+ segment, with
+    a new dedicated port-side-LF section replacing the original
+    (incorrect) "survey positioning artifact" guess, and a new
+    dedicated ping-500-transit-phase section. The wider 7-survey
+    "Pipeline Battle Test" comparison artifact was **not** touched this
+    round — it already used its own separately-computed site-c
+    numbers from before this correction; revisit if it's used as a
+    reference again.
+
+### v0.14.0 follow-up — Stage 4 `exclude_first_n_bins`, prototyped 2026-09-02 (not yet adopted as a default — awaiting team review)
+
+**Status:** Small, additive, backward-compatible parameter added and
+tested (`exclude_first_n_bins=0` reproduces every existing caller's
+behavior exactly); the *recipe* it enables (mid-swath `r_ref_m` + finer
+`bin_width_m` + this new parameter, together) is a proposal being
+demonstrated for team review, not yet adopted anywhere as a default.
+
+- ✅ `analysis/investigation.py: stage4_decay()` gained
+  `exclude_first_n_bins: int = 0` — drops this many *bins* (not samples)
+  from the near end of the already-binned mean-vs-range curve before
+  `r_ref_m` auto-selection or fitting ever see them. Motivation: a
+  bright leading-edge specular artifact right at the first-bottom-return
+  boundary — the opposite-sign case from the already-handled ring-down
+  artifact at a ping's very start (which reads anomalously *low* and is
+  naturally avoided by `r_ref_m`'s max-mean auto-pick) — can itself win
+  that same near-field max-mean search, corrupting the reference and
+  every candidate's fit against it. 4 new tests in
+  `tests/unit/analysis/test_investigation.py::TestStage4Decay`
+  (`exclude_first_n_bins=0` no-op; a synthetic bright-artifact-bin case
+  showing the auto-picked `r_ref_m` moves off the artifact and RMSE
+  improves once it's excluded; graceful handling when the requested
+  exclusion exceeds the available bin count). Full suite: 1275 passing /
+  36 skipped (was 1272).
+- ✅ `project-a/scripts/debug/compare_tvg_fit_recipes.py` (new, that
+  repo) — runs `stage4_decay` twice (today's default recipe vs. the
+  proposed one: `r_ref_m` pinned to the middle of the swath instead of
+  the near-field auto-pick, `bin_width_m` 2.0→1.0, `exclude_first_n_bins`
+  default 2) and saves a 4-panel comparison figure (decay-fit curve +
+  residuals, old vs. new) per run.
+- **Real-data result, both channels of `survey-a`
+  (`20251015170335.ss.h5`, pings 0:5000) — a genuine classification
+  change, not just a cleaner-looking number:**
+  - HF (`hz_1495000`): OLD is `ambiguous` (`spreading_only` RMSE=4.66dB
+    barely beating `full_physics` RMSE=4.75dB — a near-coin-flip). NEW
+    is a clean, decisively-separated `none`/`full_physics`
+    (RMSE=2.22dB vs. runner-up `absorption_only` at 6.20dB).
+  - LF (`hz_547500`): OLD is `spreading_only` (matching this project's
+    long-standing documented finding for this exact survey, see the
+    v0.13.0 section above) — but NEW flips the winning candidate to
+    `full_physics`/`none` (RMSE=0.51dB, a very tight fit, vs. OLD's
+    `spreading_only` RMSE=1.27dB). **This is a real disagreement with
+    previously-trusted output for this survey, not a refinement of it —
+    flagging prominently rather than quietly superseding it.**
+  - Visually, in both channels' saved figures, two-to-four real
+    near-boundary artifact points sit far above the surrounding trend
+    (e.g. HF: ~28dB and ~23dB loss right at the start, vs. neighboring
+    points near 0dB) — exactly the kind of artifact this parameter
+    targets, clearly visible by eye once plotted, not subtle.
+- **Flatness validated same day, per this file's own "RMSE win ≠
+  genuine flatness" lesson (2026-08-24 methodology-gap entry above) —
+  and it changes the read on both channels, not just confirms it.**
+  `project-a/scripts/debug/validate_tvg_fit_flatness.py` (new)
+  applies each recipe's winning candidate as a real `TVGParams` via
+  `apply_tvg()`, bins the actually-corrected `backscatter_intensity` by
+  range within the fit window, and fits a line (slope, dB/m) — the real
+  flatness check, not a proxy for it.
+  - HF: OLD's `spreading_only` winner, once actually applied, is **not
+    flat at all** — a strong -0.446 dB/m slope, 14.12dB peak-to-trough
+    across the fit window (a real, visible near-field bump then a
+    clean decline, not noise). NEW's `full_physics` winner is
+    substantially flatter — -0.227 dB/m, 3.68dB peak-to-trough — real
+    improvement, but **not fully flat either**; some real residual
+    remains unexplained by either recipe on this channel.
+  - LF: OLD's `spreading_only` winner is also not flat once applied
+    (-0.118 dB/m, 3.84dB peak-to-trough). NEW's `full_physics` winner
+    comes out **essentially flat** (+0.026 dB/m, 0.74dB peak-to-trough)
+    — this directly substantiates the classification flip flagged
+    above as a real disagreement, not an artifact of the fit
+    comparison: the new recipe's answer is the one that actually
+    matches physical reality here, on the evidence gathered so far.
+  - Same script also renders the raw artifact directly (via
+    `sidescanpy.viz.investigation.plot_stage2_nadir_zoom`, no new
+    plotting code) rather than only inferring it from the binned decay
+    curve: HF shows an unmistakable sharp amplitude spike (raw
+    `backscatter_raw` jumping to ~15-20+ from a ~2-5 baseline)
+    immediately on both sides of the first-bottom-return boundary,
+    visually confirming this is a real, sharp leading-edge-specular-like
+    feature, not a statistical binning artifact. LF's version is
+    noisier/less singularly spike-shaped in the same zoom (elevated,
+    high-variance amplitude right at the boundary rather than one clean
+    spike) — same general phenomenon, different visual character by
+    channel/format, worth keeping in mind before assuming HF's crisp
+    single-spike picture generalizes.
+  - Still open: HF's remaining -0.227 dB/m residual after the new
+    recipe isn't explained by any of the four candidate models tried —
+    consistent with this file's standing "hardware TVG/AGC artifact"
+    and "missing angular/grazing correction" open questions (see the
+    Known Issues section), not resolved by this exercise.
+- Not yet run against any Klein SDF (`project-b`) survey — this
+  project's nadir/first-bottom-return handling differs substantially by
+  format (see the "Battle-tested across 6 more real surveys" entry
+  above), so this finding shouldn't be assumed to generalize there
+  without checking.
+
+### v0.14.0 follow-up 2 — two-sided fitting tried, tested properly, and rejected (2026-09-02, same day)
+
+**Status:** `fit_hardware_tvg_curve()`/`stage4_decay()` gained a real,
+tested, backward-compatible `r_fit_min_m` parameter (fits both sides of
+`r_ref_m` instead of only outward from it — needed once `r_ref_m` is
+pinned mid-swath, or the old one-sided window throws away the entire
+near half of the usable range). **The recipe it enables did not
+outperform the simpler one-sided mid-swath recipe from the entry above
+on real data, after two rounds of honest testing** — kept as a tested
+capability, not adopted as part of the recommended recipe.
+
+- Team direction: "reference range out far is good, but then we should
+  fit both sides — just throw out the values close to first bottom
+  return." Implemented `r_fit_min_m` (default `None` = prior one-sided
+  behavior, matches every existing caller exactly; `TVGCandidateFit`
+  gained the same field, `None`-safe in both `plot_candidate_fit`/
+  `plot_stage4_residuals`). 4 new tests
+  (`tests/unit/analysis/test_tvg_diagnostics.py`,
+  `tests/unit/analysis/test_investigation.py`). Full suite: 1279
+  passing / 36 skipped (was 1275).
+- **First real-data attempt (small exclusion, 2 bins) was much worse on
+  both channels** — HF RMSE 4.66→6.98dB, peak-to-trough 3.7→31.3dB; LF
+  RMSE 1.27→11.37dB (classification collapsed to `ambiguous`/`flat`,
+  implausible), peak-to-trough 0.7→42.7dB. Root cause, found by
+  measuring the *raw* (uncorrected) binned curve directly: there's a
+  **real, broad near-field ramp already present in raw backscatter**,
+  not just a narrow artifact — HF peaks around 4-5m past the boundary,
+  LF around 9-10m, before declining into the normal decay. 2 bins
+  (1-2m) doesn't come close to clearing it. Consistent with this
+  file's own beam-geometry near-field findings elsewhere (grazing angle
+  stays shallow for a real physical distance past the boundary) — this
+  is evidence for that same mechanism, not a new one.
+- **Second attempt (data-driven exclusion, past the raw peak: 5 bins
+  HF, 10 bins LF) still did not beat the one-sided mid-swath recipe.**
+  HF: RMSE 2.15dB (comparable to the one-sided recipe's 2.22dB) but
+  peak-to-trough 4.80dB (worse than 3.68dB). LF: RMSE 1.96dB and
+  peak-to-trough 8.87dB, both clearly worse than the one-sided recipe's
+  0.51dB/0.74dB. Visually, the corrected curve's near-field peak sits
+  further out (~10-11m on HF) than the *raw* curve's peak (~4-5m) —
+  TVG's gain term, which grows with range, partially offsets the raw
+  decline past its own peak, pushing the effective ramp out further
+  under correction than a raw-data-only measurement would suggest.
+- **A real bug in the validation script itself, caught and fixed
+  mid-investigation, worth remembering:** the first flatness check
+  after adding `exclude_first_n_bins` support scored the corrected data
+  over a *wider* window than the fit actually used — conflating two
+  independent filters (`exclude_first_n_bins` trims rows out of
+  `binned` before the fit ever runs; `r_fit_min_m`/`r_ref_m` mask which
+  of the *remaining* rows participate in the fit, without removing any
+  rows). Scoring flatness over the wider, untrimmed window blamed the
+  correction for a near-field region it was never asked to explain,
+  and initially made the two-sided recipe look catastrophically worse
+  than it actually was. Fixed in `project-a/scripts/debug/
+  compare_tvg_fit_recipes.py`'s `_actual_fit_near_edge_m()` (takes the
+  max of both filters). **General lesson: when validating a fit by
+  reapplying it to real data, the validation window must exactly match
+  what the fit itself saw — recomputing it independently is an easy
+  way to silently test the wrong thing.**
+- **Current recommendation, unchanged from the entry above:** one-sided
+  fit outward from a mid-swath-pinned `r_ref_m`, finer bin width, small
+  `exclude_first_n_bins` — no `r_fit_min_m` override. Two-sided fitting
+  remains available and tested if a better near-field characterization
+  ever justifies revisiting it, but isn't paying off with the
+  straightforward approaches tried so far.
+
+### v0.14.0 follow-up 3 — Stage 3/4's `range_var` default doesn't match `apply_tvg()`'s own convention (found 2026-09-02, same day)
+
+**Status:** Real, confirmed, pre-existing inconsistency — not introduced
+by this session's work, and not fixed here (no default changed; see
+below for why). Flagged by a team member reviewing the fit plots
+("Are you using ground range for the decay fit? It should be slant
+range!").
+
+- **The mismatch:** `stage3_usable_range()`/`stage4_decay()` both
+  default to `range_var="ground_range_m"`. But `apply_tvg()` — the
+  function that actually *applies* the correction these diagnostics are
+  choosing a recipe for — computes its own gain curve directly against
+  **slant range**, independently, inside itself (`radiometric.py`:
+  `slant_range = np.arange(n_samples) * sample_interval_m`, never reads
+  `ground_range_m` at all). So the diagnostic that picks which
+  `TVGParams` to recommend has been fitting a different range variable
+  than the one the real correction physically uses. No documented
+  rationale found anywhere for the `ground_range_m` default on either
+  Stage 3 or Stage 4 — looks like an unexamined choice (a reasonable
+  one for georeferencing/gridding contexts, where `ground_range_m` is
+  the right variable, just not for a physics-based loss-vs-range fit).
+- **Real-data check, both channels of `survey-a`, the
+  recommended mid-swath recipe specifically: negligible effect.**
+  Switching `range_var` from `ground_range_m` to `slant_range_m`: HF
+  RMSE 2.22→2.30dB, applied peak-to-trough 3.68→3.68dB (unchanged); LF
+  RMSE 0.51→0.50dB, peak-to-trough 0.74→0.75dB. Same winning candidate
+  both channels either way. **Why it barely moved here:** `ground_range
+  = sqrt(slant_range² − altitude²)`, and this survey's altitude is only
+  ~2m — at `r_ref_m` (18–23m, deliberately mid-swath), `ground_range`
+  and `slant_range` have already converged to within centimeters.
+- **Not a general "this never matters" conclusion — the opposite: a
+  survey flown higher off bottom, or an r_ref pinned closer to nadir
+  (e.g. the OLD near-field auto-pick, or any near-field analysis), would
+  see this diverge far more** — ground_range→0 right at the boundary
+  while slant_range→altitude there, a large *relative* mismatch exactly
+  in the region every TVG-fit investigation this project has done cares
+  most about getting right.
+- **No default changed in `stage3_usable_range`/`stage4_decay`** —
+  both already accept `range_var` as a parameter; changing the default
+  would silently alter every existing caller's behavior across every
+  consumer project, the same category of decision this file's own
+  convention treats as needing explicit sign-off, not a same-day
+  unilateral fix for what turned out to be a low-impact case on this
+  one survey. `project-a/scripts/debug/compare_tvg_fit_recipes.py`
+  now defaults to `--range-var slant_range_m` (the physically-correct
+  choice, matching `apply_tvg()`) with `ground_range_m` still available
+  via the flag for direct comparison.
+- **Open, worth deciding deliberately rather than defaulting past:**
+  whether `stage3_usable_range`/`stage4_decay`'s own default should
+  change to `slant_range_m` project-wide — this session found one
+  low-altitude survey where it doesn't matter, not evidence it never
+  will.
+
+### v0.14.0 follow-up 4 — the recipe made official, RMSE trusted directly (2026-09-02, same day)
+
+**Status:** Settled, for real use — not another comparison round. The
+fit-window widening explored in follow-up 2 (three rounds, all
+rejected against a flatness check) turned out to just need a better
+near edge: auto-detected from the raw data itself, with margin, instead
+of a fixed bin count or the raw peak alone. `project-a/scripts/debug/
+plot_official_tvg_fit.py` (new, replaces `compare_tvg_fit_recipes.py`/
+`validate_tvg_fit_flatness.py` as the tool actually used going forward
+— both kept, not deleted, as the historical record of how this was
+found) renders exactly this recipe and nothing else: no old-vs-new, no
+paired flatness check.
+
+- **The recipe:** `range_var="slant_range_m"`; `r_ref_m = usable_range_m
+  / 2`; fit window near edge = raw backscatter's own near-field peak bin
+  (auto-detected, same search-and-bin approach `r_ref_m`'s own auto-pick
+  uses) plus a 5m margin; far edge = `usable_range_m`, unchanged. Decided
+  by RMSE (fixed-scale) directly — no separate flatness pass.
+- **Why RMSE alone is trusted now, when it wasn't in follow-up 2:** once
+  the window was repositioned this way (auto-margin past the *measured*
+  near-field peak, not a guessed fixed cutoff), RMSE improving stopped
+  disagreeing with what a flatness check would have said — the two
+  follow-up-2 rounds that trusted a narrower/differently-placed window
+  were exactly the cases where they diverged. This is a real,
+  user-directed decision to stop pairing the two, not a claim that RMSE
+  was always sufficient on its own.
+- **Real-data numbers, `survey-a`, both channels:** HF window
+  [11.0, 36.0]m, r_ref=18.0m, `full_physics` wins at RMSE=1.97dB
+  (runner-up `absorption_only` 5.50dB). LF window [15.0, 47.0]m,
+  r_ref=23.5m, `full_physics` wins at RMSE=0.59dB (runner-up
+  `spreading_only` 2.01dB) — the widest separation of any recipe tried
+  this session, on either metric.
+- **Plot changes, all requested directly:** decay-fit and residuals
+  panels now share one x-axis (`plot_stage4_residuals(...,
+  relative_x=False)`, stacked with matplotlib `sharex=True`) labeled
+  "Slant range (m)" explicitly rather than the generic "Range (m)" both
+  functions default to. Y-axis limits on the fit panel are computed from
+  the fit window's own observed values (not the full unfiltered curve),
+  so a near-boundary outlier bin — the first-bottom-return artifact this
+  whole recipe exists to route around — can no longer compress the
+  actual fit curves into an unreadable sliver by stretching the axis to
+  include it.
+- **Explicitly not portable as literal numbers:** the recipe (method) is
+  intended to transfer to other surveys/formats, including vendor-format data
+  on the field — the specific numbers above (`r_ref_m`, the near
+  edge) are this one JSF survey's own measurements and must be
+  re-derived fresh anywhere else, via the same auto-detection, not
+  copied.
+
+### v0.14.0 follow-up 5 — `stage3_usable_range`/`stage4_decay`'s own `range_var` default changed to `slant_range_m` (2026-09-02, same day)
+
+**Status:** Done — the "open decision" flagged in follow-up 3 above is
+now resolved, at the user's direction ("Both should be using slant
+range"). Both functions' `range_var` parameter now defaults to
+`slant_range_m`, matching `apply_tvg()`'s own convention, everywhere —
+not just in `project-a`'s `plot_official_tvg_fit.py`, which already
+passed it explicitly and is unaffected by this change.
+
+- **A second, more consequential bug found while making the change, not
+  just the default flip itself:** both functions' water-column exclusion
+  was keyed to `range_var`'s own NaN pattern (`ground_range_m` is NaN
+  in the water column; `slant_range_m` — pure time-of-flight — is finite
+  *everywhere*, including the water column). Flipping the default alone
+  would have silently stopped excluding the water column from Stage
+  3/4's binning and fitting entirely for every caller that doesn't pass
+  its own `exclude_before_sample`. **Fixed properly, not just avoided:**
+  water-column exclusion is now always computed from `ground_range_m`
+  specifically (falls back to `range_var`'s own finiteness only if
+  `ground_range_m` isn't present in `ds` at all), decoupled from
+  whichever variable `range_var` names for the fit's own x-axis. Both
+  functions' metrics now also record `"range_var"` directly, for
+  traceability.
+- **Real-data check: zero effect on `plot_official_tvg_fit.py`'s already-
+  reported numbers.** Re-ran both channels of `survey-a` after
+  this fix — RMSE, classification, and the auto-detected fit window are
+  byte-identical to before (HF 1.965dB/[11.0,36.0]m, LF 0.593dB/
+  [15.0,47.0]m). Expected: this survey's ~2m altitude is small enough
+  relative to the auto-detected near edges (11m/15m) that the water
+  column was never close to either fit window regardless. **Not
+  evidence this bug was harmless in general** — a survey with a deeper
+  water column relative to its fit window (plausible on the field,
+  different platform/altitude) could have seen real contamination; this
+  is exactly the kind of survey-specific difference follow-up 4's "not
+  portable as literal numbers" note above already warned about, now
+  with a second concrete mechanism behind it.
+- **4 new regression tests**
+  (`tests/unit/analysis/test_investigation.py::TestWaterColumnExclusionIndependentOfRangeVar`):
+  water-column-excluded counts match between `range_var="slant_range_m"`
+  and `range_var="ground_range_m"` on the same data (2 tests), and a
+  direct behavioral check — a huge garbage value placed only in the
+  water column does not appear in either stage's binned output under the
+  `slant_range_m` default (2 tests, one per stage). 4 existing tests
+  needed updating: 2 asserted the literal string `"ground_range_m"` in a
+  missing-variable error message (now `"slant_range_m"`, the new
+  default); 2 more (one in this file, one in `tests/unit/viz/
+  test_investigation.py`, 4 call sites) had synthetic curves built as an
+  *exact* function of `ground_range_m` specifically — pinned those to
+  `range_var="ground_range_m"` explicitly rather than re-deriving new
+  expected numbers, since none of the four were testing `range_var`
+  choice in the first place. Full suite: 1283 passing / 36 skipped (was
+  1279).
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 

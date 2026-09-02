@@ -1446,7 +1446,7 @@ def stage2_5_beam_geometry(
 def stage3_usable_range(
     ds: xr.Dataset,
     value_var: str = "backscatter_raw",
-    range_var: str = "ground_range_m",
+    range_var: str = "slant_range_m",
     *,
     bin_width_m: float = 2.0,
     snr_threshold: float = 3.0,
@@ -1460,6 +1460,22 @@ def stage3_usable_range(
     from the tail `noise_region_fraction` of bins, and find the last
     (by range) bin whose SNR relative to that floor is still >=
     `snr_threshold`.
+
+    `range_var` defaults to `slant_range_m` (2026-09-02, changed from
+    `ground_range_m`) — this is the physics-correct choice for anything
+    downstream that treats range as a TVG/propagation-loss axis, since
+    `apply_tvg()` itself computes its gain curve against slant range,
+    not ground range (see `stage4_decay`'s own note on this). Water-
+    column exclusion does NOT follow `range_var` — it's always keyed to
+    `ground_range_m`'s own NaN pattern (finite wherever `slant_range_m >
+    altitude_m`, see `compute_geometric_ranges`), independent of which
+    variable `range_var` names, because `slant_range_m` is pure
+    time-of-flight and is finite everywhere, including the water column.
+    Using `range_var`'s own finiteness for this (the pre-2026-09-02
+    behavior, still correct when `range_var="ground_range_m"`) would
+    silently stop excluding the water column at all once `range_var` is
+    `slant_range_m`. Falls back to `range_var`'s own finiteness only if
+    `ground_range_m` isn't present in `ds` at all.
 
     Parameters
     ----------
@@ -1491,16 +1507,27 @@ def stage3_usable_range(
     if range_var not in ds:
         raise ValueError(f"stage3_usable_range: {range_var!r} not found — compute geometric ranges first")
 
+    # Water-column mask always keyed to ground_range_m specifically, not
+    # range_var -- see this function's own docstring for why.
+    water_column_var = "ground_range_m" if "ground_range_m" in ds else range_var
     value_finite = np.isfinite(np.asarray(ds[value_var].values))
-    range_finite = np.isfinite(np.asarray(ds[range_var].values))
-    n_water_column_excluded = int(np.sum(value_finite & ~range_finite))
+    water_column_finite = np.isfinite(np.asarray(ds[water_column_var].values))
+    n_water_column_excluded = int(np.sum(value_finite & ~water_column_finite))
+
+    # Applied explicitly (not left to mean_backscatter_vs_range's own
+    # range_var-finiteness check below) so this holds even when
+    # range_var is slant_range_m, which has no water-column NaNs of its
+    # own to rely on.
+    original = ds[value_var]
+    working = np.where(water_column_finite, original.values, np.nan)
 
     n_nadir_gap_excluded = 0
     if exclude_before_sample is not None:
-        original = ds[value_var]
-        masked = _mask_before_sample(original.values, exclude_before_sample)
-        n_nadir_gap_excluded = int(np.sum(np.isfinite(original.values) & range_finite & ~np.isfinite(masked)))
-        ds = ds.assign(**{value_var: (original.dims, masked)})
+        masked = _mask_before_sample(working, exclude_before_sample)
+        n_nadir_gap_excluded = int(np.sum(np.isfinite(working) & ~np.isfinite(masked)))
+        working = masked
+
+    ds = ds.assign(**{value_var: (original.dims, working)})
 
     n_outliers_rejected = 0
     if reject_outliers:
@@ -1519,6 +1546,7 @@ def stage3_usable_range(
             stage="stage3_usable_range",
             metrics={
                 "usable_range_m": None,
+                "range_var": range_var,
                 "water_column_n_excluded": n_water_column_excluded,
                 "nadir_gap_n_excluded": n_nadir_gap_excluded,
             },
@@ -1558,6 +1586,7 @@ def stage3_usable_range(
         "usable_range_m": usable_range_m,
         "far_range_median": float(binned["median"].iloc[-1]),
         "max_range_m": float(binned["range_max_m"].iloc[-1]),
+        "range_var": range_var,
         "water_column_n_excluded": n_water_column_excluded,
         "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,
@@ -1596,7 +1625,7 @@ _TVG_CANDIDATE_TO_STATUS = {
 def stage4_decay(
     ds: xr.Dataset,
     value_var: str = "backscatter_raw",
-    range_var: str = "ground_range_m",
+    range_var: str = "slant_range_m",
     *,
     already_db: bool = False,
     db_reference_percentile: float = 99.0,
@@ -1608,17 +1637,32 @@ def stage4_decay(
     ambiguous_rel_tol: float = 0.2,
     min_total_count: int = 30,
     exclude_before_sample: np.ndarray | None = None,
+    exclude_first_n_bins: int = 0,
     reject_outliers: bool = False,
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
     fit_value_col: str = "mean",
     r_ref_m: float | None = None,
+    r_fit_min_m: float | None = None,
     r_ref_search_fraction: float = 0.5,
 ) -> StageResult:
     """Fit the four `fit_hardware_tvg_curve` candidate models against
     `value_var` vs. `range_var` and classify what TVG (if any) the data
     already carries: none, spreading_only, absorption_only, full, or
     ambiguous (winner not clearly separated from the runner-up).
+
+    `range_var` defaults to `slant_range_m` (2026-09-02, changed from
+    `ground_range_m`) — the physics-correct choice, since `apply_tvg()`
+    itself computes its TVG gain curve against slant range (real
+    acoustic path length), not ground range (the horizontal projection).
+    Fitting a physical loss-vs-range model against the wrong one of the
+    two is most wrong exactly where they diverge most: near the boundary,
+    where altitude is a large fraction of range. Water-column exclusion
+    does NOT follow `range_var` — always keyed to `ground_range_m`'s own
+    NaN pattern regardless (`slant_range_m` is pure time-of-flight, finite
+    everywhere including the water column, so it can't detect the water
+    column on its own — see the `water_column_var` note in this
+    function's body).
 
     Classification is ranked by each candidate's **fixed-scale** RMSE
     (`TVGCandidateFit.fixed_scale_rmse_db` — the literal, uncalibrated
@@ -1677,6 +1721,27 @@ def stage4_decay(
         — see `stage3_usable_range`'s identical parameter for why the
         geometric mask alone isn't enough. `None` (default) applies no
         additional exclusion.
+    exclude_first_n_bins : int, default 0 (no-op, prior behavior)
+        Drop this many *bins* (not samples) from the near end of
+        `binned` — the range-binned mean-vs-range curve — before
+        `r_ref_m` auto-selection or fitting ever see it. Distinct from
+        `exclude_before_sample`, which masks individual *samples*
+        before binning happens: this instead trims whole bins of the
+        already-aggregated curve, for a real, separate artifact — a
+        bright/anomalous return immediately at the first-bottom-return
+        boundary (a leading-edge specular spike, common in sidescan)
+        that can land inside the near-field search window `r_ref_m`'s
+        auto-selection scans (see that parameter's own docstring on
+        `fit_hardware_tvg_curve` for the *different*, already-handled
+        ring-down artifact that reads anomalously low, not high, right
+        at the very start of a ping — this parameter is for the
+        opposite-sign case, at the bottom-return edge rather than the
+        ping's start). Applied after `bin_width_m` binning, so "1 or 2
+        bins" is in units of whatever `bin_width_m` ends up being (post
+        any `min_bins` auto-shrink), not meters. Bins are dropped in
+        range order (nearest first), regardless of `binned`'s row
+        order. `0` (default) reproduces this function's exact prior
+        behavior — every existing caller unaffected.
     reject_outliers : bool, default False
         If True, run `reject_range_outliers` on the dB-converted values
         before binning, so the fit targets a flat-bottom-like
@@ -1731,6 +1796,17 @@ def stage4_decay(
         remains a per-survey judgment call the caller makes by eye
         (`viz.tvg_diagnostics.plot_candidate_fit`), same as every other
         override in this module.
+    r_fit_min_m : float, optional
+        Passed straight through to `fit_hardware_tvg_curve` — `None`
+        (default) reproduces the prior one-sided fit window (starts at
+        `r_ref_m`). Set explicitly (e.g. `0.0`) to fit **both sides** of
+        `r_ref_m` instead — the natural pairing with pinning `r_ref_m`
+        well into the swath (see that parameter's docstring): with the
+        one-sided default, moving the reference out that far would
+        throw away most of the near-field data for no reason. Combine
+        with `exclude_first_n_bins` to drop only the handful of bins
+        immediately at the first-bottom-return boundary rather than the
+        whole near half of the range.
     r_ref_search_fraction : float, default 0.5
         Passed straight through to `fit_hardware_tvg_curve` — only
         matters when `r_ref_m` is `None` (auto-select). See that
@@ -1764,8 +1840,16 @@ def stage4_decay(
     if range_var not in ds:
         raise ValueError(f"stage4_decay: {range_var!r} not found — compute geometric ranges first")
 
+    # Water-column mask always keyed to ground_range_m specifically, not
+    # range_var -- range_var defaults to slant_range_m (2026-09-02,
+    # matching apply_tvg()'s own convention), which is pure time-of-flight
+    # and finite everywhere including the water column, so it has no NaN
+    # pattern of its own to detect the water column with. Falls back to
+    # range_var's own finiteness only if ground_range_m isn't present.
+    water_column_var = "ground_range_m" if "ground_range_m" in ds else range_var
+    water_column_finite = np.isfinite(np.asarray(ds[water_column_var].values))
     n_water_column_excluded = int(np.sum(
-        np.isfinite(np.asarray(ds[value_var].values)) & ~np.isfinite(np.asarray(ds[range_var].values))
+        np.isfinite(np.asarray(ds[value_var].values)) & ~water_column_finite
     ))
 
     # Shrink (never widen) bin_width_m so the fit window has at least
@@ -1799,6 +1883,14 @@ def stage4_decay(
             db_reference = {"method": "percentile", "percentile": db_reference_percentile, "value": x_ref}
         db_da = 20.0 * np.log10((np.abs(arr) + _MIN_LINEAR) / x_ref)
 
+    # Applied explicitly (not left to mean_backscatter_vs_range's own
+    # range_var-finiteness check further down) so water-column exclusion
+    # holds even when range_var is slant_range_m -- see this function's
+    # water_column_var note above.
+    db_da = xr.DataArray(
+        np.where(water_column_finite, db_da.values, np.nan), dims=db_da.dims, coords=db_da.coords,
+    )
+
     n_nadir_gap_excluded = 0
     if exclude_before_sample is not None:
         db_before = np.asarray(db_da.values)
@@ -1820,11 +1912,18 @@ def stage4_decay(
         work, value_var="_investigation_db", range_var=range_var, bin_width_m=bin_width_m
     )
 
+    n_bins_excluded_after_bottom = 0
+    if exclude_first_n_bins > 0 and not binned.empty:
+        binned = binned.sort_values("range_min_m").reset_index(drop=True)
+        n_bins_excluded_after_bottom = min(exclude_first_n_bins, len(binned))
+        binned = binned.iloc[n_bins_excluded_after_bottom:].reset_index(drop=True)
+
     if binned.empty or int(binned["count"].sum()) < min_total_count:
         return StageResult(
             stage="stage4_decay",
             metrics={
                 "freq_hz": freq_hz, "db_reference": db_reference,
+                "range_var": range_var,
                 "water_column_n_excluded": n_water_column_excluded,
                 "nadir_gap_n_excluded": n_nadir_gap_excluded,
                 "reject_outliers": reject_outliers,
@@ -1833,6 +1932,8 @@ def stage4_decay(
                 "fit_value_col": fit_value_col,
                 "bin_width_m": bin_width_m,
                 "bin_width_m_requested": bin_width_m_requested,
+                "exclude_first_n_bins": exclude_first_n_bins,
+                "n_bins_excluded_after_bottom": n_bins_excluded_after_bottom,
             },
             classification="ambiguous",
             notes=["Not enough binned samples to fit a decay model."],
@@ -1841,8 +1942,8 @@ def stage4_decay(
 
     absorption_db_per_m = absorption_for_frequency(freq_hz)
     fit_result = fit_hardware_tvg_curve(
-        binned, absorption_db_per_m=absorption_db_per_m, r_ref_m=r_ref_m, r_fit_max_m=usable_range_m,
-        r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
+        binned, absorption_db_per_m=absorption_db_per_m, r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m,
+        r_fit_max_m=usable_range_m, r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
     )
 
     # Ranked by fixed_scale_rmse_db (literal, uncalibrated physics
@@ -1878,14 +1979,24 @@ def stage4_decay(
             f"to keep at least min_bins={min_bins} bins given usable_range_m={usable_range_m:.1f}m."
         )
 
+    if n_bins_excluded_after_bottom > 0:
+        notes.append(
+            f"Dropped {n_bins_excluded_after_bottom} bin(s) immediately following the first bottom "
+            f"return (exclude_first_n_bins={exclude_first_n_bins}) before r_ref_m selection/fitting."
+        )
+
     metrics = {
         "freq_hz": freq_hz,
         "db_reference": db_reference,
         "absorption_db_per_m": absorption_db_per_m,
         "bin_width_m": bin_width_m,
         "bin_width_m_requested": bin_width_m_requested,
+        "exclude_first_n_bins": exclude_first_n_bins,
+        "n_bins_excluded_after_bottom": n_bins_excluded_after_bottom,
         "r_ref_m": best.r_ref_m,
         "r_ref_m_override": r_ref_m,
+        "r_fit_min_m": best.r_fit_min_m,
+        "r_fit_min_m_override": r_fit_min_m,
         "r_fit_max_m": best.r_fit_max_m,
         "n_bins_used": best.n_bins_used,
         "best_candidate": best.name,
@@ -1900,6 +2011,7 @@ def stage4_decay(
             }
             for c in fit_result.candidates
         },
+        "range_var": range_var,
         "water_column_n_excluded": n_water_column_excluded,
         "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,
