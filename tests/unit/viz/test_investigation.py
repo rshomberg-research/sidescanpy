@@ -370,6 +370,28 @@ class TestApplyStage4FitWindowLimits:
         finally:
             plt.close(fig)
 
+    def test_degenerate_zero_width_window_does_not_warn(self, recwarn):
+        """A single-bin fit window (r_fit_min_m == r_fit_max_m, a real
+        possibility on a very short usable_range_m) would otherwise pad
+        by ~0 and hand matplotlib set_xlim(x, x) -- accepted, but with a
+        UserWarning ('identical low and high xlims'). x_pad_min_m must
+        keep the zoom well-defined instead of relying on that fallback."""
+        stage4 = StageResult(
+            stage="stage4_decay",
+            metrics={"r_fit_min_m": 20.0, "r_fit_max_m": 20.0},
+            data={"fit_result": type("_F", (), {
+                "observed_range_m": np.array([20.0]), "observed_loss_db": np.array([1.0]),
+            })()},
+        )
+        fig, ax = plt.subplots()
+        try:
+            apply_stage4_fit_window_limits(ax, stage4)
+            x_lo, x_hi = ax.get_xlim()
+            assert x_hi > x_lo
+            assert not any("identical low and high xlims" in str(w.message) for w in recwarn.list)
+        finally:
+            plt.close(fig)
+
     def test_y_limits_ignore_out_of_window_outlier(self):
         """The whole reason this exists: a single bin far outside the
         fit window (the first-bottom-return artifact) must not stretch

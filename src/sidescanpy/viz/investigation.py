@@ -557,7 +557,7 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
 
 def apply_stage4_fit_window_limits(
     ax: Axes, stage4: StageResult, *, x_pad_fraction: float = 0.12,
-    y_pad_fraction: float = 0.25, y_pad_min_db: float = 1.0,
+    y_pad_fraction: float = 0.25, y_pad_min_db: float = 1.0, x_pad_min_m: float = 1.0,
 ) -> None:
     """Zooms `ax` (a `plot_candidate_fit`/`plot_stage4_decay_fit` axis)
     to the fit window Stage 4 actually used, with padding — the
@@ -579,7 +579,10 @@ def apply_stage4_fit_window_limits(
     only (`stage4.metrics["r_fit_min_m"]` to `["r_fit_max_m"]`), not the
     full unfiltered curve, so an out-of-window outlier can't stretch the
     axis. x-limits zoom to that same window plus `x_pad_fraction` of its
-    span on each side.
+    span on each side, floored at `x_pad_min_m` so a degenerate
+    (near-zero-width) fit window still gets a well-defined, non-empty
+    zoom instead of relying on matplotlib's own auto-expand-with-warning
+    fallback for `set_xlim(x, x)`.
 
     If `ax` shares an x-axis (`sharex=True`) with another panel (e.g.
     `plot_stage4_residuals` stacked below it), that panel's x-limits
@@ -607,7 +610,13 @@ def apply_stage4_fit_window_limits(
         ax.set_ylim(y_lo - y_pad, y_hi + y_pad)
 
     x_span = r_fit_max_m - r_fit_min_m
-    x_pad = x_pad_fraction * x_span
+    # A degenerate/near-zero fit window (e.g. a single-bin fit -- short
+    # usable_range_m, or a synthetic edge case) would otherwise pad by
+    # ~0 and hand matplotlib set_xlim(x, x), which it accepts but
+    # auto-expands with a UserWarning ("identical low and high xlims") --
+    # x_pad_min_m keeps the zoom well-defined without relying on that
+    # fallback.
+    x_pad = max(x_pad_fraction * x_span, x_pad_min_m)
     ax.set_xlim(max(0.0, r_fit_min_m - x_pad), r_fit_max_m + x_pad)
 
 
