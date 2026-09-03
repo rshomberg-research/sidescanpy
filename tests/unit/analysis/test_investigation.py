@@ -1079,6 +1079,53 @@ class TestStage4Decay:
         assert result.metrics["r_fit_min_m"] == pytest.approx(20.0)
         assert any("clamped down to r_ref_m" in n for n in result.notes)
 
+    def test_r_ref_m_auto_avoids_the_clamp_the_prior_test_needed(self):
+        """2026-09-02, direct response to a real report: pinning
+        r_ref_m independently (numeric, or the legacy "mid_swath") and
+        clamping r_fit_min_m to fit around it lands the reference
+        EXACTLY on the window's boundary when they collide (the prior
+        test) -- often a noisy transition bin, since that's the region
+        the window exists to exclude. r_ref_m="auto" fixes this at the
+        root: resolve the window first, place the reference INSIDE it.
+        Same pathological ramp as the clamp test above (peak close to
+        where a pinned reference would land) -- this time the reference
+        must NOT sit on either boundary."""
+        range_m = np.arange(60.0) + 0.5
+        amplitude = np.where(range_m < 19.0, range_m, np.maximum(38.0 - range_m, 0.1)).astype(np.float32)
+        ds = xr.Dataset({
+            "backscatter_raw": ("sample", amplitude),
+            "slant_range_m": ("sample", range_m),
+        })
+
+        result = stage4_decay(
+            ds, bin_width_m=1.0, freq_hz=1_495_000.0, usable_range_m=40.0,
+            r_ref_m="auto", r_fit_min_m="auto", min_total_count=1,
+        )
+
+        m = result.metrics
+        assert m["r_fit_min_m"] < m["r_ref_m"] < m["r_fit_max_m"]  # strictly inside, not on a boundary
+        assert not any("clamped down to r_ref_m" in n for n in result.notes)
+        assert any("r_ref_m='auto' resolved to" in n for n in result.notes)
+
+    def test_r_ref_m_auto_uses_window_fraction(self):
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        result = stage4_decay(
+            ds, bin_width_m=2.0, usable_range_m=60.0, r_ref_m="auto", r_fit_min_m=10.0,
+            r_ref_window_fraction=0.25,
+        )
+
+        assert result.metrics["r_ref_m"] == pytest.approx(10.0 + 0.25 * (60.0 - 10.0))
+
+    def test_r_ref_m_auto_without_usable_range_m_falls_back_gracefully(self):
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        result = stage4_decay(ds, bin_width_m=2.0, r_ref_m="auto")
+
+        assert result.classification is not None  # completed, did not raise
+        assert result.metrics["r_ref_m_override"] == "auto"
+        assert any("falling back to the near-field auto-pick" in n for n in result.notes)
+
     def test_r_fit_min_m_invalid_string_raises(self):
         ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
 
@@ -1112,7 +1159,7 @@ class TestStage4Decay:
     def test_r_ref_m_invalid_string_raises(self):
         ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
 
-        with pytest.raises(ValueError, match="must be 'mid_swath'"):
+        with pytest.raises(ValueError, match="must be 'auto' or 'mid_swath'"):
             stage4_decay(ds, bin_width_m=2.0, usable_range_m=60.0, r_ref_m="far_field")
 
     def test_mid_swath_paired_with_auto_keeps_reference_inside_fit_window(self):

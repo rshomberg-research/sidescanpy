@@ -144,6 +144,7 @@ def run_investigation(
     stage4_r_fit_min_m: float | str | None = None,
     stage4_r_fit_min_auto_margin_m: float = 5.0,
     stage4_r_ref_search_fraction: float = 0.5,
+    stage4_r_ref_window_fraction: float = 1.0 / 3.0,
     stage4_exclude_first_n_bins: int = 0,
 ) -> InvestigationResult:
     """
@@ -316,51 +317,31 @@ def run_investigation(
         `"median"` alongside `reject_outliers=True`, see that function's
         docstring for why (real-data check found the `"mean"` pairing
         makes the fit measurably worse, not better).
-    stage4_r_ref_m, stage4_r_ref_search_fraction
+    stage4_r_ref_m, stage4_r_fit_min_m, stage4_r_fit_min_auto_margin_m,
+    stage4_r_ref_search_fraction, stage4_r_ref_window_fraction
         Passed straight through to `analysis.investigation.stage4_decay`
-        as `r_ref_m`/`r_ref_search_fraction` — see that function's
-        docstring, including a real observed case (two different
-        representative files from the same real survey/mission picked
-        different winning candidates by RMSE, one within ~1% of the
-        ambiguous threshold) motivating `stage4_r_ref_m` as a manual
-        override when the auto-picked reference range looks unstable.
-        Pass `"mid_swath"` to pin it at `usable_range_m / 2` — the
-        "official" recipe's own choice, and the pairing required (not
-        just recommended) when also using `stage4_r_fit_min_m="auto"`:
-        left at its default `None`, `stage4_r_ref_m` auto-picks the
-        near-field peak bin itself, which nearly always lands *nearer*
-        than `"auto"`'s own peak-plus-margin near edge — i.e. the
-        reference ends up outside the fit window. See `stage4_decay`'s
-        `r_ref_m` docstring for the full mechanism.
-    stage4_r_fit_min_m : float, "auto", or None
-        Passed straight through to `stage4_decay` as `r_fit_min_m`.
-        `None` (default) reproduces the prior one-sided fit window
-        (starts at `r_ref_m`/its auto-pick). Set explicitly to fit both
-        sides of `r_ref_m` instead — the natural pairing once
-        `stage4_r_ref_m` is deliberately pinned well into the swath
-        (e.g. the middle) rather than left at its near-field auto-pick,
-        so the one-sided default wouldn't otherwise throw away most of
-        the usable near-field data. 2026-09-02 real-data finding worth
-        knowing before reaching for this: a fixed near edge isn't
-        enough on its own — the real near-field transition in the
-        *corrected* data can run well past where the raw signal's own
-        near-field peak suggests. Pair with `stage4_exclude_first_n_bins`
-        and derive the near edge from the raw data's own near-field
-        peak plus a real margin, not a guess.
-
-        Pass `"auto"` to have `stage4_decay` derive that near edge
-        itself (peak-plus-margin, see its own docstring) instead of
-        hand-picking one number — added specifically because a single
-        fixed value picked by eye on one mission did not generalize
-        across a dataset whose near-field ramp varies mission to
-        mission. Needs `stage4_r_ref_m` or an auto-derivable
-        `usable_range_m` (from Stage 3) to bound its search; raises if
-        neither is available. `stage4_r_fit_min_auto_margin_m` controls
-        the margin.
-    stage4_r_fit_min_auto_margin_m : float, default 5.0
-        Passed straight through to `stage4_decay` as
-        `r_fit_min_auto_margin_m`. Only matters when
-        `stage4_r_fit_min_m="auto"`.
+        as `r_ref_m`/`r_fit_min_m`/`r_fit_min_auto_margin_m`/
+        `r_ref_search_fraction`/`r_ref_window_fraction` — **that
+        function's own docstrings for both `r_ref_m` and `r_fit_min_m`
+        are the source of truth for how these interact; read them
+        before reaching for these, don't infer from the field names
+        alone.** Short version: `stage4_r_fit_min_m="auto"` derives the
+        fit window's near edge from the raw data's own near-field peak
+        plus a margin (`stage4_r_fit_min_auto_margin_m`) instead of a
+        hand-picked number, since a fixed value picked by eye on one
+        mission doesn't generalize across a dataset whose near-field
+        ramp varies mission to mission. `stage4_r_ref_m="auto"` (the
+        recommended pairing) then places the reference *inside* that
+        resolved window, `stage4_r_ref_window_fraction` (default 1/3)
+        of the way from its near to far edge — resolved in that order
+        specifically so the reference can't land on the window's own
+        (often noisy) boundary, a real bug in the older
+        `stage4_r_ref_m="mid_swath"` design (still supported, legacy)
+        that pins `usable_range_m/2` independent of the window and can
+        collide with it. Both string modes fall back gracefully (with a
+        note, not a raise) when there isn't enough known to resolve
+        them — safe to use as blanket defaults across missions/sections
+        that won't all have a determinable `usable_range_m`.
     stage4_exclude_first_n_bins : int, default 0
         Passed straight through to `stage4_decay` — drops this many
         *bins* (not samples) from the near end of the range-binned decay
@@ -425,6 +406,7 @@ def run_investigation(
         "stage4_r_fit_min_m": stage4_r_fit_min_m,
         "stage4_r_fit_min_auto_margin_m": stage4_r_fit_min_auto_margin_m,
         "stage4_r_ref_search_fraction": stage4_r_ref_search_fraction,
+        "stage4_r_ref_window_fraction": stage4_r_ref_window_fraction,
         "stage4_exclude_first_n_bins": stage4_exclude_first_n_bins,
     }
 
@@ -487,6 +469,7 @@ def run_investigation(
         r_ref_m=stage4_r_ref_m, r_fit_min_m=stage4_r_fit_min_m,
         r_fit_min_auto_margin_m=stage4_r_fit_min_auto_margin_m,
         r_ref_search_fraction=stage4_r_ref_search_fraction,
+        r_ref_window_fraction=stage4_r_ref_window_fraction,
         exclude_first_n_bins=stage4_exclude_first_n_bins,
         channel=channel,
     )

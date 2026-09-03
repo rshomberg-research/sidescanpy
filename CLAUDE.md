@@ -2087,6 +2087,64 @@ blend happened.
   (was 1299).
 - **Version bumped 0.4.6 → 0.4.7.**
 
+### v0.14.0 follow-up 11 — r_ref_m resolution order reversed: window first, then reference inside it (2026-09-02, same day)
+
+**Status:** Done. Direct, sharp user pushback on the follow-up 10
+channel-split artifact, after being told the frequency-channel question
+still hadn't actually been answered: "you chose the reference and it
+[is] at the start of the decay curve fit window, but the value of the
+reference is clearly an outlier. All of the fits are terrible which
+makes your claim that the results are different ridiculous... Maybe the
+right way to do this is to generate the fit window first and then
+select a value 1/3 from the start." Correct on both counts.
+
+- **Root cause, finally addressed properly instead of patched:**
+  follow-up 7/8's `r_ref_m="mid_swath"` design picks the reference
+  *independently* of the fit window (`usable_range_m / 2`), then
+  follow-up 8's clamp forces `r_fit_min_m` down to meet it when they
+  collide — which lands the reference EXACTLY on the window's own
+  boundary. That boundary is precisely the near-field transition zone
+  the window exists to exclude, i.e. usually a noisy bin. Since
+  `observed_loss_db = means[i_ref] - means`, a bad reference corrupts
+  *every* bin's number, not just its own — every candidate's fit looks
+  equally bad, and RMSE "differences" between runs (or channels) become
+  reference-selection noise, not a physics signal. The follow-up-10
+  artifact's port/starboard comparison reproduced exactly this, and the
+  user caught it directly from the chart.
+- **The actual fix (not another clamp):** resolution order reversed.
+  `r_fit_min_m` (the window's near edge) now resolves FIRST — its own
+  `"auto"` peak-plus-margin search bound can no longer come from a
+  pending `r_ref_m="auto"`/`"mid_swath"` string (falls through to
+  `r_ref_search_fraction * usable_range_m` instead; an already-numeric
+  `r_ref_m` still bounds it, unchanged). `r_ref_m="auto"` — new,
+  replaces `"mid_swath"` as the recommended default — is resolved
+  SECOND, placed `r_ref_window_fraction` (new parameter, default 1/3,
+  the user's own suggested split) of the way from the now-known near
+  edge to the far edge (`usable_range_m`). Guaranteed strictly inside
+  `[r_fit_min_m, r_fit_max_m]` by construction for any fraction in
+  `(0, 1)` — not just usually, and the old clamp can never fire for
+  this pairing. `"mid_swath"` stays available (legacy, explicit/
+  backward-compat use only) with its original clamp-based safety net
+  unchanged, since it still doesn't derive the reference from the
+  window.
+- **4 new tests**: the same pathological-ramp fixture that proved the
+  clamp fires (follow-up 8) now proves `r_ref_m="auto"` avoids ever
+  needing it — reference lands strictly inside the window, not on
+  either boundary. Plus `r_ref_window_fraction` customization, and the
+  graceful-fallback-without-usable_range_m case. 1 existing test's error
+  message updated (`"must be 'mid_swath'"` → `"must be 'auto' or
+  'mid_swath'"`). Full suite: 1316 passing / 36 skipped (was 1313).
+- **Also directly answered** (separately, not a code change): the
+  user's original, still-unanswered question about HF/LF frequency-
+  channel handling — every step processes each `freq_key` fully
+  independently, including frequency-specific absorption physics via
+  `absorption_for_frequency(freq_hz)`; only `spreading_loss_db` is one
+  survey-wide setting by design (a hardware property, not a frequency-
+  dependent physics constant). The port/starboard channel-split work
+  (follow-up 10) was answering a *different* question than the one
+  originally asked — a real misread, called out directly by the user.
+- **Version bumped 0.4.7 → 0.4.8.**
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)
