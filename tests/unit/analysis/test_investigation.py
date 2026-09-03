@@ -975,13 +975,20 @@ class TestStage4Decay:
         assert result.metrics["r_fit_min_auto_margin_m"] == pytest.approx(5.0)
         assert any("r_fit_min_m='auto' resolved to" in n for n in result.notes)
 
-    def test_r_fit_min_m_auto_without_r_ref_m_or_usable_range_m_raises(self):
-        """auto mode needs something to bound its near-field search --
-        must fail loudly, not silently fall back to some default."""
+    def test_r_fit_min_m_auto_without_r_ref_m_or_usable_range_m_falls_back_gracefully(self):
+        """2026-09-02: changed from raising to a graceful fallback --
+        "auto" became downstream-project's own default (not just an opt-in
+        override), so a single difficult mission/section with no
+        determinable usable_range_m must not take down the whole
+        analyze run. Falls back to the prior one-sided fit window
+        (r_fit_min_m=None, starts at r_ref_m) instead."""
         ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
 
-        with pytest.raises(ValueError, match="needs r_ref_m or usable_range_m"):
-            stage4_decay(ds, bin_width_m=2.0, r_fit_min_m="auto")
+        result = stage4_decay(ds, bin_width_m=2.0, r_fit_min_m="auto")
+
+        assert result.metrics["r_fit_min_m"] == result.metrics["r_ref_m"]  # one-sided fallback
+        assert result.metrics["r_fit_min_m_override"] == "auto"
+        assert any("falling back to the prior one-sided fit window" in n for n in result.notes)
 
     def test_r_fit_min_m_auto_uses_r_ref_search_fraction_of_usable_range_when_r_ref_m_none(self):
         """r_ref_m=None + usable_range_m given: auto mode's search bound
@@ -1038,11 +1045,20 @@ class TestStage4Decay:
         assert result.metrics["r_ref_m_override"] == "mid_swath"
         assert any("r_ref_m='mid_swath' resolved to" in n for n in result.notes)
 
-    def test_r_ref_m_mid_swath_without_usable_range_m_raises(self):
+    def test_r_ref_m_mid_swath_without_usable_range_m_falls_back_gracefully(self):
+        """2026-09-02: changed from raising to a graceful fallback --
+        "mid_swath" became downstream-project's own default (not just an opt-in
+        override), so a single difficult mission/section with no
+        determinable usable_range_m must not take down the whole
+        analyze run. Falls back to the prior near-field auto-pick
+        (r_ref_m=None) instead."""
         ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
 
-        with pytest.raises(ValueError, match="needs usable_range_m"):
-            stage4_decay(ds, bin_width_m=2.0, r_ref_m="mid_swath")
+        result = stage4_decay(ds, bin_width_m=2.0, r_ref_m="mid_swath")
+
+        assert result.classification is not None  # completed, did not raise
+        assert result.metrics["r_ref_m_override"] == "mid_swath"
+        assert any("falling back to the near-field auto-pick" in n for n in result.notes)
 
     def test_r_ref_m_invalid_string_raises(self):
         ds = self._make_full_physics_ds(n_pings=60, n_samples=300)

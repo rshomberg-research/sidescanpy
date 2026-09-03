@@ -1987,6 +1987,49 @@ to two more real gaps:
   36 skipped (was 1298; net +1 since one test was rewritten, not added).
 - **Version bumped 0.4.4 → 0.4.5.**
 
+### v0.14.0 follow-up 9 — `mid_swath`/`auto` made resilient enough to be a default, not just an opt-in override (2026-09-02, same day)
+
+**Status:** Done. Triggered by `downstream-project` deciding to make
+`r_ref_m="mid_swath"` + `r_fit_min_m="auto"` its own **default** config
+(so missions don't need per-config overrides to get the validated
+recipe) — running that against its synthetic test suite immediately
+surfaced a real gap: `stage4_decay: r_ref_m='mid_swath' needs
+usable_range_m -- pass it, or an explicit numeric r_ref_m.` on a
+perfectly ordinary synthetic mission where Stage 3 simply couldn't
+determine `usable_range_m`. 14 of `downstream-project`'s own tests failed the
+same way once its `MissionParams` defaults flipped.
+
+**The design mistake:** follow-up 7/8 built `"mid_swath"`/`"auto"` as
+*hard requirements* — raise `ValueError` if the inputs they need aren't
+available. That's a reasonable design for an explicit opt-in override
+(a caller setting it by hand presumably knows their data supports it),
+but wrong for something meant to be a blanket default across every
+mission/section in a survey — some of those will always have a
+genuinely undeterminable `usable_range_m` (short, noisy, or otherwise
+difficult data), and raising there takes down the *entire* analyze run
+over one difficult section instead of just that section's Stage 4
+result.
+
+**Fixed:** both now degrade gracefully instead of raising, matching
+every other auto-adaptation already in this function (e.g. `min_bins`'s
+`bin_width_m` shrink) — a note explaining the fallback, never a hard
+failure over a missing optional input:
+- `r_ref_m="mid_swath"` without `usable_range_m` → falls back to the
+  prior near-field auto-pick (`r_ref_m=None`).
+- `r_fit_min_m="auto"` without enough to bound its search (or with no
+  bins in that search window) → falls back to the prior one-sided fit
+  window (`r_fit_min_m=None`, starts at `r_ref_m`).
+- Invalid string values (anything other than `"mid_swath"`/`"auto"`)
+  still raise — that's a caller bug (a typo), not a data limitation, and
+  should still fail loudly.
+- **2 existing tests rewritten** (they asserted the old raise-on-missing-
+  input behavior) to assert the new fallback + note instead. No new
+  tests needed beyond that — the fallback paths reuse the same resolved-
+  vs-`None` branches the clamp logic (follow-up 8) already exercises.
+  Full suite: 1299 passing / 36 skipped (unchanged count — 2 rewritten,
+  0 net new).
+- **Version bumped 0.4.5 → 0.4.6.**
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)

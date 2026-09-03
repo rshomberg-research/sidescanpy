@@ -1841,8 +1841,12 @@ def stage4_decay(
         auto-detected fit window's near edge, i.e. the reference range
         ends up outside the fit window entirely. `"mid_swath"` avoids
         this by construction (usable_range_m/2 sits well past the
-        near-field peak on any normal survey). Raises `ValueError` if
-        `usable_range_m` isn't available to compute it from.
+        near-field peak on any normal survey). Falls back to the prior
+        near-field auto-pick (with a note, not a raise) when
+        `usable_range_m` isn't available — `"mid_swath"` is meant to be
+        usable as a blanket default across many missions/sections, some
+        of which will have a genuinely undeterminable `usable_range_m`;
+        see `notes` for when this fallback fires.
     r_fit_min_m : float or "auto", optional
         Passed straight through to `fit_hardware_tvg_curve` — `None`
         (default) reproduces the prior one-sided fit window (starts at
@@ -1864,15 +1868,19 @@ def stage4_decay(
         eye on one vendor-format mission did not generalize across a dataset
         whose near-field ramp varies mission-to-mission — the *method*
         (peak-plus-margin) is what carries over, not any specific
-        distance. Requires `r_ref_m` or `usable_range_m` to bound the
-        search (raises `ValueError` if neither is available, or if no
-        bins fall inside the search window — widen `usable_range_m`/
-        `r_ref_m` or pass an explicit number instead). The resolved
-        value is reported in `metrics["r_fit_min_m"]` either way (via
-        `fit_result`'s own `r_fit_min_m`); `metrics["r_fit_min_m_override"]`
-        keeps the literal `"auto"` you passed in, not the resolved
-        number, so the JSON/reproducibility export still shows which
-        mode produced this run.
+        distance. Wants `r_ref_m` or `usable_range_m` to bound the
+        search, but falls back gracefully (with a note, not a raise) to
+        the prior one-sided fit window when neither is available, or
+        when no bins fall inside the search window — `"auto"` is meant
+        to be usable as a blanket default across many missions/sections,
+        some of which won't have enough known to resolve it. The
+        resolved value (or `None`, on fallback) is reported in
+        `metrics["r_fit_min_m"]` either way (via `fit_result`'s own
+        `r_fit_min_m`); `metrics["r_fit_min_m_override"]` keeps the
+        literal `"auto"` you passed in, not the resolved number, so the
+        JSON/reproducibility export still shows which mode produced
+        this run — check `notes` for whether it actually resolved or
+        fell back.
 
         **Guaranteed not to exceed `r_ref_m` (when `r_ref_m` is known):**
         the peak search restricts by *bin center* within the search
@@ -2032,12 +2040,25 @@ def stage4_decay(
         if r_ref_m != "mid_swath":
             raise ValueError(f"stage4_decay: r_ref_m string values must be 'mid_swath', got {r_ref_m!r}")
         if not usable_range_m:
-            raise ValueError(
-                "stage4_decay: r_ref_m='mid_swath' needs usable_range_m -- pass it, or an "
-                "explicit numeric r_ref_m."
+            # Graceful fallback, not a raise (2026-09-02): "mid_swath" is
+            # meant to be usable as a blanket default across many
+            # missions/sections, some of which will have a genuinely
+            # undeterminable usable_range_m (e.g. a short or noisy
+            # stretch Stage 3 can't resolve). Raising here would take
+            # down the whole analyze run over one difficult section
+            # instead of just falling back to the pre-2026-09-02
+            # near-field auto-pick for that one case -- same posture as
+            # every other auto-adaptation in this function (e.g.
+            # min_bins's bin_width_m shrink), never a hard failure over
+            # a missing optional input.
+            r_ref_m = None
+            r_ref_m_mid_swath_note = (
+                "r_ref_m='mid_swath' requested but usable_range_m is unavailable -- "
+                "falling back to the near-field auto-pick instead."
             )
-        r_ref_m = usable_range_m / 2.0
-        r_ref_m_mid_swath_note = f"r_ref_m='mid_swath' resolved to {r_ref_m:.2f}m (usable_range_m / 2)."
+        else:
+            r_ref_m = usable_range_m / 2.0
+            r_ref_m_mid_swath_note = f"r_ref_m='mid_swath' resolved to {r_ref_m:.2f}m (usable_range_m / 2)."
 
     r_fit_min_m_requested = r_fit_min_m
     r_fit_min_m_auto_note: str | None = None
@@ -2047,48 +2068,60 @@ def stage4_decay(
         near_edge_search_max_m = r_ref_m if r_ref_m is not None else (
             r_ref_search_fraction * usable_range_m if usable_range_m else None
         )
+        auto_value = None
         if near_edge_search_max_m is None:
-            raise ValueError(
-                "stage4_decay: r_fit_min_m='auto' needs r_ref_m or usable_range_m to bound its "
-                "near-field search -- pass one of those, or an explicit numeric r_fit_min_m."
-            )
-        auto_value = _auto_near_edge_m(
-            ds, value_var, range_var, bin_width_m,
-            search_max_m=near_edge_search_max_m, margin_m=r_fit_min_auto_margin_m,
-        )
-        if auto_value is None:
-            raise ValueError(
-                f"stage4_decay: r_fit_min_m='auto' found no bins within [0, {near_edge_search_max_m:.2f}m] "
-                "to search -- widen usable_range_m/r_ref_m, or pass an explicit numeric r_fit_min_m."
-            )
-        # The peak search restricts by *bin center* <= near_edge_search_max_m,
-        # but the returned value is that bin's far edge PLUS margin_m --
-        # so on data whose true near-field peak sits close to the search
-        # boundary (real, observed on real vendor-format data: this dataset's
-        # near-field ramp varies enough mission-to-mission that it isn't
-        # always safely inside the near half of the swath), the naive
-        # auto value can still land past r_ref_m even though the search
-        # itself never looked beyond it. Left unclamped, this reproduces
-        # the exact "reference outside the fit window" failure
-        # r_ref_m="mid_swath" exists to prevent -- clamp down to r_ref_m
-        # (a locally one-sided fit for just this mission/section, not a
-        # crash) rather than silently emit a window that doesn't contain
-        # its own reference.
-        if r_ref_m is not None and auto_value > r_ref_m:
+            # Graceful fallback, not a raise (2026-09-02) -- same
+            # rationale as r_ref_m="mid_swath"'s own fallback just
+            # above: "auto" is meant to be usable as a blanket default,
+            # and some missions/sections genuinely won't have enough
+            # known (neither r_ref_m nor usable_range_m) to bound the
+            # search. Falls back to the prior one-sided default rather
+            # than taking down the whole analyze run.
             r_fit_min_m_auto_note = (
-                f"r_fit_min_m='auto' naive value ({auto_value:.2f}m, near-field peak bin's "
-                f"far edge + {r_fit_min_auto_margin_m:.1f}m margin) exceeded r_ref_m "
-                f"({r_ref_m:.2f}m) -- clamped down to r_ref_m so the reference stays inside "
-                "the fit window (locally one-sided for this mission/section)."
+                "r_fit_min_m='auto' requested but neither r_ref_m nor usable_range_m is "
+                "available to bound its near-field search -- falling back to the prior "
+                "one-sided fit window (starts at r_ref_m)."
             )
-            auto_value = r_ref_m
         else:
-            r_fit_min_m_auto_note = (
-                f"r_fit_min_m='auto' resolved to {auto_value:.2f}m "
-                f"(near-field peak bin's far edge + {r_fit_min_auto_margin_m:.1f}m margin, "
-                f"searched within [0, {near_edge_search_max_m:.2f}m])."
+            auto_value = _auto_near_edge_m(
+                ds, value_var, range_var, bin_width_m,
+                search_max_m=near_edge_search_max_m, margin_m=r_fit_min_auto_margin_m,
             )
-        r_fit_min_m = auto_value
+            if auto_value is None:
+                r_fit_min_m_auto_note = (
+                    f"r_fit_min_m='auto' found no bins within [0, {near_edge_search_max_m:.2f}m] to "
+                    "search -- falling back to the prior one-sided fit window (starts at r_ref_m)."
+                )
+            elif r_ref_m is not None and auto_value > r_ref_m:
+                # The peak search restricts by *bin center* <=
+                # near_edge_search_max_m, but the returned value is that
+                # bin's far edge PLUS margin_m -- so on data whose true
+                # near-field peak sits close to the search boundary
+                # (real, observed on real vendor-format data: this dataset's
+                # near-field ramp varies enough mission-to-mission that
+                # it isn't always safely inside the near half of the
+                # swath), the naive auto value can still land past
+                # r_ref_m even though the search itself never looked
+                # beyond it. Left unclamped, this reproduces the exact
+                # "reference outside the fit window" failure
+                # r_ref_m="mid_swath" exists to prevent -- clamp down to
+                # r_ref_m (a locally one-sided fit for just this
+                # mission/section, not a crash) rather than silently
+                # emit a window that doesn't contain its own reference.
+                r_fit_min_m_auto_note = (
+                    f"r_fit_min_m='auto' naive value ({auto_value:.2f}m, near-field peak bin's "
+                    f"far edge + {r_fit_min_auto_margin_m:.1f}m margin) exceeded r_ref_m "
+                    f"({r_ref_m:.2f}m) -- clamped down to r_ref_m so the reference stays inside "
+                    "the fit window (locally one-sided for this mission/section)."
+                )
+                auto_value = r_ref_m
+            else:
+                r_fit_min_m_auto_note = (
+                    f"r_fit_min_m='auto' resolved to {auto_value:.2f}m "
+                    f"(near-field peak bin's far edge + {r_fit_min_auto_margin_m:.1f}m margin, "
+                    f"searched within [0, {near_edge_search_max_m:.2f}m])."
+                )
+        r_fit_min_m = auto_value  # None (graceful fallback above) or the resolved/clamped value
 
     absorption_db_per_m = absorption_for_frequency(freq_hz)
     fit_result = fit_hardware_tvg_curve(
