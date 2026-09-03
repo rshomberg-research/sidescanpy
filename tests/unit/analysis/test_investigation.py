@@ -572,6 +572,55 @@ class TestStage3UsableRange:
         with pytest.raises(ValueError, match="slant_range_m"):
             stage3_usable_range(ds)
 
+    def _make_two_channel_range_ds(self, n_pings=50, n_samples=200):
+        """channel 0 keeps a strong signal much further out than channel
+        1 -- distinguishable usable_range_m per channel, so pooling vs.
+        restricting is directly observable in the result."""
+        sample_idx = np.arange(n_samples)
+        decay_far = np.where(sample_idx < 150, 50.0 * np.exp(-sample_idx / 60.0), 0.0)
+        decay_near = np.where(sample_idx < 40, 50.0 * np.exp(-sample_idx / 12.0), 0.0)
+        rng = np.random.default_rng(1)
+        bs = np.zeros((n_pings, 2, n_samples))
+        bs[:, 0, :] = decay_far
+        bs[:, 1, :] = decay_near
+        bs += rng.normal(0, 0.01, size=bs.shape)
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
+        return compute_geometric_ranges(ds)
+
+    def test_channel_none_pools_both_channels(self):
+        ds = self._make_two_channel_range_ds()
+
+        pooled = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0)
+
+        assert pooled.metrics["channel"] is None
+
+    def test_channel_restricts_usable_range_to_one_side(self):
+        ds = self._make_two_channel_range_ds()
+
+        ch0 = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel=0)
+        ch1 = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel=1)
+
+        assert ch0.metrics["channel"] == 0
+        assert ch1.metrics["channel"] == 1
+        # channel 0's signal reaches much further than channel 1's --
+        # proof each was fit against only its own side, not pooled.
+        assert ch0.metrics["usable_range_m"] > ch1.metrics["usable_range_m"]
+
+    def test_channel_string_matches_int_position(self):
+        ds = self._make_two_channel_range_ds()
+
+        by_string = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel="port")
+        by_int = stage3_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel=0)
+
+        assert by_string.metrics["usable_range_m"] == pytest.approx(by_int.metrics["usable_range_m"])
+        assert by_string.metrics["channel"] == 0
+
+    def test_invalid_channel_string_raises(self):
+        ds = self._make_two_channel_range_ds()
+
+        with pytest.raises(ValueError, match="not found in channel_id"):
+            stage3_usable_range(ds, channel="midship")
+
     def test_water_column_n_excluded_matches_geometry(self):
         """Same physics as TestStage2Nadir.test_geometric_boundary_matches_geometry:
         altitude=10.0, sound_vel=1500.0, sample_rate=1000.0 -> water
@@ -1083,6 +1132,73 @@ class TestStage4Decay:
 
         assert independent.metrics["r_ref_m"] < independent.metrics["r_fit_min_m"]  # the bug
         assert paired.metrics["r_fit_min_m"] <= paired.metrics["r_ref_m"] <= paired.metrics["r_fit_max_m"]
+
+    def _make_two_channel_decay_ds(self, n_pings=60, n_samples=300):
+        """channel 0 (port) follows the full uncompensated physics decay
+        curve; channel 1 (starboard) is flat (already fully
+        compensated, scale=1.0 everywhere) -- classifies as "none" vs.
+        "full" respectively when fit independently. Pooled together,
+        neither classification is expected to hold cleanly."""
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+        ds = compute_geometric_ranges(ds)
+        freq_hz = float(ds.attrs["freq_hz_start"])
+        alpha = absorption_for_frequency(freq_hz)
+        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        ground_range = ds["ground_range_m"].values
+        loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
+        ref = np.nanmin(loss_db[np.isfinite(loss_db)])
+        port_amplitude = 10.0 ** (-(loss_db - ref) / 20.0)
+        port_amplitude = np.nan_to_num(port_amplitude, nan=0.0).astype(np.float32)
+        starboard_amplitude = np.where(np.isfinite(ground_range), 1.0, 0.0).astype(np.float32)
+
+        bs = ds["backscatter_raw"].values.copy()
+        bs[:, 0, :] = port_amplitude[:, 0, :]
+        bs[:, 1, :] = starboard_amplitude[:, 1, :]
+        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+        return ds
+
+    def test_channel_none_metrics_report_no_channel_restriction(self):
+        ds = self._make_two_channel_decay_ds()
+
+        pooled = stage4_decay(ds, bin_width_m=2.0)
+
+        assert pooled.metrics["channel"] is None
+
+    def test_channel_restricts_fit_to_one_side(self):
+        ds = self._make_two_channel_decay_ds()
+
+        port = stage4_decay(ds, bin_width_m=2.0, channel=0)
+        starboard = stage4_decay(ds, bin_width_m=2.0, channel=1)
+
+        assert port.metrics["channel"] == 0
+        assert starboard.metrics["channel"] == 1
+        assert port.classification == "none"  # nothing compensated yet
+        assert starboard.classification == "full"  # already flat
+
+    def test_channel_string_matches_int_position(self):
+        ds = self._make_two_channel_decay_ds()
+
+        by_string = stage4_decay(ds, bin_width_m=2.0, channel="starboard")
+        by_int = stage4_decay(ds, bin_width_m=2.0, channel=1)
+
+        assert by_string.classification == by_int.classification
+        assert by_string.metrics["channel"] == 1
+
+    def test_channel_invalid_string_raises(self):
+        ds = self._make_two_channel_decay_ds()
+
+        with pytest.raises(ValueError, match="not found in channel_id"):
+            stage4_decay(ds, bin_width_m=2.0, channel="midship")
+
+    def test_channel_pooled_differs_from_either_single_channel(self):
+        ds = self._make_two_channel_decay_ds()
+
+        pooled = stage4_decay(ds, bin_width_m=2.0)
+        port = stage4_decay(ds, bin_width_m=2.0, channel=0)
+        starboard = stage4_decay(ds, bin_width_m=2.0, channel=1)
+
+        assert pooled.metrics["best_rmse_db"] != pytest.approx(port.metrics["best_rmse_db"])
+        assert pooled.metrics["best_rmse_db"] != pytest.approx(starboard.metrics["best_rmse_db"])
 
     def test_exclude_first_n_bins_exceeding_available_bins_handled_gracefully(self):
         ds = self._make_full_physics_ds(n_pings=10, n_samples=60)

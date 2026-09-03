@@ -2030,6 +2030,63 @@ failure over a missing optional input:
   0 net new).
 - **Version bumped 0.4.5 → 0.4.6.**
 
+### v0.14.0 follow-up 10 — Stage 3/4 gained a `channel` parameter; they were silently pooling port and starboard (2026-09-02, same day)
+
+**Status:** Done. Found while investigating a live report ("I do not
+see multiple channels in the TVG fit charts") that turned out to name
+the wrong axis at first — `downstream-project`'s `analyze` step already loops
+over every *frequency* channel (`freq_key`, e.g. HF/LF) and produces
+separate output per one. The actual gap: `mean_backscatter_vs_range`
+(Stage 3/4's shared binning helper) `.ravel()`s **every** array
+dimension before binning, including the *physical* `channel` dim
+(port/starboard) — `run_investigation()`'s own docstring even said "one
+frequency channel," using "channel" ambiguously for both meanings. Every
+`stage3_usable_range`/`stage4_decay` call ever made (including every
+number reported earlier this session) silently blended port and
+starboard into one fitted curve, with nothing in the output signaling a
+blend happened.
+
+- **`stage3_usable_range`/`stage4_decay` gained `channel: int | str |
+  None = None`** — `0`/`1` by position or `"port"`/`"starboard"` by
+  `ds["channel_id"]`. `None` (default) is byte-identical to every
+  existing caller's prior behavior. **Masks samples, does not slice
+  `ds`** — the sidescan schema hard-requires `channel` be exactly size 2
+  everywhere in the pipeline (`SideScanAccessor.validate()`, called
+  internally by `compute_geometric_ranges`/`compute_georeferencing`),
+  and `stage2_5_beam_geometry` separately hardcodes a `(0, "port"), (1,
+  "starboard")` iteration regardless of `validate()` — an earlier
+  attempt at slicing `ds` itself down to one channel hit both of these
+  (`ValueError: 'channel' dimension must be size 2` from the first,
+  `IndexError` from the second) before landing on the masking approach,
+  which leaves `ds`'s shape untouched everywhere and only narrows the
+  working array these two functions bin from. New shared
+  `_resolve_channel_idx()` helper does the int/string resolution once.
+- **`run_investigation()` gained the same `channel` parameter**,
+  threaded through to both `stage3_usable_range`/`stage4_decay` calls
+  only — **Stages 1, 1.5, 2, 2.5, and 5 are deliberately NOT
+  restricted**, they keep seeing the full pooled `ds` regardless (those
+  stages already report both channels' own geometry independently where
+  it matters, e.g. `stage2_5_beam_geometry`'s `near_ray`/`far_ray`; only
+  Stage 3/4's flat-ravel binning actually pools). `params["channel"]`
+  records the requested value for reproducibility. Call once per
+  physical channel (typically both) for a genuine per-channel Stage 3/4
+  comparison.
+- **16 new tests**: `TestStage3UsableRange`/`TestStage4Decay` each
+  gained 5 (`channel=None` matches omitting it; restricting to one
+  channel produces a measurably different, independently-correct
+  result; string lookup matches int position; invalid string raises;
+  pooled differs from either single channel), using two-channel
+  fixtures whose sides are deliberately built to classify/measure
+  differently (so a passing "differs" assertion is a real proof, not a
+  coincidental pass). New top-level `tests/unit/test_investigation.py`
+  (this repo's first direct test coverage of `run_investigation()`
+  itself — confirmed via search that none existed before) gained 5 more
+  at the orchestration level, round-tripping a real synthetic `.ss.h5`
+  file through `write_survey`/`run_investigation` rather than calling
+  the stage functions directly. Full suite: 1313 passing / 36 skipped
+  (was 1299).
+- **Version bumped 0.4.6 → 0.4.7.**
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)

@@ -120,6 +120,7 @@ def run_investigation(
     dataset_path: str | Path,
     *,
     freq_key: str | None = None,
+    channel: int | str | None = None,
     value_var: str = "backscatter_raw",
     ping_range: tuple[int, int | None] = (0, None),
     output_dir: str | Path | None = None,
@@ -154,7 +155,40 @@ def run_investigation(
         A `.ss.h5`, `.jsf`, or `.sdf` file.
     freq_key : str, optional
         e.g. ``"hz_1495000"``. Defaults to the first (sorted) frequency
-        in the survey.
+        in the survey. Note this is a *frequency* channel (e.g. HF vs.
+        LF) — a different axis from `channel` below (port vs.
+        starboard); the two are independent and this function's own
+        "one frequency channel" phrasing above refers only to this one.
+    channel : int or str, optional
+        Restrict **Stage 3 and Stage 4's own binning/fit** to one
+        physical (port/starboard) channel — `0`/`1` by position, or
+        `"port"`/`"starboard"` by `ds["channel_id"]` value. `None`
+        (default) pools every channel's samples together, every existing
+        caller's exact prior behavior, unchanged. Real motivation
+        (2026-09-02): pooling is invisible until you look for it — port
+        and starboard transducers can have genuinely different gain
+        characteristics, and `usable_range_m`/a fitted decay curve/TVG
+        classification built from a silent blend of both is a different
+        (and less informative) result than either side's own, with
+        nothing in the output signaling that a blend happened.
+
+        **Stages 1, 1.5, 2, 2.5, and 5 are NOT restricted by this** —
+        they keep seeing the full, un-sliced `ds` regardless. This isn't
+        an oversight: the sidescan schema hard-requires the `channel`
+        dim be exactly size 2 everywhere in this pipeline
+        (`SideScanAccessor.validate()`, called by e.g.
+        `compute_geometric_ranges`), and `stage2_5_beam_geometry`
+        specifically hardcodes a `(0, "port"), (1, "starboard")`
+        iteration regardless of `validate()` — those stages already
+        report both channels' own geometry independently in their own
+        metrics (see `stage2_5_beam_geometry`'s `near_ray`/`far_ray`),
+        so narrowing `ds` itself for them would break real invariants
+        for no benefit. Only Stage 3/4's `mean_backscatter_vs_range`-
+        based binning actually pools across `channel` via a flat
+        `.ravel()`, which is the specific thing this parameter exists to
+        fix. Call `run_investigation()` once per side (typically both)
+        for a genuine per-channel Stage 3/4 comparison — this function
+        itself still only ever returns one `InvestigationResult`.
     value_var : str, default "backscatter_raw"
         Variable to investigate. The default treats the data source as
         genuinely unknown; pass ``"backscatter_intensity"`` to run the
@@ -357,7 +391,18 @@ def run_investigation(
     if "ground_range_m" not in ds:
         ds = compute_geometric_ranges(ds)
 
+    # `channel` is NOT applied by slicing `ds` here -- the sidescan
+    # schema hard-requires the channel dim be exactly size 2 everywhere
+    # in this pipeline (SideScanAccessor.validate(), a real, deliberate
+    # invariant: sidescan sonar always has port+starboard), and several
+    # stage functions (e.g. stage2_5_beam_geometry) hardcode a 2-channel
+    # iteration regardless of validate(). `ds` keeps its full shape
+    # through every stage; only stage3_usable_range/stage4_decay (the
+    # two whose own binning pools samples via `.ravel()`, the actual
+    # thing `channel` exists to restrict) receive it directly below and
+    # mask internally instead of slicing.
     params = {
+        "channel": channel,
         "value_var": value_var,
         "ping_range": list(ping_range),
         "nadir_n_samples": nadir_n_samples,
@@ -426,6 +471,7 @@ def run_investigation(
         ds, value_var=value_var, bin_width_m=stage3_bin_width_m, snr_threshold=snr_threshold,
         exclude_before_sample=exclude_before_sample_stage3,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
+        channel=channel,
     )
     # Stage 2.5 runs after Stage 3, not before -- its far edge is
     # triangulated from stage3's usable_range_m, so it needs that
@@ -442,6 +488,7 @@ def run_investigation(
         r_fit_min_auto_margin_m=stage4_r_fit_min_auto_margin_m,
         r_ref_search_fraction=stage4_r_ref_search_fraction,
         exclude_first_n_bins=stage4_exclude_first_n_bins,
+        channel=channel,
     )
     stage5 = stage5_units(stage1, stage4)
 

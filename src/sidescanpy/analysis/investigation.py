@@ -569,6 +569,23 @@ def blank_nadir_noise(
     return out
 
 
+def _resolve_channel_idx(ds: xr.Dataset, channel: int | str, *, caller: str) -> int:
+    """`channel` (int position, or str looked up against `ds["channel_id"]`)
+    -> a plain int index. Shared by `stage3_usable_range`/`stage4_decay`
+    (see their own `channel` parameter docstrings for why they mask
+    rather than slice `ds` down to one channel: the sidescan schema
+    hard-requires `channel` be exactly size 2 everywhere else in the
+    pipeline, e.g. `compute_geometric_ranges`'s own `validate()` call —
+    slicing before this point breaks that real, deliberate invariant)."""
+    if isinstance(channel, str):
+        channel_ids = np.asarray(ds["channel_id"].values)
+        matches = np.flatnonzero(channel_ids == channel)
+        if matches.size == 0:
+            raise ValueError(f"{caller}: channel={channel!r} not found in channel_id={list(channel_ids)}")
+        return int(matches[0])
+    return int(channel)
+
+
 def _mask_before_sample(values: np.ndarray, boundary: np.ndarray, *, fill_value: float = np.nan) -> np.ndarray:
     """Return a copy of `values` (..., sample) with every sample before
     `boundary` (..., matching the leading dims) set to `fill_value`
@@ -1455,6 +1472,7 @@ def stage3_usable_range(
     reject_outliers: bool = False,
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
+    channel: int | str | None = None,
 ) -> StageResult:
     """Bin `value_var` by `range_var`, estimate the far-range noise floor
     from the tail `noise_region_fraction` of bins, and find the last
@@ -1503,9 +1521,28 @@ def stage3_usable_range(
     outlier_mad_k, outlier_min_bin_count
         Passed through to `reject_range_outliers` when
         `reject_outliers=True`; ignored otherwise.
+    channel : int or str, optional
+        Restrict this stage's own binning/fit to one physical
+        (port/starboard) channel — `0`/`1` by position, or
+        `"port"`/`"starboard"` by `ds["channel_id"]` value. `None`
+        (default) pools every channel's samples together, this
+        function's exact prior behavior. **Masks samples rather than
+        slicing `ds` itself down to one channel** — `ds` keeps its full
+        `(ping, channel, sample)` shape throughout (the sidescan schema
+        hard-requires `channel` be exactly size 2 elsewhere in the
+        pipeline); only the working array this function bins from is
+        narrowed. Real motivation (2026-09-02): port and starboard
+        transducers can have genuinely different gain characteristics,
+        and `usable_range_m`/the Stage 4 fit built from a silent blend
+        of both is a different (and less informative) result than
+        either side's own — nothing in the pooled output signals that a
+        blend happened. `metrics["channel"]` records the resolved index
+        either way.
     """
     if range_var not in ds:
         raise ValueError(f"stage3_usable_range: {range_var!r} not found — compute geometric ranges first")
+
+    channel_idx = _resolve_channel_idx(ds, channel, caller="stage3_usable_range") if channel is not None else None
 
     # Water-column mask always keyed to ground_range_m specifically, not
     # range_var -- see this function's own docstring for why.
@@ -1520,6 +1557,16 @@ def stage3_usable_range(
     # own to rely on.
     original = ds[value_var]
     working = np.where(water_column_finite, original.values, np.nan)
+
+    if channel_idx is not None:
+        # Boolean per-channel selector, broadcast against `original`'s
+        # actual dims (not a hardcoded (ping, channel, sample) position)
+        # -- robust to dim order.
+        channel_selector = xr.DataArray(
+            np.arange(ds.sizes["channel"]) == channel_idx, dims=["channel"],
+        )
+        channel_finite = channel_selector.broadcast_like(original).values
+        working = np.where(channel_finite, working, np.nan)
 
     n_nadir_gap_excluded = 0
     if exclude_before_sample is not None:
@@ -1547,6 +1594,7 @@ def stage3_usable_range(
             metrics={
                 "usable_range_m": None,
                 "range_var": range_var,
+                "channel": channel_idx,
                 "water_column_n_excluded": n_water_column_excluded,
                 "nadir_gap_n_excluded": n_nadir_gap_excluded,
             },
@@ -1587,6 +1635,7 @@ def stage3_usable_range(
         "far_range_median": float(binned["median"].iloc[-1]),
         "max_range_m": float(binned["range_max_m"].iloc[-1]),
         "range_var": range_var,
+        "channel": channel_idx,
         "water_column_n_excluded": n_water_column_excluded,
         "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,
@@ -1677,6 +1726,7 @@ def stage4_decay(
     r_fit_min_m: float | str | None = None,
     r_fit_min_auto_margin_m: float = _AUTO_NEAR_EDGE_MARGIN_M,
     r_ref_search_fraction: float = 0.5,
+    channel: int | str | None = None,
 ) -> StageResult:
     """Fit the four `fit_hardware_tvg_curve` candidate models against
     `value_var` vs. `range_var` and classify what TVG (if any) the data
@@ -1905,6 +1955,21 @@ def stage4_decay(
         Passed straight through to `fit_hardware_tvg_curve` — only
         matters when `r_ref_m` is `None` (auto-select). See that
         function's own docstring.
+    channel : int or str, optional
+        Restrict this stage's own binning/fit to one physical
+        (port/starboard) channel — `0`/`1` by position, or
+        `"port"`/`"starboard"` by `ds["channel_id"]` value. `None`
+        (default) pools every channel's samples together, this
+        function's exact prior behavior. Masks samples rather than
+        slicing `ds` itself (same posture as `stage3_usable_range`'s own
+        `channel` parameter — see its docstring for why: the sidescan
+        schema hard-requires `channel` be exactly size 2 elsewhere in
+        the pipeline). Real motivation (2026-09-02): port and starboard
+        can have genuinely different gain characteristics — a fitted
+        decay curve/TVG classification built from a silent blend of
+        both is a different (and less informative) result than either
+        side's own, with nothing in the output signaling a blend
+        happened. `metrics["channel"]` records the resolved index.
     min_bins : int, default 6
         Minimum number of range bins the fit window (`r_ref_m` to
         `usable_range_m`) must contain — `bin_width_m` is automatically
@@ -1933,6 +1998,8 @@ def stage4_decay(
     """
     if range_var not in ds:
         raise ValueError(f"stage4_decay: {range_var!r} not found — compute geometric ranges first")
+
+    channel_idx = _resolve_channel_idx(ds, channel, caller="stage4_decay") if channel is not None else None
 
     # Water-column mask always keyed to ground_range_m specifically, not
     # range_var -- range_var defaults to slant_range_m (2026-09-02,
@@ -1985,6 +2052,19 @@ def stage4_decay(
         np.where(water_column_finite, db_da.values, np.nan), dims=db_da.dims, coords=db_da.coords,
     )
 
+    if channel_idx is not None:
+        # Boolean per-channel selector, broadcast against db_da's actual
+        # dims (not a hardcoded (ping, channel, sample) position) --
+        # robust to dim order. Same masking posture as stage3_usable_range's
+        # own channel parameter -- see that function's docstring.
+        channel_selector = xr.DataArray(
+            np.arange(ds.sizes["channel"]) == channel_idx, dims=["channel"],
+        )
+        channel_finite = channel_selector.broadcast_like(db_da).values
+        db_da = xr.DataArray(
+            np.where(channel_finite, db_da.values, np.nan), dims=db_da.dims, coords=db_da.coords,
+        )
+
     n_nadir_gap_excluded = 0
     if exclude_before_sample is not None:
         db_before = np.asarray(db_da.values)
@@ -2018,6 +2098,7 @@ def stage4_decay(
             metrics={
                 "freq_hz": freq_hz, "db_reference": db_reference,
                 "range_var": range_var,
+                "channel": channel_idx,
                 "water_column_n_excluded": n_water_column_excluded,
                 "nadir_gap_n_excluded": n_nadir_gap_excluded,
                 "reject_outliers": reject_outliers,
@@ -2200,6 +2281,7 @@ def stage4_decay(
             for c in fit_result.candidates
         },
         "range_var": range_var,
+        "channel": channel_idx,
         "water_column_n_excluded": n_water_column_excluded,
         "nadir_gap_n_excluded": n_nadir_gap_excluded,
         "reject_outliers": reject_outliers,
