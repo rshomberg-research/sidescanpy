@@ -1940,6 +1940,53 @@ been ported into the library, so `run_investigation()`-based callers
   1297 passing / 36 skipped (was 1294).
 - **Version bumped 0.4.2 → 0.4.3.**
 
+### v0.14.0 follow-up 8 — `r_ref_m="mid_swath"` wasn't sufficient; auto-detected near edge clamped, x-limits stopped cropping (2026-09-02, same day)
+
+**Status:** Done. Follow-up 7's `r_ref_m="mid_swath"` fix reduced but did
+not eliminate the "reference outside the fit window" bug — a second,
+independent live report ("r_ref is often outside of the fit region and
+it is not showing the full plot just the region around the fit") traced
+to two more real gaps:
+
+- **The near-edge auto-detect's search bound doesn't bound its output.**
+  `r_fit_min_m="auto"`'s peak search restricts by *bin center* <=
+  `r_ref_m`, but the value it returns is that peak bin's *far edge plus
+  the margin* — on data whose true near-field peak sits close to the
+  search boundary (real on this dataset: the near-field ramp varies
+  enough mission-to-mission that it isn't reliably confined inside the
+  near half of the swath), the returned value can still land past
+  `r_ref_m` even though the search itself never looked beyond it.
+  Pinning `r_ref_m="mid_swath"` narrowed how often this triggers but
+  can't prevent it outright — mid-swath isn't guaranteed to be past
+  wherever the real peak happens to sit on a given mission. **Fixed:**
+  the auto-detected value is now clamped down to `r_ref_m` whenever it
+  would exceed it (a locally one-sided fit for just that mission/
+  section, not a crash), with a note recording when the clamp fired —
+  `metrics["r_fit_min_m"] <= metrics["r_ref_m"]` is now a hard guarantee
+  whenever `r_ref_m` is known, not just the common case.
+- **The ported axis-zoom (follow-up 7) cropped to the fit window
+  itself — the wrong call.** Matching `plot_official_tvg_fit.py`'s tight
+  zoom meant that whenever the reference *did* still land outside the
+  window (the bug above), the chart cropped that mismatch away instead
+  of showing it — "not showing the full plot" was a direct symptom of
+  the first bug, not a separate complaint. **Fixed:**
+  `apply_stage4_fit_window_limits`'s x-limits no longer crop to
+  `[r_fit_min_m, r_fit_max_m]` — they now always start at 0.0 and extend
+  through the far edge (padded), showing the full observed curve. Only
+  the y-limits stay computed from the fit window's own in-window values
+  (the one piece of the original zoom actually worth keeping — protects
+  against a near-boundary outlier compressing the real fit curves). A
+  wrongly-placed reference or fit window is now visible on the chart
+  instead of silently cropped out of frame.
+- **1 new test** in `TestStage4Decay` (the clamp, using a hand-built
+  ramp dataset whose peak sits deliberately close to `r_ref_m` — distinct
+  from `_make_full_physics_ds`'s monotonic decay, whose peak always
+  sits at range=0 and never triggers this path). `TestApplyStage4FitWindowLimits`'s
+  zoom test rewritten for the new always-starts-at-0 contract instead of
+  asserting the old crop-to-window behavior. Full suite: 1299 passing /
+  36 skipped (was 1298; net +1 since one test was rewritten, not added).
+- **Version bumped 0.4.4 → 0.4.5.**
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)

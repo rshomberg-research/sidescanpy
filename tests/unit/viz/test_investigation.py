@@ -350,23 +350,24 @@ class TestApplyStage4FitWindowLimits:
         finally:
             plt.close(fig)
 
-    def test_zooms_to_fit_window_with_padding(self):
+    def test_shows_full_range_from_zero_not_cropped_to_fit_window(self):
+        """x-limits deliberately always start at 0.0 -- an earlier
+        version cropped to the fit window itself, which (combined with
+        a misconfigured r_ref_m) read as "not showing the full plot"
+        rather than a visibly wrong reference. See this function's own
+        docstring for the real report that changed this."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
         stage4 = stage4_decay(
             ds, range_var="ground_range_m", bin_width_m=2.0, usable_range_m=40.0,
             r_ref_m="mid_swath", r_fit_min_m="auto",
         )
-        r_fit_min_m = stage4.metrics["r_fit_min_m"]
         r_fit_max_m = stage4.metrics["r_fit_max_m"]
         fig, ax = plt.subplots()
         try:
             apply_stage4_fit_window_limits(ax, stage4)
             x_lo, x_hi = ax.get_xlim()
-            x_span = r_fit_max_m - r_fit_min_m
-            assert x_lo == pytest.approx(max(0.0, r_fit_min_m - 0.12 * x_span))
-            assert x_hi == pytest.approx(r_fit_max_m + 0.12 * x_span)
-            # A real zoom, not a no-op leaving matplotlib's autoscale:
-            assert x_hi - x_lo < r_fit_max_m  # narrower than the full [0, r_fit_max_m] span
+            assert x_lo == pytest.approx(0.0)
+            assert x_hi > r_fit_max_m  # padded past the far edge, not cropped to it
         finally:
             plt.close(fig)
 

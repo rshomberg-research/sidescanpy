@@ -559,30 +559,32 @@ def apply_stage4_fit_window_limits(
     ax: Axes, stage4: StageResult, *, x_pad_fraction: float = 0.12,
     y_pad_fraction: float = 0.25, y_pad_min_db: float = 1.0, x_pad_min_m: float = 1.0,
 ) -> None:
-    """Zooms `ax` (a `plot_candidate_fit`/`plot_stage4_decay_fit` axis)
-    to the fit window Stage 4 actually used, with padding — the
-    "official" recipe's own axis-limit choice
-    (`project-a/scripts/debug/plot_official_tvg_fit.py`, validated
-    against real survey data). Ported into the library 2026-09-02 after
-    a downstream consumer (`downstream-project`'s `apply_config_pipeline.py`)
-    reused the same underlying `plot_candidate_fit`/`plot_stage4_residuals`
-    calls but not this limit logic, leaving matplotlib's default
-    full-data autoscale in place — which let a near-boundary outlier bin
-    (the first-bottom-return artifact the fit window exists to route
-    around) compress the actual fit curves into an unreadable sliver,
-    and made a misconfigured `r_ref_m` (see `stage4_decay`'s `r_ref_m`
-    docstring on why `r_ref_m=None` paired with `r_fit_min_m="auto"`
-    tends to put the reference *outside* the fit window) look like
-    "no observations before the reference" rather than the real problem.
+    """Sets robust y-limits on `ax` (a `plot_candidate_fit`/
+    `plot_stage4_decay_fit` axis) from the fit window Stage 4 actually
+    used, and shows the full observed x-range (0 through the far edge,
+    padded) rather than matplotlib's default full-*data* autoscale.
 
-    y-limits are computed from the fit window's own observed values
+    **y-limits** are computed from the fit window's own observed values
     only (`stage4.metrics["r_fit_min_m"]` to `["r_fit_max_m"]`), not the
-    full unfiltered curve, so an out-of-window outlier can't stretch the
-    axis. x-limits zoom to that same window plus `x_pad_fraction` of its
-    span on each side, floored at `x_pad_min_m` so a degenerate
-    (near-zero-width) fit window still gets a well-defined, non-empty
-    zoom instead of relying on matplotlib's own auto-expand-with-warning
-    fallback for `set_xlim(x, x)`.
+    full unfiltered curve, so a near-boundary outlier bin (the
+    first-bottom-return artifact the fit window exists to route around)
+    can't stretch the axis and compress the actual fit curves into an
+    unreadable sliver — this is the one piece of the "official" recipe's
+    own axis-limit choice (`project-a/scripts/debug/
+    plot_official_tvg_fit.py`) worth keeping unconditionally.
+
+    **x-limits deliberately do NOT crop to the fit window.** An earlier
+    version of this function did (matching that script's own tight
+    zoom), which — ported into a downstream consumer
+    (`downstream-project`'s `apply_config_pipeline.py`) still shipping the
+    independent `r_ref_m=None` auto-pick bug (see `stage4_decay`'s
+    `r_ref_m` docstring) — turned a misconfigured reference into "not
+    showing the full plot, just the region around the fit" instead of
+    a visible, debuggable "the reference is outside the highlighted
+    window." Showing the full 0-to-far-edge curve keeps a wrongly placed
+    reference or fit window visually obvious instead of cropped away.
+    `x_pad_fraction`/`x_pad_min_m` only pad the *far* edge — the near
+    edge is always 0.0.
 
     If `ax` shares an x-axis (`sharex=True`) with another panel (e.g.
     `plot_stage4_residuals` stacked below it), that panel's x-limits
@@ -617,7 +619,8 @@ def apply_stage4_fit_window_limits(
     # x_pad_min_m keeps the zoom well-defined without relying on that
     # fallback.
     x_pad = max(x_pad_fraction * x_span, x_pad_min_m)
-    ax.set_xlim(max(0.0, r_fit_min_m - x_pad), r_fit_max_m + x_pad)
+    x_far_edge = max(r_fit_max_m, float(np.nanmax(ranges))) if ranges.size else r_fit_max_m
+    ax.set_xlim(0.0, x_far_edge + x_pad)
 
 
 def plot_stage4_residuals(

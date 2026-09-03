@@ -993,6 +993,36 @@ class TestStage4Decay:
 
         assert isinstance(result.metrics["r_fit_min_m"], float)
 
+    def test_r_fit_min_m_auto_clamps_to_r_ref_m_when_naive_value_would_exceed_it(self):
+        """2026-09-02, real bug reported from the field: the search
+        restricts by *bin center* <= r_ref_m, but the returned value is
+        that bin's far edge PLUS the margin -- on data whose true
+        near-field peak sits close to r_ref_m itself (real on vendor-format
+        data, whose near-field ramp varies enough that it isn't reliably
+        confined to the near half of the swath), the naive auto value
+        can still land past r_ref_m even though the search never looked
+        beyond it. Must clamp down to r_ref_m, not silently return a
+        window that doesn't contain its own reference."""
+        # Hand-built ramp (distinct from _make_full_physics_ds's
+        # monotonic decay, whose peak always sits at range=0): peak at
+        # range~19m, deliberately close to r_ref_m=20.0m below, so
+        # peak_far_edge(~19.5m) + the 5.0m default margin (~24.5m)
+        # would exceed r_ref_m without the clamp.
+        range_m = np.arange(60.0) + 0.5
+        amplitude = np.where(range_m < 19.0, range_m, np.maximum(38.0 - range_m, 0.1)).astype(np.float32)
+        ds = xr.Dataset({
+            "backscatter_raw": ("sample", amplitude),
+            "slant_range_m": ("sample", range_m),
+        })
+
+        result = stage4_decay(
+            ds, bin_width_m=1.0, freq_hz=1_495_000.0, usable_range_m=40.0,
+            r_ref_m=20.0, r_fit_min_m="auto", min_total_count=1,
+        )
+
+        assert result.metrics["r_fit_min_m"] == pytest.approx(20.0)
+        assert any("clamped down to r_ref_m" in n for n in result.notes)
+
     def test_r_fit_min_m_invalid_string_raises(self):
         ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
 
