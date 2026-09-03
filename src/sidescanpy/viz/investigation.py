@@ -555,6 +555,62 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
     return fig, ax
 
 
+def apply_stage4_fit_window_limits(
+    ax: Axes, stage4: StageResult, *, x_pad_fraction: float = 0.12,
+    y_pad_fraction: float = 0.25, y_pad_min_db: float = 1.0,
+) -> None:
+    """Zooms `ax` (a `plot_candidate_fit`/`plot_stage4_decay_fit` axis)
+    to the fit window Stage 4 actually used, with padding — the
+    "official" recipe's own axis-limit choice
+    (`project-a/scripts/debug/plot_official_tvg_fit.py`, validated
+    against real survey data). Ported into the library 2026-09-02 after
+    a downstream consumer (`downstream-project`'s `apply_config_pipeline.py`)
+    reused the same underlying `plot_candidate_fit`/`plot_stage4_residuals`
+    calls but not this limit logic, leaving matplotlib's default
+    full-data autoscale in place — which let a near-boundary outlier bin
+    (the first-bottom-return artifact the fit window exists to route
+    around) compress the actual fit curves into an unreadable sliver,
+    and made a misconfigured `r_ref_m` (see `stage4_decay`'s `r_ref_m`
+    docstring on why `r_ref_m=None` paired with `r_fit_min_m="auto"`
+    tends to put the reference *outside* the fit window) look like
+    "no observations before the reference" rather than the real problem.
+
+    y-limits are computed from the fit window's own observed values
+    only (`stage4.metrics["r_fit_min_m"]` to `["r_fit_max_m"]`), not the
+    full unfiltered curve, so an out-of-window outlier can't stretch the
+    axis. x-limits zoom to that same window plus `x_pad_fraction` of its
+    span on each side.
+
+    If `ax` shares an x-axis (`sharex=True`) with another panel (e.g.
+    `plot_stage4_residuals` stacked below it), that panel's x-limits
+    move too — call this once, on the top panel, not on both.
+
+    No-op (leaves `ax`'s existing limits untouched) if `stage4` has no
+    fit result, no recorded fit window, or no observed points fall
+    inside it.
+    """
+    fit_result = stage4.data.get("fit_result")
+    if fit_result is None:
+        return
+    r_fit_min_m = stage4.metrics.get("r_fit_min_m")
+    r_fit_max_m = stage4.metrics.get("r_fit_max_m")
+    if r_fit_min_m is None or r_fit_max_m is None:
+        return
+
+    ranges = fit_result.observed_range_m
+    losses = fit_result.observed_loss_db
+    window_mask = (ranges >= r_fit_min_m) & (ranges <= r_fit_max_m)
+    in_window_loss = losses[window_mask]
+    if in_window_loss.size:
+        y_lo, y_hi = float(in_window_loss.min()), float(in_window_loss.max())
+        y_pad = max(y_pad_fraction * (y_hi - y_lo), y_pad_min_db)
+        ax.set_ylim(y_lo - y_pad, y_hi + y_pad)
+
+    x_span = r_fit_max_m - r_fit_min_m
+    x_pad = x_pad_fraction * x_span
+    ax.set_xlim(max(0.0, r_fit_min_m - x_pad), r_fit_max_m + x_pad)
+
+
 def plot_stage4_residuals(
     stage4: StageResult, *, use_fixed_scale: bool = True, ax: Axes | None = None, relative_x: bool = True,
 ) -> tuple[Figure, Axes]:

@@ -139,7 +139,7 @@ def run_investigation(
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
     stage4_fit_value_col: str = "mean",
-    stage4_r_ref_m: float | None = None,
+    stage4_r_ref_m: float | str | None = None,
     stage4_r_fit_min_m: float | str | None = None,
     stage4_r_fit_min_auto_margin_m: float = 5.0,
     stage4_r_ref_search_fraction: float = 0.5,
@@ -290,6 +290,14 @@ def run_investigation(
         different winning candidates by RMSE, one within ~1% of the
         ambiguous threshold) motivating `stage4_r_ref_m` as a manual
         override when the auto-picked reference range looks unstable.
+        Pass `"mid_swath"` to pin it at `usable_range_m / 2` — the
+        "official" recipe's own choice, and the pairing required (not
+        just recommended) when also using `stage4_r_fit_min_m="auto"`:
+        left at its default `None`, `stage4_r_ref_m` auto-picks the
+        near-field peak bin itself, which nearly always lands *nearer*
+        than `"auto"`'s own peak-plus-margin near edge — i.e. the
+        reference ends up outside the fit window. See `stage4_decay`'s
+        `r_ref_m` docstring for the full mechanism.
     stage4_r_fit_min_m : float, "auto", or None
         Passed straight through to `stage4_decay` as `r_fit_min_m`.
         `None` (default) reproduces the prior one-sided fit window

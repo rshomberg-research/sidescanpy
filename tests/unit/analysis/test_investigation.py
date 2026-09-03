@@ -999,6 +999,45 @@ class TestStage4Decay:
         with pytest.raises(ValueError, match="must be 'auto'"):
             stage4_decay(ds, bin_width_m=2.0, r_ref_m=20.0, r_fit_min_m="near")
 
+    def test_r_ref_m_mid_swath_resolves_to_half_usable_range(self):
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        result = stage4_decay(ds, bin_width_m=2.0, usable_range_m=60.0, r_ref_m="mid_swath")
+
+        assert result.metrics["r_ref_m"] == pytest.approx(30.0)
+        assert result.metrics["r_ref_m_override"] == "mid_swath"
+        assert any("r_ref_m='mid_swath' resolved to" in n for n in result.notes)
+
+    def test_r_ref_m_mid_swath_without_usable_range_m_raises(self):
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        with pytest.raises(ValueError, match="needs usable_range_m"):
+            stage4_decay(ds, bin_width_m=2.0, r_ref_m="mid_swath")
+
+    def test_r_ref_m_invalid_string_raises(self):
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        with pytest.raises(ValueError, match="must be 'mid_swath'"):
+            stage4_decay(ds, bin_width_m=2.0, usable_range_m=60.0, r_ref_m="far_field")
+
+    def test_mid_swath_paired_with_auto_keeps_reference_inside_fit_window(self):
+        """The exact failure mode 'mid_swath' exists to prevent: left to
+        auto-pick independently, r_ref_m (near-field peak bin itself)
+        and r_fit_min_m="auto" (that same peak's far edge + margin)
+        nearly always disagree about which side of the peak r_ref_m
+        should be on -- r_ref_m ends up nearer than the fit window's own
+        near edge, i.e. outside it. Pinning r_ref_m="mid_swath" must
+        keep the resolved reference inside [r_fit_min_m, r_fit_max_m]."""
+        ds = self._make_full_physics_ds(n_pings=60, n_samples=300)
+
+        independent = stage4_decay(ds, bin_width_m=2.0, usable_range_m=60.0, r_fit_min_m="auto")
+        paired = stage4_decay(
+            ds, bin_width_m=2.0, usable_range_m=60.0, r_ref_m="mid_swath", r_fit_min_m="auto",
+        )
+
+        assert independent.metrics["r_ref_m"] < independent.metrics["r_fit_min_m"]  # the bug
+        assert paired.metrics["r_fit_min_m"] <= paired.metrics["r_ref_m"] <= paired.metrics["r_fit_max_m"]
+
     def test_exclude_first_n_bins_exceeding_available_bins_handled_gracefully(self):
         ds = self._make_full_physics_ds(n_pings=10, n_samples=60)
 

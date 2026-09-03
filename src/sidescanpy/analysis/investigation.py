@@ -1673,7 +1673,7 @@ def stage4_decay(
     outlier_mad_k: float = 3.5,
     outlier_min_bin_count: int = 5,
     fit_value_col: str = "mean",
-    r_ref_m: float | None = None,
+    r_ref_m: float | str | None = None,
     r_fit_min_m: float | str | None = None,
     r_fit_min_auto_margin_m: float = _AUTO_NEAR_EDGE_MARGIN_M,
     r_ref_search_fraction: float = 0.5,
@@ -1808,7 +1808,7 @@ def stage4_decay(
     outlier_mad_k, outlier_min_bin_count
         Passed through to `reject_range_outliers` when
         `reject_outliers=True`; ignored otherwise.
-    r_ref_m : float, optional
+    r_ref_m : float, "mid_swath", or None, optional
         Passed straight through to `fit_hardware_tvg_curve` — pins the
         loss reference to this exact range instead of letting it
         auto-select the near-field max-mean bin. Use this when the
@@ -1828,6 +1828,21 @@ def stage4_decay(
         remains a per-survey judgment call the caller makes by eye
         (`viz.tvg_diagnostics.plot_candidate_fit`), same as every other
         override in this module.
+
+        Pass the literal string `"mid_swath"` to pin `r_ref_m =
+        usable_range_m / 2` instead — the "official" recipe validated
+        against real survey data (`project-a`'s
+        `plot_official_tvg_fit.py`). **Required, not optional, when
+        pairing with `r_fit_min_m="auto"`:** leaving `r_ref_m=None` lets
+        it auto-pick the near-field *max-mean bin* (the peak itself),
+        while `r_fit_min_m="auto"` resolves to that same peak bin's far
+        edge *plus a margin* — independently auto-picked, these two
+        nearly always land with `r_ref_m` **inside** (nearer than) the
+        auto-detected fit window's near edge, i.e. the reference range
+        ends up outside the fit window entirely. `"mid_swath"` avoids
+        this by construction (usable_range_m/2 sits well past the
+        near-field peak on any normal survey). Raises `ValueError` if
+        `usable_range_m` isn't available to compute it from.
     r_fit_min_m : float or "auto", optional
         Passed straight through to `fit_hardware_tvg_curve` — `None`
         (default) reproduces the prior one-sided fit window (starts at
@@ -1998,6 +2013,19 @@ def stage4_decay(
             data={"binned": binned},
         )
 
+    r_ref_m_requested = r_ref_m
+    r_ref_m_mid_swath_note: str | None = None
+    if isinstance(r_ref_m, str):
+        if r_ref_m != "mid_swath":
+            raise ValueError(f"stage4_decay: r_ref_m string values must be 'mid_swath', got {r_ref_m!r}")
+        if not usable_range_m:
+            raise ValueError(
+                "stage4_decay: r_ref_m='mid_swath' needs usable_range_m -- pass it, or an "
+                "explicit numeric r_ref_m."
+            )
+        r_ref_m = usable_range_m / 2.0
+        r_ref_m_mid_swath_note = f"r_ref_m='mid_swath' resolved to {r_ref_m:.2f}m (usable_range_m / 2)."
+
     r_fit_min_m_requested = r_fit_min_m
     r_fit_min_m_auto_note: str | None = None
     if isinstance(r_fit_min_m, str):
@@ -2047,6 +2075,8 @@ def stage4_decay(
     second = ranked[1] if len(ranked) > 1 else None
 
     notes: list[str] = []
+    if r_ref_m_mid_swath_note is not None:
+        notes.append(r_ref_m_mid_swath_note)
     if r_fit_min_m_auto_note is not None:
         notes.append(r_fit_min_m_auto_note)
     if second is not None and best.fixed_scale_rmse_db > 0 and (
@@ -2083,7 +2113,7 @@ def stage4_decay(
         "exclude_first_n_bins": exclude_first_n_bins,
         "n_bins_excluded_after_bottom": n_bins_excluded_after_bottom,
         "r_ref_m": best.r_ref_m,
-        "r_ref_m_override": r_ref_m,
+        "r_ref_m_override": r_ref_m_requested,
         "r_fit_min_m": best.r_fit_min_m,
         "r_fit_min_m_override": r_fit_min_m_requested,
         "r_fit_min_auto_margin_m": r_fit_min_auto_margin_m if r_fit_min_m_requested == "auto" else None,

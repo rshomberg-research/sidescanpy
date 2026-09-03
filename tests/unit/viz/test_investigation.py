@@ -25,6 +25,7 @@ from sidescanpy.analysis.investigation import (
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 from sidescanpy.viz.investigation import (
+    apply_stage4_fit_window_limits,
     plot_stage2_5_beam_geometry,
     plot_stage2_nadir_zoom,
     plot_stage2_waterfall,
@@ -326,6 +327,71 @@ class TestPlotStage4Residuals:
         finally:
             plt.close(fig_rel)
             plt.close(fig_abs)
+
+
+class TestApplyStage4FitWindowLimits:
+    """2026-09-02: ported from project-a's plot_official_tvg_fit.py
+    after a downstream consumer (downstream-project) reused plot_candidate_fit/
+    plot_stage4_residuals directly but not this limit logic, leaving
+    matplotlib's default full-data autoscale in place -- a near-boundary
+    outlier bin could then compress the real fit curves into an
+    unreadable sliver, and a misconfigured r_ref_m looked like "missing
+    observations" rather than the real problem."""
+
+    def test_no_fit_result_leaves_limits_untouched(self):
+        stage4 = StageResult(stage="stage4_decay", metrics={}, data={})
+        fig, ax = plt.subplots()
+        ax.plot([0, 1], [0, 1])
+        original_xlim, original_ylim = ax.get_xlim(), ax.get_ylim()
+        try:
+            apply_stage4_fit_window_limits(ax, stage4)
+            assert ax.get_xlim() == original_xlim
+            assert ax.get_ylim() == original_ylim
+        finally:
+            plt.close(fig)
+
+    def test_zooms_to_fit_window_with_padding(self):
+        ds = _make_scaled_spreading_dataset(scale=1.6)
+        stage4 = stage4_decay(
+            ds, range_var="ground_range_m", bin_width_m=2.0, usable_range_m=40.0,
+            r_ref_m="mid_swath", r_fit_min_m="auto",
+        )
+        r_fit_min_m = stage4.metrics["r_fit_min_m"]
+        r_fit_max_m = stage4.metrics["r_fit_max_m"]
+        fig, ax = plt.subplots()
+        try:
+            apply_stage4_fit_window_limits(ax, stage4)
+            x_lo, x_hi = ax.get_xlim()
+            x_span = r_fit_max_m - r_fit_min_m
+            assert x_lo == pytest.approx(max(0.0, r_fit_min_m - 0.12 * x_span))
+            assert x_hi == pytest.approx(r_fit_max_m + 0.12 * x_span)
+            # A real zoom, not a no-op leaving matplotlib's autoscale:
+            assert x_hi - x_lo < r_fit_max_m  # narrower than the full [0, r_fit_max_m] span
+        finally:
+            plt.close(fig)
+
+    def test_y_limits_ignore_out_of_window_outlier(self):
+        """The whole reason this exists: a single bin far outside the
+        fit window (the first-bottom-return artifact) must not stretch
+        the y-axis and compress the real fit curves."""
+        ds = _make_scaled_spreading_dataset(scale=1.6)
+        stage4 = stage4_decay(
+            ds, range_var="ground_range_m", bin_width_m=2.0, usable_range_m=40.0,
+            r_ref_m="mid_swath", r_fit_min_m="auto",
+        )
+        fit_result = stage4.data["fit_result"]
+        # Inject an extreme out-of-window observed value directly into
+        # the already-computed fit result -- isolates this function's
+        # own windowing logic from stage4_decay's, which is tested
+        # separately.
+        fit_result.observed_loss_db[0] = 500.0
+        fig, ax = plt.subplots()
+        try:
+            apply_stage4_fit_window_limits(ax, stage4)
+            y_lo, y_hi = ax.get_ylim()
+            assert y_hi < 100.0  # nowhere near the injected 500dB outlier
+        finally:
+            plt.close(fig)
 
     def test_ax_param_draws_into_given_axes_not_a_new_figure(self):
         """For combining with plot_candidate_fit in one stacked figure

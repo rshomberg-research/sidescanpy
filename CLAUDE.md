@@ -1885,6 +1885,61 @@ on the field, not just from `project-a`'s standalone debug script:
   transferred to the field separately before this `"auto"` need
   came up there).
 
+### v0.14.0 follow-up 7 — `r_ref_m="mid_swath"` + fit-window axis limits ported, fixing a real bug on the field (2026-09-02, same day)
+
+**Status:** Done. Found from a live report after follow-up 6's `"auto"`
+near edge actually ran on real vendor-format data: "the reference range is
+often outside of the fit window," "not seeing observations from before
+the reference range," and a direct question — was the earlier artifact
+demo custom, or did it run through the automated code? **Answer: custom
+— `project-a/scripts/debug/plot_official_tvg_fit.py` computed
+`r_ref_m = usable_range_m / 2` and the axis limits inline; neither had
+been ported into the library, so `run_investigation()`-based callers
+(downstream-project) couldn't reproduce them.** Two real gaps, not one:
+
+- **`r_ref_m=None` and `r_fit_min_m="auto"` fight each other by
+  construction.** `r_ref_m=None` auto-picks the near-field *max-mean
+  bin* — the peak itself. `r_fit_min_m="auto"` (follow-up 6) resolves to
+  that same peak's far edge *plus a margin*. Left independent, `r_ref_m`
+  (at the peak) nearly always lands *nearer* than the auto-detected fit
+  window's near edge — i.e. the reference sits outside the window it's
+  supposedly the reference for. This is exactly the first bug report.
+  **Fixed:** `stage4_decay`'s `r_ref_m` now also accepts the literal
+  string `"mid_swath"`, resolving to `usable_range_m / 2` (the recipe's
+  own choice) — pinned well past the near-field peak on any normal
+  survey, so it can't collide with the auto-detected near edge.
+  `r_ref_m="mid_swath"` + `r_fit_min_m="auto"` is now the documented
+  *required* pairing, not "pick one or leave both auto" as follow-up 6's
+  own guidance had carelessly implied.
+- **The axis-limit/zoom logic lived only in the standalone script, never
+  in the library.** `plot_official_tvg_fit.py` computes robust y-limits
+  from the fit window's own observed values (not the full curve — an
+  out-of-window outlier can't compress the real fit into a sliver) and
+  x-limits zoomed to `[r_fit_min_m, r_fit_max_m]` plus padding.
+  `downstream-project`'s `_build_decay_fit_and_residuals` reused the same
+  `plot_candidate_fit`/`plot_stage4_residuals` calls but left
+  matplotlib's default full-data autoscale in place — which, combined
+  with the `r_ref_m` bug above, is what produced the second report ("not
+  seeing observations before the reference"): the reference sat so close
+  to the near edge that there was barely any span between them to render
+  meaningfully, and no window-relative zoom to make that legible.
+  **Fixed:** new `viz.investigation.apply_stage4_fit_window_limits(ax,
+  stage4)` — call once on the top (fit) panel of a `sharex=True` stack;
+  reads `stage4.metrics["r_fit_min_m"]`/`["r_fit_max_m"]` directly, so
+  any caller using the standard `stage4_decay` → `plot_candidate_fit`
+  pipeline gets the same zoom without recomputing it by hand.
+- **7 new tests**: `TestStage4Decay` gained 4 for `r_ref_m="mid_swath"`
+  (resolves to `usable_range_m/2`; raises without `usable_range_m`;
+  rejects any string other than `"mid_swath"`; a direct regression
+  reproducing the bug — `r_ref_m=None` + `r_fit_min_m="auto"` puts the
+  reference outside the window, `r_ref_m="mid_swath"` paired with it
+  does not). New `TestApplyStage4FitWindowLimits` (viz) gained 3: no-op
+  without a fit result; zooms to the fit window with the documented
+  padding; an out-of-window outlier injected directly into
+  `observed_loss_db` does not affect the computed y-limits. Full suite:
+  1297 passing / 36 skipped (was 1294).
+- **Version bumped 0.4.2 → 0.4.3.**
+
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 
 **Status:** Planning (2026-07-01). See `docs/planning/v0.7.0-geotiff-and-cropping.md` for the full plan — awaiting approval before implementation starts. (Not the same v0.7.0 work as the Format Conversion CLI + Visualization Demo above, which is already implemented — two planning docs currently share the `v0.7.0` label.)
