@@ -4,11 +4,15 @@
 
 import json
 
+import pytest
+
 from sidescanpy.targets.core import Target
 from sidescanpy.targets.interchange.coco import CocoImageEntry, write_coco
 
 
-def _entry(target_id, confidence, row=50, col=60, width=120, height=100) -> CocoImageEntry:
+def _entry(
+    target_id, confidence, row=50, col=60, width=120, height=100, file_name=None, bbox_size=None
+) -> CocoImageEntry:
     t = Target(
         target_id=target_id,
         source_format="jsf_discover",
@@ -19,7 +23,13 @@ def _entry(target_id, confidence, row=50, col=60, width=120, height=100) -> Coco
         position_confidence=confidence,
         extra_attributes={"window_row": row},
     )
-    return CocoImageEntry(target=t, file_name=f"target_{target_id}.png", width=width, height=height)
+    return CocoImageEntry(
+        target=t,
+        file_name=file_name or f"target_{target_id}.png",
+        width=width,
+        height=height,
+        bbox_size=bbox_size,
+    )
 
 
 def test_default_min_confidence_excludes_unverified(tmp_path):
@@ -63,3 +73,35 @@ def test_bbox_clipped_near_image_edge(tmp_path):
     x, y, w, h = ann["bbox"]
     assert x >= 0 and y >= 0
     assert ann["attributes"]["was_clipped"] is True
+
+
+def test_per_entry_bbox_size_overrides_global_box_size(tmp_path):
+    entries = [_entry("0001", "verified", row=50, col=60, width=120, height=100, bbox_size=(10.0, 8.0))]
+    out = tmp_path / "targets.coco.json"
+    coco = write_coco(entries, out, box_size=(40.0, 40.0))
+    ann = coco["annotations"][0]
+    assert ann["bbox"][2:] == [10.0, 8.0]
+
+
+def test_multiple_targets_sharing_file_name_become_one_image_two_annotations(tmp_path):
+    entries = [
+        _entry("0001", "verified", row=10, col=10, file_name="window_0.png"),
+        _entry("0002", "verified", row=90, col=90, file_name="window_0.png"),
+    ]
+    out = tmp_path / "targets.coco.json"
+    coco = write_coco(entries, out)
+    assert len(coco["images"]) == 1
+    assert len(coco["annotations"]) == 2
+    assert {a["image_id"] for a in coco["annotations"]} == {coco["images"][0]["id"]}
+    assert {a["id"] for a in coco["annotations"]} == {1, 2}
+    assert {a["attributes"]["target_id"] for a in coco["annotations"]} == {"0001", "0002"}
+
+
+def test_conflicting_dims_for_same_file_name_raises(tmp_path):
+    entries = [
+        _entry("0001", "verified", width=120, height=100, file_name="window_0.png"),
+        _entry("0002", "verified", width=200, height=200, file_name="window_0.png"),
+    ]
+    out = tmp_path / "targets.coco.json"
+    with pytest.raises(ValueError):
+        write_coco(entries, out)

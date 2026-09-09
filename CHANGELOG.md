@@ -9,6 +9,93 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+#### Dataset-export module (v0.15.0, in progress)
+- **`sidescanpy.export`** (new subpackage) — turns an already-corrected
+  survey channel into 8-bit training-dataset images, distinct from
+  `processing/` (physical corrections) and `targets/interchange/` (ML
+  annotation file formats).
+  - `export.eightbit`: `to_uint8()`/`from_uint8()` — invertible
+    percentile+gamma 8-bit display transform (any of uint16/uint32/
+    float32/float64), with a configurable normalization scope: default
+    per-image (each array stretched against its own percentiles), or
+    precomputed via `compute_reference_stats()` for survey-/dataset-wide
+    scope. `gamma=1.0` default matches this library's existing
+    display-gamma convention (`viz.waterfall`/`viz.gridded`).
+  - `export.windows`: `extract_chip()` — fixed-size, edge-aware,
+    optionally-jittered crop around a point. `extract_full_channel()` —
+    full-sample-axis window spanning a fixed ping span, downsampled to a
+    fixed output size; `square=True` (default) sizes the native ping
+    span to the channel's own sample count rather than a fixed ping
+    count, avoiding an aspect-ratio stretch a mismatched fixed count
+    would introduce once downsampled to a square output.
+    `sample_negative_window()` — picks a window location at least a
+    given distance from every cataloged target, for no-target negative
+    samples. `targets_within_window()` — every cataloged target whose
+    position falls inside an extracted window's extent (not just the
+    one a chip was centered on), for images with multiple targets.
+    `rescale_target_position()` — translates a target position from a
+    window's native (pre-downsample) space into its resized output
+    space.
+  - `export.geometric_window.extract_geometric_window()` — resamples an
+    already ping/sample-sliced channel window onto a regular *local*
+    grid (along-track x across-track meters, no CRS/UTM projection),
+    reusing `processing.geometric`'s per-sample `across_track_m` and
+    `viz.waterfall.along_track_distance_m()`.
+  - `export.georef_window.extract_georef_window()` — thin windowed
+    wrapper over the existing survey-wide georeferencing/gridding path
+    (`grids.resample_channel_to_grid` + `grids.definition.utm_grid_from_wgs84_bbox`),
+    extracting a region around one window instead of gridding an entire
+    survey. Produces a `SideScanGriddedRaster`, not a GeoTIFF file
+    directly — this library still hasn't taken on the `rasterio`
+    dependency a real GeoTIFF write would need.
+- **`targets.interchange.coco`/`yolo`**: `CocoImageEntry` gained
+  `bbox_size` (optional per-entry override of `write_coco`/`write_yolo`'s
+  global `box_size`, for a real measured target extent instead of the
+  shared placeholder) and support for multiple entries sharing one
+  `file_name` — they become one shared COCO image record with multiple
+  annotations (or, for YOLO, multiple lines in one label file) instead
+  of one image per target, for windows with more than one cataloged
+  target. Both changes are fully backward compatible — every existing
+  caller's behavior (one target per image, one shared `box_size`) is
+  unchanged. Raises `ValueError` if entries sharing a `file_name`
+  disagree on `width`/`height`.
+- Tests: `tests/unit/export/` (new), plus new cases in
+  `tests/unit/targets/interchange/test_coco.py`/`test_yolo.py`. Full
+  suite: 1352 passing / 36 skipped (was 1316).
+- **Fixed same day: `extract_geometric_window`/`extract_georef_window`
+  stretched their output.** Both derived `resolution_m` from the
+  window's own *larger* along/across (or NS/EW) extent, then forced
+  *both* axes to exactly `output_size_px` samples regardless of the
+  true aspect ratio — the smaller-extent axis came out visibly
+  compressed/stretched to fill the same pixel count as the larger one.
+  Fixed by changing the contract entirely: both functions now take an
+  explicit `resolution_m` and `size_px`, centered on a given real-world
+  point (`center_along_m`/`center_across_m`, or `center_lat`/`center_lon`)
+  — extent is purely `size_px * resolution_m` on *both* axes by
+  construction, so the result can't be stretched relative to the real
+  world regardless of the source data's own aspect ratio. This also
+  adds real target-centering (previously the caller had no way to
+  request a specific real-world center) and, for
+  `extract_geometric_window`, `channel_idx=None` to pool both channels
+  into one frame spanning the full swath width (no explicit mirroring
+  needed — `across_track_m`'s own sign convention already separates
+  port/starboard in real-world space). Both gain a `locate_point()`
+  companion function to place a *different* real-world point (e.g. a
+  second target) within an already-built grid. Tests rewritten
+  accordingly. Full suite: 1361 passing / 36 skipped.
+- **Fixed same day: `extract_full_channel` washed real images out to
+  near-white.** It downsampled the native window (via `scipy.ndimage.zoom`)
+  *before* a caller's percentile+gamma stretch ran, so the stretch measured
+  its percentiles against an already-blurred, low-variance array instead
+  of the real per-sample distribution — found by actually rendering real
+  survey data and comparing against this project's own known-good
+  waterfall/gridded output, which stretch first and only downsample for
+  display. Fixed by removing the resize from `extract_full_channel`
+  entirely (now returns the native-resolution window) and adding
+  `resize_to()` as an explicit, separate, deliberately-last step —
+  `to_uint8()` then `resize_to()`, never the other order. Full suite:
+  1354 passing / 36 skipped.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
@@ -74,6 +161,26 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   `backscatter_var="backscatter_intensity"`, `"linear"` otherwise; the
   colorbar label in `viz/gridded.py` now reads the raster's actual units
   instead of a hardcoded string.
+
+- **`export.eightbit.to_uint8()`'s gamma was inverted relative to this
+  library's own established convention, and its docstring claimed the
+  opposite (that it matched).** `viz.waterfall.plot_waterfall`/
+  `viz.gridded` hand `gamma` straight to `matplotlib.colors.PowerNorm`,
+  whose convention is `normalized ** gamma` (`gamma > 1` darkens
+  midtones/background, the classic contrast-enhancing direction).
+  `to_uint8()` computed `normalized ** (1/gamma)` instead — the inverse
+  — so a gamma value already tuned against a `PowerNorm`-based render
+  (e.g. 2.5) produced the opposite visual effect through this function:
+  brightened/washed-out instead of darkened. Found on real data (a
+  dataset-export progression grid at gamma=2.5 came out uniformly
+  washed-out/whited-out, the same nominal gamma that correctly enhanced
+  contrast in this survey's own `plot_waterfall` renders). Fixed:
+  `to_uint8()` now computes `normalized ** gamma`; `from_uint8()`'s
+  inverse updated to match (`normalized ** (1/gamma)`). Regression test:
+  `tests/unit/export/test_eightbit.py::test_gamma_above_1_darkens_matching_powernorm_convention`.
+  **Any caller that picked a gamma value empirically against the old
+  (inverted) behavior needs to re-tune it** — the fix changes real
+  output, not just documentation.
 
 ## [0.5.0] — 2026-06-17
 

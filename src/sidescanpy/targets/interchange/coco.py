@@ -26,12 +26,25 @@ from sidescanpy.targets.core import CONFIDENCE_RANK, Target, bbox_from_center, c
 
 @dataclass
 class CocoImageEntry:
-    """One target's canonical crop, ready to become a COCO image+annotation."""
+    """One target's canonical crop, ready to become a COCO image+annotation.
+
+    Multiple entries may share the same ``file_name`` — e.g. every
+    cataloged target that falls within one exported window (see
+    ``sidescanpy.export.windows.targets_within_window``). They become one
+    shared COCO image record with one annotation per entry, rather than
+    one image per target. Every entry sharing a ``file_name`` must agree
+    on ``width``/``height`` (the same physical image).
+
+    ``bbox_size``, if given, overrides ``write_coco``/``write_yolo``'s
+    global ``box_size`` for this entry only — for a real, measured target
+    extent instead of the shared placeholder.
+    """
 
     target: Target
     file_name: str
     width: int
     height: int
+    bbox_size: tuple[float, float] | None = None
 
 
 def write_coco(
@@ -52,7 +65,18 @@ def write_coco(
     export in a sibling project shipped an unverified/wrong bounding-box
     hypothesis by not gating on this).
 
+    Entries sharing a ``file_name`` become one image with multiple
+    annotations (see ``CocoImageEntry``'s own docstring) — each entry's
+    own ``bbox_size`` (if set) is used for its box, else the shared
+    ``box_size``.
+
     Returns the dict that was written, for inline inspection/testing.
+
+    Raises
+    ------
+    ValueError
+        If two entries share a ``file_name`` but disagree on
+        ``width``/``height``.
     """
     min_rank = CONFIDENCE_RANK[min_confidence]
     included = [e for e in entries if CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
@@ -61,24 +85,33 @@ def write_coco(
     images = []
     annotations = []
 
-    for image_id, entry in enumerate(included, start=1):
-        t = entry.target
-        images.append(
-            {
-                "id": image_id,
-                "file_name": entry.file_name,
-                "width": entry.width,
-                "height": entry.height,
-            }
-        )
+    image_ids: dict[str, int] = {}
+    annotation_id = 1
+    for entry in included:
+        image_id = image_ids.get(entry.file_name)
+        if image_id is None:
+            image_id = len(image_ids) + 1
+            image_ids[entry.file_name] = image_id
+            images.append(
+                {"id": image_id, "file_name": entry.file_name, "width": entry.width, "height": entry.height}
+            )
+        else:
+            existing = images[image_id - 1]
+            if (existing["width"], existing["height"]) != (entry.width, entry.height):
+                raise ValueError(
+                    f"conflicting width/height for file_name={entry.file_name!r}: "
+                    f"{(existing['width'], existing['height'])} vs {(entry.width, entry.height)}"
+                )
 
+        t = entry.target
         row = t.extra_attributes.get("window_row")
         col = t.sample
-        bbox, was_clipped = clip_bbox(bbox_from_center(row, col, box_size), entry.width, entry.height)
+        entry_box_size = entry.bbox_size if entry.bbox_size is not None else box_size
+        bbox, was_clipped = clip_bbox(bbox_from_center(row, col, entry_box_size), entry.width, entry.height)
 
         annotations.append(
             {
-                "id": image_id,
+                "id": annotation_id,
                 "image_id": image_id,
                 "category_id": 1,
                 "bbox": list(bbox),
@@ -92,15 +125,16 @@ def write_coco(
                 },
             }
         )
+        annotation_id += 1
 
     coco = {
         "info": {
             "description": (
                 "Single-category ('target') sonar contact dataset. No real class "
                 "labels exist in the source catalog (Description/Tag empty on "
-                "every target). Bounding boxes are a fixed placeholder size "
-                f"{tuple(box_size)}, not a measured target dimension — no source "
-                "catalog seen so far has real LengthMeters/WidthMeters data."
+                "every target). Bounding boxes default to a fixed placeholder size "
+                f"{tuple(box_size)}, not a measured target dimension, unless a "
+                "given CocoImageEntry.bbox_size overrides it with a real extent."
             ),
         },
         "licenses": [],
