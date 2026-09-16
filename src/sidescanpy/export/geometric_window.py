@@ -30,6 +30,7 @@ def extract_geometric_window(
     center_across_m: float,
     channel_idx: int | None = 0,
     backscatter_var: str = "backscatter_intensity",
+    search_radius_m: float | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Resample a ``size_px x size_px`` square region, centered on
     ``(center_along_m, center_across_m)``, at exactly ``resolution_m``
@@ -76,6 +77,18 @@ def extract_geometric_window(
     channel_idx : int or None, default 0
         Restrict to one physical channel (0=port, 1=starboard), or
         ``None`` to pool both.
+    search_radius_m : float, optional
+        KDTree query radius; defaults to ``1.5 * resolution_m``. A
+        survey whose along-track position updates at a much lower rate
+        than its ping rate (real case: a Klein SDF survey whose GPS
+        fixes only every ~8 pings, jumping ~2m each time) has real gaps
+        between along-track fixes wider than a resolution chosen from
+        the *average* distance/ping can bridge at the default radius —
+        the result grid shows periodic empty stripes at exactly the
+        fix-to-fix interval, since most cells' nearest real point sits
+        outside ``1.5 * resolution_m``. Passing a wider radius (e.g. the
+        real fix-to-fix jump distance) bridges those gaps without also
+        needing a coarser (more zoomed-out) ``resolution_m``.
 
     Returns
     -------
@@ -125,7 +138,7 @@ def extract_geometric_window(
     gg_along, gg_across = np.meshgrid(grid_along, grid_across, indexing="ij")
     query_points = np.column_stack([gg_along.ravel(), gg_across.ravel()])
 
-    search_radius = 1.5 * resolution_m
+    search_radius = search_radius_m if search_radius_m is not None else 1.5 * resolution_m
     grid_values = np.full(query_points.shape[0], np.nan)
     for i, pt in enumerate(query_points):
         idx = tree.query_ball_point(pt, r=search_radius)

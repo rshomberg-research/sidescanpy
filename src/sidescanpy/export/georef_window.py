@@ -36,6 +36,7 @@ def extract_georef_window(
     center_lon: float,
     method: ResamplingMethod = ResamplingMethod.MEAN,
     backscatter_var: str = "backscatter_intensity",
+    max_search_radius_m: float | None = None,
 ) -> tuple[SideScanGriddedRaster, dict]:
     """Resample a ``size_px x size_px`` square region, centered on
     ``(center_lat, center_lon)``, at exactly ``resolution_m`` meters/pixel
@@ -62,6 +63,13 @@ def extract_georef_window(
         target's own position, read directly from
         ``latitude_per_sample``/``longitude_per_sample`` at its
         ping/sample/channel).
+    max_search_radius_m : float, optional
+        Passed straight through to ``resample_channel_to_grid`` (defaults
+        to its own ``1.5 * resolution_m``) -- see
+        :func:`sidescanpy.export.geometric_window.extract_geometric_window`'s
+        own ``search_radius_m`` docstring for when a wider radius is
+        needed (a survey whose along-track position updates far less
+        often than its ping rate).
 
     Returns
     -------
@@ -84,7 +92,9 @@ def extract_georef_window(
         center_easting + half_extent,
     )
     grid_def = GridDefinition(bbox, resolution_m, crs=crs)
-    raster = resample_channel_to_grid(channel_ds, grid_def, method=method, backscatter_var=backscatter_var)
+    raster = resample_channel_to_grid(
+        channel_ds, grid_def, method=method, backscatter_var=backscatter_var, max_search_radius_m=max_search_radius_m
+    )
 
     meta = {
         "crs": crs,

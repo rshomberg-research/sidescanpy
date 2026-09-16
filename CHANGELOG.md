@@ -181,6 +181,26 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   **Any caller that picked a gamma value empirically against the old
   (inverted) behavior needs to re-tune it** — the fix changes real
   output, not just documentation.
+- **`extract_geometric_window`/`extract_georef_window`'s fixed
+  `1.5 * resolution_m` KDTree search radius left periodic empty stripes
+  on a survey whose GPS updates far less often than its ping rate.**
+  Found on a real Klein SDF survey: real GPS fixes land only every ~8
+  pings, each jumping ~2m — a grid resolution chosen from the *average*
+  along-track distance per ping (correctly avoiding an earlier,
+  differently-broken resolution heuristic) still can't find a real point
+  within `1.5x` that resolution for most cells between fixes, since the
+  real gaps are wider than that at the fix-to-fix boundaries. Widening
+  the resolution itself to bridge every gap would zoom a close-up window
+  out absurdly (200px at ~2m/px spans ~400m). Fixed: `extract_geometric_window`
+  gained `search_radius_m`, `extract_georef_window` gained
+  `max_search_radius_m` (threaded straight to `resample_channel_to_grid`'s
+  existing parameter of the same name) — both optional, defaulting to
+  the prior `1.5 * resolution_m` for full backward compatibility. A
+  caller widens the radius to the real worst-case gap (e.g. the
+  95th-percentile along-track diff) to bridge duty-cycle gaps without
+  touching resolution/zoom at all. Real-data confirmation: one chip-scale
+  target's geometric coverage roughly doubled (17,355→29,599 of 40,401
+  cells filled) at the same resolution, radius alone changed.
 
 ## [0.5.0] — 2026-06-17
 
