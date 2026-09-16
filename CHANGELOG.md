@@ -96,6 +96,95 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   `to_uint8()` then `resize_to()`, never the other order. Full suite:
   1354 passing / 36 skipped.
 
+#### CLI subpackage — sidescan-convert / sidescan-correct / sidescan-export / sidescan-analyze (2026-09-16)
+
+Consolidates the pipeline scripts that used to be duplicated,
+near-identically, across every consumer project's own `scripts/`
+directory. Direct comparison found 9 of 13 numbered scripts
+byte-identical between `project-b` and `project-a` except docstring
+path text — pure duplication, no per-project logic — and the one real
+divergence found (`project-b/04_radiometric.py` silently missing the
+TVG term-override flags) was an already-occurred drift bug, not a
+hypothetical risk. New `sidescanpy.cli` subpackage, four console-script
+entry points (`[project.scripts]` in `pyproject.toml`):
+
+- **`sidescan-correct`** (replaces `02_crop_farrange.py`/
+  `04_radiometric.py`/`06_geometric.py`/`08_georef.py`) — one command,
+  explicit `--crop-farrange`/`--tvg`/`--geometric`/`--georef` step
+  flags, independently toggleable and independently idempotent.
+  Requesting several steps in one invocation now reads + writes each
+  file once (`sidescanpy/cli/_common.py: process_files_in_place()`),
+  not once per stage. Verified byte-identical output against real JSF
+  and Klein SDF survey data (including the `--no-spreading`/
+  `--no-absorption` TVG override path) vs. running the four old scripts
+  in sequence.
+- **`sidescan-convert`** (replaces `01_convert.py`/`11_read_targets.py`)
+  — `survey` (unchanged) and `targets`, which dispatches on the target
+  catalog directory's own contents (`*.target` vs `Target_*.tgt`), not
+  the paired survey format. Promotes `project-b/11_read_targets.py`'s
+  Klein clock-offset calibration logic into `sidescanpy.io.sdf.targets`
+  as new public functions — `calibrate_clock_offset()`,
+  `resolve_targets_offset_corrected()`, `resolve_targets_nearest_ping()`
+  — this is a Klein-acquisition-general fix (a constant per-survey
+  epoch shift), not project-specific, and belongs where
+  `read_klein_targets()` already lives. Also new:
+  `viz.targets.plot_target_position_scatter()`/
+  `export_target_position_scatter_png()`, promoted from the
+  near-duplicated scatter-plot block in both old `11_read_targets.py`
+  copies. Verified byte-identical `targets.json` output against real
+  data for both formats, including calibrated-offset Klein resolution
+  (same derived offset, 241760407.5s, on the real two-file survey
+  checked).
+- **`sidescan-export`** (replaces `03_track_maps.py`/`05_waterfalls.py`/
+  `07_ground_waterfalls.py`/`09_grid.py`/`12_track_with_targets.py`/
+  `13_export_chips.py`, promotes `project-a/scripts/
+  14_export_dataset.py`'s `chip`/`survey-window`/`progression`
+  subcommands essentially unchanged — that script was already
+  format-agnostic and cross-project proven) — new `waterfall`
+  (`--range-mode {slant,ground}` merges the old 05/07 split), `grid`,
+  and `track` (optional `--targets-json` overlay merges the old 03/12
+  split) subcommands. Verified byte-identical output against real data
+  for waterfall/ground-waterfall/grid/track, and byte-identical chip
+  PNGs + `targets.coco.json`/`.yolo` (contact sheet differs only in a
+  deliberate cosmetic title-text change) against real target data.
+- **`sidescan-analyze`** (new) — `investigate` promotes
+  `project-a/scripts/investigate_dataset.py` essentially unchanged
+  (a thin driver over `sidescanpy.investigation.run_investigation()`).
+  `tvg-fit` is a from-scratch driver built on `stage4_decay()`'s own
+  native `r_ref_m="auto"`/`r_fit_min_m="auto"` support (see "v0.14.0
+  follow-up 11" below) rather than porting
+  `project-a/scripts/debug/plot_official_tvg_fit.py`'s now-partially-
+  superseded manual recipe verbatim — that script's exploratory
+  predecessors (`compare_tvg_fit_recipes.py`/
+  `validate_tvg_fit_flatness.py`/`tvg_range_residual_diagnostic.py`)
+  were one-time comparison tools that led to the adopted recipe, not an
+  ongoing capability, so they weren't promoted either. Verified against
+  real data: identical fit window, winning candidate, and RMSE to
+  `plot_official_tvg_fit.py`'s own manual recipe (only `r_ref_m` differs
+  — 15.00m auto-placed vs. 14.50m manual mid-swath — a documented,
+  expected difference between the two recipes that doesn't change the
+  fit outcome).
+- **`sidescanpy.cli._config`** — shared `--config path.json` support
+  across all four commands: a small per-dataset JSON file (not YAML —
+  this codebase already uses JSON everywhere and has no YAML
+  dependency) seeds a (sub)command's argparse defaults via
+  `set_defaults()`; an explicit CLI flag still overrides a config
+  value. A single file can hold settings for several different
+  (sub)commands at once — unrecognized keys are silently ignored, not
+  an error.
+- Tests: `tests/unit/cli/` (new — `test_correct.py`, `test_convert.py`,
+  `test_export.py`, `test_analyze.py`, `test_config.py`), plus new
+  cases in `tests/unit/io/sdf/test_targets.py` and
+  `tests/unit/viz/test_targets.py` for the promoted Klein calibration
+  functions and scatter-plot helper. Full suite: 1428 passing / 36
+  skipped (was 1373 before this work).
+- Consumer projects: `project-b`/`project-a` had their numbered
+  scripts (and `project-a`'s `14_export_dataset.py`/
+  `investigate_dataset.py`) deleted, replaced by a `datasets/*.json`
+  per-survey config file each (see each project's own `datasets/`
+  directory) — see each project's own `README.md`/`CLAUDE.md` for the
+  consumer-project side of this consolidation.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

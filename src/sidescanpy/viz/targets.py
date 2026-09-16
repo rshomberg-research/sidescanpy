@@ -42,6 +42,46 @@ def _project_lonlat(lat, lon, crs: CRS) -> Tuple[np.ndarray, np.ndarray]:
     return np.asarray(x, dtype=float), np.asarray(y, dtype=float)
 
 
+def plot_target_position_scatter(targets: list[Target], *, title: Optional[str] = None) -> plt.Figure:
+    """Plain lat/lon scatter of every target with a resolved position —
+    no track/scanlines context, just a standalone QA plot. Returns
+    ``None`` if no target has both ``latitude``/``longitude`` set.
+
+    Promoted from the near-identical scatter block duplicated in both
+    format's own target-catalog-reading pipeline stage (JSF's Discover
+    catalog already carries position; Klein's ``.tgt`` needs it resolved
+    externally first — see ``sidescanpy.io.sdf.targets``).
+    """
+    lat = [t.latitude for t in targets if t.latitude is not None and t.longitude is not None]
+    lon = [t.longitude for t in targets if t.latitude is not None and t.longitude is not None]
+    if not lat:
+        return None
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.scatter(lon, lat, s=50, c="#c1440e", edgecolor="black", linewidth=0.5, zorder=3)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_title(title or f"Target positions (n={len(lat)})")
+    ax.ticklabel_format(useOffset=False)
+    ax.set_aspect("equal")
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def export_target_position_scatter_png(targets: list[Target], output_path: str, *, title: Optional[str] = None, dpi: int = 150) -> bool:
+    """Plot and save :func:`plot_target_position_scatter`'s output.
+    Returns False (no file written) if no target had a resolvable
+    position, True otherwise."""
+    fig = plot_target_position_scatter(targets, title=title)
+    if fig is None:
+        return False
+    fig.savefig(output_path, dpi=dpi)
+    plt.close(fig)
+    logger.info(f"Exported target position scatter to {output_path}")
+    return True
+
+
 def plot_track_with_targets(
     track: dict,
     targets: list[Target],

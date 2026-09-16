@@ -31,8 +31,11 @@ those consumer projects — see "Quick Reference" below.
 - **Source code:** `src/sidescanpy/`
 - **Tests:** `tests/unit/` (fast), `tests/integration/` (slow, requires fixtures)
 - **Docs:** `docs/` (module refs), `docs/planning/` (feature plans)
-- **Scripts:** moved out of this repo 2026-07-07 (see note above) — CLI
-  tools and demos now live in the `project-a` consumer project
+- **Scripts:** moved out of this repo 2026-07-07 (see note above); the
+  standard pipeline CLI moved back in as `src/sidescanpy/cli/` in
+  v0.15.0 (`sidescan-convert`/`sidescan-correct`/`sidescan-export`/
+  `sidescan-analyze` console scripts) — genuinely project-specific
+  one-offs/demos still live in consumer projects' own `scripts/debug/`
 - **Changelog:** `CHANGELOG.md` (Keep a Changelog format)
 - **Development guide:** `docs/DEVELOPMENT.md`
 
@@ -64,12 +67,21 @@ sidescanpy/
 │   ├── definition.py   # GridDefinition (bbox + resolution + CRS)
 │   ├── raster.py       # SideScanGriddedRaster (xarray wrapper)
 │   └── resample.py     # resample_channel_to_grid()
-└── viz/
-    ├── waterfall.py    # Port+starboard waterfall display; along_track_distance_m()
-    ├── gridded.py      # gridded raster plots (v0.6.0)
-    └── track.py        # NEW v0.7.0: full-survey track + scan-line plot (UTM)
+├── viz/
+│   ├── waterfall.py    # Port+starboard waterfall display; along_track_distance_m()
+│   ├── gridded.py      # gridded raster plots (v0.6.0)
+│   └── track.py        # NEW v0.7.0: full-survey track + scan-line plot (UTM)
+└── cli/                # NEW v0.15.0: console-script CLIs (see "v0.15.0" below)
+    ├── convert.py      # sidescan-convert: survey | targets
+    ├── correct.py      # sidescan-correct: --crop-farrange/--tvg/--geometric/--georef
+    ├── export.py       # sidescan-export: waterfall | grid | track | chip | survey-window | progression
+    └── analyze.py      # sidescan-analyze: investigate | tvg-fit
 
 ```
+
+(This tree predates `targets/`, `export/`, and `analysis/`, added in
+later versions — not kept exhaustively current; see each subpackage's
+own module docstring for what's actually there.)
 
 `scripts/` (CLI tools built on the library: `convert_survey.py`,
 `visualization_demo.py`, `convert.py`, `batch_convert_and_plot.py`,
@@ -2144,6 +2156,44 @@ select a value 1/3 from the start." Correct on both counts.
   (follow-up 10) was answering a *different* question than the one
   originally asked — a real misread, called out directly by the user.
 - **Version bumped 0.4.7 → 0.4.8.**
+
+### v0.15.0 — CLI subpackage consolidating the consumer-project numbered scripts (2026-09-16)
+
+**Status:** Complete. Full writeup in `CHANGELOG.md`'s "Unreleased ->
+Added -> CLI subpackage" entry — this note just points at it and records
+what changed outside `sidescanpy`'s own source tree, per this file's own
+"Session Handoff" convention.
+
+- New `sidescanpy.cli` subpackage (`convert.py`/`correct.py`/
+  `export.py`/`analyze.py`/`_common.py`/`_config.py`), four
+  console-script entry points added to `pyproject.toml`
+  (`sidescan-convert`/`sidescan-correct`/`sidescan-export`/
+  `sidescan-analyze`). Replaces the numbered pipeline scripts that were
+  duplicated near-identically across `project-b`'s and `project-a`'s
+  own `scripts/` directories (9 of 13 confirmed byte-identical except
+  docstring text) — the exact category of drift that already caused a
+  real bug (`project-b/04_radiometric.py` missing a feature) is now
+  structurally impossible, since there's only one copy of this code.
+- Two small, genuinely general fixes landed on existing modules as part
+  of this: `io/sdf/targets.py` gained `calibrate_clock_offset()`/
+  `resolve_targets_offset_corrected()`/`resolve_targets_nearest_ping()`
+  (promoted from an `project-b`-local script — Klein-acquisition-
+  general, not project-specific), and `viz/targets.py` gained
+  `plot_target_position_scatter()`/`export_target_position_scatter_png()`
+  (promoted from a near-duplicated block in both formats' own
+  target-catalog-reading stage).
+- Every new command verified against real survey data (both JSF and
+  Klein SDF) with byte-identical (or, for `tvg-fit`, behaviorally
+  equivalent — it intentionally uses the more current `r_ref_m="auto"`
+  library recipe rather than porting an older manual script verbatim)
+  output vs. the scripts it replaces, before any old script was deleted.
+- `project-b`/`project-a` had their numbered scripts (plus
+  `project-a`'s `14_export_dataset.py`/`investigate_dataset.py`)
+  deleted and replaced with one `datasets/<survey>.json` `--config` file
+  each (real, cited settings — not placeholders) — see those projects'
+  own `README.md`/`CLAUDE.md` for their side of this.
+- Version bumped 0.4.10 (pyproject.toml) for this round.
+- Full suite: 1428 passing / 36 skipped (was 1373 before this work).
 
 ### v0.7.0 — GeoTIFF export + CSV-driven target cropping
 

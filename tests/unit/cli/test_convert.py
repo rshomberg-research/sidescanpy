@@ -1,0 +1,210 @@
+"""
+Unit tests for sidescan-convert — survey (.jsf/.sdf -> .ss.h5) and
+targets (catalog -> targets.json) subcommands, replacing the old
+per-project 01_convert.py / 11_read_targets.py scripts.
+
+CLI orchestration is tested here with the underlying format readers
+monkeypatched out (already covered by their own module's tests in
+tests/unit/io/) so these tests stay fast and focused on dispatch,
+flag-wiring, and file I/O.
+
+2026 rshomberg@uri.edu
+"""
+
+import argparse
+from pathlib import Path
+
+import pytest
+
+from sidescanpy.cli import convert
+from sidescanpy.io.hdf5 import read_survey
+from sidescanpy.targets.core import Target
+from sidescanpy.targets.io import read_targets_json
+
+
+def _target(target_id, lat=None, lon=None, **extra_attrs):
+    return Target(
+        target_id=target_id, source_format="x", catalog_source="x",
+        latitude=lat, longitude=lon, position_confidence="unknown",
+        extra_attributes=extra_attrs,
+    )
+
+
+class TestDetectCatalogFormat:
+    def test_klein(self, tmp_path):
+        (tmp_path / "Target_1536923484.tgt").write_bytes(b"")
+        assert convert._detect_catalog_format(tmp_path) == "sdf_klein"
+
+    def test_jsf(self, tmp_path):
+        (tmp_path / "Target-0001.target").write_bytes(b"")
+        assert convert._detect_catalog_format(tmp_path) == "jsf_discover"
+
+    def test_ambiguous_raises(self, tmp_path):
+        (tmp_path / "Target_1536923484.tgt").write_bytes(b"")
+        (tmp_path / "Target-0001.target").write_bytes(b"")
+        with pytest.raises(ValueError, match="ambiguous"):
+            convert._detect_catalog_format(tmp_path)
+
+    def test_neither_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="No target catalog files"):
+            convert._detect_catalog_format(tmp_path)
+
+
+class TestRunSurvey:
+    def _args(self, tmp_path, **overrides):
+        defaults = dict(
+            input_dir=str(tmp_path / "raw"), output_dir=str(tmp_path / "ss_h5"),
+            input_format="auto", force=False,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_converts_new_file(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        (tmp_path / "raw").mkdir()
+        (tmp_path / "raw" / "20241017181822.jsf").write_bytes(b"")
+        monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
+        monkeypatch.setattr(convert, "read_and_convert", lambda paths, fmt, survey_name=None: sample_multi_frequency_survey)
+
+        assert convert.run_survey(self._args(tmp_path)) == 0
+
+        out = tmp_path / "ss_h5" / "20241017181822.ss.h5"
+        assert out.exists()
+        result = read_survey(out)
+        assert set(result.freq_channels) == {"hz_1495000", "hz_547500"}
+
+    def test_skips_existing_output_without_force(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        (tmp_path / "raw").mkdir()
+        (tmp_path / "raw" / "a.jsf").write_bytes(b"")
+        out_dir = tmp_path / "ss_h5"
+        out_dir.mkdir()
+        (out_dir / "a.ss.h5").write_bytes(b"sentinel")
+
+        called = []
+        monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
+        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: called.append(1) or sample_multi_frequency_survey)
+
+        assert convert.run_survey(self._args(tmp_path)) == 0
+        assert called == []
+        assert (out_dir / "a.ss.h5").read_bytes() == b"sentinel"
+
+    def test_force_reprocesses(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        (tmp_path / "raw").mkdir()
+        (tmp_path / "raw" / "a.jsf").write_bytes(b"")
+        out_dir = tmp_path / "ss_h5"
+        out_dir.mkdir()
+        (out_dir / "a.ss.h5").write_bytes(b"sentinel")
+
+        monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
+        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+
+        assert convert.run_survey(self._args(tmp_path, force=True)) == 0
+        assert (out_dir / "a.ss.h5").read_bytes() != b"sentinel"
+
+    def test_no_files_found_returns_1(self, tmp_path):
+        (tmp_path / "raw").mkdir()
+        assert convert.run_survey(self._args(tmp_path)) == 1
+
+    def test_missing_input_dir_returns_1(self, tmp_path):
+        assert convert.run_survey(self._args(tmp_path)) == 1
+
+
+class TestRunTargets:
+    def _args(self, tmp_path, **overrides):
+        defaults = dict(
+            source=tmp_path / "cat", output=tmp_path / "out",
+            ss_h5_dir=None, max_time_delta_s=300.0, time_offset_s=None,
+            calibrate_offset=False, local_utc_offset_hours=4.0,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_jsf_catalog(self, tmp_path, monkeypatch):
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        (cat / "Target-0001.target").write_bytes(b"")
+        targets = [_target("0001", 41.5, -71.4), _target("0002")]
+        monkeypatch.setattr(convert, "read_discover_targets", lambda source: targets)
+
+        assert convert.run_targets(self._args(tmp_path)) == 0
+
+        written = read_targets_json(tmp_path / "out" / "targets.json")
+        assert len(written) == 2
+        assert (tmp_path / "out" / "position_scatter.png").exists()
+
+    def test_klein_catalog_no_ss_h5_dir_no_position(self, tmp_path, monkeypatch):
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        (cat / "Target_1536923484.tgt").write_bytes(b"")
+        targets = [_target("1536923484")]
+        monkeypatch.setattr(convert, "read_klein_targets", lambda source: targets)
+
+        assert convert.run_targets(self._args(tmp_path)) == 0
+
+        written = read_targets_json(tmp_path / "out" / "targets.json")
+        assert len(written) == 1
+        assert not (tmp_path / "out" / "position_scatter.png").exists()
+
+    def test_klein_catalog_with_calibrate_offset(self, tmp_path, monkeypatch):
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        (cat / "Target_1536923484.tgt").write_bytes(b"")
+        ss_h5_dir = tmp_path / "ss_h5"
+        ss_h5_dir.mkdir()
+        raw_targets = [_target("1536923484")]
+        resolved_targets = [_target("1536923484", 41.5, -71.4)]
+
+        calls = {}
+        monkeypatch.setattr(convert, "read_klein_targets", lambda source: raw_targets)
+        monkeypatch.setattr(convert, "calibrate_clock_offset", lambda d, h: calls.setdefault("offset", 500.0) or 500.0)
+
+        def _fake_resolve(targets, d, offset_s, max_time_delta_s):
+            calls["offset_s_used"] = offset_s
+            return resolved_targets
+
+        monkeypatch.setattr(convert, "resolve_targets_offset_corrected", _fake_resolve)
+
+        args = self._args(tmp_path, ss_h5_dir=ss_h5_dir, calibrate_offset=True)
+        assert convert.run_targets(args) == 0
+        assert calls["offset_s_used"] == 500.0
+
+        written = read_targets_json(tmp_path / "out" / "targets.json")
+        assert written[0].latitude == pytest.approx(41.5)
+        assert (tmp_path / "out" / "position_scatter.png").exists()
+
+    def test_klein_catalog_with_ss_h5_dir_no_offset_uses_nearest_ping(self, tmp_path, monkeypatch):
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        (cat / "Target_1536923484.tgt").write_bytes(b"")
+        ss_h5_dir = tmp_path / "ss_h5"
+        ss_h5_dir.mkdir()
+        raw_targets = [_target("1536923484")]
+        resolved_targets = [_target("1536923484", 41.5, -71.4)]
+
+        monkeypatch.setattr(convert, "read_klein_targets", lambda source: raw_targets)
+        monkeypatch.setattr(convert, "resolve_targets_nearest_ping", lambda targets, d, max_time_delta_s: resolved_targets)
+
+        args = self._args(tmp_path, ss_h5_dir=ss_h5_dir)
+        assert convert.run_targets(args) == 0
+        written = read_targets_json(tmp_path / "out" / "targets.json")
+        assert written[0].latitude == pytest.approx(41.5)
+
+    def test_no_catalog_files_returns_1(self, tmp_path):
+        (tmp_path / "cat").mkdir()
+        assert convert.run_targets(self._args(tmp_path)) == 1
+
+
+class TestMainDispatch:
+    def test_survey_subcommand_via_argv(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        (tmp_path / "raw").mkdir()
+        (tmp_path / "raw" / "a.jsf").write_bytes(b"")
+        monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
+        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "sidescan-convert", "survey",
+                "--input-dir", str(tmp_path / "raw"), "--output-dir", str(tmp_path / "ss_h5"),
+            ],
+        )
+        assert convert.main() == 0
+        assert (tmp_path / "ss_h5" / "a.ss.h5").exists()

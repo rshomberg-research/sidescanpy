@@ -10,7 +10,12 @@ import numpy as np
 from pyproj import CRS
 
 from sidescanpy.targets.core import Target
-from sidescanpy.viz.targets import export_track_with_targets_png, plot_track_with_targets
+from sidescanpy.viz.targets import (
+    export_target_position_scatter_png,
+    export_track_with_targets_png,
+    plot_target_position_scatter,
+    plot_track_with_targets,
+)
 
 
 def _make_track(n_pings=50, n_rungs=10):
@@ -95,3 +100,45 @@ class TestExportTrackWithTargetsPng:
         export_track_with_targets_png(track, targets, str(out_path))
         assert out_path.exists()
         assert out_path.stat().st_size > 0
+
+
+class TestPlotTargetPositionScatter:
+    def test_returns_none_when_no_target_has_position(self):
+        targets = [_make_target("0001"), _make_target("0002")]
+        assert plot_target_position_scatter(targets) is None
+
+    def test_returns_figure_with_resolved_targets(self):
+        targets = [
+            _make_target("0001", 41.5, -71.4),
+            _make_target("0002"),  # no position -- excluded, not an error
+            _make_target("0003", 41.51, -71.39),
+        ]
+        fig = plot_target_position_scatter(targets)
+        try:
+            assert fig is not None
+            ax = fig.axes[0]
+            assert "n=2" in ax.get_title()
+        finally:
+            plt.close(fig)
+
+    def test_custom_title(self):
+        fig = plot_target_position_scatter([_make_target("0001", 41.5, -71.4)], title="custom title")
+        try:
+            assert fig.axes[0].get_title() == "custom title"
+        finally:
+            plt.close(fig)
+
+
+class TestExportTargetPositionScatterPng:
+    def test_writes_file_when_positions_exist(self, tmp_path):
+        out_path = tmp_path / "scatter.png"
+        wrote = export_target_position_scatter_png([_make_target("0001", 41.5, -71.4)], str(out_path))
+        assert wrote is True
+        assert out_path.exists()
+        assert out_path.stat().st_size > 0
+
+    def test_no_file_written_when_no_positions(self, tmp_path):
+        out_path = tmp_path / "scatter.png"
+        wrote = export_target_position_scatter_png([_make_target("0001")], str(out_path))
+        assert wrote is False
+        assert not out_path.exists()

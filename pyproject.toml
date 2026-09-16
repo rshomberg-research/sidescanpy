@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sidescanpy"
-version = "0.4.9"
+version = "0.4.10"
 description = "..."
 authors = [{name = "Russ Shomberg"}]
 requires-python = ">=3.12"
@@ -20,6 +20,12 @@ dependencies = [
     "scipy>=1.10",
     "pynmea2>=1.18",
 ]
+
+[project.scripts]
+sidescan-convert = "sidescanpy.cli.convert:main"
+sidescan-correct = "sidescanpy.cli.correct:main"
+sidescan-export = "sidescanpy.cli.export:main"
+sidescan-analyze = "sidescanpy.cli.analyze:main"
 
 [project.optional-dependencies]
 dev = [
