@@ -185,6 +185,49 @@ entry points (`[project.scripts]` in `pyproject.toml`):
   directory) — see each project's own `README.md`/`CLAUDE.md` for the
   consumer-project side of this consolidation.
 
+##### CLI subpackage follow-up (2026-09-16, same day — real-data smoke test)
+
+Found by actually running each new command against real survey data end
+to end (`project-a/scripts/run_20251015_survey-a.sh`,
+`project-b/scripts/run_site-b.sh` — new try-it-out scripts,
+one per consumer project, mirrored in structure with format differences
+called out inline as comments) rather than only unit tests:
+
+- **`sidescan-convert`'s `-v`/`--verbose` was silently dropped when
+  passed after the subcommand** (`sidescan-convert survey ... -v`) —
+  argparse requires top-level flags *before* the subcommand name, and
+  the fix isn't "just add `-v` to each subparser too": doing that with
+  a plain `default=False` would have silently *overwritten* a real
+  `-v` already set before the subcommand, since argparse copies a
+  subparser's entire parsed sub-namespace (including unset-flag
+  defaults) onto the shared one. Fixed with `default=argparse.SUPPRESS`
+  on the subparser copy in `convert.py`/`export.py`/`analyze.py`, which
+  only ever adds capability (accepting `-v` in either position) and
+  never removes it. 2 new regression tests
+  (`tests/unit/cli/test_convert.py`) cover both positions plus the
+  overwrite risk directly.
+- **`sidescan-convert` never set matplotlib's `Agg` backend before
+  transitively importing `pyplot`** (via `viz.targets`'s position-
+  scatter plot) — unlike `export.py`/`analyze.py`, which both already
+  did. Harmless-but-noisy on this machine (matplotlib thrashed through
+  several unavailable GUI backends — macOS, Qt, GTK3/4 — before
+  eventually falling back), but a real crash risk on a stricter/more
+  minimal environment. Fixed: same `matplotlib.use("Agg")` guard added
+  before the `viz.targets` import, matching the other two CLIs exactly.
+- **`sidescan-analyze tvg-fit` had no way to proceed when Stage 3
+  couldn't auto-determine `usable_range_m`** — a known, previously-
+  documented Klein SDF failure mode (real-time hardware AGC flattens
+  backscatter enough that the SNR-vs-noise-floor threshold never trips,
+  confirmed across every Klein channel checked in this project's own
+  investigation history), reproduced immediately on real `project-b`
+  data. New `--usable-range-m` flag bypasses Stage 3's auto-detection
+  entirely when passed. 2 new tests
+  (`tests/unit/cli/test_analyze.py`) — a flat/no-decay synthetic
+  fixture reproduces the real failure mode and confirms the override
+  fixes it.
+- Full suite: 1432 passing / 36 skipped (was 1428). Version bumped
+  0.4.10 → 0.4.11.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

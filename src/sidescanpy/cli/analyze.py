@@ -171,11 +171,27 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
 
     ds_geo = ds_raw if "ground_range_m" in ds_raw else compute_geometric_ranges(ds_raw)
 
-    stage3 = stage3_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
-    usable_range_m = stage3.metrics.get("usable_range_m")
-    if usable_range_m is None:
-        logger.error("Stage 3 could not determine usable_range_m for this survey/ping range.")
-        return 1
+    if args.usable_range_m is not None:
+        # Stage 3's SNR-threshold auto-detection has a known failure
+        # mode on Klein SDF data: real-time hardware AGC flattens
+        # backscatter enough that SNR vs. the far-range noise floor
+        # never crosses threshold at any range, so usable_range_m comes
+        # back None even on perfectly good data (confirmed across every
+        # Klein channel checked in sidescanpy's own investigation
+        # history -- see its CLAUDE.md). --usable-range-m bypasses
+        # Stage 3 entirely for exactly this case.
+        usable_range_m = args.usable_range_m
+        logger.info(f"Using manually-supplied usable_range_m={usable_range_m:.2f} (Stage 3 auto-detection skipped)")
+    else:
+        stage3 = stage3_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
+        usable_range_m = stage3.metrics.get("usable_range_m")
+        if usable_range_m is None:
+            logger.error(
+                "Stage 3 could not determine usable_range_m for this survey/ping range -- "
+                "a known Klein SDF failure mode (see sidescanpy's own CLAUDE.md), not necessarily "
+                "bad data. Pass --usable-range-m explicitly to bypass Stage 3's auto-detection."
+            )
+            return 1
 
     stage4 = stage4_decay(
         ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m,
@@ -252,11 +268,21 @@ def main() -> int:
     p_tvg.add_argument("--r-ref-m", type=_parse_numeric_or_literal, default="auto", help="Number, 'auto' (default), or 'mid_swath'")
     p_tvg.add_argument("--r-fit-min-m", type=_parse_numeric_or_literal, default="auto", help="Number or 'auto' (default)")
     p_tvg.add_argument("--range-var", default="slant_range_m", choices=("slant_range_m", "ground_range_m"))
+    p_tvg.add_argument(
+        "--usable-range-m", type=float, default=None,
+        help="Bypass Stage 3's usable_range_m auto-detection and use this value instead -- "
+             "needed on some Klein SDF data where AGC flattens backscatter enough that Stage 3's "
+             "SNR threshold never trips (see sidescanpy's own CLAUDE.md); not normally needed for JSF.",
+    )
     p_tvg.add_argument("--output-dir", required=True, type=Path)
     p_tvg.set_defaults(func=run_tvg_fit)
 
     for p in (p_inv, p_tvg):
         p.add_argument("--config", type=Path, default=None, help="JSON file seeding this subcommand's defaults -- explicit flags still override")
+        # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
+        # block for why a plain default=False here would silently
+        # overwrite a real -v already set before the subcommand.
+        p.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="Also accepted after the subcommand")
 
     parser.add_argument("-v", "--verbose", action="store_true")
 

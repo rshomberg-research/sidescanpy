@@ -208,3 +208,53 @@ class TestMainDispatch:
         )
         assert convert.main() == 0
         assert (tmp_path / "ss_h5" / "a.ss.h5").exists()
+
+    def test_verbose_accepted_after_subcommand(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        """Real bug found running scripts against real data: -v is only
+        ever useful after the subcommand in practice (argparse requires
+        top-level flags before the subcommand name), but the top-level
+        parser and each subparser both defining -v with the same dest
+        risks the subparser's default silently overwriting a real -v
+        set before the subcommand -- see the SUPPRESS comment at the
+        definition site. This covers the actually-common case (-v
+        after the subcommand); test_verbose_before_subcommand_not_clobbered
+        below covers the overwrite risk directly."""
+        (tmp_path / "raw").mkdir()
+        (tmp_path / "raw" / "a.jsf").write_bytes(b"")
+        monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
+        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "sidescan-convert", "survey",
+                "--input-dir", str(tmp_path / "raw"), "--output-dir", str(tmp_path / "ss_h5"),
+                "-v",
+            ],
+        )
+        assert convert.main() == 0
+        assert (tmp_path / "ss_h5" / "a.ss.h5").exists()
+
+    def test_verbose_before_subcommand_not_clobbered(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        """-v BEFORE the subcommand must survive the subparser's own
+        (unset) default -- this is the exact regression the SUPPRESS
+        default guards against."""
+        captured = {}
+        (tmp_path / "raw").mkdir()
+        (tmp_path / "raw" / "a.jsf").write_bytes(b"")
+        monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
+        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+
+        def _fake_run_survey(args):
+            captured["verbose"] = args.verbose
+            return 0
+
+        monkeypatch.setattr(convert, "run_survey", _fake_run_survey)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "sidescan-convert", "-v", "survey",
+                "--input-dir", str(tmp_path / "raw"), "--output-dir", str(tmp_path / "ss_h5"),
+            ],
+        )
+        assert convert.main() == 0
+        assert captured["verbose"] is True

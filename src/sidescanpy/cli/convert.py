@@ -44,6 +44,10 @@ import sys
 import time
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")  # must precede any import that pulls in pyplot (viz.targets below) -- otherwise matplotlib probes for a GUI backend on import and can throw/thrash on a headless machine
+
 from sidescanpy.cli._config import apply_config_defaults, find_config_path
 from sidescanpy.io import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import write_survey
@@ -269,6 +273,16 @@ def main() -> int:
 
     for p in (p_survey, p_targets):
         p.add_argument("--config", type=Path, default=None, help="JSON file seeding this subcommand's defaults -- explicit flags still override")
+        # default=SUPPRESS (not False): argparse copies a subparser's
+        # *entire* parsed namespace onto the shared one, including
+        # unset-flag defaults -- a plain default=False here would
+        # silently overwrite a real -v already set by the top-level
+        # parser (e.g. `sidescan-convert -v survey ...`) whenever -v
+        # isn't *also* repeated after the subcommand. SUPPRESS leaves
+        # the attribute absent unless this copy is actually passed, so
+        # it only ever adds capability (accepting -v after the
+        # subcommand too), never removes it.
+        p.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="Also accepted after the subcommand, e.g. 'survey ... -v'")
 
     parser.add_argument("-v", "--verbose", action="store_true")
 

@@ -977,6 +977,10 @@ def main() -> int:
     all_subparsers = (p_wf, p_grid, p_track, p_chip, p_sw, p_prog)
     for p in all_subparsers:
         p.add_argument("--config", type=Path, default=None, help="JSON file seeding this subcommand's defaults -- explicit flags still override")
+        # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
+        # block for why a plain default=False here would silently
+        # overwrite a real -v already set before the subcommand.
+        p.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="Also accepted after the subcommand")
 
     parser.add_argument("-v", "--verbose", action="store_true")
 

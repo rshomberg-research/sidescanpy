@@ -83,7 +83,7 @@ class TestRunTvgFit:
             ss_h5=ss_h5_path, frequency=1495000, pings=(0, None),
             reconstruct_raw=False, bin_width_m=1.0, r_ref_m="auto",
             r_fit_min_m="auto", range_var="slant_range_m",
-            output_dir=tmp_path / "out",
+            usable_range_m=None, output_dir=tmp_path / "out",
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -116,6 +116,38 @@ class TestRunTvgFit:
 
         args = self._args(tmp_path, path, reconstruct_raw=True)
         assert analyze.run_tvg_fit(args) == 0
+
+    def test_flat_data_without_usable_range_override_returns_1(self, tmp_path):
+        """A flat (no real range-dependent decay) backscatter array is
+        the real Klein SDF failure mode this survives -- Stage 3's SNR
+        threshold never trips against the noise floor, so it can't
+        auto-determine usable_range_m."""
+        flat = _decay_survey()
+        ds = flat.get_frequency("hz_1495000").dataset
+        ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0  # constant, no decay
+        ds["backscatter_intensity"] = ds["backscatter_raw"].copy()
+        flat.add_frequency("hz_1495000", ds)
+
+        path = tmp_path / "a.ss.h5"
+        write_survey(flat, path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_tvg_fit(args) == 1
+
+    def test_usable_range_m_override_bypasses_stage3(self, tmp_path):
+        flat = _decay_survey()
+        ds = flat.get_frequency("hz_1495000").dataset
+        ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
+        ds["backscatter_intensity"] = ds["backscatter_raw"].copy()
+        flat.add_frequency("hz_1495000", ds)
+
+        path = tmp_path / "a.ss.h5"
+        write_survey(flat, path)
+
+        args = self._args(tmp_path, path, usable_range_m=10.0)
+        assert analyze.run_tvg_fit(args) == 0
+        pngs = list((tmp_path / "out").glob("*.png"))
+        assert len(pngs) == 1
 
     def test_numeric_r_ref_m_override(self, tmp_path):
         path = tmp_path / "a.ss.h5"
