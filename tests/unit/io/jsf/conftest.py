@@ -1102,15 +1102,23 @@ def _make_dvl_msg(
     *,
     timestamp: float | None = None,
     obs_index: int = 0,
-    altitude_m: float = 5.0,
+    bottom_dist: float = 5.0,
 ) -> Mock:
-    """Mock(spec=DopplerVelocityLogDataMessage). Aux uses timestamp (float seconds)."""
+    """Mock(spec=DopplerVelocityLogDataMessage). Aux uses timestamp (float seconds).
+
+    Real DopplerVelocityLogDataMessage has no altitude_m attribute — its
+    altitude-equivalent field is bottom_dist (see messages.py). This mock
+    previously set .altitude_m directly, which masked a real bug: the
+    converter read m.altitude_m (AttributeError on real messages) and this
+    Mock-with-spec let it through anyway since a plain assignment doesn't
+    get validated against spec the way attribute *access* does.
+    """
     if timestamp is None:
         timestamp = _EPOCH_2026_S + obs_index * 0.1
 
     m = Mock(spec=DopplerVelocityLogDataMessage)
     m.timestamp    = timestamp
-    m.altitude_m   = altitude_m
+    m.bottom_dist  = bottom_dist
     return m
 
 

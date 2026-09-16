@@ -55,7 +55,7 @@ from pathlib import Path
 import numpy as np
 
 from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
-from sidescanpy.targets.core import Target, detrend_by_range, orient_for_display
+from sidescanpy.targets.core import Target, orient_for_display
 
 _SOURCE_FORMAT = "jsf_discover"
 
@@ -219,8 +219,23 @@ def decode_target_window(target: Target) -> np.ndarray:
 
 def decode_and_correct_window(target: Target, *, freq_hz: float) -> tuple[np.ndarray, Target]:
     """Decode ``target``'s window and run it through the same
-    TVG -> orient-for-display -> range-detrend chain used everywhere this
-    project renders a target crop.
+    TVG -> orient-for-display chain used everywhere this project renders
+    a target crop.
+
+    No longer applies ``targets.core.detrend_by_range`` (removed
+    2026-08-13): a diagnostic comparing this survey's actual +/-3m target
+    crops against control windows well away from any target found the
+    per-column median swing detrend subtracts (3-12 dB) is present
+    whether or not a target is there, and is far larger than what the
+    confirmed whole-swath range residual (Known Issue #4, sidescanpy/
+    CLAUDE.md) could produce over a window that narrow (<1.3 dB even at
+    the residual's steepest) — i.e. detrend was mostly flattening real
+    seafloor texture at crop scale, not correcting the residual it was
+    built for. See ``project-a/scripts/debug/
+    tvg_range_residual_diagnostic.py`` for that methodology, kept as a
+    reusable tool independent of this decision — ``detrend_by_range``
+    itself is untouched in ``targets.core`` for any caller that still
+    wants it.
 
     Kept in this module (not ``targets.core``, despite operating on a
     ``Target``) because it composes ``decode_target_window``, which is
@@ -242,15 +257,14 @@ def decode_and_correct_window(target: Target, *, freq_hz: float) -> tuple[np.nda
     Returns
     -------
     (window, target)
-        TVG-corrected, display-oriented, range-detrended window, and a
-        copy of ``target`` with ``.sample``/``extra_attributes["window_row"]``
-        remapped to match ``orient_for_display``'s flips (see that
-        function's docstring).
+        TVG-corrected, display-oriented window, and a copy of ``target``
+        with ``.sample``/``extra_attributes["window_row"]`` remapped to
+        match ``orient_for_display``'s flips (see that function's
+        docstring).
     """
     window = decode_target_window(target)
     window = apply_tvg_to_amplitude(
         window, target.extra_attributes["ping_meters_per_sample"], freq_hz=freq_hz,
     )
     window, target = orient_for_display(window, target)
-    window = detrend_by_range(window)
     return window, target

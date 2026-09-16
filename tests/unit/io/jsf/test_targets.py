@@ -169,7 +169,7 @@ def test_target_ping_missing_from_own_window_is_unknown_confidence(tmp_path):
 
 def test_decode_and_correct_window_matches_manual_chain(tmp_path):
     from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
-    from sidescanpy.targets.core import detrend_by_range, orient_for_display
+    from sidescanpy.targets.core import orient_for_display
 
     _make_target_file(
         tmp_path / "Target-0001.target",
@@ -187,7 +187,6 @@ def test_decode_and_correct_window_matches_manual_chain(tmp_path):
     expected = decode_target_window(t)
     expected = apply_tvg_to_amplitude(expected, t.extra_attributes["ping_meters_per_sample"], freq_hz=1_495_000)
     expected, expected_target = orient_for_display(expected, t)
-    expected = detrend_by_range(expected)
 
     np.testing.assert_allclose(window, expected)
     assert corrected_target.sample == expected_target.sample

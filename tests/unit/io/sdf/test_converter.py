@@ -9,6 +9,7 @@ converter is decoupled from the byte-level reader.
 """
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -310,6 +311,47 @@ class TestBackscatterShape:
         ch = survey.get_frequency("hz_455000")
         bs = ch.dataset["backscatter_intensity"].values
         assert not np.any(np.isnan(bs))
+
+    def test_valid_samples_tracks_true_length_when_padded(self):
+        """valid_samples preserves each ping's true length after padding."""
+        pages = [
+            make_sdf_sonar_page(ping_number=1, n_port_samples=30, n_stbd_samples=30),
+            make_sdf_sonar_page(ping_number=2, n_port_samples=50, n_stbd_samples=50),
+        ]
+        survey = convert(pages, source_files=[Path("test.sdf")])
+        ch = survey.get_frequency("hz_455000")
+        valid = ch.dataset["valid_samples"].values
+        assert valid.shape == (2, 2)
+        np.testing.assert_array_equal(valid[0], [30, 30])
+        np.testing.assert_array_equal(valid[1], [50, 50])
+
+    def test_valid_samples_equals_max_when_uniform(self):
+        pages = [
+            make_sdf_sonar_page(ping_number=1, num_samples=20),
+            make_sdf_sonar_page(ping_number=2, num_samples=20),
+        ]
+        survey = convert(pages, source_files=[Path("test.sdf")])
+        ch = survey.get_frequency("hz_455000")
+        valid = ch.dataset["valid_samples"].values
+        assert np.all(valid == 20)
+
+    def test_warns_when_padding_occurs(self, caplog):
+        pages = [
+            make_sdf_sonar_page(ping_number=1, n_port_samples=30, n_stbd_samples=30),
+            make_sdf_sonar_page(ping_number=2, n_port_samples=50, n_stbd_samples=50),
+        ]
+        with caplog.at_level(logging.WARNING):
+            convert(pages, source_files=[Path("test.sdf")])
+        assert any("NaN-padded" in r.message for r in caplog.records)
+
+    def test_no_warning_when_uniform(self, caplog):
+        pages = [
+            make_sdf_sonar_page(ping_number=1, num_samples=20),
+            make_sdf_sonar_page(ping_number=2, num_samples=20),
+        ]
+        with caplog.at_level(logging.WARNING):
+            convert(pages, source_files=[Path("test.sdf")])
+        assert not any("NaN-padded" in r.message for r in caplog.records)
 
 
 # ============================================================

@@ -29,7 +29,23 @@ Klein-specific design decisions:
   assuming 1500 m/s sound velocity.
 - pulse_length_us is 0.0 (not provided by Klein).
 - freq_hz_start == freq_hz_end == center_freq_hz.
-- Pages with different num_samples are padded to max with NaN.
+- Pages with different num_samples are padded to max with NaN, logged as
+  a warning when it happens (was previously silent). Each ping's true
+  recorded sample count survives padding via the new
+  `valid_samples` (ping, channel) variable, so downstream code (e.g.
+  `processing/farrange.py`) can distinguish real short pings from
+  padded filler rather than treating the padded array shape as if every
+  ping genuinely recorded that many samples.
+- `convert()` builds one array per call across every page it's handed.
+  Current callers (`io/dispatch.py: read_and_convert()`) invoke it once
+  per source file (`01_convert.py` calls `read_and_convert([single_path], ...)`
+  in a loop), so in practice padding is currently scoped to pages within
+  one physical `.sdf` file. `read_and_convert()`'s own multi-file-merge
+  capability would pad across files too if a caller ever used it that
+  way — worth knowing before doing so, not a hidden trap given the
+  warning above, but a single outlier-length page anywhere in whatever
+  set of pages reaches this function does inflate every other page's
+  stored array.
 
 2026 rshomberg@uri.edu
 """
@@ -173,6 +189,20 @@ def _build_channel_dataset(
             f"All pages at {freq_hz} Hz have zero samples"
         )
 
+    n_padded = sum(
+        1 for n_p, n_s in zip(port_lengths, stbd_lengths)
+        if n_p != max_samples or n_s != max_samples
+    )
+    if n_padded > 0:
+        logger.warning(
+            f"  {freq_hz} Hz: {n_padded}/{n_pings} ping(s) have fewer samples "
+            f"than this group's max ({max_samples}) and are NaN-padded to "
+            f"match — real per-ping length is preserved in the "
+            f"'valid_samples' variable. Real length range: "
+            f"{min(min(port_lengths, default=0), min(stbd_lengths, default=0))}"
+            f"-{max_samples}."
+        )
+
     # NaN-padded backscatter array
     bs = np.full((n_pings, 2, max_samples), np.nan, dtype=np.float32)
     for i, page in enumerate(pages):
@@ -182,6 +212,15 @@ def _build_channel_dataset(
             bs[i, 0, :n_p] = page.port_data.astype(np.float32)
         if n_s > 0:
             bs[i, 1, :n_s] = page.stbd_data.astype(np.float32)
+
+    # Per-ping, per-channel true recorded sample count — preserved so
+    # padding (above) never silently discards how much of a padded
+    # ping's tail is real vs. filler.
+    valid_samples = np.stack(
+        [np.array(port_lengths, dtype=np.int32),
+         np.array(stbd_lengths, dtype=np.int32)],
+        axis=1,
+    )
 
     # Per-ping arrays
     times_ns = np.array([p.timestamp_ns for p in pages], dtype="int64")
@@ -231,6 +270,7 @@ def _build_channel_dataset(
     data_vars = {
         "backscatter_intensity": (["ping", "channel", "sample"], bs.copy()),
         "backscatter_raw": (["ping", "channel", "sample"], bs.copy()),
+        "valid_samples": (["ping", "channel"], valid_samples),
         "latitude": (["ping"], latitudes),
         "longitude": (["ping"], longitudes),
         "heading_deg": (["ping"], headings),

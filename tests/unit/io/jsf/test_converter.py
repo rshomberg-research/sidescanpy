@@ -538,6 +538,18 @@ class TestBuildDVLRecord:
         assert ds.sizes["obs"] == len(dvl_msgs)
         assert "altitude_m" in ds.data_vars
 
+    def test_altitude_values_come_from_bottom_dist(self):
+        """DopplerVelocityLogDataMessage has no altitude_m attribute — its
+        altitude-equivalent field is bottom_dist. Regression test for a real
+        bug: _build_dvl_record read m.altitude_m (AttributeError on every
+        real JSF file with DVL messages) while the old mock-based fixture
+        set .altitude_m directly and masked it. Asserts the actual values
+        flow through, not just that the variable exists."""
+        from tests.unit.io.jsf.conftest import _make_dvl_msg
+        msgs = [_make_dvl_msg(obs_index=i, bottom_dist=float(i)) for i in range(3)]
+        ds = _build_dvl_record(msgs)
+        np.testing.assert_array_equal(ds["altitude_m"].values, [0.0, 1.0, 2.0])
+
     def test_validates(self, dvl_msgs):
         ds = _build_dvl_record(dvl_msgs)
         ds.dvl_record.validate()

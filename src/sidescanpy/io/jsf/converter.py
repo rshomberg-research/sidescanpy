@@ -461,7 +461,13 @@ def _build_dvl_record(dvl_msgs: list[DopplerVelocityLogDataMessage]) -> xr.Datas
 
     return xr.Dataset(
         data_vars={
-            "altitude_m": (("obs",), np.array([_coerce(m.altitude_m) for m in sorted_msgs], dtype=np.float32)),
+            # DopplerVelocityLogDataMessage has no altitude_m attribute — its
+            # altitude-equivalent field is bottom_dist (mean of the 4 DVL
+            # beams' bottom-distance readings, see messages.py's
+            # __post_init__). The *output* variable stays named altitude_m
+            # to match REQUIRED_DVL_VARS (core/schema.py) — same physical
+            # quantity, different source attribute name.
+            "altitude_m": (("obs",), np.array([_coerce(m.bottom_dist) for m in sorted_msgs], dtype=np.float32)),
         },
         coords={"time": (("obs",), times)},
         attrs={"source": "doppler_velocity_log_data_message"},

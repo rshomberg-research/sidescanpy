@@ -161,7 +161,38 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   `backscatter_var="backscatter_intensity"`, `"linear"` otherwise; the
   colorbar label in `viz/gridded.py` now reads the raster's actual units
   instead of a hardcoded string.
-
+- **`io/sdf/converter.py`'s pad-to-max-with-NaN behavior (for pages with
+  differing sample counts) was silent, and discarded each ping's true
+  recorded length.** Now logs a warning when padding actually occurs,
+  and `_build_channel_dataset()` adds a new `valid_samples` (ping,
+  channel) variable recording each ping's true length before padding —
+  downstream code (e.g. `processing/farrange.py`) can now distinguish
+  real short pings from padded filler instead of the padded shape
+  looking like every ping genuinely recorded that many samples.
+- **`01_convert.py`/`02_crop_farrange.py` (consumer-project pipeline
+  scripts, `project-a` and `project-b`) wrote a survey's full,
+  uncropped far-range data to disk during conversion, then
+  `02_crop_farrange.py` read it back and rewrote it cropped** — doubling
+  disk I/O for exactly the data that ends up thrown away.
+  `01_convert.py` now runs `crop_far_range_noise()` in memory before its
+  one and only write; `02_crop_farrange.py` remains for files converted
+  before this change and is now a fast no-op (one read, no rewrite) on
+  files already cropped at convert time.
+- **JSF conversion crashed (`AttributeError`) on any file containing DVL
+  (Doppler Velocity Log) messages.** `io/jsf/converter.py`'s
+  `_build_dvl_record()` read `m.altitude_m` from each
+  `DopplerVelocityLogDataMessage`, but that class has no such
+  attribute — its altitude-equivalent field is `bottom_dist` (mean of
+  the DVL's 4 beam bottom-distance readings). Every real JSF file with
+  DVL data failed to convert at all. The existing unit tests never
+  caught this because the DVL test fixture was a `Mock(spec=...)` with
+  `.altitude_m` set directly rather than a real message object — masked
+  the bug instead of exercising it (same class of issue as this file's
+  "Passing Tests ≠ Correct Code" lesson). Fixed: converter now reads
+  `m.bottom_dist`; the output variable is still named `altitude_m`
+  (unchanged, matches the DVL record schema); fixture corrected to set
+  `.bottom_dist`; added a regression test asserting real values flow
+  through, not just that the field exists.
 - **`export.eightbit.to_uint8()`'s gamma was inverted relative to this
   library's own established convention, and its docstring claimed the
   opposite (that it matched).** `viz.waterfall.plot_waterfall`/

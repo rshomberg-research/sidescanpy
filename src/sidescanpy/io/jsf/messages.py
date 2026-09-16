@@ -280,7 +280,7 @@ class SonarDataMessage(JSFMessage):
     _raw_cable_out:             int = field(repr=False) # ???: cable out (decimeters) (see validity flags)
     _reserved32:                int = field(repr=False)
 
-    _raw_trace_data: list[int] = field(repr=False)    # Raw data output of trace
+    _raw_trace_data: np.ndarray = field(repr=False)    # Raw data output of trace (int16 array)
 
     # Converted fields
     timestamp_ns:             int = field(init=False) # nanoseconds since 1970
@@ -573,8 +573,10 @@ class SonarDataMessage(JSFMessage):
         self.water_temp_C = self._raw_water_temp / 1e1    # TODO: check validity flags
         self.cable_out_m = self._raw_cable_out / 1e3      # TODO: check validity flags
 
-        # Handle trace data
-        self.backscatter_intensity = [float(val)*2**(-self._weighting_factor) for val in self._raw_trace_data]  # TODO: do some math on the trace data samples
+        # Handle trace data -- vectorized (see _parse_body's numpy-decode
+        # comment); a second full-length Python float list here, on top of
+        # the int list, doubled the same per-sample boxing overhead.
+        self.backscatter_intensity = np.asarray(self._raw_trace_data, dtype=np.float64) * (2.0 ** (-self._weighting_factor))  # TODO: do some math on the trace data samples
         self.N_samples = len(self.backscatter_intensity)
         # TODO: error checking
 
@@ -613,8 +615,21 @@ class SonarDataMessage(JSFMessage):
             )
 
         # 5. Extract acoustic payload array
+        #
+        # Decode directly into a numpy int16 array, not a Python list.
+        # list(struct.unpack(...)) boxes every sample as its own Python int
+        # object (~28-36 bytes incl. list slot, vs. 2 bytes packed) -- on a
+        # real 629MB JSF file (305M total samples across both channels) this
+        # alone drove read_jsf() to ~20GB peak RSS, an ~8x overshoot versus
+        # the ~2.4GB of actual numpy data the file decodes to. Confirmed via
+        # instrumented profiling 2026-08-22; root cause of repeated OOM
+        # kills when reading full multi-hundred-MB JSF files. .copy()
+        # detaches from the message-body `data` buffer so the full 240+n
+        # byte raw message isn't kept alive just to hold this slice.
         total_integers = num_samples * ints_per_sample
-        raw_trace_data = list(struct.unpack(f'<{total_integers}h', data[240:]))
+        raw_trace_data = np.frombuffer(
+            data, dtype='<i2', offset=240, count=total_integers
+        ).copy()
 
         # 6. Instantiate using keyword header injection
         obj = cls(_header=_header, *fixed_fields, _raw_trace_data=raw_trace_data)
