@@ -228,6 +228,55 @@ called out inline as comments) rather than only unit tests:
 - Full suite: 1432 passing / 36 skipped (was 1428). Version bumped
   0.4.10 → 0.4.11.
 
+##### CLI subpackage follow-up 2 — real bounding-box visualization + a silent-success bug (2026-09-16, same day)
+
+Found asking directly "is target bounding-box visualization part of the
+system" after reviewing a real try-it-out run's output — it wasn't, for
+either of the two things actually wanted (a full waterfall with boxes at
+every matched target; a per-target context image with a drawn box), even
+though the underlying box-drawing primitive
+(`viz.contact_sheet.render_target_context()`) already existed from the
+old, now-deleted `13_export_chips.py`.
+
+- **`sidescan-export waterfall` gained `--targets-json`** (plus
+  `--max-match-dist-m`/`--box-size`, matching `chip`'s own flags) — draws
+  a red box + target-id label at every matched target's real position on
+  the full rendered waterfall. Scoped to the default `sample`/`ping`
+  axes only (rejected with a clear error otherwise) — `plot_waterfall`
+  renders in real matplotlib *data* coordinates via `pcolormesh`, not raw
+  pixel-array indices (x = ∓sample by channel, y = the *global* ping
+  index `ping_offset` already bakes in), a genuinely different
+  coordinate system from `render_target_context`'s plain `imshow` — an
+  early version of this reused `bbox_from_center`/local-row math meant
+  for the *other* rendering path and would have drawn every box in the
+  wrong place; caught before shipping by writing `_target_waterfall_xy()`
+  as a small pure function and unit-testing the coordinate math directly
+  rather than only checking that a PNG got written.
+- **`sidescan-export chip` gained `--with-context`** — alongside the
+  existing tight `target_<id>.png` crop, saves `context/context_<id>.png`
+  via `render_target_context()` on the full loaded ping neighborhood
+  (wider view, real box drawn at the target's true position). Reuses the
+  same real position-correlation machinery `chip` already has (matching
+  each target's recorded lat/lon against the real per-ping GPS track) —
+  not the old, since-removed `13_export_chips.py`'s approach (decoding
+  the target catalog's own embedded window snippet), which the
+  consolidation's own history already found to be wrong for JSF surveys.
+- **Real bug, same session: `chip`/`survey-window` always reported
+  success even when nothing was exported.** Both had an early
+  `return` (bare, implicitly `None`) on their "nothing correlated/
+  extracted" path, logged as `ERROR` -- but `main()`'s own
+  `result if isinstance(result, int) else 0` fallback (needed for
+  `progression`, which has no such early-exit path) turned that `None`
+  into a *successful* exit code. Caught directly: a real try-it-out
+  script using `set -e` to fail loudly on this exact condition kept
+  running instead. Fixed: both now return 1 on that path, 0 on success
+  (type hints corrected `-> None` to `-> int` to match).
+- 11 new tests: `TestTargetWaterfallXY` (4, the coordinate math in
+  isolation), `TestRunWaterfall`/`TestRunChip` additions (target-box/
+  context-image integration, plus the no-match-returns-1 regression).
+  Full suite: 1441 passing / 36 skipped (was 1432). Version bumped
+  0.4.11 → 0.4.12.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

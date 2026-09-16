@@ -76,6 +76,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 from PIL import Image
 
@@ -103,7 +104,7 @@ from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
 from sidescanpy.targets.interchange import CocoImageEntry, write_coco, write_yolo
 from sidescanpy.targets.io import read_targets_json
 from sidescanpy.viz import plot_waterfall, resolve_waterfall_axes
-from sidescanpy.viz.contact_sheet import contact_sheet
+from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 from sidescanpy.viz.gridded import export_gridded_png
 from sidescanpy.viz.targets import export_track_with_targets_png
 from sidescanpy.viz.track import build_survey_track, export_track_and_scanlines_png
@@ -119,7 +120,23 @@ _DEFAULT_SEGMENT_SIZE = 2000
 # waterfall (replaces 05_waterfalls.py / 07_ground_waterfalls.py)
 # ============================================================
 
-def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi):
+def _target_waterfall_xy(target, ping_idx: int) -> tuple[float, float]:
+    """Where ``target`` lands in ``plot_waterfall``'s own ``x_axis="sample"``/
+    ``y_axis="ping"`` *data* coordinates (pcolormesh, not raw pixel-array
+    indices): x = -sample (port, channel 0) / +sample (starboard, channel
+    1); y = the *global* ping index directly (``_compute_y_full`` already
+    bakes ``ping_offset`` into the plotted y-axis, so ``ping_idx`` needs
+    no re-basing to the segment here)."""
+    channel_idx = target.channel if target.channel is not None else 0
+    x_center = -target.sample if channel_idx == 0 else target.sample
+    return float(x_center), float(ping_idx)
+
+
+def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, boxes=None, box_size=40.0):
+    """``boxes``, if given: list of ``(target, ping_idx)`` (file-global
+    ping index) to draw a red box + target_id label for, on top of the
+    rendered waterfall. Only meaningful when ``x_axis="sample"``/
+    ``y_axis="ping"`` (the caller is responsible for enforcing that)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(14, 6))
     try:
@@ -128,6 +145,11 @@ def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset,
             cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct,
             gamma=gamma, ax=ax,
         )
+        for target, ping_idx in boxes or []:
+            x_center, y_center = _target_waterfall_xy(target, ping_idx)
+            half = box_size / 2.0
+            ax.add_patch(Rectangle((x_center - half, y_center - half), box_size, box_size, fill=False, edgecolor="red", linewidth=1.2))
+            ax.annotate(str(target.target_id), (x_center - half, y_center - half), color="red", fontsize=7, xytext=(2, 2), textcoords="offset points")
         fig.tight_layout()
         fig.savefig(output_path, dpi=dpi)
     finally:
@@ -143,6 +165,27 @@ def run_waterfall(args: argparse.Namespace) -> int:
         x_axis, y_axis = resolve_waterfall_axes(frozenset({"geometric"}), args.x_axis, args.y_axis)
     else:
         x_axis, y_axis = args.x_axis, args.y_axis
+
+    targets_by_file_freq: dict[tuple, list] = defaultdict(list)
+    if args.targets_json:
+        if x_axis != "sample" or y_axis != "ping":
+            logger.error(
+                "--targets-json only supports the default sample/ping pixel axes -- "
+                f"got x_axis={x_axis!r}, y_axis={y_axis!r} (--range-mode ground always forces "
+                "across_track/along_track, which this doesn't support yet)."
+            )
+            return 1
+        targets = read_targets_json(args.targets_json)
+        index = _build_position_index(args.ss_h5_dir)
+        n_matched = 0
+        for t in targets:
+            m = _correlate_target(t, index, args.max_match_dist_m)
+            if m is None:
+                continue
+            path, freq_key, ping_idx, _dist_m = m
+            targets_by_file_freq[(path, freq_key)].append((t, ping_idx))
+            n_matched += 1
+        logger.info(f"Overlaying {n_matched}/{len(targets)} target(s) matched to a real ping")
 
     files = sorted(args.ss_h5_dir.glob("*.ss.h5"))
     if not files:
@@ -160,18 +203,20 @@ def run_waterfall(args: argparse.Namespace) -> int:
             ds = survey.get_frequency(freq_key).dataset
             n_pings = ds.sizes["ping"]
             n_segments = max(1, -(-n_pings // args.segment_size))
+            file_targets = targets_by_file_freq.get((path, freq_key), [])
             for seg_idx in range(n_segments):
                 start = seg_idx * args.segment_size
                 stop = min(start + args.segment_size, n_pings)
                 ds_segment = ds.isel(ping=slice(start, stop))
                 out_path = args.output_dir / freq_key / path.stem / f"segment_{seg_idx + 1:03d}.png"
+                segment_boxes = [(t, p) for t, p in file_targets if start <= p < stop]
                 try:
                     _export_waterfall_png(
                         ds_segment, out_path,
                         x_axis=x_axis, y_axis=y_axis, ping_offset=start,
                         cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
                         vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
-                        dpi=args.dpi,
+                        dpi=args.dpi, boxes=segment_boxes, box_size=args.box_size,
                     )
                     n_written += 1
                 except Exception as e:
@@ -381,7 +426,7 @@ def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
     return best
 
 
-def run_chip(args: argparse.Namespace) -> None:
+def run_chip(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
     if args.min_confidence != "unknown":
@@ -402,7 +447,7 @@ def run_chip(args: argparse.Namespace) -> None:
 
     if not matched:
         logger.error("No targets correlated to any ss_h5 ping — nothing to export")
-        return
+        return 1
 
     # Group by (file, frequency, channel) -- each is one physical 2D
     # array; a window from one group can only legitimately be checked
@@ -411,6 +456,9 @@ def run_chip(args: argparse.Namespace) -> None:
     for t, path, freq_key, ping_idx in matched:
         channel_idx = t.channel if t.channel is not None else 0
         groups[(path, freq_key, channel_idx)].append((t, ping_idx))
+
+    if args.with_context:
+        (args.output / "context").mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
     raw_windows = []
@@ -448,6 +496,18 @@ def run_chip(args: argparse.Namespace) -> None:
             raw_windows.append(window)
             window_meta.append((extent, t, co_targets, path.stem, freq_key))
 
+            if args.with_context:
+                # Full loaded neighborhood (not the tight chip crop),
+                # with a real box drawn at the target's true position --
+                # window_row must describe position *within array_2d*,
+                # not the file-global ping_idx render_target_context's
+                # other callers (e.g. JSF's own Discover-catalog window)
+                # would expect.
+                context_target = replace(t, extra_attributes={**t.extra_attributes, "window_row": local_ping})
+                fig = render_target_context(array_2d, context_target, box_size=(args.box_size, args.box_size))
+                fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                plt.close(fig)
+
     reference_stats = _reference_stats_for_scope(args.normalization_scope, raw_windows, args.pct_low, args.pct_high)
 
     coco_entries = []
@@ -474,9 +534,10 @@ def run_chip(args: argparse.Namespace) -> None:
     yolo = write_yolo(coco_entries, args.output / "targets.yolo", box_size=(args.box_size, args.box_size))
     logger.info(f"YOLO export: {len(yolo['images'])} image(s) -> {args.output / 'targets.yolo'}")
     logger.info(f"Wrote {len(raw_windows)} chip(s) + contact sheet to {args.output}")
+    return 0
 
 
-def run_survey_window(args: argparse.Namespace) -> None:
+def run_survey_window(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     survey = read_survey(args.ss_h5, chunks={"ping": 512})
     channel = survey.get_frequency(args.freq_key)
@@ -538,7 +599,7 @@ def run_survey_window(args: argparse.Namespace) -> None:
 
     if not raw_windows:
         logger.error("No windows extracted — nothing to export")
-        return
+        return 1
 
     # Percentile/gamma stretch on the native-resolution values *first* —
     # full-channel's native window can be far larger than output_size_px,
@@ -570,6 +631,7 @@ def run_survey_window(args: argparse.Namespace) -> None:
     empty_entries: list[CocoImageEntry] = []
     write_coco(empty_entries, args.output / "empty.coco.json")
     logger.info(f"Wrote {len(raw_windows)} {args.mode} window(s) + contact sheet to {args.output}")
+    return 0
 
 
 # ============================================================
@@ -885,6 +947,13 @@ def main() -> int:
     p_wf.add_argument("--vmax-pct", type=float, default=98.0)
     p_wf.add_argument("--gamma", type=float, default=2.5)
     p_wf.add_argument("--dpi", type=int, default=100)
+    p_wf.add_argument(
+        "--targets-json", type=Path, default=None,
+        help="Optional: draw a box + label at each matched target's real position. Only supported "
+             "with the default sample/ping axes (--range-mode slant, default --x-axis/--y-axis).",
+    )
+    p_wf.add_argument("--max-match-dist-m", type=float, default=25.0, help="Reject a target/ping match farther than this (meters); only used with --targets-json")
+    p_wf.add_argument("--box-size", type=float, default=40.0, help="Drawn box size in pixels; only used with --targets-json")
     p_wf.set_defaults(func=run_waterfall)
 
     p_grid = subparsers.add_parser("grid", help="Gridded-raster PNGs on an auto-selected UTM grid")
@@ -918,7 +987,13 @@ def main() -> int:
     p_chip.add_argument("--max-match-dist-m", type=float, default=25.0, help="Reject a target/ping match farther than this (meters)")
     p_chip.add_argument("--output", required=True, type=Path)
     p_chip.add_argument("--size-px", type=int, default=400)
-    p_chip.add_argument("--box-size", type=float, default=40.0)
+    p_chip.add_argument("--box-size", type=float, default=40.0, help="COCO/YOLO annotation box size AND (with --with-context) the drawn box size, in pixels")
+    p_chip.add_argument(
+        "--with-context", action="store_true",
+        help="Also save context/context_<id>.png -- the full loaded ping neighborhood (wider than "
+             "--size-px's tight crop) with a real box drawn at the target's true position, via "
+             "sidescanpy.viz.render_target_context.",
+    )
     p_chip.add_argument("--jitter-px", type=int, default=0)
     p_chip.add_argument("--gamma", type=float, default=common["gamma"])
     p_chip.add_argument("--pct-low", type=float, default=common["pct_low"])

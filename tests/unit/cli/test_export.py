@@ -75,7 +75,7 @@ class TestRunWaterfall:
             ss_h5_dir=ss_h5_dir, output_dir=tmp_path / "out", frequency="all",
             segment_size=2000, range_mode="slant", x_axis="sample", y_axis="ping",
             cmap="copper", vmin=None, vmax=None, vmin_pct=2.0, vmax_pct=98.0,
-            gamma=2.5, dpi=50,
+            gamma=2.5, dpi=50, targets_json=None, max_match_dist_m=25.0, box_size=40.0,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -100,6 +100,54 @@ class TestRunWaterfall:
         empty = tmp_path / "empty"
         empty.mkdir()
         assert export.run_waterfall(self._args(tmp_path, empty)) == 1
+
+    def test_targets_json_rejected_with_ground_mode(self, tmp_path, georef_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([Target(target_id="1", source_format="x", catalog_source="x", latitude=40.0, longitude=-70.0)], targets_json)
+        args = self._args(tmp_path, georef_ss_h5_dir, range_mode="ground", targets_json=targets_json)
+        assert export.run_waterfall(args) == 1
+
+    def test_matched_target_gets_a_box_drawn(self, tmp_path, georef_ss_h5_dir, caplog):
+        # ping 10's exact lat/lon from _geo_friendly_survey()'s own
+        # np.linspace(...) -- guarantees a real, non-ambiguous match.
+        lat = float(np.linspace(40.0000, 40.0010, 20)[10])
+        lon = float(np.linspace(-70.0000, -70.0010, 20)[10])
+        target = Target(target_id="42", source_format="x", catalog_source="x", latitude=lat, longitude=lon, channel=1, sample=500)
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([target], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json=targets_json)
+        with caplog.at_level("INFO"):
+            assert export.run_waterfall(args) == 0
+        assert "Overlaying 1/1 target(s) matched to a real ping" in caplog.text
+
+
+class TestTargetWaterfallXY:
+    def test_port_channel_is_negative_x(self):
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=300)
+        x, y = export._target_waterfall_xy(t, ping_idx=57)
+        assert x == -300.0
+        assert y == 57.0
+
+    def test_starboard_channel_is_positive_x(self):
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=1, sample=300)
+        x, y = export._target_waterfall_xy(t, ping_idx=57)
+        assert x == 300.0
+        assert y == 57.0
+
+    def test_missing_channel_defaults_to_port(self):
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=None, sample=300)
+        x, _y = export._target_waterfall_xy(t, ping_idx=0)
+        assert x == -300.0
+
+    def test_y_is_the_global_ping_index_unmodified(self):
+        """The whole point of this helper -- plot_waterfall's own
+        ping_offset already bakes the segment's start into the y-axis,
+        so a target's file-global ping_idx must NOT be re-based to the
+        segment here (that was a real bug caught before this shipped)."""
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=0)
+        _x, y = export._target_waterfall_xy(t, ping_idx=4321)
+        assert y == 4321.0
 
 
 class TestRunGrid:
@@ -149,3 +197,63 @@ class TestRunTrack:
         empty = tmp_path / "empty"
         empty.mkdir()
         assert export.run_track(self._args(tmp_path, empty)) == 1
+
+
+class TestRunChip:
+    def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
+        defaults = dict(
+            targets_json=targets_json, ss_h5_dir=ss_h5_dir, max_match_dist_m=25.0,
+            output=tmp_path / "out", size_px=200, box_size=40.0, with_context=False,
+            jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
+            normalization_scope="image", min_confidence="verified", seed=0,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _matched_target(self):
+        lat = float(np.linspace(40.0000, 40.0010, 20)[10])
+        lon = float(np.linspace(-70.0000, -70.0010, 20)[10])
+        return Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=lat, longitude=lon, channel=1, sample=500,
+            position_confidence="verified",
+        )
+
+    def test_without_context_no_context_dir(self, tmp_path, georef_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json)
+        assert export.run_chip(args) == 0
+
+        assert (tmp_path / "out" / "target_7.png").exists()
+        assert not (tmp_path / "out" / "context").exists()
+
+    def test_with_context_writes_boxed_context_image(self, tmp_path, georef_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, with_context=True)
+        assert export.run_chip(args) == 0
+
+        assert (tmp_path / "out" / "target_7.png").exists()
+        context_path = tmp_path / "out" / "context" / "context_7.png"
+        assert context_path.exists()
+        assert context_path.stat().st_size > 0
+
+    def test_no_matched_targets_returns_1_not_silent_success(self, tmp_path, georef_ss_h5_dir):
+        """Real bug found running this against real project-b data: this
+        path logged an ERROR but returned None, which main()'s own
+        `result if isinstance(result, int) else 0` fallback then turned
+        into a *successful* exit code -- a script relying on this to
+        fail loudly (e.g. `set -e`) would silently continue instead."""
+        far_away = Target(
+            target_id="9", source_format="x", catalog_source="x",
+            latitude=1.0, longitude=1.0, channel=0, sample=0,
+            position_confidence="verified",
+        )
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([far_away], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json)
+        assert export.run_chip(args) == 1
