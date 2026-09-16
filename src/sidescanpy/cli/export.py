@@ -529,9 +529,15 @@ def run_chip(args: argparse.Namespace) -> int:
     sheet_fig.savefig(args.output / "contact_sheet.png", dpi=150)
     plt.close(sheet_fig)
 
-    coco = write_coco(coco_entries, args.output / "targets.coco.json", box_size=(args.box_size, args.box_size))
+    # write_coco()/write_yolo() have their own independent min_confidence
+    # filter (default "verified", separate from the target-list filter
+    # above) -- pass args.min_confidence through explicitly, or a format
+    # whose targets are never "verified" (e.g. Klein's .tgt, which is
+    # unconditionally "unknown") gets a real crop for every target but
+    # zero COCO/YOLO annotations for any of them, silently.
+    coco = write_coco(coco_entries, args.output / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
     logger.info(f"COCO export: {len(coco['images'])} image(s), {len(coco['annotations'])} annotation(s) -> {args.output / 'targets.coco.json'}")
-    yolo = write_yolo(coco_entries, args.output / "targets.yolo", box_size=(args.box_size, args.box_size))
+    yolo = write_yolo(coco_entries, args.output / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
     logger.info(f"YOLO export: {len(yolo['images'])} image(s) -> {args.output / 'targets.yolo'}")
     logger.info(f"Wrote {len(raw_windows)} chip(s) + contact sheet to {args.output}")
     return 0

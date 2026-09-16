@@ -277,6 +277,33 @@ old, now-deleted `13_export_chips.py`.
   Full suite: 1441 passing / 36 skipped (was 1432). Version bumped
   0.4.11 → 0.4.12.
 
+##### CLI subpackage follow-up 3 — chip's --min-confidence never reached the COCO/YOLO writers (2026-09-16, same day)
+
+Found running `chip --min-confidence unknown --with-context` against real
+Klein SDF data end to end: real target crops were written for all 36
+correlated targets, but `targets.coco.json`/`targets.yolo` came back
+completely empty (0 images, 0 annotations) despite that.
+
+- **Root cause: two independent confidence filters, only one of which
+  `run_chip` actually controlled.** `run_chip`'s own `--min-confidence`
+  filters the *target list* before correlation — already fixed to accept
+  `unknown` in the previous follow-up. But `write_coco()`/`write_yolo()`
+  each have their *own* separate `min_confidence: str = "verified"`
+  default, applied again when building the COCO/YOLO entries — and
+  `run_chip` never passed `args.min_confidence` through to either call.
+  Klein's `.tgt` reader unconditionally sets `position_confidence=
+  "unknown"` on every target (no vendor data exists to assess it any
+  other way), so this second, unreachable filter silently discarded
+  100% of entries regardless of what `--min-confidence` was set to.
+- **Fixed:** both `write_coco()`/`write_yolo()` calls in `run_chip` now
+  pass `min_confidence=args.min_confidence` explicitly.
+- **Real-data confirmation:** the same 36-target Klein SDF run that
+  previously wrote "COCO export: 0 image(s), 0 annotation(s)" now
+  writes 36 images / 84 annotations (COCO) and 36 label files (YOLO).
+- 1 new test (`test_min_confidence_reaches_coco_yolo_writers`). Full
+  suite: 1442 passing / 36 skipped (was 1441). Version bumped
+  0.4.12 → 0.4.13.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

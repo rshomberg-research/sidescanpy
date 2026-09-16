@@ -12,6 +12,8 @@ verified — not re-tested from scratch here.
 """
 
 import argparse
+import json
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -240,6 +242,27 @@ class TestRunChip:
         context_path = tmp_path / "out" / "context" / "context_7.png"
         assert context_path.exists()
         assert context_path.stat().st_size > 0
+
+    def test_min_confidence_reaches_coco_yolo_writers(self, tmp_path, georef_ss_h5_dir):
+        """Real bug found running this against real Klein SDF data: Klein
+        targets are unconditionally position_confidence='unknown', and
+        write_coco()/write_yolo() have their OWN independent
+        min_confidence='verified' default, separate from run_chip's own
+        target-list filter above -- passing --min-confidence unknown
+        got real crops written for every target but zero COCO/YOLO
+        annotations for any of them, because run_chip never threaded
+        args.min_confidence through to either writer call."""
+        target = replace(self._matched_target(), position_confidence="unknown")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([target], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, min_confidence="unknown")
+        assert export.run_chip(args) == 0
+
+        assert (tmp_path / "out" / "target_7.png").exists()
+        coco = json.loads((tmp_path / "out" / "targets.coco.json").read_text())
+        assert len(coco["images"]) == 1
+        assert len(coco["annotations"]) == 1
 
     def test_no_matched_targets_returns_1_not_silent_success(self, tmp_path, georef_ss_h5_dir):
         """Real bug found running this against real project-b data: this
