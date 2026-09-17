@@ -71,6 +71,37 @@ def georef_ss_h5_dir(tmp_path):
     return d
 
 
+def _swath_friendly_survey(n_pings=300, n_samples=30):
+    """Unlike ``_geo_friendly_survey`` (20 pings x 2000 samples, built for
+    geometric/georef range coverage), single-swath/dual-swath's native
+    square window needs ``n_samples``/``2*n_samples`` *pings* to fit
+    inside the survey (see ``extract_full_channel``'s own docstring) --
+    many more pings than samples, the opposite proportion.
+    """
+    survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="survey_a")
+    ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples, freq_hz_start=1_495_000)
+    # max slant range at the default 1500m/s, 400kHz fixture sample rate is
+    # n_samples * 0.001875m (~0.056m here) -- altitude must be well under
+    # that or every sample stays inside the water column (ground_range_m/
+    # across_track_m all NaN, exactly _geo_friendly_survey's own docstring
+    # warning about its default fixture, scaled down for this one's much
+    # smaller n_samples).
+    ds["altitude_m"] = ("ping", np.full(n_pings, 0.01, dtype=np.float32))
+    ds["latitude"] = ("ping", np.linspace(40.0000, 40.0010, n_pings))
+    ds["longitude"] = ("ping", np.linspace(-70.0000, -70.0010, n_pings))
+    survey.add_frequency("hz_1495000", ds)
+    return survey
+
+
+@pytest.fixture
+def swath_ss_h5_dir(tmp_path):
+    d = tmp_path / "ss_h5"
+    d.mkdir()
+    corrected = run_correction_steps(_swath_friendly_survey(), {"tvg", "geometric", "georef"})
+    write_survey(corrected, d / "survey_a.ss.h5")
+    return d
+
+
 class TestRunWaterfall:
     def _args(self, tmp_path, ss_h5_dir, **overrides):
         defaults = dict(
@@ -205,7 +236,8 @@ class TestRunChip:
     def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
         defaults = dict(
             targets_json=targets_json, ss_h5_dir=ss_h5_dir, max_match_dist_m=25.0,
-            output=tmp_path / "out", size_px=200, box_size=40.0, with_context=False,
+            output=tmp_path / "out", styles=["chip"], render_level="radiometric",
+            size_px=200, swath_size_px=200, box_size=40.0, with_context=False,
             jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
             normalization_scope="image", min_confidence="verified", seed=0,
         )
@@ -228,7 +260,7 @@ class TestRunChip:
         args = self._args(tmp_path, georef_ss_h5_dir, targets_json)
         assert export.run_chip(args) == 0
 
-        assert (tmp_path / "out" / "target_7.png").exists()
+        assert (tmp_path / "out" / "chip" / "target_7.png").exists()
         assert not (tmp_path / "out" / "context").exists()
 
     def test_with_context_writes_boxed_context_image(self, tmp_path, georef_ss_h5_dir):
@@ -238,7 +270,7 @@ class TestRunChip:
         args = self._args(tmp_path, georef_ss_h5_dir, targets_json, with_context=True)
         assert export.run_chip(args) == 0
 
-        assert (tmp_path / "out" / "target_7.png").exists()
+        assert (tmp_path / "out" / "chip" / "target_7.png").exists()
         context_path = tmp_path / "out" / "context" / "context_7.png"
         assert context_path.exists()
         assert context_path.stat().st_size > 0
@@ -259,8 +291,8 @@ class TestRunChip:
         args = self._args(tmp_path, georef_ss_h5_dir, targets_json, min_confidence="unknown")
         assert export.run_chip(args) == 0
 
-        assert (tmp_path / "out" / "target_7.png").exists()
-        coco = json.loads((tmp_path / "out" / "targets.coco.json").read_text())
+        assert (tmp_path / "out" / "chip" / "target_7.png").exists()
+        coco = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())
         assert len(coco["images"]) == 1
         assert len(coco["annotations"]) == 1
 
@@ -280,3 +312,127 @@ class TestRunChip:
 
         args = self._args(tmp_path, georef_ss_h5_dir, targets_json)
         assert export.run_chip(args) == 1
+
+    def _swath_matched_target(self, n_pings=300):
+        lat = float(np.linspace(40.0000, 40.0010, n_pings)[150])
+        lon = float(np.linspace(-70.0000, -70.0010, n_pings)[150])
+        return Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=lat, longitude=lon, channel=1, sample=15,
+            position_confidence="verified",
+        )
+
+    def test_default_styles_produce_three_parallel_datasets(self, tmp_path, swath_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json,
+            styles=["chip", "single-swath", "dual-swath"], swath_size_px=64,
+        )
+        assert export.run_chip(args) == 0
+
+        for style in ("chip", "single-swath", "dual-swath"):
+            style_dir = tmp_path / "out" / style
+            assert (style_dir / "target_7.png").exists()
+            coco = json.loads((style_dir / "targets.coco.json").read_text())
+            assert len(coco["images"]) == 1
+            assert len(coco["annotations"]) == 1
+
+    def test_context_combines_both_channels(self, tmp_path, swath_ss_h5_dir, mocker):
+        """The user asked for context plots to show both port and
+        starboard, not just the target's own side -- verify by spying on
+        render_target_context's own array argument, since the saved PNG's
+        pixel dimensions don't directly reflect the source array's shape
+        (matplotlib renders it at a fixed figure size/DPI)."""
+        spy = mocker.spy(export, "render_target_context")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, with_context=True, styles=["chip"])
+        assert export.run_chip(args) == 0
+
+        assert spy.call_count == 1
+        combined_array = spy.call_args[0][0]
+        assert combined_array.shape[1] == 2 * 30  # n_samples from _swath_friendly_survey's default
+
+    def test_geometric_render_level_calls_geometric_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
+        spy = mocker.spy(export, "extract_geometric_window")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric",
+            styles=["chip", "single-swath", "dual-swath"], swath_size_px=64,
+        )
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 3  # once per style
+        for style in ("chip", "single-swath", "dual-swath"):
+            assert (tmp_path / "out" / style / "target_7.png").exists()
+
+    def test_georef_render_level_calls_georef_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
+        spy = mocker.spy(export, "extract_georef_window")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, render_level="georef",
+            styles=["chip", "dual-swath"], swath_size_px=64,
+        )
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 2
+        for style in ("chip", "dual-swath"):
+            assert (tmp_path / "out" / style / "target_7.png").exists()
+
+    def test_raw_and_radiometric_render_levels_produce_different_images(self, tmp_path, swath_ss_h5_dir):
+        """backscatter_raw and backscatter_intensity are byte-identical in
+        this fixture only if TVG is a no-op there -- run_correction_steps
+        with 'tvg' genuinely modifies backscatter_intensity, so raw and
+        radiometric renders of the same target must differ."""
+        from PIL import Image
+
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        raw_args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="raw", styles=["chip"], output=tmp_path / "raw_out")
+        radiometric_args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], output=tmp_path / "rad_out")
+        assert export.run_chip(raw_args) == 0
+        assert export.run_chip(radiometric_args) == 0
+
+        raw_img = np.array(Image.open(tmp_path / "raw_out" / "chip" / "target_7.png"))
+        rad_img = np.array(Image.open(tmp_path / "rad_out" / "chip" / "target_7.png"))
+        assert not np.array_equal(raw_img, rad_img)
+
+    def test_geometric_level_without_geometric_correction_returns_1(self, tmp_path, ss_h5_dir):
+        """ss_h5_dir's survey was never run through sidescan-correct
+        --geometric -- across_track_m doesn't exist at all. Must fail
+        gracefully (return 1, real per-target warnings), not crash with
+        an uncaught KeyError."""
+        lat = float(np.linspace(40.0, 40.5, 10)[5])
+        lon = float(np.linspace(-70.0, -69.9, 10)[5])
+        target = Target(
+            target_id="1", source_format="x", catalog_source="x",
+            latitude=lat, longitude=lon, channel=0, sample=10,
+            position_confidence="verified",
+        )
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([target], targets_json)
+
+        args = self._args(tmp_path, ss_h5_dir, targets_json, render_level="geometric", styles=["chip"])
+        assert export.run_chip(args) == 1
+
+    def test_geometric_level_out_of_bounds_sample_skips_gracefully(self, tmp_path, swath_ss_h5_dir):
+        """Real crash found running this against real Klein SDF data: a
+        target whose catalog entry carries no ping_meters_per_sample
+        (_match_frequency then picks a frequency arbitrarily) can be
+        correlated to a channel whose own sample count is smaller than
+        the sample index the target's position was originally captured
+        against elsewhere -- an exact .isel(sample=t.sample) then raised
+        an uncaught IndexError instead of being skipped like every other
+        unavailable-window case."""
+        target = replace(self._swath_matched_target(), sample=999)  # fixture's n_samples=30
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([target], targets_json)
+
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric", styles=["chip"])
+        assert export.run_chip(args) == 1  # gracefully -- not a crash

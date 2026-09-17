@@ -27,11 +27,22 @@ Subcommands:
   with an optional target-catalog overlay via ``--targets-json`` (merges
   the old ``03_track_maps.py``/``12_track_with_targets.py``; requires
   georeferencing for the scan-line rungs).
-- ``chip`` — real, TVG-corrected, jittered target-positive chips,
-  position-correlated to the real survey array by matching each
-  target's recorded lat/lon (not by trusting a target catalog's own
-  embedded ping index, which can be private to that catalog file — see
-  this module's own git history for the JSF bug that motivated this).
+- ``chip`` — real, jittered target-positive chips, position-correlated
+  to the real survey array by matching each target's recorded lat/lon
+  (not by trusting a target catalog's own embedded ping index, which
+  can be private to that catalog file — see this module's own git
+  history for the JSF bug that motivated this). Exports up to three
+  parallel COCO+YOLO datasets under ``output/<style>/`` (``--styles``):
+  ``chip`` (tight single-channel crop), ``single-swath`` (one full
+  channel, square), ``dual-swath`` (both channels combined, square).
+  ``--render-level`` selects what every style renders from: ``raw``/
+  ``radiometric`` (pixel/sample space) or ``geometric``/``georef`` (real
+  meters-square, via the same window extractors ``progression`` uses —
+  requires that correction already run via ``sidescan-correct``).
+  ``--with-context`` (independent of styles/render-level, always
+  radiometric) saves ``context/context_<id>.png`` — the full ping
+  neighborhood, both channels combined, with a real box drawn at the
+  target's position.
 - ``survey-window`` — full-channel / geometric / georef windows at
   evenly-spaced ping locations, uncorrelated to any target catalog, so
   every window is honestly a no-target negative.
@@ -426,6 +437,177 @@ def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
     return best
 
 
+_CHIP_STYLES = ("chip", "single-swath", "dual-swath")
+_RENDER_LEVELS = ("raw", "radiometric", "geometric", "georef")
+
+
+def _style_size_px(style: str, args: argparse.Namespace) -> int:
+    return args.size_px if style == "chip" else args.swath_size_px
+
+
+def _rescale_co_targets(co_targets: list, native_shape: tuple[int, int], output_shape: tuple[int, int]) -> list:
+    """Move every co-target's (row, col) from a native-resolution window
+    into its resized output space, matching :func:`resize_to`'s own
+    transform -- see :func:`rescale_target_position`."""
+    rescaled = []
+    for ct in co_targets:
+        row, col = rescale_target_position(ct.extra_attributes["window_row"], ct.sample, native_shape, output_shape)
+        rescaled.append(replace(ct, sample=col, extra_attributes={**ct.extra_attributes, "window_row": row}))
+    return rescaled
+
+
+def _extract_pixel_style_window(
+    masked, t, channel_idx: int, n_samples_single: int, local_ping: int, lo: int, style: str, level: str,
+    size_px: int, jitter_px: int, rng: np.random.Generator, placed_by_channel: dict, placed_combined: list,
+) -> tuple[np.ndarray, list] | None:
+    """``raw``/``radiometric`` (sample/ping pixel space) window + the
+    co-targets that land inside it, for one target/style. Returns
+    ``None`` if this level's backscatter variable isn't present on
+    ``masked`` (e.g. ``radiometric`` requested against a never-TVG'd
+    file), or if ``masked``'s own ping neighborhood is too short for a
+    full-swath style's native square window (a short source file/segment
+    -- see ``extract_full_channel``'s own docstring) -- caller logs and
+    skips, doesn't crash the whole run.
+    """
+    value_var = "backscatter_raw" if level == "raw" else "backscatter_intensity"
+    if value_var not in masked:
+        return None
+
+    if style == "dual-swath":
+        port_2d = masked[value_var].isel(channel=0).values
+        stbd_2d = masked[value_var].isel(channel=1).values
+        arr_2d = _combine_channels_mirrored(port_2d, stbd_2d)
+        target_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
+        co_source = placed_combined
+    else:
+        arr_2d = masked[value_var].isel(channel=channel_idx).values
+        target_col = t.sample
+        co_source = placed_by_channel[channel_idx]
+
+    try:
+        if style == "chip":
+            window, extent = extract_chip(arr_2d, center_row=local_ping, center_col=target_col, size_px=size_px, jitter_px=jitter_px, rng=rng)
+        else:
+            window, extent = extract_full_channel(arr_2d, center_ping=float(local_ping), jitter_px=jitter_px, rng=rng)
+    except ValueError:
+        return None
+
+    extent_global = WindowExtent(row_start=extent.row_start + lo, col_start=extent.col_start, n_rows=extent.n_rows, n_cols=extent.n_cols)
+    co_targets = targets_within_window(co_source, extent_global)
+    if not co_targets:
+        return None
+
+    native_shape = window.shape
+    if native_shape != (size_px, size_px):
+        co_targets = _rescale_co_targets(co_targets, native_shape, (size_px, size_px))
+        window = resize_to(window, size_px)
+    return window, co_targets
+
+
+def _extract_geo_style_window(
+    masked, t, channel_idx: int, local_ping: int, style: str, level: str, size_px: int, jitter_px: int,
+    rng: np.random.Generator, mps: float,
+) -> tuple[np.ndarray, list] | None:
+    """``geometric``/``georef`` (real-meters) window + the primary target's
+    own position within it.
+
+    Unlike the pixel-space styles, co-occurring targets from elsewhere in
+    the source array are **not** searched for here (only the primary
+    target is annotated) -- checking every cataloged target's real-world
+    position against an arbitrarily-shaped resampled grid is materially
+    more work than a pixel-window bounds check, and wasn't asked for;
+    documented, not silently missing. Returns ``None`` if this window
+    can't be built (e.g. no finite geometry in this ping neighborhood, or
+    ``level="georef"``/``"geometric"`` requested against a file that was
+    never run through ``sidescan-correct --geometric``/``--georef``, so
+    ``across_track_m``/``latitude_per_sample`` etc. don't exist at all).
+    Also ``None`` if ``t.sample`` doesn't fit this *specific* channel's own
+    sample axis -- real bug found running this against Klein SDF data: a
+    target whose catalog entry carries no ``ping_meters_per_sample``
+    (``_match_frequency`` then has no basis to prefer one frequency
+    channel over another and picks arbitrarily) can be correlated to a
+    frequency/file whose own sample count is smaller than the sample
+    index the target's position was originally captured against on a
+    *different* channel -- an exact ``.isel(sample=t.sample)`` then raises
+    ``IndexError`` where the pixel-space styles merely clamp silently
+    (``extract_chip``/``extract_full_channel``'s own edge-shifting
+    window placement never indexes out of bounds). Skipping here matches
+    that same "don't crash the whole run over one bad target" contract,
+    not a fix to the underlying frequency-matching ambiguity itself.
+    """
+    if t.sample is None or not (0 <= t.sample < masked.sizes["sample"]):
+        return None
+    try:
+        along_dist = along_track_distance_m(masked)
+        target_along_m = float(along_dist[local_ping])
+        target_across_m = float(masked["across_track_m"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
+    except KeyError:
+        return None
+
+    ping_span_m = float(along_dist[-1] - along_dist[0]) if along_dist.size > 1 else 0.0
+    ping_spacing_m = abs(ping_span_m) / max(along_dist.size - 1, 1) if along_dist.size > 1 else mps
+    along_diffs = np.abs(np.diff(along_dist)) if along_dist.size > 1 else np.array([])
+    nonzero_along_diffs = along_diffs[along_diffs > 0]
+    gap_p95_m = float(np.percentile(nonzero_along_diffs, 95)) if nonzero_along_diffs.size else 0.0
+
+    combine = style == "dual-swath"
+    if style == "chip":
+        resolution_m = max(mps, ping_spacing_m)
+        center_across_m = target_across_m + _jitter_offset_m(jitter_px, resolution_m, rng)
+    else:
+        across_all = masked["across_track_m"].values if combine else masked["across_track_m"].isel(channel=channel_idx).values
+        across_finite = across_all[np.isfinite(across_all)]
+        swath_width_m = float(across_finite.max() - across_finite.min()) if across_finite.size else size_px * mps
+        resolution_m = max(swath_width_m / size_px, ping_spacing_m, 1e-6)
+        center_across_m = 0.0 if combine else (float((across_finite.max() + across_finite.min()) / 2.0) if across_finite.size else 0.0)
+    geo_search_radius_m = max(1.5 * resolution_m, gap_p95_m)
+
+    if level == "geometric":
+        geom_channel_idx = None if combine else channel_idx
+        center_along_m = target_along_m + _jitter_offset_m(jitter_px, resolution_m, rng)
+        try:
+            grid, meta = extract_geometric_window(
+                masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
+                center_across_m=center_across_m, channel_idx=geom_channel_idx, search_radius_m=geo_search_radius_m,
+            )
+        except ValueError:
+            return None
+        row, col = locate_point_geometric(target_along_m, target_across_m, meta)
+    else:  # georef
+        try:
+            target_lat = float(masked["latitude_per_sample"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
+            target_lon = float(masked["longitude_per_sample"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
+        except KeyError:
+            return None
+        north_jitter_m = _jitter_offset_m(jitter_px, resolution_m, rng)
+        east_jitter_m = _jitter_offset_m(jitter_px, resolution_m, rng)
+        center_lat, center_lon = _jitter_latlon(target_lat, target_lon, north_jitter_m, east_jitter_m)
+        georef_input = masked
+        if not combine:
+            excluded = 1 - channel_idx
+            georef_input = masked.copy()
+            georef_input["backscatter_intensity"] = georef_input["backscatter_intensity"].copy()
+            georef_input["backscatter_intensity"][{"channel": excluded}] = np.nan
+        try:
+            raster, meta = extract_georef_window(
+                georef_input, size_px, resolution_m=resolution_m, center_lat=center_lat, center_lon=center_lon,
+                max_search_radius_m=geo_search_radius_m,
+            )
+        except (ValueError, KeyError):
+            return None
+        grid = raster.dataset["backscatter"].values
+        if grid.shape != (size_px, size_px):
+            padded = np.full((size_px, size_px), np.nan)
+            r = min(grid.shape[0], size_px)
+            c = min(grid.shape[1], size_px)
+            padded[:r, :c] = grid[:r, :c]
+            grid = padded
+        row, col = locate_point_georef(target_lat, target_lon, meta)
+
+    primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
+    return grid, [primary_local]
+
+
 def run_chip(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
@@ -449,97 +631,141 @@ def run_chip(args: argparse.Namespace) -> int:
         logger.error("No targets correlated to any ss_h5 ping — nothing to export")
         return 1
 
-    # Group by (file, frequency, channel) -- each is one physical 2D
-    # array; a window from one group can only legitimately be checked
-    # for co-occurring targets against other targets in that same group.
-    groups: dict[tuple, list] = defaultdict(list)
+    # Group by (file, frequency) only -- NOT also channel, unlike before:
+    # a "dual-swath" style window spans both physical channels, so
+    # co-target lookup for it needs both channels' matched targets
+    # together, not split into separate per-channel groups.
+    groups: dict[tuple, dict[int, list]] = defaultdict(lambda: defaultdict(list))
     for t, path, freq_key, ping_idx in matched:
         channel_idx = t.channel if t.channel is not None else 0
-        groups[(path, freq_key, channel_idx)].append((t, ping_idx))
+        groups[(path, freq_key)][channel_idx].append((t, ping_idx))
 
+    styles = list(args.styles)
+    for style in styles:
+        (args.output / style).mkdir(parents=True, exist_ok=True)
     if args.with_context:
         (args.output / "context").mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
-    raw_windows = []
-    window_meta = []  # (extent, primary_target, co_targets, file_stem, freq_key)
+    raw_windows: dict[str, list] = {s: [] for s in styles}
+    window_meta: dict[str, list] = {s: [] for s in styles}  # (co_targets, primary, file_stem, freq_key)
 
-    for (path, freq_key, channel_idx), items in groups.items():
+    for (path, freq_key), items_by_channel in groups.items():
         survey = read_survey(path, chunks={"ping": 512})
         ds_full = survey.get_frequency(freq_key).dataset
         n_pings = ds_full.sizes["ping"]
+        n_samples_single = ds_full.sizes["sample"]
 
-        # Targets in this group, expressed in the *full file's* (row=ping,
-        # col=sample) coordinates, for targets_within_window -- kept in
-        # full-file coordinates (not re-based per target below) so a
-        # co-occurring target's position is checked consistently
-        # regardless of which target's own ping-neighborhood slice
-        # produced the window.
-        placed = [replace(t, extra_attributes={**t.extra_attributes, "window_row": ping_idx}) for t, ping_idx in items]
+        # Full-file-ping-coordinate target lists for co-target lookup:
+        # one per physical channel (chip/single-swath stay same-channel-
+        # only, matching a real operator's own recorded side), plus one
+        # combined-column version spanning both channels (dual-swath).
+        placed_by_channel = {
+            ch: [replace(t, extra_attributes={**t.extra_attributes, "window_row": ping_idx}) for t, ping_idx in its]
+            for ch, its in items_by_channel.items()
+        }
+        placed_combined = [
+            replace(t, sample=_target_combined_col(t.sample, n_samples_single, ch), extra_attributes={**t.extra_attributes, "window_row": ping_idx})
+            for ch, its in items_by_channel.items()
+            for t, ping_idx in its
+        ]
 
-        half_span = args.size_px // 2 + args.jitter_px + 50
-        for t, ping_idx in items:
-            # Slice a bounded ping neighborhood before loading/masking --
-            # this project's real files run up to 14.8GB with every
-            # correction stage's arrays included; loading one target's
-            # neighborhood is bounded regardless of file size, loading
-            # the whole file per group isn't.
-            lo = max(0, ping_idx - half_span)
-            hi = min(n_pings, ping_idx + half_span)
-            masked = mask_nadir_gap(ds_full.isel(ping=slice(lo, hi)).load())
-            local_ping = ping_idx - lo
-            array_2d = masked["backscatter_intensity"].isel(channel=channel_idx).values
+        max_native_span = 0
+        if "chip" in styles:
+            max_native_span = max(max_native_span, args.size_px)
+        if "single-swath" in styles:
+            max_native_span = max(max_native_span, n_samples_single)
+        if "dual-swath" in styles:
+            max_native_span = max(max_native_span, 2 * n_samples_single)
+        half_span = max_native_span // 2 + args.jitter_px + 50
 
-            window, extent = extract_chip(array_2d, center_row=local_ping, center_col=t.sample, size_px=args.size_px, jitter_px=args.jitter_px, rng=rng)
-            extent_global = WindowExtent(row_start=extent.row_start + lo, col_start=extent.col_start, n_rows=extent.n_rows, n_cols=extent.n_cols)
-            co_targets = targets_within_window(placed, extent_global)
-            raw_windows.append(window)
-            window_meta.append((extent, t, co_targets, path.stem, freq_key))
+        for channel_idx, its in items_by_channel.items():
+            for t, ping_idx in its:
+                # Slice a bounded ping neighborhood before loading/masking
+                # -- this project's real files run up to 14.8GB with
+                # every correction stage's arrays included; loading one
+                # target's neighborhood is bounded regardless of file
+                # size, loading the whole file per group isn't.
+                lo = max(0, ping_idx - half_span)
+                hi = min(n_pings, ping_idx + half_span)
+                masked = mask_nadir_gap(ds_full.isel(ping=slice(lo, hi)).load())
+                local_ping = ping_idx - lo
+                mps = _sample_interval_m(masked)
 
-            if args.with_context:
-                # Full loaded neighborhood (not the tight chip crop),
-                # with a real box drawn at the target's true position --
-                # window_row must describe position *within array_2d*,
-                # not the file-global ping_idx render_target_context's
-                # other callers (e.g. JSF's own Discover-catalog window)
-                # would expect.
-                context_target = replace(t, extra_attributes={**t.extra_attributes, "window_row": local_ping})
-                fig = render_target_context(array_2d, context_target, box_size=(args.box_size, args.box_size))
-                fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                plt.close(fig)
+                if args.with_context:
+                    port_2d = masked["backscatter_intensity"].isel(channel=0).values
+                    stbd_2d = masked["backscatter_intensity"].isel(channel=1).values
+                    combined = _combine_channels_mirrored(port_2d, stbd_2d)
+                    combined_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
+                    context_target = replace(t, sample=combined_col, extra_attributes={**t.extra_attributes, "window_row": local_ping})
+                    fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size))
+                    fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                    plt.close(fig)
 
-    reference_stats = _reference_stats_for_scope(args.normalization_scope, raw_windows, args.pct_low, args.pct_high)
+                for style in styles:
+                    size_px = _style_size_px(style, args)
+                    if args.render_level in ("raw", "radiometric"):
+                        result = _extract_pixel_style_window(
+                            masked, t, channel_idx, n_samples_single, local_ping, lo, style, args.render_level,
+                            size_px, args.jitter_px, rng, placed_by_channel, placed_combined,
+                        )
+                    else:
+                        result = _extract_geo_style_window(
+                            masked, t, channel_idx, local_ping, style, args.render_level, size_px, args.jitter_px, rng, mps,
+                        )
+                    if result is None:
+                        logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")
+                        continue
+                    window, co_targets = result
+                    raw_windows[style].append(window)
+                    window_meta[style].append((co_targets, t, path.stem, freq_key))
 
-    coco_entries = []
-    thumbnails, captions = [], []
-    for window, (extent, primary, co_targets, file_stem, freq_key) in zip(raw_windows, window_meta):
-        img_8bit, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
-        file_name = f"target_{primary.target_id}.png"
-        _save_grayscale(img_8bit, args.output / file_name)
+    total_written = 0
+    for style in styles:
+        windows = raw_windows[style]
+        if not windows:
+            logger.warning(f"{style}: no windows produced at render-level={args.render_level!r} — skipping this style's COCO/YOLO export")
+            continue
 
-        for co in co_targets:
-            coco_entries.append(
-                CocoImageEntry(target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0])
-            )
-        thumbnails.append(img_8bit)
-        n_co = len(co_targets)
-        captions.append(f"{primary.target_id} ({freq_key}, {n_co} target{'s' if n_co != 1 else ''})")
+        reference_stats = _reference_stats_for_scope(args.normalization_scope, windows, args.pct_low, args.pct_high)
 
-    sheet_fig = contact_sheet(thumbnails, captions, ncols=6, suptitle=f"{len(thumbnails)} chips")
-    sheet_fig.savefig(args.output / "contact_sheet.png", dpi=150)
-    plt.close(sheet_fig)
+        coco_entries = []
+        thumbnails, captions = [], []
+        style_dir = args.output / style
+        for window, (co_targets, primary, file_stem, freq_key) in zip(windows, window_meta[style]):
+            img_8bit, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
+            file_name = f"target_{primary.target_id}.png"
+            _save_grayscale(img_8bit, style_dir / file_name)
 
-    # write_coco()/write_yolo() have their own independent min_confidence
-    # filter (default "verified", separate from the target-list filter
-    # above) -- pass args.min_confidence through explicitly, or a format
-    # whose targets are never "verified" (e.g. Klein's .tgt, which is
-    # unconditionally "unknown") gets a real crop for every target but
-    # zero COCO/YOLO annotations for any of them, silently.
-    coco = write_coco(coco_entries, args.output / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
-    logger.info(f"COCO export: {len(coco['images'])} image(s), {len(coco['annotations'])} annotation(s) -> {args.output / 'targets.coco.json'}")
-    yolo = write_yolo(coco_entries, args.output / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
-    logger.info(f"YOLO export: {len(yolo['images'])} image(s) -> {args.output / 'targets.yolo'}")
-    logger.info(f"Wrote {len(raw_windows)} chip(s) + contact sheet to {args.output}")
+            for co in co_targets:
+                coco_entries.append(
+                    CocoImageEntry(target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0])
+                )
+            thumbnails.append(img_8bit)
+            n_co = len(co_targets)
+            captions.append(f"{primary.target_id} ({freq_key}, {n_co} target{'s' if n_co != 1 else ''})")
+
+        sheet_fig = contact_sheet(thumbnails, captions, ncols=6, suptitle=f"{style}: {len(thumbnails)} chips")
+        sheet_fig.savefig(style_dir / "contact_sheet.png", dpi=150)
+        plt.close(sheet_fig)
+
+        # write_coco()/write_yolo() have their own independent
+        # min_confidence filter (default "verified", separate from the
+        # target-list filter above) -- pass args.min_confidence through
+        # explicitly, or a format whose targets are never "verified"
+        # (e.g. Klein's .tgt, which is unconditionally "unknown") gets a
+        # real crop for every target but zero COCO/YOLO annotations for
+        # any of them, silently.
+        coco = write_coco(coco_entries, style_dir / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
+        logger.info(f"{style}: COCO export: {len(coco['images'])} image(s), {len(coco['annotations'])} annotation(s) -> {style_dir / 'targets.coco.json'}")
+        yolo = write_yolo(coco_entries, style_dir / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
+        logger.info(f"{style}: YOLO export: {len(yolo['images'])} image(s) -> {style_dir / 'targets.yolo'}")
+        logger.info(f"{style}: wrote {len(windows)} chip(s) + contact sheet to {style_dir}")
+        total_written += len(windows)
+
+    if total_written == 0:
+        logger.error(f"No style produced any window at render-level={args.render_level!r} — nothing exported")
+        return 1
     return 0
 
 
@@ -992,13 +1218,30 @@ def main() -> int:
     p_chip.add_argument("--ss-h5-dir", required=True, type=Path, help="Directory of already-corrected .ss.h5 files to search for each target's real position")
     p_chip.add_argument("--max-match-dist-m", type=float, default=25.0, help="Reject a target/ping match farther than this (meters)")
     p_chip.add_argument("--output", required=True, type=Path)
-    p_chip.add_argument("--size-px", type=int, default=400)
+    p_chip.add_argument(
+        "--styles", nargs="+", choices=list(_CHIP_STYLES), default=list(_CHIP_STYLES),
+        help="Which chip style(s) to export as parallel COCO/YOLO datasets under output/<style>/: "
+             "'chip' (tight single-channel crop, --size-px), 'single-swath' (one full channel, square), "
+             "'dual-swath' (both channels combined, square, port+starboard). Default: all three.",
+    )
+    p_chip.add_argument(
+        "--render-level", choices=list(_RENDER_LEVELS), default="radiometric",
+        help="Processing level every style renders from this run (applies to both COCO and YOLO): "
+             "'raw' (backscatter_raw, no TVG), 'radiometric' (TVG-corrected, the old default), "
+             "'geometric' (across/along-track meters -- requires --geometric already run via "
+             "sidescan-correct), 'georef' (lat/lon-projected meters -- requires --georef already run). "
+             "Under geometric/georef every style's image is a real size_px*resolution_m meters square, "
+             "not a pixel crop.",
+    )
+    p_chip.add_argument("--size-px", type=int, default=400, help="Output size (both axes) for the 'chip' style")
+    p_chip.add_argument("--swath-size-px", type=int, default=512, help="Output size (both axes) for the 'single-swath'/'dual-swath' styles")
     p_chip.add_argument("--box-size", type=float, default=40.0, help="COCO/YOLO annotation box size AND (with --with-context) the drawn box size, in pixels")
     p_chip.add_argument(
         "--with-context", action="store_true",
-        help="Also save context/context_<id>.png -- the full loaded ping neighborhood (wider than "
-             "--size-px's tight crop) with a real box drawn at the target's true position, via "
-             "sidescanpy.viz.render_target_context.",
+        help="Also save context/context_<id>.png -- the full loaded ping neighborhood, BOTH channels "
+             "combined (port+starboard), with a real box drawn at the target's true position, via "
+             "sidescanpy.viz.render_target_context. Independent of --styles/--render-level -- always "
+             "radiometric-level, matching this feature's existing QA-visualization purpose.",
     )
     p_chip.add_argument("--jitter-px", type=int, default=0)
     p_chip.add_argument("--gamma", type=float, default=common["gamma"])

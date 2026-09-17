@@ -304,6 +304,135 @@ completely empty (0 images, 0 annotations) despite that.
   suite: 1442 passing / 36 skipped (was 1441). Version bumped
   0.4.12 → 0.4.13.
 
+##### CLI subpackage follow-up 4 — chip's 3 parallel styles + selectable render level + dual-channel context (2026-09-16, same day)
+
+User feedback after reviewing the first full-survey runs: liked the
+`--with-context` QA images but wanted both channels shown, not just the
+target's own side; wanted three separate COCO/YOLO datasets from one run
+(tight chip, single-channel full swath, dual-channel full swath, the
+latter two square); and wanted the option to render any of those from
+raw/radiometric/geometric/georef data, geometric/georef putting the
+image into real meters-square instead of pixel/sample space.
+
+- **`--with-context` now combines port+starboard** (`_combine_channels_
+  mirrored` + `_target_combined_col`, the same helpers `progression`
+  already used) before calling `render_target_context` — no change to
+  that function itself, since it only ever needed a plain 2D array plus
+  a `(row, col)` position, both of which now describe the combined
+  array's own space instead of one channel's.
+- **`chip` gained `--styles {chip,single-swath,dual-swath}`** (default:
+  all three) — each gets its own `output/<style>/` with its own
+  `target_<id>.png` files, `contact_sheet.png`, `targets.coco.json`,
+  `targets.yolo/`. `single-swath`/`dual-swath` reuse `export.windows.
+  extract_full_channel()` (already built for `progression`'s full-scale
+  stages) — native square window resized to `--swath-size-px` *before*
+  the percentile stretch/uint8 conversion, a deliberate compromise for
+  memory (a native dual-swath crop can be ~9500x9500 samples on a real
+  JSF survey) that trades a small amount of stretch fidelity for keeping
+  a `--normalization-scope shared` batch's memory bounded — documented,
+  not silently different from `chip` style's own native-resolution
+  shared-stats behavior. `dual-swath`'s co-target lookup now spans both
+  physical channels (grouping changed from `(file, freq, channel)` to
+  `(file, freq)`, with per-channel and channel-combined target lists
+  built once per group) — needed since a dual-swath window can show a
+  target from *either* channel, not just the primary's own side.
+- **`chip` gained `--render-level {raw,radiometric,geometric,georef}`**
+  (default `radiometric`, matching prior behavior exactly) — applies to
+  every requested style's COCO *and* YOLO output alike. `geometric`/
+  `georef` reuse `export.geometric_window.extract_geometric_window()`/
+  `export.georef_window.extract_georef_window()` (`progression`'s own
+  per-stage extractors), replicating that function's established
+  centering/jitter/resolution conventions per style: `chip` centers on
+  the target (jittered) at a resolution matching its native pixel
+  footprint; `single-swath`/`dual-swath` center on the swath's own
+  real-world extent (target located within it via `locate_point_*`, not
+  assumed centered) at a resolution derived from the real swath width.
+  Both require that correction to already exist in the source `.ss.h5`
+  (via `sidescan-correct --geometric`/`--georef`) — requesting one
+  against a file that never had it fails per-target with a warning
+  (`KeyError`/`ValueError` caught), not a crash; a style that ends up
+  with zero windows this way skips its own COCO/YOLO write with a clear
+  warning instead of shipping an empty dataset silently.
+- **Known, documented limitation:** unlike the pixel-space styles,
+  `geometric`/`georef` windows only ever annotate the *primary* target,
+  not other cataloged targets that happen to also fall inside the same
+  resampled grid — checking every target's real-world position against
+  an arbitrary resampled extent is materially more work than a pixel-
+  window bounds check and wasn't asked for.
+- **Real-data verification, `survey-a`'s full 5-file survey**
+  (32 cataloged targets): `radiometric` level, all 3 styles + `--with-
+  context` — `chip` 32/32, `single-swath` 32/32, `dual-swath` 9/32 (the
+  rest skipped with a clear per-target warning — genuinely too close to
+  their own file's start/end for dual-swath's ~9500-ping native window,
+  `extract_full_channel`'s own documented, pre-existing edge case, not a
+  regression). `geometric` level, `chip`+`single-swath`: 32/32 both
+  (slow — ~7.75 minutes for 64 total KDTree-resampled windows at a small
+  64/96px test size, a pre-existing `extract_geometric_window` cost
+  inherited from `progression`, not introduced here). `georef` level,
+  `chip`: 32/32 in ~24s (vectorized `resample_channel_to_grid` path, no
+  Python-loop KDTree cost). Every output visually confirmed: the context
+  image shows a real port+starboard waterfall with the box on the
+  correct side; `dual-swath` chips show both channels with the nadir gap
+  centered; `geometric`/`georef` chips show real grid-resampled crops,
+  not pixel windows.
+- 20 new tests (`tests/unit/cli/test_export.py`, new `_swath_friendly_
+  survey`/`swath_ss_h5_dir` fixtures — proportioned oppositely from the
+  existing `_geo_friendly_survey`, many pings/few samples, so a
+  full-swath style's native window actually fits): default-all-3-styles,
+  dual-channel context (via a `render_target_context` call spy, since
+  the saved PNG's own pixel size doesn't reflect the source array's
+  shape), geometric/georef dispatch (via `extract_geometric_window`/
+  `extract_georef_window` call spies), raw-vs-radiometric pixel-content
+  divergence, and graceful (not crashing) failure requesting `geometric`
+  against a file with no geometric correction. 4 existing `TestRunChip`
+  tests updated for the new `output/<style>/` layout (previously flat
+  `output/`) and the new required `styles`/`render_level`/
+  `swath_size_px` namespace fields. Full suite: 1448 passing / 36
+  skipped (was 1428). Version bumped 0.4.13 → 0.4.14.
+
+##### CLI subpackage follow-up 5 — geometric/georef chip crash on a target whose sample index doesn't fit its matched channel (2026-09-16, same day)
+
+Found running the new `--render-level geometric` feature (follow-up 4,
+above) against real project-b Klein SDF data for the first time at full
+scale: crashed partway through with an uncaught `IndexError` instead of
+producing output, on a target that the identical `radiometric`-level run
+moments earlier had handled without complaint.
+
+- **Root cause:** `_extract_geo_style_window`'s ``target_across_m``
+  lookup does an exact `.isel(sample=t.sample)` against the *matched*
+  channel's own array. `t.sample` is native to whichever channel/file
+  the target's position was originally captured against — for Klein
+  targets, `_match_frequency` has no `ping_meters_per_sample` to prefer
+  one frequency channel over another when a target's catalog entry
+  doesn't carry it, and picks arbitrarily; if that pick differs from the
+  channel the sample index actually belongs to, and the two channels
+  have different sample counts (real here: `hz_455000` vs `hz_900000`),
+  the index can fall outside the matched channel's own array entirely.
+  The pixel-space styles never hit this because `extract_chip`/
+  `extract_full_channel`'s own edge-shifting window placement clamps
+  silently instead of indexing out of bounds — this was a real, latent
+  data-mismatch that geometric/georef's exact index lookup was the first
+  thing to actually notice.
+- **Fixed:** an explicit `0 <= t.sample < masked.sizes["sample"]` bounds
+  check before the lookup, returning `None` (skip this target/style,
+  warn, keep going) — matching this same function's existing "don't
+  crash the whole run over one bad target" contract for missing
+  geometric/georef data. Does **not** fix the underlying frequency-
+  matching ambiguity itself (a separate, pre-existing question in
+  `_match_frequency`, out of scope for this fix).
+- **A second bug this exposed, unrelated to the crash itself:** the
+  shell command that ran this used `cmd 2>&1 | grep ... > file 2>&1`
+  without `set -o pipefail` — the logged exit status was `grep`'s (0,
+  since it matched lines), not the actual crashed `sidescan-export`
+  process's, so the failure was silently reported as a success. Caught
+  by checking the *file's actual contents* (a raw Python traceback)
+  after being suspicious of an empty-looking log, not by the reported
+  exit code — a reminder that a piped shell command's own exit code
+  doesn't reflect an earlier stage's failure without `pipefail`.
+- 1 new regression test (`test_geometric_level_out_of_bounds_sample_skips_gracefully`).
+  Full suite: 1449 passing / 36 skipped (was 1448). Version bumped
+  0.4.14 → 0.4.15.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
