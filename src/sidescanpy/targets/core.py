@@ -109,6 +109,51 @@ def bbox_from_center(row: float, col: float, box_size: tuple[float, float]) -> t
     return (col - w / 2, row - h / 2, w, h)
 
 
+def project_target_to_frequency(target: Target, source_mps: float, target_mps: float, *, n_samples: int | None = None) -> Target | None:
+    """Re-express ``target``'s position on a *different* frequency channel
+    of the same survey, using the one thing both channels share exactly:
+    the physical world.
+
+    A source catalog (EdgeTech Discover, Klein SonarWiz) only ever marks
+    a contact against the one frequency channel it was picked on — there
+    is no "also visible on the other channel" field. But ``ping`` (both
+    channels are pinged in lockstep — the same physical vessel position,
+    confirmed on real data: identical ping *count* per channel within one
+    file) and the physical slant range a sample represents
+    (``sample * meters_per_sample``) are both real, channel-independent
+    quantities. So the target's true position on the untagged channel is
+    recoverable: convert its sample index to a physical slant range using
+    the *source* channel's own meters/sample, then back to a sample index
+    using the *target* channel's — same ping, same side, no catalog entry
+    needed for that channel at all.
+
+    ``ping``/``channel``/every other field are carried through unchanged
+    (``replace``) — only ``sample`` moves, plus
+    ``extra_attributes["projected_from_mps"]`` recording the source
+    resolution, so a caller/renderer can tell a real catalog mark apart
+    from one recovered this way (e.g. to draw it with a different box
+    style) without losing the fact that it's the same real contact.
+
+    Returns ``None`` (not a clamped/guessed value) if the projected
+    sample would land at or past ``n_samples`` — a real, physical
+    consequence of the two channels recording different maximum ranges,
+    not a placement bug: the contact genuinely sits beyond the other
+    channel's recorded window and has no honest position to report
+    there. Only checked when ``n_samples`` is given.
+    """
+    if target.sample is None:
+        return None
+    slant_range_m = target.sample * source_mps
+    projected_sample = round(slant_range_m / target_mps)
+    if n_samples is not None and not (0 <= projected_sample < n_samples):
+        return None
+    return replace(
+        target,
+        sample=projected_sample,
+        extra_attributes={**target.extra_attributes, "projected_from_mps": source_mps},
+    )
+
+
 def detrend_by_range(window: np.ndarray) -> np.ndarray:
     """Subtract each column's (sample index's) median value across every
     ping in the window, flattening any left-to-right brightness gradient

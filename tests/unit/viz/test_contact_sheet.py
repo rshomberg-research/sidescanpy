@@ -45,6 +45,53 @@ def test_contact_sheet_rejects_mismatched_lengths():
         contact_sheet([np.zeros((5, 5))], ["a", "b"])
 
 
+def test_contact_sheet_uses_equal_aspect_not_auto():
+    # Real bug found 2026-09-17: aspect="auto" stretched genuinely
+    # square chip files to fill whatever box shape the grid layout
+    # produced for that cell -- confirmed every underlying file was
+    # actually square on disk, so this was purely a display bug.
+    images = [np.random.default_rng(0).random((20, 20))]
+    fig = contact_sheet(images, ["a"])
+    ax = fig.get_axes()[0]
+    assert ax.get_aspect() == 1.0  # matplotlib reports "equal" as 1.0
+
+
+def test_contact_sheet_rejects_mismatched_boxes_length(sample_target):
+    with pytest.raises(ValueError, match="boxes"):
+        contact_sheet([np.zeros((5, 5)), np.zeros((5, 5))], ["a", "b"], boxes=[[sample_target]])
+
+
+def test_contact_sheet_draws_boxes_when_given(sample_target):
+    images = [np.random.default_rng(0).random((20, 20))]
+    fig = contact_sheet(images, ["a"], boxes=[[sample_target]], box_size=(6, 6))
+    ax = fig.get_axes()[0]
+    assert len(ax.patches) == 1
+
+
+def test_contact_sheet_no_boxes_by_default():
+    images = [np.random.default_rng(0).random((20, 20))]
+    fig = contact_sheet(images, ["a"])
+    ax = fig.get_axes()[0]
+    assert len(ax.patches) == 0
+
+
+def test_contact_sheet_empty_box_list_draws_nothing(sample_target):
+    images = [np.random.default_rng(0).random((20, 20)), np.random.default_rng(1).random((20, 20))]
+    fig = contact_sheet(images, ["a", "b"], boxes=[[sample_target], []])
+    axes = fig.get_axes()
+    assert len(axes[0].patches) == 1
+    assert len(axes[1].patches) == 0
+
+
+def test_contact_sheet_multiple_targets_per_thumbnail(sample_target):
+    from dataclasses import replace
+    second = replace(sample_target, target_id="0002", sample=20)
+    images = [np.random.default_rng(0).random((20, 30))]
+    fig = contact_sheet(images, ["a"], boxes=[[sample_target, second]], box_size=(6, 6))
+    ax = fig.get_axes()[0]
+    assert len(ax.patches) == 2
+
+
 def test_render_target_context_draws_box(sample_target):
     rng = np.random.default_rng(0)
     window = rng.random((10, 30))

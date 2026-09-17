@@ -62,6 +62,7 @@ def plot_waterfall(
     show_colorbar: bool = False,
     ax: Axes | None = None,
     title: str | None = None,
+    value_var: str = "backscatter_intensity",
 ) -> Axes:
     """
     Plot a port+starboard combined waterfall.
@@ -70,6 +71,10 @@ def plot_waterfall(
     ----------
     ds : xr.Dataset
         Validated sidescan dataset.
+    value_var : str, default "backscatter_intensity"
+        Which backscatter variable to plot -- the TVG-corrected default,
+        or ``"backscatter_raw"`` for an uncorrected view. Always present
+        regardless of what correction stages have run (raw is immutable).
     start : int, default 0
         First ping index to include.
     stop : int, optional
@@ -155,7 +160,7 @@ def plot_waterfall(
     n_pings_slice = sliced.sizes["ping"]
     n_samples = sliced.sizes["sample"]
 
-    bs = _mask_floor_clip(sliced["backscatter_intensity"].values)
+    bs = _mask_floor_clip(sliced[value_var].values)
 
     # Compute x for the slice
     x_port, x_stbd = _compute_x_values(sliced, x_axis)
@@ -270,6 +275,7 @@ def plot_survey_overview(
     show_colorbar: bool = False,
     ax: Axes | None = None,
     title: str | None = None,
+    value_var: str = "backscatter_intensity",
 ) -> Axes:
     """
     Compressed, whole-survey waterfall overview.
@@ -337,6 +343,7 @@ def plot_survey_overview(
         show_colorbar=show_colorbar,
         ax=ax,
         title=title,
+        value_var=value_var,
     )
 
     # plot_waterfall labeled the y-axis with the *strided* dataset's own

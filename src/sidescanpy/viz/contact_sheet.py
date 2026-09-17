@@ -34,6 +34,8 @@ def contact_sheet(
     images: list[np.ndarray],
     captions: list[str],
     *,
+    boxes: list[list[Target]] | None = None,
+    box_size: tuple[float, float] = (40.0, 40.0),
     ncols: int = 6,
     cmap: str = _DEFAULT_CMAP,
     vmin_pct: float = _DEFAULT_VMIN_PCT,
@@ -53,11 +55,24 @@ def contact_sheet(
         One per target.
     captions : list of str
         Same length as ``images``.
+    boxes : list of list of Target, optional
+        Same length as ``images`` if given — every target to draw a box
+        for on that thumbnail (``.sample``/``extra_attributes["window_row"]``,
+        the same convention ``bbox_from_center``/COCO/YOLO already use).
+        An empty list for an entry draws no box on that thumbnail.
+        Omit entirely for a plain, unboxed grid (e.g. no-target negative
+        samples, which have nothing to box by definition).
+    box_size : tuple, default (40.0, 40.0)
+        Shared placeholder box size — same meaning as everywhere else in
+        this codebase (no measured target extent exists in any source
+        catalog seen so far).
     ncols : int, default 6
         Grid columns; rows are computed to fit.
     """
     if len(images) != len(captions):
         raise ValueError(f"images ({len(images)}) and captions ({len(captions)}) must be the same length")
+    if boxes is not None and len(boxes) != len(images):
+        raise ValueError(f"boxes ({len(boxes)}) must be the same length as images ({len(images)})")
     n = len(images)
     ncols = max(1, min(ncols, n)) if n else 1
     nrows = max(1, -(-n // ncols)) if n else 1
@@ -69,8 +84,22 @@ def contact_sheet(
         if idx < n:
             image = images[idx]
             vmin, vmax = _vlimits(image, vmin_pct, vmax_pct)
-            ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+            # aspect="equal" -- "auto" (the prior default) stretches an
+            # image to fill whatever box shape the grid layout happens to
+            # produce for that cell, which can visibly distort a
+            # genuinely square array (found 2026-09-17: every underlying
+            # chip file was confirmed square on disk, but contact sheets
+            # made some look stretched -- a display bug here, not a data
+            # bug in the export itself).
+            ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, aspect="equal")
             ax.set_title(captions[idx], fontsize=8)
+            for t in (boxes[idx] if boxes else []):
+                row = t.extra_attributes.get("window_row")
+                col = t.sample
+                if row is None or col is None:
+                    continue
+                x, y, w, h = bbox_from_center(row, col, box_size)
+                ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="red", linewidth=1.0))
         ax.set_xticks([])
         ax.set_yticks([])
 

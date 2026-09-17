@@ -433,6 +433,128 @@ moments earlier had handled without complaint.
   Full suite: 1449 passing / 36 skipped (was 1448). Version bumped
   0.4.14 → 0.4.15.
 
+##### CLI subpackage follow-up 6 — waterfall rebuilt for whole-survey windows + cross-frequency target projection (2026-09-17)
+
+User feedback after a full end-to-end run: didn't want waterfall segments
+restarting at each file boundary; wanted window/overlap control instead
+of fixed non-overlapping segments; wanted a fixed-size whole-survey
+overview regardless of survey length; wanted raw/radiometric selectable;
+and wanted every target visible on *both* frequency channels, not just
+whichever one it was actually correlated to, using slant range + ping
+number to derive its position on the other channel when the source
+catalog only ever marks one.
+
+- **New `sidescanpy.targets.core.project_target_to_frequency()`** — the
+  physical trick: two frequency channels share the same ping (both
+  pinged in lockstep — confirmed on real data: identical ping count per
+  channel within one file) and the same physical world, so a target's
+  slant range (`sample * meters_per_sample`) computed on its own
+  channel converts cleanly to a sample index on any other channel via
+  that channel's own meters/sample — no catalog entry for the second
+  channel needed. Returns `None` (not a clamped guess) when the
+  projected sample would land outside the target channel's own
+  recorded window — a real, physical "this channel's range doesn't
+  reach that far" case, not a bug.
+- **`sidescan-export waterfall` rebuilt around one lazy, whole-survey
+  concatenated dataset per frequency** (new `_concat_survey_frequency()`
+  — every `.ss.h5` file in `--ss-h5-dir`, dask-backed, `xr.concat` along
+  `ping`, tracking each file's own start-ping offset in the combined
+  axis) instead of looping file-by-file and restarting segmentation at
+  0 for each one. Output layout simplified to match:
+  `output_dir/<freq>/segment_NNN.png` (no more `<file>.ss/` subfolder).
+- **`--window-pings`/`--overlap-pings`** replace `--segment-size` —
+  `--overlap-pings=0` (default) reproduces the old non-overlapping
+  behavior exactly; a caller wanting overlap gets it via one new flag
+  instead of pre/post-processing segments themselves. Rejects
+  `overlap-pings >= window-pings` explicitly (would never advance)
+  rather than looping forever or producing an unbounded segment count.
+- **`--overview-rows N`** — additionally writes one `overview.png` per
+  frequency: the *already-built* `viz.waterfall.plot_survey_overview()`
+  (existed in the library, never wired into any CLI since the old
+  `visualization_demo.py` was retired) compressed to approximately `N`
+  rows via a computed `ping_stride = total_pings // N`, so every
+  survey's overview comes out roughly the same size regardless of
+  length, with a red marker line at every file boundary (using the same
+  file-offset tracking `_concat_survey_frequency` already computes).
+  Not an exact `N` (integer-division stride, not literal `linspace`
+  point selection) — `plot_survey_overview`'s existing tick-label and
+  break-marker math assumes one uniform stride value throughout, which
+  true `linspace` sampling (generally non-uniform spacing after
+  rounding) would have broken; a computed stride achieves the same
+  practical goal (same approximate size for every survey) without
+  touching that already-tested math.
+- **`--value-var {raw,radiometric}`** (new; `plot_waterfall()`/
+  `plot_survey_overview()` both gained the underlying `value_var`
+  parameter, default `"backscatter_intensity"` — exactly today's prior
+  behavior) — `raw` plots `backscatter_raw` instead. Combine with the
+  already-existing `--range-mode ground` for the "geometric" half of
+  the ask; **known limitation, not silently dropped**: `--targets-json`
+  still only supports the default sample/ping axes (unchanged, pre-
+  existing restriction) — `--range-mode ground` and target-box overlay
+  are mutually exclusive in the same run, so getting both means two
+  separate `sidescan-export waterfall` invocations (see the consumer
+  scripts' own step 4 for the concrete pattern now used).
+- **Cross-frequency target overlay wired directly into `run_waterfall`**:
+  every matched target is now drawn on *every* rendered frequency of its
+  own file — its real native position on the frequency it was actually
+  correlated to, `project_target_to_frequency()`'s projection on every
+  other one (silently skipped for that one frequency only if the
+  projection lands out of bounds there).
+- **Real-data verification, `survey-a`'s full 5-file, 64,627-
+  ping survey:** overview's file-boundary markers (17547 / 22763 /
+  40310 / 57858) matched this survey's already-known per-file ping
+  counts (17547, 5216, 17547, 17548, 6769) exactly. A window/overlap run
+  (3000/500) produced 26 windows spanning the whole concatenated survey
+  with no per-file restart. A target correlated to `hz_1495000` was
+  confirmed, visually, to also appear on `hz_547500`'s own rendering at
+  the identical ping and a proportionally-scaled sample position (LF's
+  coarser meters/sample puts the same physical range at a smaller
+  sample index than HF) — the projection math confirmed correct against
+  real data, not just synthetic fixtures. A one-ping HF/LF total-count
+  mismatch surfaced on this real survey (64627 vs 64626) — handled
+  correctly since offsets are tracked per-frequency independently, not
+  assumed equal.
+- 14 new tests (`tests/unit/cli/test_export.py`, new `two_file_ss_h5_dir`
+  fixture for genuine no-restart-across-files coverage; `tests/unit/
+  targets/test_core.py`'s new `TestProjectTargetToFrequency`, 8 tests).
+  4 existing `TestRunWaterfall` tests updated for the new namespace
+  fields and flat `<freq>/segment_NNN.png` output layout. Full suite:
+  1463 passing / 36 skipped (was 1449). Version bumped 0.4.15 → 0.4.16.
+
+##### CLI subpackage follow-up 7 — contact sheets: boxes drawn, real square-display bug fixed (2026-09-17)
+
+User feedback reviewing the new chip datasets: wanted bounding boxes on
+the contact sheets themselves (not just the individual chip files), and
+reported some full-swath thumbnails not appearing square.
+
+- **Root cause of the square complaint, confirmed not a data bug**:
+  every underlying `target_<id>.png` file was independently verified
+  square on disk (direct `PIL.Image.open(...).size` check, every style,
+  every real dataset generated this session) — the distortion was in
+  `viz.contact_sheet.contact_sheet()`'s own `imshow(..., aspect="auto")`,
+  which stretches each thumbnail to fill whatever box shape the grid
+  layout happens to produce for that cell, regardless of the source
+  array's own shape. **Fixed**: `aspect="equal"`.
+- **`contact_sheet()` gained `boxes`/`box_size` parameters** — a list of
+  `Target` per thumbnail (reusing the same `bbox_from_center()`
+  convention as COCO/YOLO/`render_target_context`, so all four agree on
+  the same box for a given target), drawn as unfilled red rectangles.
+  `run_chip` now passes each window's own `co_targets` list through, so
+  a busy thumbnail correctly shows every target inside it, not just the
+  one the crop was centered on (confirmed on real data: one dual-swath
+  thumbnail legitimately shows 8 boxes). `run_survey_window`'s own
+  contact sheet call is unaffected (no-target negatives by definition,
+  nothing to box).
+- **`render_target_context()`'s intentionally non-square wide-aspect
+  QA view was left untouched** — that aspect is a deliberate, documented
+  choice (matching EdgeTech Discover's own per-target image convention),
+  not the same "auto" bug.
+- 7 new tests (`tests/unit/viz/test_contact_sheet.py`: equal-aspect
+  assertion, mismatched-`boxes`-length validation, boxes drawn/omitted/
+  multi-target cases; `tests/unit/cli/test_export.py`: `run_chip` passes
+  real `co_targets` through as `boxes`). Full suite: 1470 passing / 36
+  skipped (was 1463). Version bumped 0.4.16 → 0.4.17.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

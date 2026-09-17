@@ -89,6 +89,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np
+import xarray as xr
 from PIL import Image
 
 from sidescanpy.cli._config import apply_config_defaults, find_config_path
@@ -112,9 +113,10 @@ from sidescanpy.grids import ResamplingMethod, bbox_from_channel_dataset, resamp
 from sidescanpy.grids.definition import utm_crs_for_lonlat
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
+from sidescanpy.targets.core import project_target_to_frequency
 from sidescanpy.targets.interchange import CocoImageEntry, write_coco, write_yolo
 from sidescanpy.targets.io import read_targets_json
-from sidescanpy.viz import plot_waterfall, resolve_waterfall_axes
+from sidescanpy.viz import plot_survey_overview, plot_waterfall, resolve_waterfall_axes
 from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 from sidescanpy.viz.gridded import export_gridded_png
 from sidescanpy.viz.targets import export_track_with_targets_png
@@ -143,18 +145,19 @@ def _target_waterfall_xy(target, ping_idx: int) -> tuple[float, float]:
     return float(x_center), float(ping_idx)
 
 
-def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, boxes=None, box_size=40.0):
-    """``boxes``, if given: list of ``(target, ping_idx)`` (file-global
-    ping index) to draw a red box + target_id label for, on top of the
-    rendered waterfall. Only meaningful when ``x_axis="sample"``/
-    ``y_axis="ping"`` (the caller is responsible for enforcing that)."""
+def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, boxes=None, box_size=40.0, value_var="backscatter_intensity"):
+    """``boxes``, if given: list of ``(target, ping_idx)`` (global ping
+    index within whatever ``ds`` this call was handed) to draw a red box
+    + target_id label for, on top of the rendered waterfall. Only
+    meaningful when ``x_axis="sample"``/``y_axis="ping"`` (the caller is
+    responsible for enforcing that)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(14, 6))
     try:
         plot_waterfall(
             ds, x_axis=x_axis, y_axis=y_axis, ping_offset=ping_offset,
             cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct,
-            gamma=gamma, ax=ax,
+            gamma=gamma, ax=ax, value_var=value_var,
         )
         for target, ping_idx in boxes or []:
             x_center, y_center = _target_waterfall_xy(target, ping_idx)
@@ -167,6 +170,32 @@ def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset,
         plt.close(fig)
 
 
+def _concat_survey_frequency(files: list[Path], freq_key: str, chunks: dict) -> tuple[xr.Dataset | None, dict]:
+    """Lazily concatenate ``freq_key``'s channel across every file in
+    ``files`` (sorted, so typically time order) into one dask-backed
+    dataset spanning the whole survey -- no per-file restart.
+
+    Returns ``(concatenated_ds, file_start_ping)`` where
+    ``file_start_ping[path]`` is that file's own first ping's position in
+    the concatenated dataset's global ping axis (0 for the first file).
+    ``concatenated_ds`` is ``None`` if no file has this frequency at all.
+    """
+    datasets = []
+    file_start_ping: dict[Path, int] = {}
+    cumulative = 0
+    for path in files:
+        survey = read_survey(path, chunks=chunks)
+        if freq_key not in survey.frequencies:
+            continue
+        ds = survey.get_frequency(freq_key).dataset
+        file_start_ping[path] = cumulative
+        cumulative += ds.sizes["ping"]
+        datasets.append(ds)
+    if not datasets:
+        return None, {}
+    return xr.concat(datasets, dim="ping"), file_start_ping
+
+
 def run_waterfall(args: argparse.Namespace) -> int:
     if args.range_mode == "ground":
         # Forces the distance-axis branch regardless of --x-axis/--y-axis
@@ -177,7 +206,8 @@ def run_waterfall(args: argparse.Namespace) -> int:
     else:
         x_axis, y_axis = args.x_axis, args.y_axis
 
-    targets_by_file_freq: dict[tuple, list] = defaultdict(list)
+    targets = []
+    index: dict[Path, dict] = {}
     if args.targets_json:
         if x_axis != "sample" or y_axis != "ping":
             logger.error(
@@ -188,15 +218,6 @@ def run_waterfall(args: argparse.Namespace) -> int:
             return 1
         targets = read_targets_json(args.targets_json)
         index = _build_position_index(args.ss_h5_dir)
-        n_matched = 0
-        for t in targets:
-            m = _correlate_target(t, index, args.max_match_dist_m)
-            if m is None:
-                continue
-            path, freq_key, ping_idx, _dist_m = m
-            targets_by_file_freq[(path, freq_key)].append((t, ping_idx))
-            n_matched += 1
-        logger.info(f"Overlaying {n_matched}/{len(targets)} target(s) matched to a real ping")
 
     files = sorted(args.ss_h5_dir.glob("*.ss.h5"))
     if not files:
@@ -204,38 +225,98 @@ def run_waterfall(args: argparse.Namespace) -> int:
         return 1
     logger.info(f"Found {len(files)} .ss.h5 file(s) in {args.ss_h5_dir}")
 
+    stride = args.window_pings - args.overlap_pings
+    if stride <= 0:
+        logger.error(f"--overlap-pings ({args.overlap_pings}) must be smaller than --window-pings ({args.window_pings})")
+        return 1
+
+    value_var = "backscatter_raw" if args.value_var == "raw" else "backscatter_intensity"
+
     n_written = 0
-    for path in files:
-        survey = read_survey(path)
-        freq_keys = survey.frequencies if args.frequency == "all" else [f"hz_{args.frequency}"]
-        for freq_key in freq_keys:
-            if freq_key not in survey.frequencies:
-                continue
-            ds = survey.get_frequency(freq_key).dataset
-            n_pings = ds.sizes["ping"]
-            n_segments = max(1, -(-n_pings // args.segment_size))
-            file_targets = targets_by_file_freq.get((path, freq_key), [])
-            for seg_idx in range(n_segments):
-                start = seg_idx * args.segment_size
-                stop = min(start + args.segment_size, n_pings)
-                ds_segment = ds.isel(ping=slice(start, stop))
-                out_path = args.output_dir / freq_key / path.stem / f"segment_{seg_idx + 1:03d}.png"
-                segment_boxes = [(t, p) for t, p in file_targets if start <= p < stop]
-                try:
-                    _export_waterfall_png(
-                        ds_segment, out_path,
-                        x_axis=x_axis, y_axis=y_axis, ping_offset=start,
-                        cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
-                        vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
-                        dpi=args.dpi, boxes=segment_boxes, box_size=args.box_size,
-                    )
-                    n_written += 1
-                except Exception as e:
-                    logger.error(f"[{path.name}/{freq_key}] segment {seg_idx + 1} failed: {type(e).__name__}: {e}")
-            logger.info(f"[{path.name}/{freq_key}] {n_segments} segment(s) processed")
+    # Correlate every target once (position-based, format-agnostic), then
+    # re-derive its position on *each* frequency below -- its own native
+    # mark where it was actually correlated, or a physical projection
+    # (same ping, slant-range-equivalent sample) onto every other
+    # frequency of that same file, so a target shows up on every
+    # rendered frequency, not just the one it happened to be picked on.
+    matched = []
+    for t in targets:
+        m = _correlate_target(t, index, args.max_match_dist_m)
+        if m is not None:
+            matched.append((t,) + m)  # (t, path, native_freq_key, local_ping, dist_m)
+    if targets:
+        logger.info(f"Overlaying {len(matched)}/{len(targets)} target(s) matched to a real ping")
+
+    ds_first = read_survey(files[0], chunks={"ping": 512})
+    freq_keys = ds_first.frequencies if args.frequency == "all" else [f"hz_{args.frequency}"]
+
+    for freq_key in freq_keys:
+        ds_all, file_start_ping = _concat_survey_frequency(files, freq_key, chunks={"ping": 512})
+        if ds_all is None:
+            logger.warning(f"{freq_key}: no file has this frequency, skipping")
+            continue
+        n_pings_total = ds_all.sizes["ping"]
+
+        boxes_by_ping: dict[int, list] = defaultdict(list)
+        for t, path, native_freq_key, local_ping, _dist_m in matched:
+            if path not in file_start_ping:
+                continue  # this file has no freq_key channel at all
+            if native_freq_key == freq_key:
+                projected = t
+            else:
+                src = index[path][native_freq_key]["sample_interval_m"]
+                dst = index[path][freq_key]["sample_interval_m"]
+                n_samples_dst = index[path][freq_key]["n_samples"]
+                projected = project_target_to_frequency(t, source_mps=src, target_mps=dst, n_samples=n_samples_dst)
+                if projected is None:
+                    continue  # genuinely out of this frequency's recorded range
+            boxes_by_ping[file_start_ping[path] + local_ping].append(projected)
+
+        if args.overview_rows:
+            overview_stride = max(1, n_pings_total // args.overview_rows)
+            breaks = sorted(p for p in file_start_ping.values() if p > 0)
+            out_path = args.output_dir / freq_key / "overview.png"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            fig, ax = plt.subplots(figsize=(14, 8))
+            try:
+                plot_survey_overview(
+                    ds_all, ping_stride=overview_stride, break_ping_indices=breaks,
+                    x_axis=x_axis, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+                    vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma, ax=ax,
+                    value_var=value_var,
+                )
+                fig.tight_layout()
+                fig.savefig(out_path, dpi=args.dpi)
+                n_written += 1
+                logger.info(f"{freq_key}: wrote overview.png ({n_pings_total} pings, 1:{overview_stride} compressed)")
+            finally:
+                plt.close(fig)
+
+        n_windows = 0
+        for start in range(0, n_pings_total, stride):
+            stop = min(start + args.window_pings, n_pings_total)
+            ds_window = ds_all.isel(ping=slice(start, stop)).load()
+            out_path = args.output_dir / freq_key / f"segment_{n_windows + 1:03d}.png"
+            window_boxes = [(bt, p) for p in range(start, stop) for bt in boxes_by_ping.get(p, [])]
+            try:
+                _export_waterfall_png(
+                    ds_window, out_path,
+                    x_axis=x_axis, y_axis=y_axis, ping_offset=start,
+                    cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+                    vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
+                    dpi=args.dpi, boxes=window_boxes, box_size=args.box_size,
+                    value_var=value_var,
+                )
+                n_written += 1
+            except Exception as e:
+                logger.error(f"{freq_key}: window starting at ping {start} failed: {type(e).__name__}: {e}")
+            n_windows += 1
+            if stop == n_pings_total:
+                break
+        logger.info(f"{freq_key}: {n_windows} window(s) processed ({n_pings_total} total pings, window={args.window_pings}, overlap={args.overlap_pings})")
 
     logger.info("=" * 60)
-    logger.info(f"export waterfall ({args.range_mode}) complete: {n_written} PNG(s) written")
+    logger.info(f"export waterfall ({args.range_mode}, {args.value_var}) complete: {n_written} PNG(s) written")
     return 0 if n_written > 0 else 1
 
 
@@ -730,7 +811,7 @@ def run_chip(args: argparse.Namespace) -> int:
         reference_stats = _reference_stats_for_scope(args.normalization_scope, windows, args.pct_low, args.pct_high)
 
         coco_entries = []
-        thumbnails, captions = [], []
+        thumbnails, captions, sheet_boxes = [], [], []
         style_dir = args.output / style
         for window, (co_targets, primary, file_stem, freq_key) in zip(windows, window_meta[style]):
             img_8bit, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
@@ -742,10 +823,14 @@ def run_chip(args: argparse.Namespace) -> int:
                     CocoImageEntry(target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0])
                 )
             thumbnails.append(img_8bit)
+            sheet_boxes.append(co_targets)
             n_co = len(co_targets)
             captions.append(f"{primary.target_id} ({freq_key}, {n_co} target{'s' if n_co != 1 else ''})")
 
-        sheet_fig = contact_sheet(thumbnails, captions, ncols=6, suptitle=f"{style}: {len(thumbnails)} chips")
+        sheet_fig = contact_sheet(
+            thumbnails, captions, boxes=sheet_boxes, box_size=(args.box_size, args.box_size),
+            ncols=6, suptitle=f"{style}: {len(thumbnails)} chips",
+        )
         sheet_fig.savefig(style_dir / "contact_sheet.png", dpi=150)
         plt.close(sheet_fig)
 
@@ -1164,11 +1249,32 @@ def main() -> int:
 
     common = dict(gamma=1.0, pct_low=1.0, pct_high=99.0)
 
-    p_wf = subparsers.add_parser("waterfall", help="Sample/ping or ground-range/along-track waterfall PNGs")
+    p_wf = subparsers.add_parser("waterfall", help="Sample/ping or ground-range/along-track waterfall PNGs, spanning the whole survey")
     p_wf.add_argument("--ss-h5-dir", required=True, type=Path)
     p_wf.add_argument("--output-dir", required=True, type=Path)
     p_wf.add_argument("--frequency", type=str, default="all")
-    p_wf.add_argument("--segment-size", type=int, default=_DEFAULT_SEGMENT_SIZE)
+    p_wf.add_argument(
+        "--window-pings", type=int, default=_DEFAULT_SEGMENT_SIZE,
+        help="Pings per window. Windows are cut from the whole survey (every .ss.h5 file in "
+             "--ss-h5-dir, lazily concatenated in filename order) -- not restarted per file.",
+    )
+    p_wf.add_argument(
+        "--overlap-pings", type=int, default=0,
+        help="Pings shared between consecutive windows (must be < --window-pings). 0 (default): "
+             "the old non-overlapping behavior.",
+    )
+    p_wf.add_argument(
+        "--overview-rows", type=int, default=None,
+        help="Also write one overview.png per frequency: the whole survey compressed to "
+             "approximately this many rows (stride computed as total_pings // this value, so "
+             "every survey's overview comes out about the same size regardless of length), with "
+             "a marker line at every file boundary. Omit to skip the overview.",
+    )
+    p_wf.add_argument(
+        "--value-var", choices=["raw", "radiometric"], default="radiometric",
+        help="raw = backscatter_raw (no TVG); radiometric = backscatter_intensity (TVG-corrected, "
+             "the old default). Combine with --range-mode ground for a geometrically-axed view.",
+    )
     p_wf.add_argument("--range-mode", choices=["slant", "ground"], default="slant", help="ground requires geometric ranges already computed (see sidescan-correct --geometric)")
     p_wf.add_argument("--x-axis", choices=["sample", "ground_range", "across_track"], default="sample", help="Ignored when --range-mode ground")
     p_wf.add_argument("--y-axis", choices=["ping", "time", "along_track"], default="ping", help="Ignored when --range-mode ground")

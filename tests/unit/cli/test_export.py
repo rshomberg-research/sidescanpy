@@ -71,6 +71,18 @@ def georef_ss_h5_dir(tmp_path):
     return d
 
 
+@pytest.fixture
+def two_file_ss_h5_dir(tmp_path):
+    """Two independent 20-ping files, same shape as georef_ss_h5_dir's
+    single file -- for testing that waterfall windows/overview span the
+    whole survey without restarting at each file boundary."""
+    d = tmp_path / "ss_h5"
+    d.mkdir()
+    write_survey(run_correction_steps(_geo_friendly_survey(), {"tvg", "geometric", "georef"}), d / "survey_a.ss.h5")
+    write_survey(run_correction_steps(_geo_friendly_survey(), {"tvg", "geometric", "georef"}), d / "survey_b.ss.h5")
+    return d
+
+
 def _swath_friendly_survey(n_pings=300, n_samples=30):
     """Unlike ``_geo_friendly_survey`` (20 pings x 2000 samples, built for
     geometric/georef range coverage), single-swath/dual-swath's native
@@ -106,7 +118,8 @@ class TestRunWaterfall:
     def _args(self, tmp_path, ss_h5_dir, **overrides):
         defaults = dict(
             ss_h5_dir=ss_h5_dir, output_dir=tmp_path / "out", frequency="all",
-            segment_size=2000, range_mode="slant", x_axis="sample", y_axis="ping",
+            window_pings=2000, overlap_pings=0, overview_rows=None, value_var="radiometric",
+            range_mode="slant", x_axis="sample", y_axis="ping",
             cmap="copper", vmin=None, vmax=None, vmin_pct=2.0, vmax_pct=98.0,
             gamma=2.5, dpi=50, targets_json=None, max_match_dist_m=25.0, box_size=40.0,
         )
@@ -116,14 +129,16 @@ class TestRunWaterfall:
     def test_slant_mode_writes_pngs_for_every_frequency(self, tmp_path, ss_h5_dir):
         assert export.run_waterfall(self._args(tmp_path, ss_h5_dir)) == 0
         out = tmp_path / "out"
-        assert (out / "hz_1495000" / "survey_a.ss" / "segment_001.png").exists()
-        assert (out / "hz_547500" / "survey_a.ss" / "segment_001.png").exists()
+        assert (out / "hz_1495000" / "segment_001.png").exists()
+        assert (out / "hz_547500" / "segment_001.png").exists()
+        # no more per-file subfolder
+        assert not (out / "hz_1495000" / "survey_a.ss").exists()
 
     def test_ground_mode_requires_geometric_ranges(self, tmp_path, georef_ss_h5_dir):
         args = self._args(tmp_path, georef_ss_h5_dir, range_mode="ground")
         assert export.run_waterfall(args) == 0
         out = tmp_path / "out"
-        assert (out / "hz_1495000" / "survey_a.ss" / "segment_001.png").exists()
+        assert (out / "hz_1495000" / "segment_001.png").exists()
 
     def test_ground_mode_without_geometric_ranges_fails_cleanly(self, tmp_path, ss_h5_dir):
         args = self._args(tmp_path, ss_h5_dir, range_mode="ground")
@@ -153,6 +168,68 @@ class TestRunWaterfall:
         with caplog.at_level("INFO"):
             assert export.run_waterfall(args) == 0
         assert "Overlaying 1/1 target(s) matched to a real ping" in caplog.text
+
+    def test_target_projected_onto_sibling_frequency(self, tmp_path, georef_ss_h5_dir, mocker):
+        """A target correlated to hz_1495000 (its own recorded position)
+        must also get drawn on hz_547500's own windows, via
+        project_target_to_frequency -- same ping, slant-range-equivalent
+        sample, since the source catalog never marks a contact on both
+        channels itself."""
+        lat = float(np.linspace(40.0000, 40.0010, 20)[10])
+        lon = float(np.linspace(-70.0000, -70.0010, 20)[10])
+        target = Target(target_id="42", source_format="x", catalog_source="x", latitude=lat, longitude=lon, channel=1, sample=500)
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([target], targets_json)
+        spy = mocker.spy(export, "project_target_to_frequency")
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json=targets_json, frequency="all")
+        assert export.run_waterfall(args) == 0
+        assert spy.call_count >= 1  # projected onto at least the sibling frequency
+
+    def test_window_spans_across_file_boundary_no_restart(self, tmp_path, two_file_ss_h5_dir):
+        """Two 20-ping files, 40 pings total. A 25-ping window must
+        produce 2 windows (25 + 15), not 2 restarts of 1-each-with-a-
+        leftover per file (the old per-file behavior)."""
+        args = self._args(tmp_path, two_file_ss_h5_dir, window_pings=25, frequency="1495000")
+        assert export.run_waterfall(args) == 0
+        out = tmp_path / "out" / "hz_1495000"
+        assert (out / "segment_001.png").exists()
+        assert (out / "segment_002.png").exists()
+        assert not (out / "segment_003.png").exists()
+
+    def test_overlap_pings_produces_more_windows(self, tmp_path, two_file_ss_h5_dir):
+        no_overlap = self._args(tmp_path, two_file_ss_h5_dir, window_pings=10, overlap_pings=0, frequency="1495000", output_dir=tmp_path / "no_overlap")
+        overlap = self._args(tmp_path, two_file_ss_h5_dir, window_pings=10, overlap_pings=5, frequency="1495000", output_dir=tmp_path / "overlap")
+        assert export.run_waterfall(no_overlap) == 0
+        assert export.run_waterfall(overlap) == 0
+        n_no_overlap = len(list((tmp_path / "no_overlap" / "hz_1495000").glob("segment_*.png")))
+        n_overlap = len(list((tmp_path / "overlap" / "hz_1495000").glob("segment_*.png")))
+        assert n_overlap > n_no_overlap
+
+    def test_overlap_not_smaller_than_window_returns_1(self, tmp_path, ss_h5_dir):
+        args = self._args(tmp_path, ss_h5_dir, window_pings=10, overlap_pings=10)
+        assert export.run_waterfall(args) == 1
+
+    def test_overview_rows_writes_overview_png(self, tmp_path, two_file_ss_h5_dir):
+        args = self._args(tmp_path, two_file_ss_h5_dir, overview_rows=10, frequency="1495000")
+        assert export.run_waterfall(args) == 0
+        assert (tmp_path / "out" / "hz_1495000" / "overview.png").exists()
+
+    def test_value_var_raw_and_radiometric_produce_different_images(self, tmp_path, georef_ss_h5_dir):
+        # georef_ss_h5_dir (unlike ss_h5_dir) actually ran TVG -- ss_h5_dir's
+        # backscatter_intensity is just an uncorrected copy of
+        # backscatter_raw, so the two value_vars would be byte-identical
+        # there and this test would prove nothing.
+        from PIL import Image
+
+        raw_args = self._args(tmp_path, georef_ss_h5_dir, value_var="raw", frequency="1495000", output_dir=tmp_path / "raw_out")
+        rad_args = self._args(tmp_path, georef_ss_h5_dir, value_var="radiometric", frequency="1495000", output_dir=tmp_path / "rad_out")
+        assert export.run_waterfall(raw_args) == 0
+        assert export.run_waterfall(rad_args) == 0
+
+        raw_img = np.array(Image.open(tmp_path / "raw_out" / "hz_1495000" / "segment_001.png"))
+        rad_img = np.array(Image.open(tmp_path / "rad_out" / "hz_1495000" / "segment_001.png"))
+        assert not np.array_equal(raw_img, rad_img)
 
 
 class TestTargetWaterfallXY:
@@ -338,6 +415,23 @@ class TestRunChip:
             coco = json.loads((style_dir / "targets.coco.json").read_text())
             assert len(coco["images"]) == 1
             assert len(coco["annotations"]) == 1
+
+    def test_contact_sheet_gets_boxes(self, tmp_path, swath_ss_h5_dir, mocker):
+        spy = mocker.spy(export, "contact_sheet")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, styles=["chip"])
+        assert export.run_chip(args) == 0
+
+        assert spy.call_count == 1
+        _call_args, kwargs = spy.call_args
+        # one thumbnail, and the primary target is always inside its own
+        # window (targets_within_window's own contract) -- so exactly
+        # one box list with exactly the primary target in it.
+        assert len(kwargs["boxes"]) == 1
+        assert len(kwargs["boxes"][0]) == 1
+        assert kwargs["boxes"][0][0].target_id == "7"
 
     def test_context_combines_both_channels(self, tmp_path, swath_ss_h5_dir, mocker):
         """The user asked for context plots to show both port and
