@@ -38,7 +38,6 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import sys
 import time
@@ -48,7 +47,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # must precede any import that pulls in pyplot (viz.targets below) -- otherwise matplotlib probes for a GUI backend on import and can throw/thrash on a headless machine
 
-from sidescanpy.cli._config import apply_config_defaults, find_config_path
+from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.io import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.io.jsf.targets import read_discover_targets
@@ -279,7 +278,7 @@ def main() -> int:
     p_targets.set_defaults(func=run_targets)
 
     for p in (p_survey, p_targets):
-        p.add_argument("--config", type=Path, default=None, help="JSON file seeding this subcommand's defaults -- explicit flags still override")
+        p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
         # default=SUPPRESS (not False): argparse copies a subparser's
         # *entire* parsed namespace onto the shared one, including
         # unset-flag defaults -- a plain default=False here would
@@ -296,7 +295,7 @@ def main() -> int:
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
     if config_path is not None:
-        config = json.loads(config_path.read_text())
+        config = load_config(config_path)
         for p in (p_survey, p_targets):
             apply_config_defaults(p, config)
 

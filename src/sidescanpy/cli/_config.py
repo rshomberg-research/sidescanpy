@@ -1,6 +1,6 @@
 """
 Shared ``--config`` support for the ``sidescan-*`` CLIs: a small
-per-dataset JSON settings file (e.g. gamma, TVG term overrides, channel
+per-dataset settings file (e.g. gamma, TVG term overrides, channel
 restriction — see the family root's ``DATASET_BRIEF_PLAYBOOK.md``
 "settings that genuinely need to vary per dataset" table) that seeds
 argparse defaults for a command, so an operator doesn't have to retype
@@ -11,10 +11,14 @@ argparse *defaults*, via ``set_defaults()`` called before
 ``parse_args()``; a flag actually typed on the command line still wins,
 same as any other argparse default.
 
-JSON, not YAML: this codebase already uses JSON as its one interchange
-format everywhere (``targets.json``, ``metrics.json``, ``summary.json``)
-and has no existing YAML dependency — this avoids a new dependency for
-no real gain over a format already in use throughout.
+**Format convention (superseded 2026-09-18 -- see ``CLAUDE.md``'s
+"Consumer-Project Architecture Contract" section): YAML for anything a
+human reads or edits, JSON reserved for machine-generated/machine-only
+artifacts.** A ``--config`` file is exactly the human-edited case, so
+``.yaml``/``.yml`` is now the recommended extension for new configs.
+``.json`` is still accepted, unchanged, for every existing config
+already written that way -- this is additive, not a breaking format
+change.
 
 2026 rshomberg@uri.edu
 """
@@ -22,6 +26,8 @@ no real gain over a format already in use throughout.
 import argparse
 import json
 from pathlib import Path
+
+import yaml
 
 
 def find_config_path(argv: list[str]) -> Path | None:
@@ -34,6 +40,18 @@ def find_config_path(argv: list[str]) -> Path | None:
         if arg.startswith("--config="):
             return Path(arg.split("=", 1)[1])
     return None
+
+
+def load_config(path: Path) -> dict:
+    """Load a ``--config`` file, dispatched on extension: ``.yaml``/
+    ``.yml`` via ``yaml.safe_load``, anything else (including ``.json``)
+    via ``json.loads`` -- matches every config file already in use
+    across the family before YAML support existed, so an un-suffixed or
+    oddly-suffixed existing file keeps working exactly as before."""
+    text = path.read_text()
+    if path.suffix in (".yaml", ".yml"):
+        return yaml.safe_load(text)
+    return json.loads(text)
 
 
 def apply_config_defaults(parser: argparse.ArgumentParser, config: dict) -> None:

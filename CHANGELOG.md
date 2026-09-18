@@ -636,6 +636,29 @@ distance) are already computed and already present in a georeferenced
   combo instead). Full suite: 1475 passing / 36 skipped (was 1470).
   Version bumped 0.4.18 → 0.4.19.
 
+##### CLI subpackage follow-up 10 — `--config` accepts YAML, not just JSON (2026-09-18)
+
+`cli/_config.py` was JSON-only by a documented decision (this codebase's
+one interchange format) now superseded by `CLAUDE.md`'s "Consumer-Project
+Architecture Contract" section: YAML for anything a human reads or edits
+(a `--config` file is exactly that case), JSON reserved for
+machine-generated artifacts (`targets.json`, `metrics.json`, COCO
+annotations).
+
+- New `cli/_config.py: load_config(path)` — dispatches on extension
+  (`.yaml`/`.yml` via `yaml.safe_load`, anything else via `json.loads`,
+  so every existing extensionless/`.json` config already in use across
+  the family keeps parsing exactly as before). All four CLIs
+  (`convert.py`/`correct.py`/`export.py`/`analyze.py`) switched their
+  inline `json.loads(config_path.read_text())` call to this, and their
+  `--config` help text updated to say "YAML or JSON."
+- New dependency: `pyyaml` (already a real dependency elsewhere in the
+  family, e.g. `downstream-project`'s `pyproject.toml` — not new to the family).
+- Tests: `tests/unit/cli/test_config.py: TestLoadConfig` (5 new — JSON by
+  extension, YAML by extension, `.yml`, extensionless falls back to
+  JSON, an end-to-end YAML-seeds-argparse-defaults case). Full suite:
+  1522 passing / 36 skipped (was 1517).
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

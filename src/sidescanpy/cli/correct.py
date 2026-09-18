@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 from sidescanpy.cli._common import process_files_in_place
-from sidescanpy.cli._config import apply_config_defaults, find_config_path
+from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing import crop_far_range_noise, run_correction_steps
 from sidescanpy.processing.radiometric import TVGParams
@@ -178,13 +178,13 @@ def main() -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
         "--config", type=Path, default=None,
-        help="JSON file seeding this command's defaults (e.g. {\"spreading_loss_db\": 0.0}) -- explicit flags still override",
+        help="YAML or JSON file seeding this command's defaults (e.g. spreading_loss_db: 0.0) -- explicit flags still override",
     )
 
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
     if config_path is not None:
-        apply_config_defaults(parser, json.loads(config_path.read_text()))
+        apply_config_defaults(parser, load_config(config_path))
 
     args = parser.parse_args(argv)
 

@@ -1073,6 +1073,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pynmea2" },
     { name = "pyproj" },
+    { name = "pyyaml" },
     { name = "scipy" },
     { name = "xarray" },
 ]
@@ -1103,6 +1104,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.10" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "scipy", specifier = ">=1.10" },
     { name = "xarray", specifier = ">=2023.0" },
 ]

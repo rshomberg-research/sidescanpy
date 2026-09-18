@@ -53,7 +53,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sidescanpy.analysis.investigation import stage3_usable_range, stage4_decay
-from sidescanpy.cli._config import apply_config_defaults, find_config_path
+from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
@@ -278,7 +278,7 @@ def main() -> int:
     p_tvg.set_defaults(func=run_tvg_fit)
 
     for p in (p_inv, p_tvg):
-        p.add_argument("--config", type=Path, default=None, help="JSON file seeding this subcommand's defaults -- explicit flags still override")
+        p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
         # overwrite a real -v already set before the subcommand.
@@ -289,7 +289,7 @@ def main() -> int:
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
     if config_path is not None:
-        config = json.loads(config_path.read_text())
+        config = load_config(config_path)
         for p in (p_inv, p_tvg):
             apply_config_defaults(p, config)
 

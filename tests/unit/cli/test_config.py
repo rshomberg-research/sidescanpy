@@ -1,6 +1,6 @@
 """
-Unit tests for sidescanpy.cli._config — shared --config JSON-defaults
-support for the sidescan-* CLIs.
+Unit tests for sidescanpy.cli._config — shared --config YAML/JSON
+defaults support for the sidescan-* CLIs.
 
 2026 rshomberg@uri.edu
 """
@@ -8,7 +8,7 @@ support for the sidescan-* CLIs.
 import argparse
 import json
 
-from sidescanpy.cli._config import apply_config_defaults, find_config_path
+from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 
 
 class TestFindConfigPath:
@@ -58,7 +58,42 @@ class TestApplyConfigDefaults:
         config_path.write_text(json.dumps({"gamma": 2.5}))
 
         p = self._parser()
-        config = json.loads(config_path.read_text())
+        config = load_config(config_path)
         apply_config_defaults(p, config)
         args = p.parse_args([])
         assert args.gamma == 2.5
+
+
+class TestLoadConfig:
+    def test_loads_json_by_extension(self, tmp_path):
+        config_path = tmp_path / "survey.json"
+        config_path.write_text(json.dumps({"gamma": 2.5, "channel": "port"}))
+        assert load_config(config_path) == {"gamma": 2.5, "channel": "port"}
+
+    def test_loads_yaml_by_extension(self, tmp_path):
+        config_path = tmp_path / "survey.yaml"
+        config_path.write_text("gamma: 2.5\nchannel: port\n")
+        assert load_config(config_path) == {"gamma": 2.5, "channel": "port"}
+
+    def test_loads_yml_extension(self, tmp_path):
+        config_path = tmp_path / "survey.yml"
+        config_path.write_text("gamma: 2.5\n")
+        assert load_config(config_path) == {"gamma": 2.5}
+
+    def test_unsuffixed_falls_back_to_json(self, tmp_path):
+        """Matches every config file already in use before YAML support
+        existed -- an extensionless/oddly-suffixed file keeps parsing as
+        JSON exactly as it did before this function existed."""
+        config_path = tmp_path / "survey_config"
+        config_path.write_text(json.dumps({"gamma": 2.5}))
+        assert load_config(config_path) == {"gamma": 2.5}
+
+    def test_end_to_end_yaml_seeds_argparse_defaults(self, tmp_path):
+        config_path = tmp_path / "survey.yaml"
+        config_path.write_text("spreading_loss_db: 20.0\n")
+        p = argparse.ArgumentParser()
+        p.add_argument("--spreading-loss-db", dest="spreading_loss_db", type=float, default=0.0)
+
+        apply_config_defaults(p, load_config(config_path))
+        args = p.parse_args([])
+        assert args.spreading_loss_db == 20.0

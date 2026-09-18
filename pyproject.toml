@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sidescanpy"
-version = "0.4.19"
+version = "0.4.20"
 description = "..."
 authors = [{name = "Russ Shomberg"}]
 requires-python = ">=3.12"
@@ -19,6 +19,7 @@ dependencies = [
     "pyproj>=3.6",
     "scipy>=1.10",
     "pynmea2>=1.18",
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]
