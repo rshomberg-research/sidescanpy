@@ -162,7 +162,16 @@ def plot_gridded_raster(
 
     if show_land:
         from sidescanpy.viz.basemap import add_land_background
-        add_land_background(ax, raster.bbox, raster.crs, zorder=0)
+
+        # margin_frac=0.0: unlike track.py's tight-to-the-data bbox,
+        # raster.bbox already has its own ~10% margin baked in by
+        # bbox_from_channel_dataset() (the grid-construction step, run
+        # before this raster ever existed) -- add_land_background's own
+        # default 8% margin would stack on top of that, nearly doubling
+        # the padding around the swath. That compounding was the direct
+        # cause of a real user-reported "way more padding than
+        # necessary" bug (2026-09-18).
+        add_land_background(ax, raster.bbox, raster.crs, zorder=0, margin_frac=0.0)
 
     # Create masked array for NaN handling
     backscatter_masked = np.ma.masked_invalid(backscatter)

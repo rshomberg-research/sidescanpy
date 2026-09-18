@@ -861,6 +861,54 @@ reported some full-swath thumbnails not appearing square.
   added-in-a-later-standalone-invocation, matching `TestCombinedSteps`/
   `TestIdempotency`'s existing conventions). Full suite: 1497 passing /
   36 skipped (was 1494).
+- **Bundled default range-correction calibration was fit against a
+  since-superseded TVG recipe, and was actively making the residual
+  worse, not better, once layered on top of the current one (2026-09-18).**
+  Follow-up to the `--range-correction` flag fix directly above: exposing
+  the flag surfaced that applying it on real `survey-a` data
+  still left gridded output looking bright-center/dark-edge, not flat.
+  Root cause, confirmed quantitatively: the bundled calibration
+  (`range_correction_default.json`) was fit 2026-07-17 against the
+  `absorption_only` TVG era later superseded by `project-a`'s own
+  2026-09-16 `full_physics`-recipe decision (`datasets/survey-a.json`) —
+  a different, larger real residual than the one the calibration was
+  built to remove. Direct measurement of production `backscatter_intensity`
+  (post range-correction) showed a ~33dB near-to-far decline (HF) /
+  ~48dB (LF) over 0-30m ground range — the stale calibration wasn't just
+  ineffective, applying it measurably worsened the held-out residual
+  compared to plain TVG+geometric alone. **Fixed by refitting**, not by
+  changing any library code: reran `fit_range_correction()` against
+  `reconstruct_raw()` + `apply_correction_steps({"tvg", "geometric"})` on
+  the current production recipe (plain-default full-physics TVG) using
+  this survey's own already-corrected `ss_h5` file, then validated on a
+  held-out ping range — held-out peak-to-trough residual dropped from
+  13.10dB to 1.18dB (HF, 91% reduction) and 5.49dB to 1.02dB (LF, 81%
+  reduction). Same known limitation as before, unchanged: fit and
+  validation ranges are both from this one survey file, not genuine
+  cross-survey validation; this file's own recorded/cropped range only
+  reaches ~30m, so the refit table's 6 bins span 2.5-27.5m and any
+  caller's `ground_range_m` beyond that clamps to the last bin's value
+  (`RangeCorrectionTable`'s existing, deliberate constant-extrapolation
+  behavior) rather than extrapolating an unverified shape further out.
+  No test changes needed — no test asserts the bundled table's actual
+  values, only that `load_default()` returns a usable table.
+- **Gridded raster's background land/water context (`show_land=True`)
+  compounded two independent margins into one visibly oversized "way
+  more padding than necessary around the swath" frame (2026-09-18).**
+  `bbox_from_channel_dataset()` — the grid-construction step run before
+  a `SideScanGriddedRaster` ever exists — already pads the channel's
+  true data extent by its own default 10% margin, so `raster.bbox`
+  arriving at `plot_gridded_raster()` is never a tight fit to begin
+  with. `add_land_background()`'s own default `margin_frac=0.08`
+  (reasonable for a caller passing an unpadded, tight bbox, e.g.
+  `viz/track.py`'s own track+scanline extent) was stacking a second,
+  independent margin on top of the first for the gridded-raster case
+  specifically, nearly doubling the effective padding around the real
+  swath. Fixed at the `plot_gridded_raster()` call site only (not
+  `add_land_background()`'s own default, which is still correct for a
+  tight-bbox caller): passes `margin_frac=0.0` explicitly, since
+  `raster.bbox`'s own pre-existing 10% margin already serves
+  `add_land_background()`'s "don't clip land right at the edge" purpose.
 
 ## [0.5.0] — 2026-06-17
 
