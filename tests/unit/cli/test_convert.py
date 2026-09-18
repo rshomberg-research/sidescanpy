@@ -19,7 +19,7 @@ import pytest
 from sidescanpy.cli import convert
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.targets.core import Target
-from sidescanpy.targets.io import read_targets_json
+from sidescanpy.targets.io import read_targets_csv, read_targets_json
 
 
 def _target(target_id, lat=None, lon=None, **extra_attrs):
@@ -130,6 +130,9 @@ class TestRunTargets:
         written = read_targets_json(tmp_path / "out" / "targets.json")
         assert len(written) == 2
         assert (tmp_path / "out" / "position_scatter.png").exists()
+
+        written_csv = read_targets_csv(tmp_path / "out" / "targets.csv")
+        assert len(written_csv) == 2
 
     def test_klein_catalog_no_ss_h5_dir_no_position(self, tmp_path, monkeypatch):
         cat = tmp_path / "cat"

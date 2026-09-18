@@ -17,6 +17,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from sidescanpy.cli import export
 from sidescanpy.core.survey import SideScanSurvey
@@ -150,11 +151,32 @@ class TestRunWaterfall:
         empty.mkdir()
         assert export.run_waterfall(self._args(tmp_path, empty)) == 1
 
-    def test_targets_json_rejected_with_ground_mode(self, tmp_path, georef_ss_h5_dir):
+    def test_targets_json_unsupported_axes_still_rejected(self, tmp_path, georef_ss_h5_dir):
+        """Ground mode itself is now supported (see the tests below) --
+        this only checks the rejection still fires for a genuinely
+        unsupported combo, i.e. slant mode with a non-default axis."""
         targets_json = tmp_path / "targets.json"
         write_targets_json([Target(target_id="1", source_format="x", catalog_source="x", latitude=40.0, longitude=-70.0)], targets_json)
-        args = self._args(tmp_path, georef_ss_h5_dir, range_mode="ground", targets_json=targets_json)
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json=targets_json, x_axis="ground_range")
         assert export.run_waterfall(args) == 1
+
+    def test_ground_mode_matched_target_gets_a_real_box(self, tmp_path, georef_ss_h5_dir, mocker):
+        """Ground-mode target boxes -- the feature this test class exists
+        to cover. Same match as test_matched_target_gets_a_box_drawn but
+        with --range-mode ground: confirms _target_waterfall_xy actually
+        resolves a real (non-None) across_track/along_track position for
+        the matched target, not just that the run completes."""
+        lat = float(np.linspace(40.0000, 40.0010, 20)[10])
+        lon = float(np.linspace(-70.0000, -70.0010, 20)[10])
+        target = Target(target_id="42", source_format="x", catalog_source="x", latitude=lat, longitude=lon, channel=1, sample=500)
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([target], targets_json)
+        spy = mocker.spy(export, "_target_waterfall_xy")
+
+        args = self._args(tmp_path, georef_ss_h5_dir, range_mode="ground", targets_json=targets_json)
+        assert export.run_waterfall(args) == 0
+        assert spy.call_count >= 1
+        assert spy.spy_return is not None
 
     def test_matched_target_gets_a_box_drawn(self, tmp_path, georef_ss_h5_dir, caplog):
         # ping 10's exact lat/lon from _geo_friendly_survey()'s own
@@ -236,19 +258,21 @@ class TestRunWaterfall:
 class TestTargetWaterfallXY:
     def test_port_channel_is_negative_x(self):
         t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=300)
-        x, y = export._target_waterfall_xy(t, ping_idx=57)
+        x, y, x_scale, y_scale = export._target_waterfall_xy(t, None, 57, 0, "sample", "ping")
         assert x == -300.0
         assert y == 57.0
+        assert (x_scale, y_scale) == (1.0, 1.0)
 
     def test_starboard_channel_is_positive_x(self):
         t = Target(target_id="1", source_format="x", catalog_source="x", channel=1, sample=300)
-        x, y = export._target_waterfall_xy(t, ping_idx=57)
+        x, y, x_scale, y_scale = export._target_waterfall_xy(t, None, 57, 0, "sample", "ping")
         assert x == 300.0
         assert y == 57.0
+        assert (x_scale, y_scale) == (1.0, 1.0)
 
     def test_missing_channel_defaults_to_port(self):
         t = Target(target_id="1", source_format="x", catalog_source="x", channel=None, sample=300)
-        x, _y = export._target_waterfall_xy(t, ping_idx=0)
+        x, _y, _xs, _ys = export._target_waterfall_xy(t, None, 0, 0, "sample", "ping")
         assert x == -300.0
 
     def test_y_is_the_global_ping_index_unmodified(self):
@@ -257,8 +281,61 @@ class TestTargetWaterfallXY:
         so a target's file-global ping_idx must NOT be re-based to the
         segment here (that was a real bug caught before this shipped)."""
         t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=0)
-        _x, y = export._target_waterfall_xy(t, ping_idx=4321)
+        _x, y, _xs, _ys = export._target_waterfall_xy(t, None, 4321, 0, "sample", "ping")
         assert y == 4321.0
+
+    def test_ground_mode_reads_across_track_at_targets_own_position(self):
+        """x_axis="across_track"/y_axis="along_track" (--range-mode
+        ground): x comes from the real across_track_m value at the
+        target's own (local ping, channel, sample) -- not derivable from
+        sample index alone the way slant mode's x is."""
+        across_track = xr.DataArray(
+            np.arange(2 * 2 * 10, dtype=np.float64).reshape(2, 2, 10),
+            dims=("ping", "channel", "sample"),
+        )
+        ds = xr.Dataset({"across_track_m": across_track})
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=1, sample=3)
+        # ping_offset=100, target's global ping_idx=101 -> local ping 1
+        x, y, _xs, _ys = export._target_waterfall_xy(t, ds, 101, 100, "across_track", "along_track", along_track=np.array([0.0, 12.5]))
+        assert x == float(across_track.isel(ping=1, channel=1, sample=3).values)
+        assert y == 12.5
+
+    def test_ground_mode_scale_factors_are_real_meters_not_one(self):
+        """The bug this whole helper's scale-factor return exists to fix:
+        a shared --box-size (a sample/ping pixel count) must NOT be
+        applied as literal meters in ground mode -- x_scale/y_scale carry
+        the real meters-per-sample/meters-per-ping conversion so the
+        caller can size the box correctly."""
+        # across_track steps by 2.0m per sample (0, 2, 4, ...) on this ping/channel.
+        across_track = xr.DataArray(
+            (np.arange(10, dtype=np.float64) * 2.0).reshape(1, 1, 10),
+            dims=("ping", "channel", "sample"),
+        )
+        ds = xr.Dataset({"across_track_m": across_track})
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=3)
+        # along_track steps by 5.0m per ping.
+        along_track = np.array([0.0, 5.0, 10.0])
+        _x, _y, x_scale, y_scale = export._target_waterfall_xy(t, ds, 100, 100, "across_track", "along_track", along_track=along_track)
+        assert x_scale == pytest.approx(2.0)
+        assert y_scale == pytest.approx(5.0)
+
+    def test_ground_mode_out_of_window_ping_returns_none(self):
+        ds = xr.Dataset({"across_track_m": xr.DataArray(np.zeros((2, 2, 10)), dims=("ping", "channel", "sample"))})
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=3)
+        assert export._target_waterfall_xy(t, ds, 999, 100, "across_track", "along_track", along_track=np.array([0.0, 1.0])) is None
+
+    def test_ground_mode_nan_across_track_returns_none(self):
+        """A target still in the water column at its own position has no
+        real across-track value -- skip its box rather than drawing one
+        at a garbage/NaN location."""
+        across_track = xr.DataArray(np.full((1, 2, 10), np.nan), dims=("ping", "channel", "sample"))
+        ds = xr.Dataset({"across_track_m": across_track})
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=3)
+        assert export._target_waterfall_xy(t, ds, 100, 100, "across_track", "along_track", along_track=np.array([0.0])) is None
+
+    def test_unsupported_axis_combo_returns_none(self):
+        t = Target(target_id="1", source_format="x", catalog_source="x", channel=0, sample=3)
+        assert export._target_waterfall_xy(t, None, 0, 0, "ground_range", "time") is None
 
 
 class TestRunGrid:

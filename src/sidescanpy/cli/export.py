@@ -133,24 +133,96 @@ _DEFAULT_SEGMENT_SIZE = 2000
 # waterfall (replaces 05_waterfalls.py / 07_ground_waterfalls.py)
 # ============================================================
 
-def _target_waterfall_xy(target, ping_idx: int) -> tuple[float, float]:
-    """Where ``target`` lands in ``plot_waterfall``'s own ``x_axis="sample"``/
-    ``y_axis="ping"`` *data* coordinates (pcolormesh, not raw pixel-array
-    indices): x = -sample (port, channel 0) / +sample (starboard, channel
-    1); y = the *global* ping index directly (``_compute_y_full`` already
-    bakes ``ping_offset`` into the plotted y-axis, so ``ping_idx`` needs
-    no re-basing to the segment here)."""
+def _sample_spacing_m(ds, local_ping: int, channel_idx: int) -> float:
+    """Mean across-track meters-per-sample for one ping/channel, used to
+    convert a pixel-space box size into a real-world width in ground
+    mode. Averaged over every finite (non-water-column) sample on the
+    ping rather than a local two-point difference, so it's stable near
+    the water-column boundary or the window's own edges."""
+    at = ds["across_track_m"].isel(ping=local_ping, channel=channel_idx).values
+    finite = at[np.isfinite(at)]
+    if finite.size < 2:
+        return 1.0
+    return float(np.abs(np.diff(finite)).mean())
+
+
+def _ping_spacing_m(along_track) -> float:
+    """Median along-track meters-per-ping across the whole plotted
+    window, used to convert a pixel-space box size into a real-world
+    height in ground mode. Median, not mean, so it isn't skewed by a
+    vessel-turn's occasional large ping-to-ping jump."""
+    if along_track is None or along_track.size < 2:
+        return 1.0
+    diffs = np.abs(np.diff(along_track))
+    return float(np.median(diffs)) if diffs.size else 1.0
+
+
+def _target_waterfall_xy(target, ds, ping_idx: int, ping_offset: int, x_axis: str, y_axis: str, along_track=None) -> tuple[float, float, float, float] | None:
+    """Where ``target`` lands in ``plot_waterfall``'s own *data*
+    coordinates (pcolormesh, not raw pixel-array indices), for whichever
+    of the two supported axis pairings is active, plus the (x, y) scale
+    factors (real axis-units per pixel-space unit) a caller needs to
+    convert a shared ``--box-size`` -- always a sample/ping *pixel*
+    count -- into a comparably-sized box on whichever axes are active.
+
+    ``x_axis="sample"``/``y_axis="ping"`` (slant mode): x = -sample
+    (port, channel 0) / +sample (starboard, channel 1); y = the *global*
+    ping index directly (``_compute_y_full`` already bakes
+    ``ping_offset`` into the plotted y-axis, so ``ping_idx`` needs no
+    re-basing here). Scale factors are both 1.0 -- the axes already
+    *are* pixel-space, so ``box_size`` needs no conversion.
+
+    ``x_axis="across_track"``/``y_axis="along_track"`` (ground mode,
+    forced by ``--range-mode ground`` via ``resolve_waterfall_axes``):
+    unlike the ping axis, ``along_track`` resets to 0 at ``ds``'s own
+    first ping (see ``_along_track_distance``'s docstring) -- so the
+    target's ping must be re-based to ``ds``'s local index
+    (``ping_idx - ping_offset``) before it can index either
+    ``across_track_m`` or the caller-supplied ``along_track`` array.
+    x = the target's own real across-track position (already signed by
+    channel), read directly off ``ds`` at its own ping/channel/sample --
+    not derivable from ``target.sample`` alone the way slant mode's
+    sample-index x is, since across-track distance is altitude/geometry
+    dependent, not a fixed function of sample index. Scale factors are
+    real meters-per-sample/meters-per-ping (see ``_sample_spacing_m``/
+    ``_ping_spacing_m``) -- **without** these, a shared ``box_size`` of
+    e.g. 50 (calibrated to look tight in slant mode's sample/ping pixel
+    units) was being applied as a literal 50 *meters*, easily covering
+    most of a swath only tens of meters wide.
+
+    Returns ``None`` if the target's ping falls outside ``ds`` (already
+    windowed) or (ground mode only) it has no across-track value at its
+    own position (e.g. still in the water column).
+    """
+    if target.sample is None:
+        return None
     channel_idx = target.channel if target.channel is not None else 0
-    x_center = -target.sample if channel_idx == 0 else target.sample
-    return float(x_center), float(ping_idx)
+
+    if x_axis == "sample" and y_axis == "ping":
+        x_center = -target.sample if channel_idx == 0 else target.sample
+        return float(x_center), float(ping_idx), 1.0, 1.0
+
+    if x_axis == "across_track" and y_axis == "along_track":
+        local_ping = ping_idx - ping_offset
+        if not (0 <= local_ping < ds.sizes["ping"]) or not (0 <= target.sample < ds.sizes["sample"]):
+            return None
+        x_center = float(ds["across_track_m"].isel(ping=local_ping, channel=channel_idx, sample=target.sample).values)
+        if not np.isfinite(x_center):
+            return None
+        y_center = float(along_track[local_ping]) if along_track is not None else float(local_ping)
+        x_scale = _sample_spacing_m(ds, local_ping, channel_idx)
+        y_scale = _ping_spacing_m(along_track)
+        return x_center, y_center, x_scale, y_scale
+
+    return None
 
 
 def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, boxes=None, box_size=40.0, value_var="backscatter_intensity"):
     """``boxes``, if given: list of ``(target, ping_idx)`` (global ping
     index within whatever ``ds`` this call was handed) to draw a red box
-    + target_id label for, on top of the rendered waterfall. Only
-    meaningful when ``x_axis="sample"``/``y_axis="ping"`` (the caller is
-    responsible for enforcing that)."""
+    + target_id label for, on top of the rendered waterfall. Supports
+    both the default sample/ping axes and ground mode's across_track/
+    along_track axes -- see ``_target_waterfall_xy``."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(14, 6))
     try:
@@ -159,11 +231,19 @@ def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset,
             cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct,
             gamma=gamma, ax=ax, value_var=value_var,
         )
-        for target, ping_idx in boxes or []:
-            x_center, y_center = _target_waterfall_xy(target, ping_idx)
-            half = box_size / 2.0
-            ax.add_patch(Rectangle((x_center - half, y_center - half), box_size, box_size, fill=False, edgecolor="red", linewidth=1.2))
-            ax.annotate(str(target.target_id), (x_center - half, y_center - half), color="red", fontsize=11, fontweight="bold", xytext=(2, 2), textcoords="offset points")
+        boxes = boxes or []
+        # Computed once per window, not per box -- along_track_distance_m
+        # does a real pyproj.Geod.inv call over every ping in ds.
+        along_track = along_track_distance_m(ds) if boxes and y_axis == "along_track" else None
+        for target, ping_idx in boxes:
+            xy = _target_waterfall_xy(target, ds, ping_idx, ping_offset, x_axis, y_axis, along_track)
+            if xy is None:
+                continue
+            x_center, y_center, x_scale, y_scale = xy
+            half_x = (box_size / 2.0) * x_scale
+            half_y = (box_size / 2.0) * y_scale
+            ax.add_patch(Rectangle((x_center - half_x, y_center - half_y), 2 * half_x, 2 * half_y, fill=False, edgecolor="red", linewidth=1.2))
+            ax.annotate(str(target.target_id), (x_center - half_x, y_center - half_y), color="red", fontsize=11, fontweight="bold", xytext=(2, 2), textcoords="offset points")
         fig.tight_layout()
         fig.savefig(output_path, dpi=dpi)
     finally:
@@ -209,11 +289,12 @@ def run_waterfall(args: argparse.Namespace) -> int:
     targets = []
     index: dict[Path, dict] = {}
     if args.targets_json:
-        if x_axis != "sample" or y_axis != "ping":
+        supported_axes = (x_axis == "sample" and y_axis == "ping") or (x_axis == "across_track" and y_axis == "along_track")
+        if not supported_axes:
             logger.error(
-                "--targets-json only supports the default sample/ping pixel axes -- "
-                f"got x_axis={x_axis!r}, y_axis={y_axis!r} (--range-mode ground always forces "
-                "across_track/along_track, which this doesn't support yet)."
+                "--targets-json only supports the default sample/ping pixel axes or "
+                f"ground mode's across_track/along_track axes -- got x_axis={x_axis!r}, "
+                f"y_axis={y_axis!r}."
             )
             return 1
         targets = read_targets_json(args.targets_json)

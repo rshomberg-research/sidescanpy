@@ -59,7 +59,7 @@ from sidescanpy.io.sdf.targets import (
     resolve_targets_offset_corrected,
 )
 from sidescanpy.processing import crop_far_range_noise
-from sidescanpy.targets.io import write_targets_json
+from sidescanpy.targets.io import write_targets_csv, write_targets_json
 from sidescanpy.viz.targets import export_target_position_scatter_png
 
 logger = logging.getLogger(__name__)
@@ -227,6 +227,13 @@ def run_targets(args: argparse.Namespace) -> int:
 
     write_targets_json(targets, output / "targets.json")
     logger.info(f"Wrote {output / 'targets.json'}")
+
+    # JSON is the source-of-truth format (round-trips every field
+    # losslessly, see targets.io's own module docstring) -- CSV is a
+    # secondary, always-written convenience view for manual/spreadsheet
+    # review, not a second thing a caller has to opt into.
+    write_targets_csv(targets, output / "targets.csv")
+    logger.info(f"Wrote {output / 'targets.csv'}")
 
     wrote_scatter = export_target_position_scatter_png(targets, str(output / "position_scatter.png"), title=scatter_title)
     if not wrote_scatter:

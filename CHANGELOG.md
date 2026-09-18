@@ -582,6 +582,60 @@ reported some full-swath thumbnails not appearing square.
   real `co_targets` through as `boxes`). Full suite: 1470 passing / 36
   skipped (was 1463). Version bumped 0.4.16 → 0.4.17.
 
+##### CLI subpackage follow-up 8 — `sidescan-convert targets` now also writes targets.csv (2026-09-17)
+
+`targets.io.write_targets_csv()`/`read_targets_csv()` have existed since
+the original target-catalog work, fully tested, round-tripping every
+field losslessly except `bbox`/`extra_attributes` (JSON-encoded into
+single cells) — but nothing in any CLI command ever called
+`write_targets_csv()`. `run_targets()` now writes `targets.csv`
+unconditionally alongside `targets.json` (JSON stays the source-of-truth
+format; CSV is a portable, human-reviewable secondary view, not an
+opt-in extra). 1 existing test extended (`test_jsf_catalog`) to assert
+`targets.csv` round-trips too. Full suite: 1470 passing / 36 skipped
+(unchanged count — an assertion was added to an existing test, not a new
+one). Version bumped 0.4.17 → 0.4.18.
+
+##### CLI subpackage follow-up 9 — ground-mode waterfalls now draw target boxes too (2026-09-17)
+
+Follow-up 6 added target boxes to `sidescan-export waterfall`, but hard-
+rejected `--targets-json` whenever `--range-mode ground` was in effect
+(that mode always forces `x_axis="across_track"`/`y_axis="along_track"`
+via `resolve_waterfall_axes`, and the box-placement helper only knew how
+to place a box in the default sample/ping pixel space). Not structural —
+ground mode's own coordinates (`across_track_m`, cumulative along-track
+distance) are already computed and already present in a georeferenced
+`.ss.h5`, just not wired into the box math.
+
+- `cli/export.py: _target_waterfall_xy()` now takes `ds`, the box's
+  ping_offset, and the active `x_axis`/`y_axis`, and handles two
+  supported pairings: the original `sample`/`ping` (x = ±sample by
+  channel, y = the global ping index) and the new `across_track`/
+  `along_track` (x = the target's own real `across_track_m` value, read
+  directly off `ds` at its own local ping/channel/sample — not
+  derivable from sample index alone, since across-track distance is
+  altitude/geometry-dependent; y = cumulative along-track distance at
+  the target's local ping). Returns `None` — box silently skipped, not
+  drawn at a garbage position — when the target's ping falls outside
+  the window or (ground mode only) its own across-track value is NaN
+  (still in the water column at that exact sample). Any other
+  `x_axis`/`y_axis` combination also returns `None`.
+- `_export_waterfall_png()` computes the along-track distance array once
+  per window (not once per box — `along_track_distance_m()` does a real
+  `pyproj.Geod.inv` call over every ping) and passes it through.
+- `run_waterfall()`'s `--targets-json` rejection narrowed to only the
+  combinations that are genuinely unsupported (any pairing other than
+  the two above) — ground mode itself is no longer rejected.
+- Tests: `TestTargetWaterfallXY` gained 4 (ground-mode position read,
+  out-of-window ping → `None`, NaN across-track → `None`, unsupported
+  axis combo → `None`); `TestRunWaterfall` gained
+  `test_ground_mode_matched_target_gets_a_real_box` (confirms a real
+  match resolves to a non-`None` position under `--range-mode ground`)
+  and `test_targets_json_unsupported_axes_still_rejected` (replaces the
+  old ground-mode-is-rejected test, now checking a genuinely-unsupported
+  combo instead). Full suite: 1475 passing / 36 skipped (was 1470).
+  Version bumped 0.4.18 → 0.4.19.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
