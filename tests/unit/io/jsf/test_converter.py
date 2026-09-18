@@ -274,7 +274,8 @@ class TestConvertInconsistentAttrs:
     @pytest.mark.parametrize("varying_field,values", [
     ("transmit_freq_end", [1_495_000, 1_500_000]),
     ("sweep_length",      [0.020, 0.025]),
-    ("sample_freq",       [400_000, 500_000])
+    ("sample_freq",       [400_000, 500_000]),
+    ("sample_interval",   [1.0 / 400_000, 1.0 / 500_000]),
     ])
     def test_inconsistent_file_attr_raises(self, make_sonar_msg, varying_field, values):
         msgs = [
@@ -429,6 +430,19 @@ class TestBuildFrequencyChannel:
         import json
         ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
         assert json.loads(ds.attrs["processing_history"]) == []
+
+    def test_sample_rate_hz_from_sample_interval_not_sample_freq(self, make_sonar_msg):
+        """Real-data regression: the JSF header's own sample_freq field is
+        unreliable (survey-specific, off by 2-3x from the real rate) --
+        sample_rate_hz must come from the independently-decoded
+        sample_interval, not sample_freq."""
+        msgs = [
+            make_sonar_msg(ping_number=0, channel=0, sample_freq=54_656, sample_interval=1.0 / 120_192.3),
+            make_sonar_msg(ping_number=0, channel=1, sample_freq=54_656, sample_interval=1.0 / 120_192.3),
+        ]
+        ds = _build_frequency_channel(msgs, repair_mode="nan_pad")
+        assert ds.attrs["sample_rate_hz"] == pytest.approx(120_192.3, rel=1e-6)
+        assert ds.attrs["sample_rate_hz"] != pytest.approx(54_656)
 
     def test_per_ping_lat_from_port(self, make_sonar_msg):
         msgs = []

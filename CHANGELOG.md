@@ -691,6 +691,62 @@ reported some full-swath thumbnails not appearing square.
   touching resolution/zoom at all. Real-data confirmation: one chip-scale
   target's geometric coverage roughly doubled (17,355→29,599 of 40,401
   cells filled) at the same resolution, radius alone changed.
+- **`io/jsf/converter.py` stored `sample_rate_hz` from the JSF header's
+  own `_raw_sample_freq` field, which is unreliable** (its own doc
+  comment reads "sample freqency (Hz) usually (see Data Format)",
+  already hedged) — confirmed on real data (`project-a`'s
+  `survey-a` survey) 2.2x (HF) to 3.0x (LF) off from the real
+  per-sample rate, survey-specific. This cascaded into every downstream
+  range-dependent computation (TVG, geometric ranges, georeferencing,
+  gridding) and, most visibly, target-catalog frequency matching — 29 of
+  32 cataloged targets in that survey were being exported from the wrong
+  frequency channel entirely. Fixed: `sample_rate_hz` now derives from
+  `sample_interval` (`1.0 / first.sample_interval`), decoded
+  independently from the header's own sampling-interval bytes and
+  already correct (`messages.py` had a long-standing `TODO` flagging
+  exactly this substitution). `sample_interval` added to
+  `_validate_file_level_attrs`'s constancy check alongside the existing
+  fields. Regression test:
+  `tests/unit/io/jsf/test_converter.py::test_sample_rate_hz_from_sample_interval_not_sample_freq`.
+  **Any `.ss.h5` file already converted under the old behavior has a
+  wrong `sample_rate_hz` and needs reconversion from raw** — this fix
+  only affects future conversions.
+- **Chip/context exports (`cli/export.py: run_chip()`) never matched
+  EdgeTech Discover's own per-target thumbnails, despite
+  `targets.core.orient_for_display()` already existing and already
+  validated for exactly this — it was just never called from the chip
+  export path** (confirmed via grep: zero references outside
+  `io/jsf/targets.py`). Two real display-orientation bugs: (1) a missing
+  horizontal port-only mirror, matching this library's own
+  `viz/waterfall.py` sign convention (port mirrored, starboard not) that
+  chip exports were silently inconsistent with; (2) a missing vertical
+  ping-order flip, a genuine Discover-vs-this-library display
+  convention difference, scoped to chip/context exports only (not the
+  whole-survey waterfall/gridded pipeline, whose own top-down ping
+  convention is deliberate and used consistently elsewhere). Fixed via
+  new `_orient_pixel_window()` — not a direct call to
+  `orient_for_display()`, which assumes one target owns its own window;
+  a chip/full-swath window here can carry several co-located targets
+  that all need remapping together. Wired into
+  `_extract_pixel_style_window()` (raw/radiometric render levels) and
+  `run_chip()`'s context-image path; horizontal flip is skipped for
+  "dual-swath" windows, which `_combine_channels_mirrored()` already
+  port-mirrors at combination time. `geometric`/`georef` render levels
+  are real-meters grids, not raw pixel arrays, and are unaffected.
+  Tests: `tests/unit/cli/test_export.py::TestOrientPixelWindow` (5
+  tests).
+- **Chip exports defaulted to `--render-level radiometric` (raw pixel
+  space), causing crops to be non-uniformly stretched 5-11x depending on
+  vehicle speed at each target** (along-track pixel spacing isn't
+  constant in sample/ping space; `--render-level geometric`/`georef`
+  resample onto real, uniform meters instead). Not changed as
+  `sidescan-export chip`'s own shared default (a real behavior change
+  for every consumer, and geometric/georef windows are only trustworthy
+  once a survey's `sample_rate_hz` is correct and it's been reconverted
+  — see the fix above) — instead pinned explicitly via `--render-level
+  geometric` in `project-a/scripts/dataset_20251015_survey-a.sh` and
+  `project-b/scripts/dataset_site-b.sh`, the two scripts that
+  actually produce each project's final chip/COCO/YOLO dataset.
 
 ## [0.5.0] — 2026-06-17
 

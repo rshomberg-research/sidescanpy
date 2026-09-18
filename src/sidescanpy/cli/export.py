@@ -526,6 +526,36 @@ def _style_size_px(style: str, args: argparse.Namespace) -> int:
     return args.size_px if style == "chip" else args.swath_size_px
 
 
+def _orient_pixel_window(window: np.ndarray, co_targets: list, channel_idx: int, style: str) -> tuple[np.ndarray, list]:
+    """Match ``targets.core.orient_for_display``'s two display
+    conventions (found by comparing rendered output against EdgeTech
+    Discover's own target thumbnails) for a chip/full-swath export
+    window, which — unlike ``orient_for_display`` itself — can carry
+    several co-located targets sharing one window and so needs every
+    one of them remapped together, not just a single primary target.
+
+    Vertical (ping-axis) flip always applies: ``targets_within_window``'s
+    row convention is ascending ping order, top-down, the opposite of
+    Discover's own display.
+
+    Horizontal (port-mirror) flip applies only for a single physical
+    channel's own window (``channel_idx == 0``, i.e. port) -- a
+    "dual-swath" window is already port-mirrored by
+    ``_combine_channels_mirrored`` at combination time, so flipping
+    again here would un-mirror it.
+    """
+    n_rows, n_cols = window.shape
+    window = window[::-1, :]
+    co_targets = [
+        replace(ct, extra_attributes={**ct.extra_attributes, "window_row": n_rows - 1 - ct.extra_attributes["window_row"]})
+        for ct in co_targets
+    ]
+    if style != "dual-swath" and channel_idx == 0:
+        window = window[:, ::-1]
+        co_targets = [replace(ct, sample=n_cols - 1 - ct.sample) for ct in co_targets]
+    return window, co_targets
+
+
 def _rescale_co_targets(co_targets: list, native_shape: tuple[int, int], output_shape: tuple[int, int]) -> list:
     """Move every co-target's (row, col) from a native-resolution window
     into its resized output space, matching :func:`resize_to`'s own
@@ -577,6 +607,7 @@ def _extract_pixel_style_window(
     co_targets = targets_within_window(co_source, extent_global)
     if not co_targets:
         return None
+    window, co_targets = _orient_pixel_window(window, co_targets, channel_idx, style)
 
     native_shape = window.shape
     if native_shape != (size_px, size_px):
@@ -779,6 +810,11 @@ def run_chip(args: argparse.Namespace) -> int:
                     combined = _combine_channels_mirrored(port_2d, stbd_2d)
                     combined_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
                     context_target = replace(t, sample=combined_col, extra_attributes={**t.extra_attributes, "window_row": local_ping})
+                    # "combined" is the same port-mirrored dual-swath layout
+                    # _extract_pixel_style_window builds -- reuse the same
+                    # orientation fix (style="dual-swath" skips the
+                    # already-applied horizontal mirror, only flips vertically).
+                    combined, (context_target,) = _orient_pixel_window(combined, [context_target], channel_idx, "dual-swath")
                     fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size))
                     fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                     plt.close(fig)

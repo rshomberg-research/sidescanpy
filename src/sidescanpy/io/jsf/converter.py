@@ -87,7 +87,8 @@ def convert(
     ValueError
         If ``messages`` is empty.
         If file-level attrs (transmit_freq_start/end, sweep_length,
-        sample_freq) are not constant within a frequency group.
+        sample_freq, sample_interval) are not constant within a
+        frequency group.
         If port and starboard sample counts disagree for a paired ping.
         If ``repair_mode == "abort"`` and an orphan ping is found.
     """
@@ -249,7 +250,15 @@ def _build_frequency_channel(
         "freq_hz_start":      int(first.transmit_freq_start),
         "freq_hz_end":        int(first.transmit_freq_end),
         "pulse_length_us":    float(first.sweep_length) * 1e6,
-        "sample_rate_hz":     float(first.sample_freq),
+        # NOTE: NOT first.sample_freq -- that's decoded straight from the
+        # JSF header's _raw_sample_freq field, whose own doc comment reads
+        # "sample freqency (Hz) usually (see Data Format)", already hedged.
+        # Confirmed wrong on real data: 2.2x-3.0x off from the true rate,
+        # survey-specific. sample_interval is decoded independently from
+        # the header's sampling-interval bytes and is the real per-sample
+        # time resolution; see messages.py's own long-standing TODO on
+        # sample_freq flagging exactly this.
+        "sample_rate_hz":     1.0 / first.sample_interval,
         "processing_level":   "raw",
         "processing_history": json.dumps([]),
     }
@@ -288,6 +297,7 @@ _FILE_LEVEL_FIELDS = (
     "transmit_freq_end",
     "sweep_length",
     "sample_freq",
+    "sample_interval",
 )
 
 

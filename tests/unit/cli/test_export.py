@@ -309,6 +309,53 @@ class TestRunTrack:
         assert export.run_track(self._args(tmp_path, empty)) == 1
 
 
+class TestOrientPixelWindow:
+    """Real-data bug: chip/context exports never matched EdgeTech
+    Discover's own target thumbnails -- ``orient_for_display`` existed and
+    was validated for this, but was never called from the chip export
+    path. ``_orient_pixel_window`` is the adapted equivalent (handles
+    every co-located target sharing one window, not just a single
+    primary target)."""
+
+    def _co_target(self, sample, window_row):
+        return Target(target_id="1", source_format="x", catalog_source="x", sample=sample, extra_attributes={"window_row": window_row})
+
+    def test_vertical_flip_always_applies(self):
+        window = np.array([[1, 2], [3, 4], [5, 6]])  # 3 rows, 2 cols
+        ct = self._co_target(sample=0, window_row=0)
+        flipped, (out,) = export._orient_pixel_window(window, [ct], channel_idx=1, style="single-swath")
+        np.testing.assert_array_equal(flipped, window[::-1, :])
+        assert out.extra_attributes["window_row"] == 2
+
+    def test_port_channel_flips_horizontally_for_single_channel_style(self):
+        window = np.array([[1, 2, 3], [4, 5, 6]])  # 2 rows, 3 cols
+        ct = self._co_target(sample=0, window_row=0)
+        _, (out,) = export._orient_pixel_window(window, [ct], channel_idx=0, style="chip")
+        assert out.sample == 2
+
+    def test_starboard_channel_does_not_flip_horizontally(self):
+        window = np.array([[1, 2, 3], [4, 5, 6]])
+        ct = self._co_target(sample=0, window_row=0)
+        flipped, (out,) = export._orient_pixel_window(window, [ct], channel_idx=1, style="chip")
+        assert out.sample == 0
+        np.testing.assert_array_equal(flipped, window[::-1, :])
+
+    def test_dual_swath_never_flips_horizontally_even_for_channel_0(self):
+        """dual-swath windows are already port-mirrored by
+        _combine_channels_mirrored at combination time -- flipping again
+        here would un-mirror them."""
+        window = np.array([[1, 2, 3], [4, 5, 6]])
+        ct = self._co_target(sample=0, window_row=0)
+        _, (out,) = export._orient_pixel_window(window, [ct], channel_idx=0, style="dual-swath")
+        assert out.sample == 0
+
+    def test_multiple_co_targets_all_remapped(self):
+        window = np.zeros((4, 5))
+        cts = [self._co_target(sample=1, window_row=0), self._co_target(sample=4, window_row=3)]
+        _, out = export._orient_pixel_window(window, cts, channel_idx=0, style="chip")
+        assert {(o.sample, o.extra_attributes["window_row"]) for o in out} == {(3, 3), (0, 0)}
+
+
 class TestRunChip:
     def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
         defaults = dict(

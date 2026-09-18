@@ -1036,6 +1036,7 @@ def _make_sonar_msg(
     transmit_freq_end: int = 1_495_000,
     sweep_length: float = 0.020,
     sample_freq: float = 400_000.0,
+    sample_interval: float | None = None,
     n_samples: int = 100,
     backscatter_val: float = 1000.0,
     latitude: float = 41.0,
@@ -1059,6 +1060,12 @@ def _make_sonar_msg(
     m.transmit_freq_end = transmit_freq_end
     m.sweep_length      = sweep_length
     m.sample_freq       = sample_freq
+    # Deliberately independent of sample_freq by default in real data (that's
+    # the bug converter.py's sample_rate_hz fix routes around) -- but for
+    # fixtures where the two are unrelated to what's under test, defaulting
+    # to 1/sample_freq keeps sample_rate_hz numerically boring unless a test
+    # overrides one or the other on purpose.
+    m.sample_interval   = sample_interval if sample_interval is not None else 1.0 / sample_freq
     m.N_samples         = n_samples
     m.backscatter_intensity = np.full(n_samples, backscatter_val, dtype=np.float32)
 
