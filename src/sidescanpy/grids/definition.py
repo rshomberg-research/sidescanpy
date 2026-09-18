@@ -448,8 +448,15 @@ def bbox_from_channel_dataset(
     """
     lats = ds["latitude_per_sample"].values
     lons = ds["longitude_per_sample"].values
-    valid_lats = lats[np.isfinite(lats)]
-    valid_lons = lons[np.isfinite(lons)]
+    # Finite alone isn't enough -- a physically-invalid-but-finite value
+    # (e.g. lat=103 deg, found via a synthetic-data exercise tracing to a
+    # corrupted compute_georeferencing() result) can blow up this bbox's
+    # extent, which then blows up an auto-selected UTM grid's cell count
+    # downstream (OverflowError converting an infinite cell count to
+    # int). One bad sample in an otherwise-good survey shouldn't be able
+    # to do that.
+    valid_lats = lats[np.isfinite(lats) & (np.abs(lats) <= 90)]
+    valid_lons = lons[np.isfinite(lons) & (np.abs(lons) <= 180)]
     if valid_lats.size == 0 or valid_lons.size == 0:
         raise ValueError("No valid latitude/longitude_per_sample in dataset")
 

@@ -703,6 +703,25 @@ finite" `ValueError` pointing nowhere near the real cause.
   `test_all_samples_invalid_latitude_raises_clear_error`). Full suite:
   1529 passing / 36 skipped (was 1527).
 
+##### Gridding — `bbox_from_channel_dataset()` also excludes physically-invalid coordinates (2026-09-18, same-day follow-up)
+
+Found continuing the same exercise: even after the fix above, a channel
+with a few physically-invalid-but-finite samples could still crash
+`sidescan-export grid` further upstream -- `bbox_from_channel_dataset()`
+(used to auto-select a UTM zone before gridding) only filtered
+`np.isfinite`, so those samples blew up its computed bbox extent, which
+then produced an infinite auto-selected grid cell count and an
+`OverflowError` converting it to `int` -- before `resample_channel_to_grid()`'s
+own new finite-check ever got a chance to run.
+
+- `bbox_from_channel_dataset()`: latitude/longitude filtering now also
+  excludes anything outside `[-90, 90]`/`[-180, 180]`, not just non-finite
+  values.
+- Tests: `tests/unit/grids/test_definition.py::TestBboxFromChannelDataset`
+  gained 2 (`test_physically_invalid_but_finite_coordinates_excluded`,
+  `test_raises_when_every_coordinate_is_physically_invalid`). Full suite:
+  1531 passing / 36 skipped (was 1529).
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

@@ -438,3 +438,41 @@ class TestBboxFromChannelDataset:
         )
         with pytest.raises(ValueError, match="No valid"):
             bbox_from_channel_dataset(ds)
+
+    def test_physically_invalid_but_finite_coordinates_excluded(self):
+        """A finite lat/lon outside [-90,90]/[-180,180] (e.g. a corrupted
+        compute_georeferencing() result found via a synthetic-data
+        exercise) must not blow up the bbox -- it can poison an
+        auto-selected UTM zone's cell count downstream (OverflowError
+        converting an infinite extent to int)."""
+        import xarray as xr
+
+        lat = np.full((5, 2, 3), 41.0)
+        lon = np.full((5, 2, 3), -71.0)
+        lat[0, 0, 0] = 103.25  # physically invalid, but np.isfinite
+        lon[0, 0, 0] = 209.5
+        ds = xr.Dataset(
+            {
+                "latitude_per_sample": (["ping", "channel", "sample"], lat),
+                "longitude_per_sample": (["ping", "channel", "sample"], lon),
+            }
+        )
+        south, west, north, east = bbox_from_channel_dataset(ds, min_margin_deg=0.01)
+        assert south == pytest.approx(40.99)
+        assert north == pytest.approx(41.01)
+        assert west == pytest.approx(-71.01)
+        assert east == pytest.approx(-70.99)
+
+    def test_raises_when_every_coordinate_is_physically_invalid(self):
+        import xarray as xr
+
+        lat = np.full((5, 2, 3), 103.25)
+        lon = np.full((5, 2, 3), 209.5)
+        ds = xr.Dataset(
+            {
+                "latitude_per_sample": (["ping", "channel", "sample"], lat),
+                "longitude_per_sample": (["ping", "channel", "sample"], lon),
+            }
+        )
+        with pytest.raises(ValueError, match="No valid"):
+            bbox_from_channel_dataset(ds)
