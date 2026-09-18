@@ -110,6 +110,23 @@ class TestCombinedSteps:
         assert _has_var(result, "latitude_per_sample")
         assert _crop_history_present(result)
 
+    def test_range_correction_included_in_one_pass(self, ss_h5_path, monkeypatch):
+        # sample_multi_frequency_survey's two channels (hz_1495000/hz_547500)
+        # are exactly the bundled default calibration's own scope.
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent),
+                "--tvg", "--geometric", "--range-correction",
+            ],
+        )
+        assert correct.main() == 0
+
+        result = read_survey(ss_h5_path)
+        for ch in result.freq_channels.values():
+            history = json.loads(ch.dataset.attrs["processing_history"])
+            assert any(h.get("step") == "empirical_range_correction" for h in history)
+
     def test_tvg_override_applied(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
             "sys.argv",
@@ -157,6 +174,36 @@ class TestIdempotency:
         monkeypatch.setattr("sys.argv", ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg"])
         assert correct.main() == 0
         assert correct.main() == 0  # would raise inside apply_tvg if double-applied
+
+    def test_range_correction_rerun_skips_completed_step(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction"],
+        )
+        assert correct.main() == 0
+        assert correct.main() == 0  # would raise inside apply_empirical_range_correction if double-applied
+
+    def test_range_correction_added_in_later_invocation(self, tmp_path, sample_multi_frequency_survey):
+        """--range-correction must work standalone once geometric was
+        already applied in an earlier, separate sidescan-correct run --
+        idempotency here is judged from the file's own recorded state,
+        not from which flags happen to be typed on this invocation."""
+        pre_corrected = run_correction_steps(sample_multi_frequency_survey, {"tvg", "geometric"})
+        path = tmp_path / "survey_d.ss.h5"
+        write_survey(pre_corrected, path)
+
+        import sys
+        old_argv = sys.argv
+        try:
+            sys.argv = ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--range-correction"]
+            assert correct.main() == 0
+        finally:
+            sys.argv = old_argv
+
+        result = read_survey(path)
+        for ch in result.freq_channels.values():
+            history = json.loads(ch.dataset.attrs["processing_history"])
+            assert any(h.get("step") == "empirical_range_correction" for h in history)
 
     def test_pending_subset_only_applies_missing_step(self, tmp_path, sample_multi_frequency_survey):
         """A file already through --tvg, then run with --tvg --geometric,

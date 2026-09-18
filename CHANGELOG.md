@@ -811,6 +811,29 @@ reported some full-swath thumbnails not appearing square.
   land in one geometric chip's own COCO annotations, in
   `tests/unit/cli/test_export.py`. Full suite: 1494 passing / 36 skipped
   (was 1482).
+- **`sidescan-correct` had no way to apply `processing.range_correction`'s
+  bundled empirical range correction at all** — `run_correction_steps`/
+  `apply_correction_steps` have supported `"range_correction"` as a
+  valid step since v0.9.0, but the CLI script that actually wraps them
+  for every consumer project never exposed a flag for it, silently
+  capping every real correction run at physics-based TVG alone. Found
+  investigating "gridded segments look uncorrected — bright center, dark
+  edges" on `project-a`'s `survey-a` survey: a real,
+  altitude-invariant residual TVG (spreading+absorption alone) doesn't
+  capture (documented in `processing/range_correction.py`'s own module
+  docstring as the reason this module exists) — invisible in waterfall
+  renders (percentile scaling dominated by floor-clipped outliers hides
+  it) but plainly visible in gridded planview output (mean-aggregation
+  reveals it as a vignette). This survey's own two frequencies
+  (`hz_1495000`/`hz_547500`) are exactly what the bundled default
+  calibration table was fit from originally. Fixed: new `--range-correction`
+  flag, same idempotent/`--config`-seedable pattern as every other step
+  (`_range_correction_already_done()` checks `processing_history` for
+  `"empirical_range_correction"`, matching `apply_empirical_range_correction`'s
+  own double-apply guard). 4 new tests (combined-pass, rerun-skip,
+  added-in-a-later-standalone-invocation, matching `TestCombinedSteps`/
+  `TestIdempotency`'s existing conventions). Full suite: 1497 passing /
+  36 skipped (was 1494).
 
 ## [0.5.0] — 2026-06-17
 

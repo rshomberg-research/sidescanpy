@@ -27,6 +27,14 @@ Usage:
     # Run one stage standalone, same as the old numbered scripts:
     sidescan-correct --ss-h5-dir data/active/unknown/ss_h5/ --georef
 
+    # Add the bundled empirical range correction on top of an
+    # already-tvg+geometric-corrected directory -- fits/removes a
+    # residual, altitude-invariant range-dependent shape plain
+    # physics-based TVG doesn't capture (see processing/range_correction.py's
+    # module docstring). Only hz_1495000/hz_547500 are calibrated by the
+    # bundled default table.
+    sidescan-correct --ss-h5-dir data/active/unknown/ss_h5/ --range-correction
+
 2026 rshomberg@uri.edu
 """
 
@@ -41,6 +49,7 @@ from sidescanpy.cli._config import apply_config_defaults, find_config_path
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing import crop_far_range_noise, run_correction_steps
 from sidescanpy.processing.radiometric import TVGParams
+from sidescanpy.processing.range_correction import STEP_NAME as _RANGE_CORRECTION_STEP_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +64,10 @@ _DISK_MULTIPLIERS = {
     "crop_farrange": 1.5,
     "tvg": 3.0,
     "geometric": 4.0,
+    "range_correction": 1.0,  # shifts backscatter_intensity in place, adds no new arrays
     "georef": 2.0,
 }
-_CORRECTION_STEPS = ("tvg", "geometric", "georef")
+_CORRECTION_STEPS = ("tvg", "geometric", "range_correction", "georef")
 
 
 def _crop_already_done(survey: SideScanSurvey) -> bool:
@@ -89,10 +99,19 @@ def _georef_already_done(survey: SideScanSurvey) -> bool:
     )
 
 
+def _range_correction_already_done(survey: SideScanSurvey) -> bool:
+    for channel in survey.freq_channels.values():
+        history = json.loads(channel.dataset.attrs.get("processing_history", "[]"))
+        if not any(h.get("step") == _RANGE_CORRECTION_STEP_NAME for h in history):
+            return False
+    return True
+
+
 _ALREADY_DONE = {
     "crop_farrange": _crop_already_done,
     "tvg": _tvg_already_done,
     "geometric": _geometric_already_done,
+    "range_correction": _range_correction_already_done,
     "georef": _georef_already_done,
 }
 
@@ -129,6 +148,16 @@ def main() -> int:
     parser.add_argument("--crop-farrange", action="store_true", help="Detect and crop far-range noise")
     parser.add_argument("--tvg", action="store_true", help="Apply radiometric (TVG) correction")
     parser.add_argument("--geometric", action="store_true", help="Apply geometric range correction")
+    parser.add_argument(
+        "--range-correction", action="store_true",
+        help=(
+            "Apply the bundled empirical range-correction curve (residual TVG-vs-range "
+            "shape TVG's spreading/absorption terms don't capture -- see "
+            "processing/range_correction.py). Requires --geometric to have run (this "
+            "invocation or a prior one). Only calibrated for hz_1495000/hz_547500 -- a "
+            "channel at another frequency is skipped with a warning, not guessed."
+        ),
+    )
     parser.add_argument("--georef", action="store_true", help="Apply georeferencing")
     parser.add_argument(
         "--spreading-loss-db", type=float, default=None,
@@ -164,11 +193,12 @@ def main() -> int:
             ("crop_farrange", args.crop_farrange),
             ("tvg", args.tvg),
             ("geometric", args.geometric),
+            ("range_correction", args.range_correction),
             ("georef", args.georef),
         ) if flag
     }
     if not requested:
-        parser.error("at least one of --crop-farrange/--tvg/--geometric/--georef is required")
+        parser.error("at least one of --crop-farrange/--tvg/--geometric/--range-correction/--georef is required")
 
     if args.no_spreading and args.spreading_loss_db is not None:
         parser.error("--no-spreading and --spreading-loss-db are mutually exclusive")
