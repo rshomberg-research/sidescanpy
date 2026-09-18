@@ -909,6 +909,10 @@ reported some full-swath thumbnails not appearing square.
   tight-bbox caller): passes `margin_frac=0.0` explicitly, since
   `raster.bbox`'s own pre-existing 10% margin already serves
   `add_land_background()`'s "don't clip land right at the edge" purpose.
+- **Version bumped 0.4.17 → 0.4.18** for this round (covers this entry,
+  the `--range-correction` CLI flag fix directly above, and the
+  vertical-flip/edge-gap/jitter/multi-target geometric-chip fixes from
+  the prior round — none had bumped the version yet).
 
 ## [0.5.0] — 2026-06-17
 
