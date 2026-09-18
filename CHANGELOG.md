@@ -747,6 +747,70 @@ reported some full-swath thumbnails not appearing square.
   geometric` in `project-a/scripts/dataset_20251015_survey-a.sh` and
   `project-b/scripts/dataset_site-b.sh`, the two scripts that
   actually produce each project's final chip/COCO/YOLO dataset.
+- **`--render-level geometric` chip exports had three further real gaps,
+  found reviewing the first real-data run of the fix above.**
+  1. **Vertical orientation still didn't match Discover.** The
+     `_orient_pixel_window()` fix above only covers the raw/radiometric
+     pixel path — `extract_geometric_window()` builds its grid with row
+     0 = the minimum along-track distance (ascending ping order,
+     top-down), the same "wrong" direction `_orient_pixel_window` exists
+     to reverse for pixel-space, but nothing applied an equivalent flip
+     to the geometric path. Fixed: new `_flip_geo_vertical()` in
+     `cli/export.py`, applied to every geometric-level chip/single-swath/
+     dual-swath window. Verified two ways on real data: (1) an isolated
+     no-jitter/no-edge-avoidance test showing the flipped render's
+     large-shadow/small-speck vertical arrangement matches EdgeTech's own
+     thumbnail (the unflipped render has it backwards); (2) a raw-pixel
+     crosshair check confirming the underlying position (ping/sample) is
+     itself correct — the shadow trails away from the marked point
+     exactly as expected for a real sonar contact.
+  2. **A window pushed to the edge of recorded data filled the rest with
+     blanks instead of shifting to stay on real data.** Real case: target
+     0011 sits almost at the max-range edge of its channel's recorded
+     swath, so a window centered exactly on it was half no-data.
+     `extract_geometric_window()` gained `avoid_edge_gaps: bool = False`
+     (opt-in, not a default-behavior change for the one existing caller's
+     other uses) — when `True`, shifts the center inward just enough to
+     keep the full window on real data, the same trade-off `extract_chip`
+     already makes for raw-pixel windows near an array edge. Wired to
+     `True` for chip export specifically. New `_clamp_center()` helper;
+     found and fixed a real bug while adding it — an un-cast
+     `np.float32` from `along_valid.min()`/`.max()` silently tainted the
+     clamped center (and everything derived from it) with a numpy dtype
+     `json.dumps` can't serialize, breaking COCO export outright.
+  3. **Targets were always exactly centered — `--jitter-px` was never
+     actually wired into either dataset script**, despite the CLI
+     supporting it since chip export was first built (default `0`,
+     opt-in per run). Not a library bug — `project-a`'s/`project-b`'s
+     own `dataset_*.sh` scripts simply never passed it. Added
+     `JITTER_PX=30` (10% of `CHIP_SIZE_PX`) to both `_config_*.sh` files
+     and wired `--jitter-px "$JITTER_PX"` into both `dataset_*.sh`
+     scripts.
+  4. **Geometric/georef windows never searched for co-occurring
+     targets** — `_extract_geo_style_window()`'s own docstring admitted
+     this explicitly ("documented, not silently missing"), unlike the
+     raw-pixel styles' `targets_within_window()`. Fixed for `geometric`
+     specifically: new `_geo_targets_within_window()` (the real-world
+     equivalent — translates every other matched target's own along/
+     across position into this window's local pixel coordinates, skips
+     one that's out of range or off the current channel's sample axis
+     rather than crashing the whole run) plus the same flip-and-remap
+     pattern as `_flip_geo_vertical()`. `georef` still doesn't have
+     this — its row-axis convention (northing-based) isn't obviously the
+     same "match Discover" question, needs its own separate look before
+     assuming the same fix applies; documented as a known gap, not
+     silently missing.
+  Real-data re-run, all 32 targets, all three styles: chip 37
+  annotations (was 32, one per image with no co-target support), single-
+  swath 46, dual-swath 63 — confirms co-target search is finding real
+  matches, not just passing an empty-case test. Tests: 8 new in
+  `tests/unit/export/test_geometric_window.py` (`avoid_edge_gaps`
+  behavior, `_clamp_center` including the float32 regression),
+  `TestGeoTargetsWithinWindow`/`TestFlipGeoVertical` (new, 5 tests) and
+  a `TestRunChip` integration test proving two co-located targets both
+  land in one geometric chip's own COCO annotations, in
+  `tests/unit/cli/test_export.py`. Full suite: 1494 passing / 36 skipped
+  (was 1482).
 
 ## [0.5.0] — 2026-06-17
 

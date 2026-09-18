@@ -21,6 +21,28 @@ from scipy.spatial import cKDTree
 from sidescanpy.viz.waterfall import along_track_distance_m
 
 
+def _clamp_center(center: float, half_extent: float, data_min: float, data_max: float) -> float:
+    """Shift a window center so its full extent fits inside
+    ``[data_min, data_max]`` when possible, instead of leaving genuine
+    no-data gaps at one edge -- mirrors ``export.windows._place_window_1d``'s
+    own non-padding placement for the raw-pixel case (``extract_chip``/
+    ``extract_full_channel``). When the available extent is itself
+    smaller than the requested window, centers on the available extent
+    instead (still can't avoid *some* no-data margin, same as the
+    pixel-space case falling back to the full array).
+
+    Always returns a plain Python ``float`` regardless of ``data_min``/
+    ``data_max``'s own dtype (real bug found downstream: ``along_valid``/
+    ``across_valid`` are numpy float32 arrays, so an un-cast ``.min()``/
+    ``.max()`` silently taints ``center_along_m``/``center_across_m`` --
+    and everything computed from them (``meta``, target row/col) -- with
+    ``np.float32``, which ``json.dumps`` (COCO export) can't serialize).
+    """
+    if data_max - data_min <= 2 * half_extent:
+        return float((data_min + data_max) / 2.0)
+    return float(min(max(center, data_min + half_extent), data_max - half_extent))
+
+
 def extract_geometric_window(
     channel_ds: xr.Dataset,
     size_px: int,
@@ -31,6 +53,7 @@ def extract_geometric_window(
     channel_idx: int | None = 0,
     backscatter_var: str = "backscatter_intensity",
     search_radius_m: float | None = None,
+    avoid_edge_gaps: bool = False,
 ) -> tuple[np.ndarray, dict]:
     """Resample a ``size_px x size_px`` square region, centered on
     ``(center_along_m, center_across_m)``, at exactly ``resolution_m``
@@ -89,6 +112,21 @@ def extract_geometric_window(
         outside ``1.5 * resolution_m``. Passing a wider radius (e.g. the
         real fix-to-fix jump distance) bridges those gaps without also
         needing a coarser (more zoomed-out) ``resolution_m``.
+    avoid_edge_gaps : bool, default False
+        When True and the requested center is close enough to the edge
+        of this channel's own recorded extent that the window would
+        otherwise include genuine no-data cells (e.g. a target near the
+        max-range edge of the swath), shift the center inward just
+        enough to keep the full window inside real data instead -- same
+        tradeoff ``extract_chip`` already makes for raw-pixel windows
+        near an array edge. The target itself is then no longer
+        necessarily at the window's exact center; ``locate_point``
+        against the *original* requested point still reports its true
+        (now off-center) position correctly. Default ``False`` keeps
+        the window exactly centered on the requested point regardless
+        (this function's original, unconditional behavior) -- opt in
+        per caller, since not every use of this function is a
+        target-crop where "no data" is worse than "off-center".
 
     Returns
     -------
@@ -127,6 +165,9 @@ def extract_geometric_window(
     values_valid = values[finite]
 
     half_extent = size_px * resolution_m / 2.0
+    if avoid_edge_gaps:
+        center_along_m = _clamp_center(center_along_m, half_extent, along_valid.min(), along_valid.max())
+        center_across_m = _clamp_center(center_across_m, half_extent, across_valid.min(), across_valid.max())
     along_min = center_along_m - half_extent
     across_min = center_across_m - half_extent
 

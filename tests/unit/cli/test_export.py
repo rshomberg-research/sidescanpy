@@ -22,6 +22,7 @@ from sidescanpy.cli import export
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.processing import run_correction_steps
+from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.targets.core import Target
 from sidescanpy.targets.io import write_targets_json
 from tests.conftest import make_minimal_sidescan_dataset
@@ -356,6 +357,95 @@ class TestOrientPixelWindow:
         assert {(o.sample, o.extra_attributes["window_row"]) for o in out} == {(3, 3), (0, 0)}
 
 
+def _geo_channel_ds():
+    """A single-channel dataset with real across_track_m/along-track
+    geometry, for _geo_targets_within_window/_flip_geo_vertical tests --
+    mirrors _geo_friendly_survey's altitude/lat/lon overrides but returns
+    a bare per-channel Dataset (geometric ranges already computed)."""
+    ds = make_minimal_sidescan_dataset(n_pings=20, n_samples=2000, freq_hz_start=1_495_000)
+    ds["altitude_m"] = ("ping", np.full(20, 0.5, dtype=np.float32))
+    ds["latitude"] = ("ping", np.linspace(40.0000, 40.0010, 20))
+    ds["longitude"] = ("ping", np.linspace(-70.0000, -70.0010, 20))
+    return compute_geometric_ranges(ds)
+
+
+class TestGeoTargetsWithinWindow:
+    def test_finds_a_co_located_target_and_places_it_locally(self):
+        from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
+        from sidescanpy.viz.waterfall import along_track_distance_m
+
+        ds = _geo_channel_ds()
+        along = along_track_distance_m(ds)
+        across = ds["across_track_m"].isel(channel=0).values
+        finite = np.isfinite(across)
+        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
+
+        grid, meta = extract_geometric_window(
+            ds, 16, resolution_m=0.5, center_along_m=float(along[ping_idx]),
+            center_across_m=float(across[ping_idx, sample_idx]), channel_idx=0,
+        )
+        co_target = Target(target_id="co", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
+        candidates = [(co_target, int(ping_idx))]
+        found = export._geo_targets_within_window(candidates, ds, 0, along, 16, meta, locate_point)
+        assert len(found) == 1
+        assert found[0].target_id == "co"
+        assert 0 <= found[0].sample < 16
+        assert 0 <= found[0].extra_attributes["window_row"] < 16
+
+    def test_target_outside_window_is_excluded(self):
+        from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
+        from sidescanpy.viz.waterfall import along_track_distance_m
+
+        ds = _geo_channel_ds()
+        along = along_track_distance_m(ds)
+        across = ds["across_track_m"].isel(channel=0).values
+        finite = np.isfinite(across)
+        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
+
+        grid, meta = extract_geometric_window(
+            ds, 16, resolution_m=0.5, center_along_m=float(along[ping_idx]),
+            center_across_m=float(across[ping_idx, sample_idx]), channel_idx=0,
+        )
+        # a target at ping 0 -- far outside a tight 16*0.5m=8m window centered mid-survey
+        far_target = Target(target_id="far", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
+        found = export._geo_targets_within_window([(far_target, 0)], ds, 0, along, 16, meta, locate_point)
+        assert found == []
+
+    def test_out_of_range_ping_idx_skipped_not_crashed(self):
+        from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
+        from sidescanpy.viz.waterfall import along_track_distance_m
+
+        ds = _geo_channel_ds()
+        along = along_track_distance_m(ds)
+        across = ds["across_track_m"].isel(channel=0).values
+        finite = np.isfinite(across)
+        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
+        grid, meta = extract_geometric_window(
+            ds, 16, resolution_m=0.5, center_along_m=float(along[ping_idx]),
+            center_across_m=float(across[ping_idx, sample_idx]), channel_idx=0,
+        )
+        bogus = Target(target_id="bogus", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
+        # ping_idx way outside this masked slice's own ping axis (lo=0, n_pings=20)
+        found = export._geo_targets_within_window([(bogus, 9999)], ds, 0, along, 16, meta, locate_point)
+        assert found == []
+
+
+class TestFlipGeoVertical:
+    def _co_target(self, sample, window_row):
+        return Target(target_id="1", source_format="x", catalog_source="x", sample=sample, extra_attributes={"window_row": window_row})
+
+    def test_flips_grid_vertically(self):
+        grid = np.array([[1, 2], [3, 4], [5, 6]])
+        flipped, _ = export._flip_geo_vertical(grid, [], size_px=3)
+        np.testing.assert_array_equal(flipped, grid[::-1, :])
+
+    def test_remaps_every_target_window_row(self):
+        grid = np.zeros((10, 10))
+        targets = [self._co_target(sample=1, window_row=0), self._co_target(sample=4, window_row=9)]
+        _, out = export._flip_geo_vertical(grid, targets, size_px=10)
+        assert {t.extra_attributes["window_row"] for t in out} == {10, 1}
+
+
 class TestRunChip:
     def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
         defaults = dict(
@@ -524,6 +614,44 @@ class TestRunChip:
         assert spy.call_count == 2
         for style in ("chip", "dual-swath"):
             assert (tmp_path / "out" / style / "target_7.png").exists()
+
+    def test_geometric_render_level_annotates_co_located_targets(self, tmp_path, swath_ss_h5_dir):
+        """Real-data gap: _extract_geo_style_window used to only ever
+        annotate the primary target, unlike the raw-pixel styles' own
+        targets_within_window search -- two targets close enough to share
+        one geometric chip must both end up in that chip's own COCO
+        annotations, not just the one the crop was centered on."""
+        n_pings = 300
+        lat = np.linspace(40.0000, 40.0010, n_pings)
+        lon = np.linspace(-70.0000, -70.0010, n_pings)
+        primary = Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=float(lat[150]), longitude=float(lon[150]), channel=1, sample=15,
+            position_confidence="verified",
+        )
+        co_located = Target(
+            target_id="8", source_format="x", catalog_source="x",
+            latitude=float(lat[152]), longitude=float(lon[152]), channel=1, sample=16,
+            position_confidence="verified",
+        )
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([primary, co_located], targets_json)
+
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric", styles=["chip"])
+        assert export.run_chip(args) == 0
+
+        coco = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())
+        file_names = {img["file_name"] for img in coco["images"]}
+        # each target still gets its own centered chip file...
+        assert {"target_7.png", "target_8.png"} <= file_names
+        # ...but target 8's chip should also carry an annotation for target 7
+        # (found via co-target search), not just its own -- 2+ annotations
+        # total for at least one of the two images.
+        by_image = {}
+        for ann in coco["annotations"]:
+            by_image.setdefault(ann["image_id"], 0)
+            by_image[ann["image_id"]] += 1
+        assert max(by_image.values()) >= 2
 
     def test_raw_and_radiometric_render_levels_produce_different_images(self, tmp_path, swath_ss_h5_dir):
         """backscatter_raw and backscatter_intensity are byte-identical in

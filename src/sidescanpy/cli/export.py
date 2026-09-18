@@ -556,6 +556,56 @@ def _orient_pixel_window(window: np.ndarray, co_targets: list, channel_idx: int,
     return window, co_targets
 
 
+def _geo_targets_within_window(
+    candidates: list[tuple], masked, lo: int, along_dist: np.ndarray, size_px: int, meta: dict, locate_fn,
+) -> list:
+    """Real-world equivalent of ``targets_within_window`` for a
+    geometric window: which of ``candidates`` (``(Target, global_ping_idx)``
+    pairs, as gathered in ``run_chip``'s ``items_by_channel``) physically
+    fall inside this specific window's along/across bounds, translated to
+    window-local ``(row, col)`` via ``locate_fn`` (pre-flip -- see
+    ``_flip_geo_vertical``). Mirrors ``_extract_geo_style_window``'s own
+    per-target lookup, so a bad/out-of-range candidate is skipped, not a
+    crash.
+    """
+    included = []
+    for candidate_t, ping_idx in candidates:
+        local_ping = ping_idx - lo
+        if not (0 <= local_ping < masked.sizes["ping"]):
+            continue
+        c_idx = candidate_t.channel if candidate_t.channel is not None else 0
+        if candidate_t.sample is None or not (0 <= candidate_t.sample < masked.sizes["sample"]):
+            continue
+        try:
+            t_across = float(masked["across_track_m"].isel(ping=local_ping, channel=c_idx, sample=candidate_t.sample).values)
+        except (KeyError, IndexError):
+            continue
+        if not np.isfinite(t_across):
+            continue
+        t_along = float(along_dist[local_ping])
+        row, col = locate_fn(t_along, t_across, meta)
+        if 0 <= row < size_px and 0 <= col < size_px:
+            included.append(replace(candidate_t, sample=col, extra_attributes={**candidate_t.extra_attributes, "window_row": row}))
+    return included
+
+
+def _flip_geo_vertical(grid: np.ndarray, positioned_targets: list, size_px: int) -> tuple[np.ndarray, list]:
+    """Match Discover's ping-order display convention (see
+    ``_orient_pixel_window``'s docstring for the raw-pixel equivalent) for
+    a geometric window: ``extract_geometric_window`` builds row 0 = the
+    minimum along-track distance (ascending ping order, top-down), the
+    opposite of Discover's own display. ``positioned_targets`` must
+    already carry window-local ``sample``/``extra_attributes["window_row"]``
+    (e.g. from ``locate_point_geometric`` via ``_geo_targets_within_window``).
+    """
+    grid = grid[::-1, :]
+    positioned_targets = [
+        replace(pt, extra_attributes={**pt.extra_attributes, "window_row": size_px - pt.extra_attributes["window_row"]})
+        for pt in positioned_targets
+    ]
+    return grid, positioned_targets
+
+
 def _rescale_co_targets(co_targets: list, native_shape: tuple[int, int], output_shape: tuple[int, int]) -> list:
     """Move every co-target's (row, col) from a native-resolution window
     into its resized output space, matching :func:`resize_to`'s own
@@ -618,17 +668,22 @@ def _extract_pixel_style_window(
 
 def _extract_geo_style_window(
     masked, t, channel_idx: int, local_ping: int, style: str, level: str, size_px: int, jitter_px: int,
-    rng: np.random.Generator, mps: float,
+    rng: np.random.Generator, mps: float, items_by_channel: dict, lo: int,
 ) -> tuple[np.ndarray, list] | None:
     """``geometric``/``georef`` (real-meters) window + the primary target's
     own position within it.
 
-    Unlike the pixel-space styles, co-occurring targets from elsewhere in
-    the source array are **not** searched for here (only the primary
-    target is annotated) -- checking every cataloged target's real-world
-    position against an arbitrarily-shaped resampled grid is materially
-    more work than a pixel-window bounds check, and wasn't asked for;
-    documented, not silently missing. Returns ``None`` if this window
+    ``geometric`` searches for co-occurring targets and applies the same
+    Discover-matching vertical flip the raw-pixel styles get (see
+    ``_geo_targets_within_window``/``_flip_geo_vertical``) -- ``georef``
+    does neither yet: checking every cataloged target's real-world
+    position against an arbitrarily-shaped resampled grid is more work
+    for georef's own (lat/lon-based, CRS-projected) grid construction,
+    and georef's row-axis convention (northing-based) isn't obviously
+    the same "match Discover's ping order" question the geometric/
+    raw-pixel styles share -- needs its own separate look before
+    assuming the same fix applies. Documented, not silently missing.
+    Returns ``None`` if this window
     can't be built (e.g. no finite geometry in this ping neighborhood, or
     ``level="georef"``/``"geometric"`` requested against a file that was
     never run through ``sidescan-correct --geometric``/``--georef``, so
@@ -681,10 +736,17 @@ def _extract_geo_style_window(
             grid, meta = extract_geometric_window(
                 masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
                 center_across_m=center_across_m, channel_idx=geom_channel_idx, search_radius_m=geo_search_radius_m,
+                avoid_edge_gaps=True,
             )
         except ValueError:
             return None
         row, col = locate_point_geometric(target_along_m, target_across_m, meta)
+        primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
+        all_items = [item for items in items_by_channel.values() for item in items] if combine else items_by_channel.get(channel_idx, [])
+        candidates = [item for item in all_items if item[0].target_id != t.target_id]
+        co_targets = _geo_targets_within_window(candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric)
+        grid, targets_out = _flip_geo_vertical(grid, [primary_local] + co_targets, size_px)
+        return grid, targets_out
     else:  # georef
         try:
             target_lat = float(masked["latitude_per_sample"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
@@ -715,9 +777,8 @@ def _extract_geo_style_window(
             padded[:r, :c] = grid[:r, :c]
             grid = padded
         row, col = locate_point_georef(target_lat, target_lon, meta)
-
-    primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
-    return grid, [primary_local]
+        primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
+        return grid, [primary_local]
 
 
 def run_chip(args: argparse.Namespace) -> int:
@@ -829,6 +890,7 @@ def run_chip(args: argparse.Namespace) -> int:
                     else:
                         result = _extract_geo_style_window(
                             masked, t, channel_idx, local_ping, style, args.render_level, size_px, args.jitter_px, rng, mps,
+                            items_by_channel, lo,
                         )
                     if result is None:
                         logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")

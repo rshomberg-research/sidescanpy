@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 
-from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
+from sidescanpy.export.geometric_window import _clamp_center, extract_geometric_window, locate_point
 from sidescanpy.viz.waterfall import along_track_distance_m
 
 
@@ -82,6 +82,59 @@ class TestExtractGeometricWindow:
         ds = geometric_channel_factory(n_pings=5, n_samples=10, altitude_m=1_000_000.0)
         with pytest.raises(ValueError):
             extract_geometric_window(ds, 8, resolution_m=1.0, center_along_m=0.0, center_across_m=0.0)
+
+    def test_avoid_edge_gaps_reduces_nans_near_edge(self, geometric_channel):
+        # A target right at the far (max-range) edge of the recorded swath
+        # -- real-data case (project-a target 0011, sample 7751 of a
+        # 7792-wide window) where a window centered exactly on it would be
+        # half no-data. avoid_edge_gaps=True should shift the window inward
+        # instead. Default (False) preserves the original unconditional
+        # centering -- see test_center_is_reported_at_the_true_middle /
+        # TestLocatePoint for that regression guard.
+        across = geometric_channel["across_track_m"].isel(channel=1).values  # starboard, positive
+        along = along_track_distance_m(geometric_channel)
+        finite = np.isfinite(across)
+        masked_across = np.where(finite, across, -np.inf)
+        ping_idx, sample_idx = np.unravel_index(np.argmax(masked_across), masked_across.shape)
+        center_along = float(along[ping_idx])
+        center_across = float(across[ping_idx, sample_idx])
+
+        grid_avoid, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            channel_idx=1, avoid_edge_gaps=True,
+        )
+        grid_default, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across, channel_idx=1,
+        )
+        assert np.isnan(grid_avoid).sum() < np.isnan(grid_default).sum()
+
+
+class TestClampCenter:
+    def test_no_change_when_window_fits_away_from_edges(self):
+        assert _clamp_center(5.0, half_extent=2.0, data_min=0.0, data_max=10.0) == 5.0
+
+    def test_shifts_inward_when_too_close_to_max_edge(self):
+        result = _clamp_center(9.5, half_extent=2.0, data_min=0.0, data_max=10.0)
+        assert result == pytest.approx(8.0)
+
+    def test_shifts_inward_when_too_close_to_min_edge(self):
+        result = _clamp_center(0.5, half_extent=2.0, data_min=0.0, data_max=10.0)
+        assert result == pytest.approx(2.0)
+
+    def test_centers_on_available_extent_when_window_larger_than_data(self):
+        result = _clamp_center(1.0, half_extent=10.0, data_min=0.0, data_max=4.0)
+        assert result == pytest.approx(2.0)
+
+    def test_always_returns_plain_python_float_even_from_numpy_inputs(self):
+        # Regression: along_valid/across_valid are numpy float32 arrays in
+        # extract_geometric_window, so an un-cast .min()/.max() silently
+        # taints the result with np.float32 -- which downstream COCO/YOLO
+        # export's json.dumps can't serialize.
+        data_min = np.float32(0.0)
+        data_max = np.float32(10.0)
+        assert type(_clamp_center(9.5, half_extent=2.0, data_min=data_min, data_max=data_max)) is float
+        assert type(_clamp_center(0.5, half_extent=2.0, data_min=data_min, data_max=data_max)) is float
+        assert type(_clamp_center(1.0, half_extent=10.0, data_min=data_min, data_max=data_max)) is float
 
 
 class TestLocatePoint:
