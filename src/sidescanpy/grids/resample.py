@@ -180,6 +180,26 @@ def resample_channel_to_grid(
         transformer = Transformer.from_crs(_WGS84, grid_def.crs, always_xy=True)
         x_valid, y_valid = transformer.transform(lon_valid, lat_valid)
 
+        # A finite WGS84 lat/lon can still project to a non-finite
+        # projected coordinate -- e.g. within a couple degrees of a pole,
+        # where UTM's own math blows up. Filtered here rather than
+        # relying on the pre-transform isfinite check above, which can't
+        # see this: cKDTree raises an opaque scipy ValueError on any
+        # non-finite input, not a message pointing at the real cause.
+        projected_finite = np.isfinite(x_valid) & np.isfinite(y_valid)
+        if not np.all(projected_finite):
+            n_dropped = int(np.sum(~projected_finite))
+            logger.warning(
+                f"{n_dropped:,} sample(s) had a finite WGS84 position but a non-finite "
+                f"{grid_def.crs} projection (e.g. too close to a pole) -- excluded from gridding"
+            )
+            backscatter_valid = backscatter_valid[projected_finite]
+            x_valid = x_valid[projected_finite]
+            y_valid = y_valid[projected_finite]
+
+    if len(x_valid) == 0:
+        raise ValueError("No valid sample coordinates in channel")
+
     # Build KDTree in the grid's native coordinate space
     sample_coords = np.column_stack([y_valid, x_valid])
     tree = cKDTree(sample_coords)

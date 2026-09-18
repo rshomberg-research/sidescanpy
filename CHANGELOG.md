@@ -678,6 +678,31 @@ whose freq_key convention isn't `hz_<freq_hz_start>` would hit this.
   `tests/unit/cli/test_analyze.py::TestRunTvgFit::test_literal_freq_key_fallback_for_non_hz_naming`
   (1). Full suite: 1527 passing / 36 skipped (was 1522).
 
+##### Gridding — non-finite projected coordinates dropped with a warning, not a bare scipy crash (2026-09-18)
+
+Also found via the same vendor-format synthetic-mission exercise:
+`resample_channel_to_grid()` filters out NaN *WGS84* lat/lon before
+reprojecting into the grid's own CRS, but never checked the *projected*
+result for finiteness — a physically-invalid latitude (>90, traced in
+the triggering case to a corrupted `compute_georeferencing()` result for
+a synthetic vessel position that wandered too close to a pole; not
+something a healthy GPS fix produces, but not NaN either, so the
+pre-transform filter let it through) can project to `inf`, which
+`scipy.spatial.cKDTree` then rejects with an opaque "data must be
+finite" `ValueError` pointing nowhere near the real cause.
+
+- `resample_channel_to_grid()`: after projecting into a non-geographic
+  (projected) CRS, samples whose projected x/y aren't finite are now
+  dropped with a logged warning (count + CRS), mirroring the existing
+  pre-transform NaN-lat/lon handling; if every sample is dropped this
+  way, raises the same clear "No valid sample coordinates in channel"
+  `ValueError` the pre-existing all-invalid-coordinates case already
+  used, instead of reaching `cKDTree` at all.
+- Tests: `tests/unit/grids/test_resample.py::TestResampleChannelToGridUTM`
+  gained 2 (`test_physically_invalid_latitude_dropped_not_crashed`,
+  `test_all_samples_invalid_latitude_raises_clear_error`). Full suite:
+  1529 passing / 36 skipped (was 1527).
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

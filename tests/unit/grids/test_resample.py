@@ -446,6 +446,43 @@ class TestResampleChannelToGridUTM:
         assert raster.crs == utm_grid.crs
         assert raster.crs.to_epsg() == 26919
 
+    def test_physically_invalid_latitude_dropped_not_crashed(self, utm_grid, caplog):
+        """A physically-invalid latitude (>90, e.g. a corrupted
+        georeferencing result or sensor glitch -- not something a
+        healthy WGS84 fix ever produces, but not NaN either) can project
+        to a non-finite UTM coordinate. Found via a synthetic vendor-format
+        mission whose fabricated vessel position wandered close enough
+        to a pole that its per-sample georeferencing math produced a few
+        out-of-range (>90 deg) latitudes. Previously crashed inside
+        scipy's cKDTree with an opaque "data must be finite" ValueError;
+        should instead drop just the bad sample(s) (with a logged
+        warning) and grid the rest normally."""
+        channel = _make_test_channel(num_pings=50, samples_per_ping=128)
+        channel["latitude_per_sample"].values[0, :, :] = 95.0
+
+        raster = resample_channel_to_grid(
+            channel,
+            grid_def=utm_grid,
+            method=ResamplingMethod.MEAN,
+        )
+
+        assert isinstance(raster, SideScanGriddedRaster)
+        assert "non-finite" in caplog.text
+
+    def test_all_samples_invalid_latitude_raises_clear_error(self, utm_grid):
+        """Every sample projects to a non-finite UTM coordinate -- should
+        raise the same clear "no valid coordinates" error as the
+        pre-existing all-NaN-lat/lon case, not a bare scipy ValueError."""
+        channel = _make_test_channel(num_pings=50, samples_per_ping=128)
+        channel["latitude_per_sample"].values[:, :, :] = 95.0
+
+        with pytest.raises(ValueError, match="No valid sample coordinates"):
+            resample_channel_to_grid(
+                channel,
+                grid_def=utm_grid,
+                method=ResamplingMethod.MEAN,
+            )
+
     def test_resample_to_utm_grid_matches_reprojected_wgs84_grid(self, channel):
         """A UTM grid and its geographic-equivalent WGS84 grid should
         resample to the same physical cells (allowing for the different
