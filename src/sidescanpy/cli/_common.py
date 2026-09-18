@@ -24,6 +24,26 @@ from sidescanpy.io.hdf5 import read_survey, write_survey
 logger = logging.getLogger(__name__)
 
 
+def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list[str]:
+    """Resolve a ``--frequency`` CLI value to one or more real freq_keys.
+
+    ``"all"`` -> every freq_key in ``available`` (sorted). Otherwise:
+    JSF/SDF's own convention is ``freq_key = f"hz_{freq_hz_start}"`` --
+    tried first, so every existing caller passing a bare frequency
+    number (e.g. ``--frequency 1495000``) keeps resolving exactly as
+    before. Not every consumer uses that convention (e.g. vendor-format's
+    ``"sensor<N>_data<M>"``), so ``requested`` itself is tried as a
+    literal freq_key when the ``"hz_"``-prefixed guess isn't a real key,
+    rather than assuming every survey names its channels that way.
+    """
+    if requested == "all":
+        return sorted(available)
+    candidate = f"hz_{requested}"
+    if candidate in available:
+        return [candidate]
+    return [requested]
+
+
 def check_disk_space(path: Path, multiplier: float) -> bool:
     """True if there's plausibly enough free space to safely rewrite
     ``path`` in place (conservative flat multiplier)."""

@@ -53,6 +53,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sidescanpy.analysis.investigation import stage3_usable_range, stage4_decay
+from sidescanpy.cli._common import resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
@@ -153,7 +154,7 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     survey = read_survey(args.ss_h5, chunks={"ping": 500})
-    freq_key = f"hz_{args.frequency}"
+    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
     ds = survey.get_frequency(freq_key).dataset
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
@@ -261,7 +262,11 @@ def main() -> int:
 
     p_tvg = subparsers.add_parser("tvg-fit", help="TVG decay-curve fit + residuals, using the adopted auto-window recipe")
     p_tvg.add_argument("--ss-h5", required=True, type=Path)
-    p_tvg.add_argument("--frequency", type=int, required=True, help="freq_hz_start, e.g. 1495000")
+    p_tvg.add_argument(
+        "--frequency", type=str, required=True,
+        help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "
+             "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
+    )
     p_tvg.add_argument("--pings", type=_parse_ping_range, default=(0, 5000))
     p_tvg.add_argument("--reconstruct-raw", action="store_true", help="Rebuild processing_level='raw' from backscatter_raw (needed for an already-pipelined .ss.h5)")
     p_tvg.add_argument("--bin-width-m", type=float, default=1.0)

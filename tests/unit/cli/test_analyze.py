@@ -156,6 +156,23 @@ class TestRunTvgFit:
         args = self._args(tmp_path, path, r_ref_m=6.0, r_fit_min_m=1.0)
         assert analyze.run_tvg_fit(args) == 0
 
+    def test_literal_freq_key_fallback_for_non_hz_naming(self, tmp_path):
+        """Not every consumer uses JSF/SDF's "hz_<freq>" freq_key
+        convention (e.g. vendor-format's "sensor1_data1") -- --frequency must
+        resolve to a literal freq_key when "hz_<value>" doesn't exist,
+        not assume every survey uses that naming."""
+        survey = _decay_survey()
+        ds = survey.get_frequency("hz_1495000").dataset
+        survey = SideScanSurvey(source_files=["a.h5"], source_format="vendor_h5", survey_name="a")
+        survey.add_frequency("sensor1_data1", ds)
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+
+        args = self._args(tmp_path, path, frequency="sensor1_data1")
+        assert analyze.run_tvg_fit(args) == 0
+        pngs = list((tmp_path / "out").glob("*.png"))
+        assert len(pngs) == 1
+
 
 class TestParseHelpers:
     def test_parse_ping_range(self):

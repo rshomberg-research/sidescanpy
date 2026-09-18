@@ -92,6 +92,7 @@ import numpy as np
 import xarray as xr
 from PIL import Image
 
+from sidescanpy.cli._common import resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.export import (
     ReferenceStats,
@@ -329,7 +330,7 @@ def run_waterfall(args: argparse.Namespace) -> int:
         logger.info(f"Overlaying {len(matched)}/{len(targets)} target(s) matched to a real ping")
 
     ds_first = read_survey(files[0], chunks={"ping": 512})
-    freq_keys = ds_first.frequencies if args.frequency == "all" else [f"hz_{args.frequency}"]
+    freq_keys = resolve_freq_keys(ds_first.frequencies, args.frequency)
 
     for freq_key in freq_keys:
         ds_all, file_start_ping = _concat_survey_frequency(files, freq_key, chunks={"ping": 512})
@@ -426,7 +427,7 @@ def run_grid(args: argparse.Namespace) -> int:
     n_written = 0
     for path in files:
         survey = read_survey(path)
-        freq_keys = survey.frequencies if args.frequency == "all" else [f"hz_{args.frequency}"]
+        freq_keys = resolve_freq_keys(survey.frequencies, args.frequency)
         for freq_key in freq_keys:
             if freq_key not in survey.frequencies:
                 continue
@@ -461,12 +462,10 @@ def run_grid(args: argparse.Namespace) -> int:
 # ============================================================
 
 def _resolve_frequencies(surveys: dict, requested: str) -> list[str]:
-    if requested == "all":
-        freqs = set()
-        for survey in surveys.values():
-            freqs.update(survey.frequencies)
-        return sorted(freqs)
-    return [f"hz_{requested}"]
+    freqs: set[str] = set()
+    for survey in surveys.values():
+        freqs.update(survey.frequencies)
+    return resolve_freq_keys(freqs, requested)
 
 
 def run_track(args: argparse.Namespace) -> int:

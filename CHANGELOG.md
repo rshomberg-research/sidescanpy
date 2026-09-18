@@ -659,6 +659,25 @@ annotations).
   JSON, an end-to-end YAML-seeds-argparse-defaults case). Full suite:
   1522 passing / 36 skipped (was 1517).
 
+##### CLI subpackage follow-up 11 — `--frequency` no longer assumes every survey uses JSF/SDF's `hz_<freq>` freq_key naming (2026-09-18)
+
+Found empirically while verifying `sidescan-*` against an vendor-format-format
+synthetic mission (`sensor1_data1`-style freq_keys, not `hz_<freq>`) for
+`downstream-project`'s single-pipeline-migration plan — `analyze.py: run_tvg_fit`
+hardcoded `freq_key = f"hz_{args.frequency}"`, and `export.py`'s
+`run_waterfall`/`run_grid`/`_resolve_frequencies` (`run_track`) did the
+same for any non-`"all"` request. Not vendor-format-specific: any consumer
+whose freq_key convention isn't `hz_<freq_hz_start>` would hit this.
+
+- New `cli/_common.py: resolve_freq_keys(available, requested)` —
+  `"all"` returns every available key; otherwise tries `f"hz_{requested}"`
+  first (every existing caller passing a bare frequency number keeps
+  resolving exactly as before), falling back to `requested` itself as a
+  literal freq_key. All four call sites switched to it.
+- Tests: new `tests/unit/cli/test_common.py` (4), plus
+  `tests/unit/cli/test_analyze.py::TestRunTvgFit::test_literal_freq_key_fallback_for_non_hz_naming`
+  (1). Full suite: 1527 passing / 36 skipped (was 1522).
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
