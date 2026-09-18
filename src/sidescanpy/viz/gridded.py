@@ -65,6 +65,8 @@ def plot_gridded_raster(
     gamma: float = 1.0,
     show_colorbar: bool = True,
     show_grid: bool = False,
+    show_land: bool = False,
+    show_locator: bool = False,
     title: Optional[str] = None,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
@@ -115,6 +117,18 @@ def plot_gridded_raster(
         Include colorbar.
     show_grid : bool, default False
         Show grid lines.
+    show_land : bool, default False
+        Draw land/water context (vendored 1:50m Natural Earth data)
+        behind the raster, in cells NaN masks out (see
+        ``sidescanpy.viz.basemap``) -- water-colored fill plus land
+        polygons, drawn first so the raster paints over it wherever
+        there's real data. Requires the optional ``maps`` extra
+        (cartopy); raises ``ImportError`` with an install hint if it
+        isn't installed, rather than silently skipping the background.
+    show_locator : bool, default False
+        Add a small inset (bottom-left) showing this raster's location
+        zoomed way out, with a marker box — "where is this, relative to
+        the coast." Requires the optional ``maps`` extra.
     title : str, optional
         Plot title. If None, auto-generate from raster metadata,
         including the CRS (see ``_crs_label``).
@@ -146,6 +160,10 @@ def plot_gridded_raster(
         else:
             vmin, vmax = 0, 1
 
+    if show_land:
+        from sidescanpy.viz.basemap import add_land_background
+        add_land_background(ax, raster.bbox, raster.crs, zorder=0)
+
     # Create masked array for NaN handling
     backscatter_masked = np.ma.masked_invalid(backscatter)
 
@@ -162,6 +180,7 @@ def plot_gridded_raster(
         backscatter_masked,
         cmap=cmap,
         shading="auto",
+        zorder=1,
         **scale_kwargs,
     )
 
@@ -188,6 +207,23 @@ def plot_gridded_raster(
         units = raster.dataset["backscatter"].attrs.get("units", "unknown units")
         cbar = plt.colorbar(im, ax=ax, label=f"Backscatter ({units})")
         logger.debug(f"Colorbar range: {vmin:.3f} — {vmax:.3f}")
+
+    if show_locator:
+        from sidescanpy.viz.basemap import plot_locator_thumbnail
+
+        south, west, north, east = raster.bbox
+        if raster.is_geographic:
+            bbox_wgs84 = (west, south, east, north)
+        else:
+            from pyproj import Transformer
+
+            to_wgs84 = Transformer.from_crs(raster.crs, "EPSG:4326", always_xy=True)
+            lons, lats = to_wgs84.transform([west, east], [south, north])
+            bbox_wgs84 = (min(lons), min(lats), max(lons), max(lats))
+        center_lon = (bbox_wgs84[0] + bbox_wgs84[2]) / 2.0
+        center_lat = (bbox_wgs84[1] + bbox_wgs84[3]) / 2.0
+        inset_ax = ax.inset_axes([0.02, 0.02, 0.22, 0.22])
+        plot_locator_thumbnail(center_lon, center_lat, mark_bbox_wgs84=bbox_wgs84, ax=inset_ax, fig=fig)
 
     return fig, ax
 
@@ -429,6 +465,8 @@ def export_gridded_png(
     vmax_pct: float = 99.0,
     gamma: float = 1.0,
     show_colorbar: bool = True,
+    show_land: bool = False,
+    show_locator: bool = False,
 ) -> None:
     """
     Export gridded raster to PNG file.
@@ -452,6 +490,12 @@ def export_gridded_png(
         Display-only power-law contrast curve — see ``plot_gridded_raster``.
     show_colorbar : bool, default True
         Include colorbar.
+    show_land : bool, default False
+        Draw land/water context behind the raster — see
+        ``plot_gridded_raster``. Requires the optional ``maps`` extra.
+    show_locator : bool, default False
+        Add a zoomed-out locator inset — see ``plot_gridded_raster``.
+        Requires the optional ``maps`` extra.
     """
     fig, ax = plot_gridded_raster(
         raster,
@@ -462,6 +506,8 @@ def export_gridded_png(
         vmax_pct=vmax_pct,
         gamma=gamma,
         show_colorbar=show_colorbar,
+        show_land=show_land,
+        show_locator=show_locator,
     )
 
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")

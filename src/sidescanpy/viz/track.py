@@ -53,6 +53,8 @@ def plot_track_and_scanlines(
     fig: Optional[plt.Figure] = None,
     ax: Optional[plt.Axes] = None,
     title: Optional[str] = None,
+    show_land: bool = False,
+    show_locator: bool = False,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot a survey's nadir track plus periodic port/starboard scan-line
@@ -76,6 +78,15 @@ def plot_track_and_scanlines(
         Existing figure/axes to draw into.
     title : str, optional
         Plot title. Default includes point/rung counts and the CRS.
+    show_land : bool, default False
+        Draw land/water context (vendored 1:50m Natural Earth data)
+        behind the track — see ``sidescanpy.viz.basemap``. Requires the
+        optional ``maps`` extra (cartopy); raises ``ImportError`` with
+        an install hint if it isn't installed.
+    show_locator : bool, default False
+        Add a small inset (bottom-left) showing this survey's location
+        zoomed way out, with a marker box. Requires the optional
+        ``maps`` extra.
 
     Returns
     -------
@@ -93,6 +104,15 @@ def plot_track_and_scanlines(
     track_x, track_y = _project(track_lat, track_lon, crs)
     port_x, port_y = _project(scan_port_lat, scan_port_lon, crs)
     stbd_x, stbd_y = _project(scan_stbd_lat, scan_stbd_lon, crs)
+
+    if show_land:
+        from sidescanpy.viz.basemap import add_land_background
+
+        all_x = np.concatenate([track_x, port_x, stbd_x])
+        all_y = np.concatenate([track_y, port_y, stbd_y])
+        finite = np.isfinite(all_x) & np.isfinite(all_y)
+        bbox = (float(np.min(all_y[finite])), float(np.min(all_x[finite])), float(np.max(all_y[finite])), float(np.max(all_x[finite])))
+        add_land_background(ax, bbox, crs, zorder=0)
 
     n_rungs = len(port_x)
     if n_rungs > 0:
@@ -127,6 +147,18 @@ def plot_track_and_scanlines(
         )
     ax.set_title(title)
 
+    if show_locator:
+        from sidescanpy.viz.basemap import plot_locator_thumbnail
+
+        all_lon = np.concatenate([track_lon, scan_port_lon, scan_stbd_lon])
+        all_lat = np.concatenate([track_lat, scan_port_lat, scan_stbd_lat])
+        finite = np.isfinite(all_lon) & np.isfinite(all_lat)
+        bbox_wgs84 = (float(np.min(all_lon[finite])), float(np.min(all_lat[finite])), float(np.max(all_lon[finite])), float(np.max(all_lat[finite])))
+        center_lon = (bbox_wgs84[0] + bbox_wgs84[2]) / 2.0
+        center_lat = (bbox_wgs84[1] + bbox_wgs84[3]) / 2.0
+        inset_ax = ax.inset_axes([0.02, 0.02, 0.22, 0.22])
+        plot_locator_thumbnail(center_lon, center_lat, mark_bbox_wgs84=bbox_wgs84, ax=inset_ax, fig=fig)
+
     return fig, ax
 
 
@@ -141,6 +173,8 @@ def export_track_and_scanlines_png(
     *,
     crs: Optional[CRS] = None,
     dpi: int = 150,
+    show_land: bool = False,
+    show_locator: bool = False,
 ) -> None:
     """Plot and save a survey track + scan lines PNG. See plot_track_and_scanlines."""
     fig, ax = plot_track_and_scanlines(
@@ -148,6 +182,8 @@ def export_track_and_scanlines_png(
         scan_port_lat, scan_port_lon,
         scan_stbd_lat, scan_stbd_lon,
         crs=crs,
+        show_land=show_land,
+        show_locator=show_locator,
     )
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
     logger.info(f"Exported track + scan lines to {output_path}")

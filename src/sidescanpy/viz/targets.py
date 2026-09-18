@@ -89,6 +89,8 @@ def plot_track_with_targets(
     crs: Optional[CRS] = None,
     fig: Optional[plt.Figure] = None,
     ax: Optional[plt.Axes] = None,
+    show_land: bool = False,
+    show_locator: bool = False,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """Plot a survey track + scan-lines (see ``plot_track_and_scanlines``)
     with target catalog positions scattered on top, each annotated with
@@ -108,6 +110,13 @@ def plot_track_with_targets(
         Defaults to an auto-selected UTM zone from the track's centroid.
     fig, ax : optional
         Existing figure/axes to draw into.
+    show_land, show_locator : bool, default False
+        See ``plot_track_and_scanlines``. Note: ``show_land`` fixes the
+        view to the track/scan-line extent (plus a margin) — a target
+        cataloged well outside that extent would be plotted but fall
+        outside the visible view. Not expected in practice (a cataloged
+        target is normally inside the swath that found it), not
+        specially handled here.
 
     Returns
     -------
@@ -124,6 +133,7 @@ def plot_track_with_targets(
         track["scan_port_lat"], track["scan_port_lon"],
         track["scan_stbd_lat"], track["scan_stbd_lon"],
         crs=crs, fig=fig, ax=ax,
+        show_land=show_land, show_locator=show_locator,
     )
 
     t_lat = [t.latitude for t in targets if t.latitude is not None and t.longitude is not None]
@@ -150,10 +160,12 @@ def export_track_with_targets_png(
     *,
     crs: Optional[CRS] = None,
     dpi: int = 150,
+    show_land: bool = False,
+    show_locator: bool = False,
 ) -> None:
     """Plot and save a survey track + scan-lines + target overlay PNG.
     See ``plot_track_with_targets``."""
-    fig, _ax = plot_track_with_targets(track, targets, crs=crs)
+    fig, _ax = plot_track_with_targets(track, targets, crs=crs, show_land=show_land, show_locator=show_locator)
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
     logger.info(f"Exported track + targets to {output_path}")
     plt.close(fig)

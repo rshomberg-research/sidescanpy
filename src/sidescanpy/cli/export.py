@@ -163,7 +163,7 @@ def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset,
             x_center, y_center = _target_waterfall_xy(target, ping_idx)
             half = box_size / 2.0
             ax.add_patch(Rectangle((x_center - half, y_center - half), box_size, box_size, fill=False, edgecolor="red", linewidth=1.2))
-            ax.annotate(str(target.target_id), (x_center - half, y_center - half), color="red", fontsize=7, xytext=(2, 2), textcoords="offset points")
+            ax.annotate(str(target.target_id), (x_center - half, y_center - half), color="red", fontsize=11, fontweight="bold", xytext=(2, 2), textcoords="offset points")
         fig.tight_layout()
         fig.savefig(output_path, dpi=dpi)
     finally:
@@ -324,12 +324,15 @@ def run_waterfall(args: argparse.Namespace) -> int:
 # grid (replaces 09_grid.py)
 # ============================================================
 
-def _export_gridded_segment(ds, output_path: Path, *, resolution_m, method, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi):
+def _export_gridded_segment(ds, output_path: Path, *, resolution_m, method, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, show_land=False, show_locator=False):
     bbox_wgs84 = bbox_from_channel_dataset(ds)
     grid_def = utm_grid_from_wgs84_bbox(bbox_wgs84, resolution_m=resolution_m)
     raster = resample_channel_to_grid(ds, grid_def, method=ResamplingMethod(method), backscatter_var="backscatter_intensity")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    export_gridded_png(raster, str(output_path), dpi=dpi, cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct, gamma=gamma)
+    export_gridded_png(
+        raster, str(output_path), dpi=dpi, cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct, gamma=gamma,
+        show_land=show_land, show_locator=show_locator,
+    )
 
 
 def run_grid(args: argparse.Namespace) -> int:
@@ -360,7 +363,7 @@ def run_grid(args: argparse.Namespace) -> int:
                         resolution_m=args.grid_resolution_m, method=args.grid_method,
                         cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
                         vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
-                        dpi=args.dpi,
+                        dpi=args.dpi, show_land=args.show_land, show_locator=args.show_locator,
                     )
                     n_written += 1
                 except Exception as e:
@@ -414,13 +417,17 @@ def run_track(args: argparse.Namespace) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if targets is not None:
-                export_track_with_targets_png(track, targets, str(out_path), dpi=args.dpi)
+                export_track_with_targets_png(
+                    track, targets, str(out_path), dpi=args.dpi,
+                    show_land=args.show_land, show_locator=args.show_locator,
+                )
             else:
                 export_track_and_scanlines_png(
                     track["track_lat"], track["track_lon"],
                     track["scan_port_lat"], track["scan_port_lon"],
                     track["scan_stbd_lat"], track["scan_stbd_lon"],
                     str(out_path), dpi=args.dpi,
+                    show_land=args.show_land, show_locator=args.show_locator,
                 )
             logger.info(f"  Wrote {out_path}")
             n_written += 1
@@ -1406,6 +1413,8 @@ def main() -> int:
     p_grid.add_argument("--vmax-pct", type=float, default=98.0)
     p_grid.add_argument("--gamma", type=float, default=2.5)
     p_grid.add_argument("--dpi", type=int, default=100)
+    p_grid.add_argument("--show-land", action="store_true", help="Draw land/water context behind the raster (requires the 'maps' extra)")
+    p_grid.add_argument("--show-locator", action="store_true", help="Add a zoomed-out locator inset (requires the 'maps' extra)")
     p_grid.set_defaults(func=run_grid)
 
     p_track = subparsers.add_parser("track", help="Full-survey nadir track + scan-lines, optionally with a target-catalog overlay")
@@ -1415,6 +1424,8 @@ def main() -> int:
     p_track.add_argument("--targets-json", type=Path, default=None, help="Optional: overlay target-catalog positions")
     p_track.add_argument("--scanline-stride", type=int, default=50)
     p_track.add_argument("--dpi", type=int, default=150)
+    p_track.add_argument("--show-land", action="store_true", help="Draw land/water context behind the track (requires the 'maps' extra)")
+    p_track.add_argument("--show-locator", action="store_true", help="Add a zoomed-out locator inset (requires the 'maps' extra)")
     p_track.set_defaults(func=run_track)
 
     p_chip = subparsers.add_parser("chip", help="Real, jittered target-positive chips, position-correlated to the real survey array")

@@ -267,7 +267,7 @@ class TestRunGrid:
             ss_h5_dir=ss_h5_dir, output_dir=tmp_path / "out", frequency="all",
             segment_size=2000, grid_resolution_m=1.0, grid_method="mean",
             cmap="copper", vmin=None, vmax=None, vmin_pct=2.0, vmax_pct=98.0,
-            gamma=2.5, dpi=50,
+            gamma=2.5, dpi=50, show_land=False, show_locator=False,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -282,7 +282,7 @@ class TestRunTrack:
     def _args(self, tmp_path, ss_h5_dir, **overrides):
         defaults = dict(
             ss_h5_dir=ss_h5_dir, output_dir=tmp_path / "out", frequency="all",
-            targets_json=None, scanline_stride=5, dpi=50,
+            targets_json=None, scanline_stride=5, dpi=50, show_land=False, show_locator=False,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)

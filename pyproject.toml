@@ -34,12 +34,21 @@ dev = [
     "pytest-mock>=3.10",
     "pytest-xdist>=3.0",
 ]
+maps = [
+    # Used by viz/basemap.py to draw land/water context behind a
+    # georeferenced plot (gridded raster, track) and a zoomed-out locator
+    # thumbnail. Vendored Natural Earth data (assets/natural_earth/,
+    # public domain) ships with the package regardless of whether this
+    # extra is installed -- only the cartopy import itself is optional,
+    # gated at each basemap function's own call site.
+    "cartopy>=0.24",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-sidescanpy = ["processing/calibration/*.json"]
+sidescanpy = ["processing/calibration/*.json", "assets/natural_earth/**/*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

@@ -451,3 +451,38 @@ class TestExportGriddedPng:
 
         assert output_path.exists()
         assert output_path.stat().st_size > 0
+
+
+class TestBasemapIntegration:
+    """show_land/show_locator -- see tests/unit/viz/test_basemap.py for
+    the basemap module itself; these confirm the wiring into
+    plot_gridded_raster/export_gridded_png specifically."""
+
+    cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' extra")
+
+    def test_show_land_draws_a_background_collection(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster, show_land=True)
+        assert len(ax.collections) >= 1  # land patch collection + pcolormesh
+        plt.close(fig)
+
+    def test_show_land_works_for_projected_crs_too(self, utm_raster):
+        fig, ax = plot_gridded_raster(utm_raster, show_land=True)
+        assert len(ax.collections) >= 1
+        plt.close(fig)
+
+    def test_show_locator_adds_an_inset_axes(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster, show_locator=True)
+        # inset_axes() registers as a child of ax, not a top-level fig.axes entry
+        assert len(ax.child_axes) >= 1
+        plt.close(fig)
+
+    def test_export_png_with_land_and_locator(self, sample_raster, tmp_path):
+        output_path = tmp_path / "test_raster_basemap.png"
+        export_gridded_png(sample_raster, str(output_path), show_land=True, show_locator=True)
+        assert output_path.exists()
+        assert output_path.stat().st_size > 0
+
+    def test_default_false_adds_no_inset_and_no_land_collection(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster)
+        assert len(ax.child_axes) == 0
+        plt.close(fig)

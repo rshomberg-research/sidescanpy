@@ -191,3 +191,38 @@ class TestBuildSurveyTrack:
 
         assert not np.isnan(result["scan_port_lat"]).any()
         assert not np.isnan(result["scan_stbd_lat"]).any()
+
+
+class TestBasemapIntegration:
+    """show_land/show_locator -- see tests/unit/viz/test_basemap.py for
+    the basemap module itself; these confirm the wiring into
+    plot_track_and_scanlines/export_track_and_scanlines_png specifically."""
+
+    cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' extra")
+
+    def test_show_land_draws_a_background_collection(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so, show_land=True)
+        # the scan-line LineCollection plus the land PatchCollection
+        assert len(ax.collections) >= 2
+        plt.close(fig)
+
+    def test_show_locator_adds_an_inset_axes(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so, show_locator=True)
+        # inset_axes() registers as a child of ax, not a top-level fig.axes entry
+        assert len(ax.child_axes) >= 1
+        plt.close(fig)
+
+    def test_export_with_land_and_locator(self, tmp_path):
+        lat, lon, pl, po, sl, so = _make_track()
+        out = tmp_path / "track_basemap.png"
+        export_track_and_scanlines_png(lat, lon, pl, po, sl, so, str(out), show_land=True, show_locator=True)
+        assert out.exists()
+        assert out.stat().st_size > 0
+
+    def test_default_false_adds_no_inset(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so)
+        assert len(ax.child_axes) == 0
+        plt.close(fig)

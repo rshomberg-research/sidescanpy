@@ -7,6 +7,7 @@ catalog positions overlaid.
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 from pyproj import CRS
 
 from sidescanpy.targets.core import Target
@@ -142,3 +143,27 @@ class TestExportTargetPositionScatterPng:
         wrote = export_target_position_scatter_png([_make_target("0001")], str(out_path))
         assert wrote is False
         assert not out_path.exists()
+
+
+class TestBasemapIntegration:
+    """show_land/show_locator passthrough into plot_track_and_scanlines
+    -- see tests/unit/viz/test_basemap.py for the basemap module itself."""
+
+    cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' extra")
+
+    def test_show_land_and_locator_together(self):
+        track = _make_track()
+        targets = [_make_target("0001", 41.505, -71.395)]
+        fig, ax = plot_track_with_targets(track, targets, show_land=True, show_locator=True)
+        assert len(ax.collections) >= 2  # scan-lines + land
+        # inset_axes() registers as a child of ax, not a top-level fig.axes entry
+        assert len(ax.child_axes) >= 1
+        plt.close(fig)
+
+    def test_export_with_land_and_locator(self, tmp_path):
+        track = _make_track()
+        targets = [_make_target("0001", 41.505, -71.395)]
+        out = tmp_path / "track_targets_basemap.png"
+        export_track_with_targets_png(track, targets, str(out), show_land=True, show_locator=True)
+        assert out.exists()
+        assert out.stat().st_size > 0

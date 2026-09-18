@@ -9,6 +9,33 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+#### Land/water context for georeferenced plots (2026-09-18)
+- **`sidescanpy.viz.basemap`** (new module, requires the new optional
+  `maps` extra — cartopy) — land/water context for georeferenced plots.
+  `add_land_background(ax, bbox, crs)` fills `ax` with a water color and
+  draws land polygons behind whatever the caller plots next (a gridded
+  raster, a survey track); `plot_locator_thumbnail(lon, lat)` is a small
+  zoomed-out map with a marker showing where the main plot sits —
+  "where is this, relative to the coast." Land geometry is a vendored
+  1:50m Natural Earth land shapefile (`assets/natural_earth/`, public
+  domain) — no network access needed at runtime, and coarse by design
+  (good for "near land vs. open water" orientation and a regional
+  locator, not a substitute for chart-scale shoreline detail). Every
+  function raises `ImportError` with an install hint if cartopy isn't
+  present, rather than silently skipping the background. Wired in as
+  opt-in `show_land`/`show_locator` params on `viz.gridded.plot_gridded_raster()`/
+  `export_gridded_png()`, `viz.track.plot_track_and_scanlines()`/
+  `export_track_and_scanlines_png()`, and `viz.targets.plot_track_with_targets()`/
+  `export_track_with_targets_png()` (default `False` — no behavior
+  change for existing callers), plus `--show-land`/`--show-locator` on
+  `sidescan-export grid`/`track`. Found wanting investigating
+  `project-a`'s `survey-a` gridded/track exports having no
+  way to show a survey's location relative to the coastline. 21 new
+  tests across `tests/unit/viz/test_basemap.py` (new) and integration
+  cases in `test_gridded.py`/`test_track.py`/`test_targets.py`, all
+  gated on the optional extra via `pytest.importorskip`. Full suite:
+  1516 passing / 36 skipped (was 1497).
+
 #### Dataset-export module (v0.15.0, in progress)
 - **`sidescanpy.export`** (new subpackage) — turns an already-corrected
   survey channel into 8-bit training-dataset images, distinct from
