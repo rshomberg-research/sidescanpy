@@ -41,6 +41,66 @@ those consumer projects — see "Quick Reference" below.
 
 ---
 
+## Consumer-Project Architecture Contract (added 2026-09-18 — read this before adding project-local logic anywhere)
+
+**This section exists because the family has drifted from it multiple
+times without a written record to check against.** Every project
+consuming this library — several source formats, several data sources,
+one shared goal — is expected to converge on the same two-layer split:
+
+1. **This library (`sidescanpy`) + its `sidescan-*` CLI carries every
+   genuinely generic capability**: format ingestion, TVG/geometric/
+   georef correction, investigation/diagnostics, visualization
+   (waterfall/track/grid, with options), and dataset export (COCO/YOLO,
+   chips, with options). If a capability would benefit more than one
+   consumer project, it belongs here — not duplicated per-project.
+2. **Each consumer project carries only a handful of thin scripts +
+   configs** whose entire job is: resolve that dataset's own
+   format/hardware quirks, get the data converted into this library's
+   shared `.ss.h5` format as fast as possible, then hand off to the same
+   `sidescan-*` CLI every other project uses. A project-local script
+   that reimplements correction, investigation, or dataset-export logic
+   already generic in this library is exactly the failure mode this
+   section exists to prevent — not a stylistic preference.
+
+**Analysis is diagnostic, not load-bearing at runtime.** `sidescan-analyze`
+(or any investigation tooling) exists to identify a dataset's quirks —
+hardware TVG state, nadir behavior, sample-rate assumptions — once, with
+a human in the loop deciding what the finding actually means. The
+*correction* that results gets hardcoded into that project's own
+script/config (a fixed `TVGParams` recipe, a fixed nadir margin, etc.),
+not re-derived by an automated classifier on every run. An automated
+classifier that gets overruled by a human is expected and normal (see
+`CHANGELOG.md`'s TVG-recipe history for several real examples); what
+must not happen is a stale automated finding sitting uncorrected in a
+config, or a human override happening in conversation without the
+config being updated to match.
+
+**Config-file format convention**: YAML for anything a human reads or
+edits (per-dataset settings, correction recipes — the object of the
+"analysis together, script recommends, human decides" workflow), JSON
+reserved for machine-generated/machine-only artifacts a human would
+essentially never hand-edit (`targets.json`, `metrics.json`,
+`summary.json`, COCO annotations). **`sidescan-*`'s own `--config`
+loader (`src/sidescanpy/cli/_config.py`) is currently JSON-only, by a
+documented decision now superseded by this convention — adding YAML
+support there (`pyyaml`, already a dependency elsewhere in this family)
+is real, not-yet-done work, not just a documentation change.**
+
+**Low-side develop, field run.** A consumer project's scripts/configs
+are expected to work unmodified on a field/offline copy of the
+same project, on the assumption that the field data has already been
+brought into the same structure/format as the low-side reference —
+because the actual correction/export logic lives in this library and its
+CLI, not in anything environment-specific.
+
+**Where a project currently stands relative to this contract is that
+project's own concern, documented in its own `CLAUDE.md`/planning docs —
+not summarized here, so this file doesn't need updating every time a
+project's status changes.**
+
+---
+
 ## Architecture
 
 ```
