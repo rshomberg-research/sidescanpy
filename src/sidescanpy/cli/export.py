@@ -426,7 +426,14 @@ def run_grid(args: argparse.Namespace) -> int:
 
     n_written = 0
     for path in files:
-        survey = read_survey(path)
+        # chunks= keeps this lazy (dask-backed) -- without it, the whole
+        # file loads eagerly before any segmenting happens below,
+        # defeating --segment-size's own purpose on a large real survey
+        # (found via a real field OOM report; every other exporter in
+        # this file -- waterfall/track/chip -- already reads this way,
+        # this one didn't). `.load()` on each segment slice below then
+        # only ever materializes that one segment's data.
+        survey = read_survey(path, chunks={"ping": args.segment_size})
         freq_keys = resolve_freq_keys(survey.frequencies, args.frequency)
         for freq_key in freq_keys:
             if freq_key not in survey.frequencies:
@@ -437,7 +444,7 @@ def run_grid(args: argparse.Namespace) -> int:
             for seg_idx in range(n_segments):
                 start = seg_idx * args.segment_size
                 stop = min(start + args.segment_size, n_pings)
-                ds_segment = ds.isel(ping=slice(start, stop))
+                ds_segment = ds.isel(ping=slice(start, stop)).load()
                 out_path = args.output_dir / freq_key / path.stem / f"segment_{seg_idx + 1:03d}.png"
                 try:
                     _export_gridded_segment(

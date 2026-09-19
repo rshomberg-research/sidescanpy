@@ -354,6 +354,18 @@ class TestRunGrid:
         out = tmp_path / "out"
         assert (out / "hz_1495000" / "survey_a.ss" / "segment_001.png").exists()
 
+    def test_reads_lazily_chunked_by_segment_size(self, tmp_path, georef_ss_h5_dir, mocker):
+        """Real field OOM report: this used to call read_survey(path)
+        with no chunks= at all, loading the whole file eagerly before any
+        segmenting happened -- defeating --segment-size's own purpose on
+        a large real survey. Every other exporter (waterfall/track/chip)
+        already read lazily; this one didn't."""
+        spy = mocker.spy(export, "read_survey")
+        assert export.run_grid(self._args(tmp_path, georef_ss_h5_dir, segment_size=37)) == 0
+        assert spy.call_count >= 1
+        _args, kwargs = spy.call_args_list[0]
+        assert kwargs.get("chunks") == {"ping": 37}
+
 
 class TestRunTrack:
     def _args(self, tmp_path, ss_h5_dir, **overrides):

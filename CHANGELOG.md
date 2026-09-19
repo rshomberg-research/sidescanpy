@@ -803,6 +803,30 @@ not the file size, at any combination of steps in one invocation.
   (was 1534).
 - Version bumped 0.4.24 -> 0.4.25.
 
+##### `sidescan-export grid` was the one exporter still loading eagerly (2026-09-19, same-day follow-up)
+
+Same real field OOM report, extended to the export side on request:
+"we should be using the same lazy loading technique for the exports and
+dataset generation as well." Checked every exporter, not just grid --
+`waterfall`/`track` already lazily concatenate via `chunks=`
+(`_concat_survey_frequency`), and `chip` already reads lazily *and*
+slices a bounded per-target ping neighborhood before `.load()`ing
+(with its own comment citing real 14.8GB files as the motivation) --
+both were already doing exactly this. `run_grid` was the one exception:
+`read_survey(path)` with no `chunks=` at all, loading the whole file
+eagerly before `--segment-size`'s own per-segment loop ever ran,
+defeating that flag's entire purpose on a large real survey.
+
+- `run_grid` now reads via `chunks={"ping": args.segment_size}` and
+  calls `.load()` on each segment slice explicitly (matching `chip`'s
+  own established pattern) -- only that one segment is ever
+  materialized, regardless of file size.
+- Tests: `tests/unit/cli/test_export.py::TestRunGrid::test_reads_lazily_chunked_by_segment_size`
+  (spies on `read_survey`, confirms `chunks={"ping": args.segment_size}`
+  is what's actually passed). Full suite: 1553 passing / 36 skipped
+  (was 1552).
+- Version bumped 0.4.25 -> 0.4.26.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
