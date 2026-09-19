@@ -9,6 +9,12 @@ write, per-file skip/success/fail logging, summary) around one
 different one-line body — confirmed byte-identical apart from that body
 across both `project-b` and `project-a`'s own copies.
 
+:func:`process_files_in_place_chunked` is the ping-chunked counterpart,
+for callers needing memory bounded to roughly one chunk's worth of
+derived arrays instead of the whole file — see
+:mod:`sidescanpy.processing.chunked` for the actual per-file mechanics
+and the real memory numbers behind why it exists.
+
 2026 rshomberg@uri.edu
 """
 
@@ -42,6 +48,92 @@ def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list
     if candidate in available:
         return [candidate]
     return [requested]
+
+
+def process_files_in_place_chunked(
+    files: list[Path],
+    steps: frozenset[str] | set[str] | tuple[str, ...],
+    step_params: dict[str, dict] | None,
+    ping_chunk_size: int,
+    disk_multiplier: float,
+    stage_label: str,
+) -> int:
+    """Ping-chunked counterpart to :func:`process_files_in_place`, for
+    callers that need memory bounded to roughly one chunk's worth of
+    derived arrays instead of the whole file — see
+    :mod:`sidescanpy.processing.chunked`'s own module docstring for why
+    this exists and the real memory numbers behind it. Same disk-space
+    guard, same per-file success/skipped/failed accounting and log
+    shape as :func:`process_files_in_place`, so a caller switching
+    between the two sees consistent output either way.
+
+    Unlike the non-chunked path, ``step_fn``/``already_done_fn``
+    aren't caller-supplied here — chunking only makes sense for the
+    fixed, per-ping-independent step set
+    :func:`sidescanpy.processing.chunked.correct_file_chunked` already
+    knows how to check/apply per chunk (``crop_farrange`` is rejected
+    there, not accepted and silently mishandled here).
+    """
+    from sidescanpy.processing.chunked import correct_file_chunked
+
+    if not files:
+        logger.error("No .ss.h5 files found")
+        return 1
+
+    logger.info(f"Found {len(files)} .ss.h5 file(s)")
+    start_time = time.time()
+    results = []
+    for i, path in enumerate(files, 1):
+        elapsed = time.time() - start_time
+        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s, chunk={ping_chunk_size} pings)")
+        result = {"path": path, "status": "", "error": ""}
+
+        if not check_disk_space(path, disk_multiplier):
+            result["status"] = "failed_disk_space"
+            result["error"] = (
+                f"Insufficient free space to safely process {path.name} "
+                f"(need ~{disk_multiplier:.1f}x its current size)"
+            )
+            results.append(result)
+            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            continue
+
+        try:
+            applied = correct_file_chunked(path, steps, step_params=step_params, ping_chunk_size=ping_chunk_size)
+        except Exception as e:
+            result["status"] = "failed_process"
+            result["error"] = f"{type(e).__name__}: {e}"
+            results.append(result)
+            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            continue
+
+        if applied:
+            result["status"] = "success"
+            logger.info(f"    ✓ {stage_label} applied in place (chunked)")
+        else:
+            result["status"] = "skipped"
+            logger.info("    ⤤ skipped (already done)")
+        results.append(result)
+
+    total_elapsed = time.time() - start_time
+    n_success = sum(1 for r in results if r["status"] == "success")
+    n_skipped = sum(1 for r in results if r["status"] == "skipped")
+    n_failed = sum(1 for r in results if r["status"].startswith("failed"))
+
+    logger.info("=" * 60)
+    logger.info(f"{stage_label} complete in {total_elapsed:.0f}s")
+    logger.info(f"  Success: {n_success}/{len(files)}")
+    logger.info(f"  Skipped: {n_skipped}")
+    logger.info(f"  Failed:  {n_failed}")
+
+    if n_failed > 0:
+        logger.warning("Failures:")
+        for r in results:
+            if r["status"].startswith("failed"):
+                logger.warning(f"  {r['path'].name}: {r['error']}")
+        return 2
+
+    return 0
 
 
 def check_disk_space(path: Path, multiplier: float) -> bool:

@@ -746,6 +746,63 @@ been silently wrong.
   stale literal. Full suite: 1534 passing / 36 skipped (was 1531).
 - Version bumped 0.4.23 -> 0.4.24.
 
+##### `sidescan-correct --ping-chunk-size` — memory-bounded, ping-chunked correction (2026-09-19)
+
+Same real field report as the memory-split fix in `downstream-project`'s own
+history (running `--tvg --geometric --georef` combined holds ~7x the
+raw file size in memory before one write): that project's own
+`batch script` mitigated it by splitting into 3 separate
+invocations (2-4x per step). This is the actual root fix underneath —
+each requested step is applied one ping-chunk at a time instead of
+across the whole file, so peak memory is bounded by the *chunk* size,
+not the file size, at any combination of steps in one invocation.
+
+- New `sidescanpy.processing.chunked.correct_file_chunked()` — reuses
+  the exact same `apply_correction_steps()`/`step_already_done()` the
+  non-chunked path uses (no separate numerical implementation, so
+  chunked results are identical to eager ones, chunk boundaries
+  included — verified directly, not assumed). Each chunk is written to
+  a temporary file; the chunk files are then lazily reassembled
+  (`xr.open_mfdataset`, dask-backed, never fully materialized) and
+  written to the real output via the existing `write_survey()`.
+- **Real, empirically-measured gotcha, not a guess:** dask's *default*
+  threaded scheduler does not stream that final write safely — measured
+  peak memory at ~3x the *total* array size regardless of chunking
+  (almost certainly concurrent worker threads racing for the underlying
+  HDF5 file's write lock, each holding its own already-computed chunk
+  while waiting). Forcing `dask.config.set(scheduler="single-threaded")`
+  around the write fixed this completely: measured peak memory then
+  scales with *per-chunk* size, confirmed across 100/500/2000-ping
+  chunks (consistently ~2-3x the chunk's own size, not the file's).
+  `correct_file_chunked()` always uses this scheduler for its write.
+- Only steps that are genuinely per-ping-independent are supported:
+  `tvg`/`geometric`/`range_correction`/`georef`. `crop_farrange` is
+  rejected with a clear error — it needs to see a channel's entire
+  ping range to pick one good far-range cutoff, so it isn't chunkable
+  this way; run it (if needed) via the regular eager path first.
+- `cli/correct.py`: new `--ping-chunk-size N` flag, routing through a
+  new `cli/_common.py: process_files_in_place_chunked()` (same disk-
+  space guard, same per-file success/skipped/failed accounting/logging
+  shape as the non-chunked `process_files_in_place()`). Rejected
+  together with `--crop-farrange` at argument-parsing time, not left to
+  fail deep inside processing.
+- Refactored `cli/correct.py`'s own per-survey already-done checks
+  (`_tvg_already_done`, etc.) to call the new
+  `pipeline.py: step_already_done()` per channel instead of duplicating
+  the per-dataset logic — one place this now lives, shared by the CLI's
+  per-survey checks and the new chunked path's per-chunk checks.
+- Tests: new `tests/unit/processing/test_chunked.py` (7 — numerically
+  identical to eager for `{tvg,geometric,georef}` and `{geometric}`
+  alone, all-already-done is a true no-op (file untouched, `mtime`
+  unchanged), partial-already-done applies only the missing steps
+  without re-running `tvg` (checked by exact value equality, not just
+  the history entry), rejects `crop_farrange`/unknown steps, handles
+  multiple frequency channels), `tests/unit/processing/test_pipeline.py::TestStepAlreadyDone`
+  (7), `tests/unit/cli/test_correct.py::TestPingChunkSize`/new
+  `TestArgValidation` cases (5). Full suite: 1552 passing / 36 skipped
+  (was 1534).
+- Version bumped 0.4.24 -> 0.4.25.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

@@ -22,6 +22,7 @@ ladder is just a fixed mapping from level name to step set.
 2026 rshomberg@uri.edu
 """
 
+import json
 import logging
 
 import xarray as xr
@@ -31,6 +32,7 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
 from sidescanpy.processing.interpolate import interpolate_aux_onto_pings
 from sidescanpy.processing.radiometric import apply_tvg
+from sidescanpy.processing.range_correction import STEP_NAME as _RANGE_CORRECTION_STEP_NAME
 from sidescanpy.processing.range_correction import apply_empirical_range_correction
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,33 @@ _STEP_FUNCTIONS = {
     STEP_RANGE_CORRECTION: apply_empirical_range_correction,
     STEP_GEOREF: compute_georeferencing,
 }
+
+
+def step_already_done(ds: xr.Dataset, step: str) -> bool:
+    """True if ``step`` has already been applied to a single frequency
+    channel dataset ``ds``.
+
+    Per-dataset predicate for any of ``VALID_STEPS`` — the one place
+    this logic lives; ``sidescanpy.cli.correct``'s own per-*survey*
+    checks (looping over every channel) and
+    ``sidescanpy.processing.chunked``'s per-*chunk* checks both call
+    this rather than each keeping their own copy.
+
+    Raises
+    ------
+    ValueError
+        If ``step`` isn't one of ``VALID_STEPS``.
+    """
+    if step == STEP_TVG:
+        return ds.attrs.get("processing_level") != "raw"
+    if step == STEP_GEOMETRIC:
+        return "ground_range_m" in ds.data_vars
+    if step == STEP_GEOREF:
+        return "latitude_per_sample" in ds.data_vars
+    if step == STEP_RANGE_CORRECTION:
+        history = json.loads(ds.attrs.get("processing_history", "[]"))
+        return any(h.get("step") == _RANGE_CORRECTION_STEP_NAME for h in history)
+    raise ValueError(f"Unknown correction step: {step!r}. Valid steps: {VALID_STEPS}")
 
 
 def apply_correction_steps(

@@ -17,6 +17,7 @@ from sidescanpy.processing.pipeline import (
     apply_correction_steps,
     run_correction_steps,
     run_pipeline,
+    step_already_done,
 )
 from sidescanpy.processing.radiometric import TVGParams
 
@@ -132,6 +133,38 @@ class TestApplyCorrectionSteps:
     def test_empty_steps_is_noop(self, sample_dataset):
         result = apply_correction_steps(sample_dataset, frozenset())
         assert result.attrs["processing_level"] == "raw"
+
+
+class TestStepAlreadyDone:
+    """Per-dataset predicate shared by cli/correct.py's per-survey checks
+    and processing/chunked.py's per-chunk checks -- the one place this
+    logic lives (see the function's own docstring)."""
+
+    def test_tvg_false_on_raw(self, sample_dataset):
+        assert step_already_done(sample_dataset, "tvg") is False
+
+    def test_tvg_true_after_applying(self, sample_dataset):
+        corrected = apply_correction_steps(sample_dataset, {"tvg"})
+        assert step_already_done(corrected, "tvg") is True
+
+    def test_geometric_false_before_applying(self, sample_dataset):
+        assert step_already_done(sample_dataset, "geometric") is False
+
+    def test_geometric_true_after_applying(self, sample_dataset):
+        corrected = apply_correction_steps(sample_dataset, {"geometric"})
+        assert step_already_done(corrected, "geometric") is True
+
+    def test_georef_true_after_applying(self, sample_dataset):
+        corrected = apply_correction_steps(sample_dataset, {"geometric", "georef"})
+        assert step_already_done(corrected, "georef") is True
+
+    def test_range_correction_true_after_applying(self, sample_dataset):
+        corrected = apply_correction_steps(sample_dataset, {"tvg", "geometric", "range_correction"})
+        assert step_already_done(corrected, "range_correction") is True
+
+    def test_unknown_step_raises(self, sample_dataset):
+        with pytest.raises(ValueError, match="Unknown correction step"):
+            step_already_done(sample_dataset, "not_a_real_step")
         assert "ground_range_m" not in result.data_vars
 
     def test_geometric_without_tvg(self, sample_dataset):

@@ -67,6 +67,60 @@ class TestArgValidation:
         monkeypatch.setattr("sys.argv", ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--tvg"])
         assert correct.main() == 1
 
+    def test_ping_chunk_size_rejects_crop_farrange(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--crop-farrange", "--ping-chunk-size", "4"],
+        )
+        with pytest.raises(SystemExit):
+            correct.main()
+
+    def test_ping_chunk_size_rejects_non_positive(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--tvg", "--ping-chunk-size", "0"],
+        )
+        with pytest.raises(SystemExit):
+            correct.main()
+
+
+class TestPingChunkSize:
+    """--ping-chunk-size routes through
+    sidescanpy.processing.chunked.correct_file_chunked instead of the
+    eager path -- see that module's own tests for the numerical-
+    equivalence proof; these just confirm the CLI wiring itself."""
+
+    def test_tvg_only_chunked(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--ping-chunk-size", "4"],
+        )
+        assert correct.main() == 0
+
+        result = read_survey(ss_h5_path)
+        assert set(_levels(result).values()) == {"radiometric"}
+
+    def test_all_steps_chunked(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent),
+                "--tvg", "--geometric", "--georef", "--ping-chunk-size", "3",
+            ],
+        )
+        assert correct.main() == 0
+
+        result = read_survey(ss_h5_path)
+        assert _has_var(result, "latitude_per_sample")
+
+    def test_already_done_chunked_run_is_skipped(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--ping-chunk-size", "4"],
+        )
+        assert correct.main() == 0
+        assert correct.main() == 0  # second run: already done, still exits 0
+
 
 class TestSingleStep:
     def test_tvg_only(self, ss_h5_path, monkeypatch):

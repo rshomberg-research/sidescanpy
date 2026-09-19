@@ -44,12 +44,12 @@ import logging
 import sys
 from pathlib import Path
 
-from sidescanpy.cli._common import process_files_in_place
+from sidescanpy.cli._common import process_files_in_place, process_files_in_place_chunked
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing import crop_far_range_noise, run_correction_steps
+from sidescanpy.processing.pipeline import step_already_done
 from sidescanpy.processing.radiometric import TVGParams
-from sidescanpy.processing.range_correction import STEP_NAME as _RANGE_CORRECTION_STEP_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -78,41 +78,18 @@ def _crop_already_done(survey: SideScanSurvey) -> bool:
     return True
 
 
-def _tvg_already_done(survey: SideScanSurvey) -> bool:
-    return all(
-        channel.dataset.attrs.get("processing_level") != "raw"
-        for channel in survey.freq_channels.values()
-    )
-
-
-def _geometric_already_done(survey: SideScanSurvey) -> bool:
-    return all(
-        "ground_range_m" in channel.dataset.data_vars
-        for channel in survey.freq_channels.values()
-    )
-
-
-def _georef_already_done(survey: SideScanSurvey) -> bool:
-    return all(
-        "latitude_per_sample" in channel.dataset.data_vars
-        for channel in survey.freq_channels.values()
-    )
-
-
-def _range_correction_already_done(survey: SideScanSurvey) -> bool:
-    for channel in survey.freq_channels.values():
-        history = json.loads(channel.dataset.attrs.get("processing_history", "[]"))
-        if not any(h.get("step") == _RANGE_CORRECTION_STEP_NAME for h in history):
-            return False
-    return True
-
-
+# The other 4 checks are per-dataset predicates shared with
+# sidescanpy.processing.chunked (see step_already_done's own docstring)
+# -- this dict adapts them to the per-survey (all channels) shape this
+# CLI's own _make_already_done()/_make_step_fn() expect. crop_farrange
+# stays its own thing here (not one of pipeline.py's VALID_STEPS, and
+# not chunkable -- see chunked.py's module docstring for why).
 _ALREADY_DONE = {
     "crop_farrange": _crop_already_done,
-    "tvg": _tvg_already_done,
-    "geometric": _geometric_already_done,
-    "range_correction": _range_correction_already_done,
-    "georef": _georef_already_done,
+    "tvg": lambda survey: all(step_already_done(c.dataset, "tvg") for c in survey.freq_channels.values()),
+    "geometric": lambda survey: all(step_already_done(c.dataset, "geometric") for c in survey.freq_channels.values()),
+    "range_correction": lambda survey: all(step_already_done(c.dataset, "range_correction") for c in survey.freq_channels.values()),
+    "georef": lambda survey: all(step_already_done(c.dataset, "georef") for c in survey.freq_channels.values()),
 }
 
 
@@ -180,6 +157,18 @@ def main() -> int:
         "--config", type=Path, default=None,
         help="YAML or JSON file seeding this command's defaults (e.g. spreading_loss_db: 0.0) -- explicit flags still override",
     )
+    parser.add_argument(
+        "--ping-chunk-size", type=int, default=None,
+        help=(
+            "Process each file in chunks of this many pings instead of all at once -- "
+            "bounds peak memory to roughly one chunk's worth of derived arrays regardless "
+            "of file size (see processing/chunked.py's module docstring for the real memory "
+            "numbers behind this). Default: unset, process the whole file eagerly (unchanged "
+            "prior behavior). Not compatible with --crop-farrange, which needs to see a "
+            "channel's entire ping range to pick one good far-range cutoff -- run that step "
+            "separately (unchunked) first if you need both."
+        ),
+    )
 
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
@@ -211,6 +200,15 @@ def main() -> int:
     if tvg_override_requested and "tvg" not in requested:
         parser.error("TVG term overrides require --tvg")
 
+    if args.ping_chunk_size is not None:
+        if args.ping_chunk_size <= 0:
+            parser.error("--ping-chunk-size must be a positive integer")
+        if "crop_farrange" in requested:
+            parser.error(
+                "--ping-chunk-size is not compatible with --crop-farrange -- that step needs "
+                "to see a channel's entire ping range. Run --crop-farrange separately (unchunked) first."
+            )
+
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -239,6 +237,16 @@ def main() -> int:
         return 1
 
     stage_label = f"correct ({'+'.join(sorted(requested))})"
+    if args.ping_chunk_size is not None:
+        step_params = {"tvg": {"params": tvg_params}} if tvg_params is not None else None
+        return process_files_in_place_chunked(
+            files,
+            steps=requested,
+            step_params=step_params,
+            ping_chunk_size=args.ping_chunk_size,
+            disk_multiplier=disk_multiplier,
+            stage_label=stage_label,
+        )
     return process_files_in_place(
         files,
         step_fn=_make_step_fn(requested, tvg_params),
