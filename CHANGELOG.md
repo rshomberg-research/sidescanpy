@@ -722,6 +722,30 @@ own new finite-check ever got a chance to run.
   `test_raises_when_every_coordinate_is_physically_invalid`). Full suite:
   1531 passing / 36 skipped (was 1529).
 
+##### `__version__` was a hardcoded, long-stale literal -- fixed (2026-09-19)
+
+Found via a real field report: `import sidescanpy; sidescanpy.__version__`
+printed `"0.1.0"` right after installing the 0.4.23 wheel from this same
+transfer. Root cause: `__init__.py` hardcoded `__version__ = "0.1.0"` as
+a plain literal, never updated across the entire 0.4.x version history
+-- `pyproject.toml`'s real version and this constant have been two
+independent, silently-diverging sources of truth the whole time. Not
+just cosmetic: this value gets stamped into real `.ss.h5`
+`processing_history` records (`processing/{georeferencing,interpolate,
+geometric,farrange}.py` all import and record it) as which library
+version performed a correction step -- every one of those records has
+been silently wrong.
+
+- `__init__.py` now reads `importlib.metadata.version("sidescanpy")`
+  (the installed package's real, build-time-embedded metadata) instead
+  of a hardcoded string. Falls back to `"0.0.0+unknown"` only if the
+  package somehow isn't installed at all (bare `sys.path` hack) --
+  every real caller (editable install, wheel install) has metadata.
+- Tests: new `tests/unit/test_version.py` (3) -- matches installed
+  metadata, matches `pyproject.toml`'s real version, isn't the old
+  stale literal. Full suite: 1534 passing / 36 skipped (was 1531).
+- Version bumped 0.4.23 -> 0.4.24.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
