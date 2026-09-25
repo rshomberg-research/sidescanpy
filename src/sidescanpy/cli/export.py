@@ -829,6 +829,7 @@ def _extract_pixel_style_window(
 def _extract_geo_style_window(
     masked, t, channel_idx: int, local_ping: int, style: str, level: str, size_px: int, jitter_px: int,
     rng: np.random.Generator, mps: float, items_by_channel: dict, lo: int,
+    resolution_m_override: float | None = None,
 ) -> tuple[np.ndarray, list] | None:
     """``geometric``/``georef`` (real-meters) window + the primary target's
     own position within it.
@@ -861,6 +862,14 @@ def _extract_geo_style_window(
     window placement never indexes out of bounds). Skipping here matches
     that same "don't crash the whole run over one bad target" contract,
     not a fix to the underlying frequency-matching ambiguity itself.
+
+    ``resolution_m_override``, when given, is used directly as
+    ``resolution_m`` for every style instead of the auto-calculated
+    value -- see ``--resolution-m``'s own help text in ``main()`` for
+    why the auto-calculation is unreliable per-target. ``ping_spacing_m``
+    is still computed either way; it also feeds ``bbox_size_px``'s own
+    unit conversion, independent of which resolution the crop itself
+    renders at.
     """
     if t.sample is None or not (0 <= t.sample < masked.sizes["sample"]):
         return None
@@ -879,13 +888,13 @@ def _extract_geo_style_window(
 
     combine = style == "dual-swath"
     if style == "chip":
-        resolution_m = max(mps, ping_spacing_m)
+        resolution_m = resolution_m_override if resolution_m_override is not None else max(mps, ping_spacing_m)
         center_across_m = target_across_m + _jitter_offset_m(jitter_px, resolution_m, rng)
     else:
         across_all = masked["across_track_m"].values if combine else masked["across_track_m"].isel(channel=channel_idx).values
         across_finite = across_all[np.isfinite(across_all)]
         swath_width_m = float(across_finite.max() - across_finite.min()) if across_finite.size else size_px * mps
-        resolution_m = max(swath_width_m / size_px, ping_spacing_m, 1e-6)
+        resolution_m = resolution_m_override if resolution_m_override is not None else max(swath_width_m / size_px, ping_spacing_m, 1e-6)
         center_across_m = 0.0 if combine else (float((across_finite.max() + across_finite.min()) / 2.0) if across_finite.size else 0.0)
     geo_search_radius_m = max(1.5 * resolution_m, gap_p95_m)
 
@@ -951,6 +960,14 @@ def _extract_geo_style_window(
 
 
 def run_chip(args: argparse.Namespace) -> int:
+    resolution_m_override = getattr(args, "resolution_m", None)
+    if resolution_m_override is not None and args.render_level in ("raw", "radiometric"):
+        logger.warning(
+            f"--resolution-m={resolution_m_override} has no effect under --render-level {args.render_level!r} "
+            "(native pixel crop, no resolution_m concept) -- ignoring it",
+        )
+        resolution_m_override = None
+
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
     if args.min_confidence != "unknown":
@@ -1059,7 +1076,7 @@ def run_chip(args: argparse.Namespace) -> int:
                     else:
                         result = _extract_geo_style_window(
                             masked, t, channel_idx, local_ping, style, args.render_level, size_px, args.jitter_px, rng, mps,
-                            items_by_channel, lo,
+                            items_by_channel, lo, resolution_m_override=resolution_m_override,
                         )
                     if result is None:
                         logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")
@@ -1615,6 +1632,19 @@ def main() -> int:
     )
     p_chip.add_argument("--size-px", type=int, default=400, help="Output size (both axes) for the 'chip' style")
     p_chip.add_argument("--swath-size-px", type=int, default=512, help="Output size (both axes) for the 'single-swath'/'dual-swath' styles")
+    p_chip.add_argument(
+        "--resolution-m", type=float, default=None,
+        help="Real-world meters per output pixel for 'geometric'/'georef' render levels, applied to "
+             "every style. When set, used directly instead of the per-target auto-calculated value "
+             "(swath width / output size for single-swath/dual-swath, native sample/ping spacing for "
+             "chip) -- that auto-calculation has a known failure mode: it derives ping spacing from an "
+             "average over a wide ping neighborhood, so a target sitting in a locally slow/dense-ping "
+             "region (e.g. where the vessel slowed for a closer look) can get an inflated, too-coarse "
+             "resolution that makes the whole crop look zoomed far out. Set this from sidescan-analyze's "
+             "findings for the dataset, not by trial and error. No effect (logged, not an error) under "
+             "'raw'/'radiometric' render level, which crops in native pixel space and has no resolution_m "
+             "concept at all.",
+    )
     p_chip.add_argument("--box-size", type=float, default=40.0, help="COCO/YOLO annotation box size AND (with --with-context) the drawn box size, in pixels")
     p_chip.add_argument(
         "--with-context", action="store_true",

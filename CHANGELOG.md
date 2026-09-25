@@ -9,6 +9,51 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+#### `sidescan-export chip --resolution-m` — config-driven, not auto-calculated (2026-09-25)
+
+Real field report, direct follow-up to the scale-bar work above:
+some `chip`/`single-swath`/`dual-swath` crops (all three, same target,
+together) came out "way zoomed out" — mostly black, the real swath
+shrunk to a speck in the center. Root cause: under `geometric`/`georef`
+render level, every style's `resolution_m` (meters per output pixel)
+was auto-calculated per target from `ping_spacing_m` — a window-average
+vessel speed over a ping neighborhood sized from the *sample count per
+ping* (`n_samples_single`, used as a ping-count bound in `run_chip`, a
+holdover from the raw-pixel styles' own square-crop needs, which
+geometric/georef extraction doesn't share). A target sitting in a
+locally slow/dense-ping region (e.g. where the vessel slowed for a
+closer look — exactly where interesting targets tend to get marked)
+gets an average pulled from much faster surrounding transit pings,
+inflating `resolution_m` and zooming every style out together — chip
+included, since its own formula (`max(mps, ping_spacing_m)`) shares the
+same inflated `ping_spacing_m`.
+
+Rather than patch the auto-calculation's averaging window (still
+fragile — no window size is right for every survey/target), the user
+asked for the opposite: dataset/export parameters like this should be
+determined by config, not auto-calculated at all, with the `analyze`
+step providing the evidence to choose them. This is a first, scoped
+step toward that, not the full redesign (tracked separately).
+
+- New `sidescan-export chip --resolution-m METERS` — when set, used
+  directly as `resolution_m` for every style under `geometric`/`georef`
+  render level, bypassing the per-target auto-calculation entirely.
+  Already config-file-settable for free via the existing YAML `--config`
+  loader (`cli/_config.py`, no changes needed there). No effect (logged,
+  not silently ignored) under `raw`/`radiometric` render level, which
+  crops in native pixel space and has no `resolution_m` concept.
+- `_extract_geo_style_window()` gained `resolution_m_override` — swaps
+  in for both the chip-style and swath-style resolution formulas;
+  `ping_spacing_m` itself is still computed either way, since it also
+  feeds `bbox_size_px`'s unit conversion independent of which
+  resolution the crop renders at (a known, separate, smaller-impact
+  imprecision in that conversion — not addressed here).
+- Tests: `tests/unit/cli/test_export.py::TestRunChip` gained 3 — the
+  override reaches `extract_geometric_window`/`extract_georef_window`
+  for every requested style, and is ignored with a logged warning under
+  `raw`/`radiometric`. Full suite: 1591 passing / 36 skipped (was 1588).
+- Version bumped 0.4.28 -> 0.4.29.
+
 #### Land/water context for georeferenced plots (2026-09-18)
 - **`sidescanpy.viz.basemap`** (new module, requires the new optional
   `maps` extra — cartopy) — land/water context for georeferenced plots.

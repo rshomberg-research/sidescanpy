@@ -641,6 +641,7 @@ class TestRunChip:
             size_px=200, swath_size_px=200, box_size=40.0, with_context=False,
             jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
             normalization_scope="image", min_confidence="verified", seed=0,
+            resolution_m=None,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -787,6 +788,53 @@ class TestRunChip:
         assert spy.call_count == 3  # once per style
         for style in ("chip", "single-swath", "dual-swath"):
             assert (tmp_path / "out" / style / "target_7.png").exists()
+
+    def test_resolution_m_override_reaches_geometric_extraction_for_every_style(self, tmp_path, swath_ss_h5_dir, mocker):
+        """Real production report: some targets' chip/single-swath/dual-swath
+        came out 'way zoomed out', mostly-black with the real swath tiny in
+        the center -- traced to the per-target auto-calculated resolution_m
+        (derived from a wide ping-neighborhood-average spacing) blowing up
+        for a target sitting in a locally slow/dense-ping region. --resolution-m
+        lets the operator set a known-good value directly, bypassing that
+        auto-calculation entirely for every style."""
+        spy = mocker.spy(export, "extract_geometric_window")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric",
+            styles=["chip", "single-swath", "dual-swath"], swath_size_px=64,
+            resolution_m=0.25,
+        )
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 3
+        for call in spy.call_args_list:
+            assert call.kwargs["resolution_m"] == 0.25
+
+    def test_resolution_m_override_reaches_georef_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
+        spy = mocker.spy(export, "extract_georef_window")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, render_level="georef",
+            styles=["chip"], swath_size_px=64, resolution_m=0.1,
+        )
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 1
+        assert spy.call_args.kwargs["resolution_m"] == 0.1
+
+    def test_resolution_m_override_ignored_with_a_warning_for_pixel_styles(self, tmp_path, swath_ss_h5_dir, caplog):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, render_level="radiometric",
+            styles=["chip"], resolution_m=0.25,
+        )
+        with caplog.at_level("WARNING"):
+            assert export.run_chip(args) == 0
+        assert any("has no effect" in r.message for r in caplog.records)
 
     def test_georef_render_level_calls_georef_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
         spy = mocker.spy(export, "extract_georef_window")
