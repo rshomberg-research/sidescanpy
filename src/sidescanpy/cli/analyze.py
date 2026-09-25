@@ -96,11 +96,13 @@ from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommen
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
+from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.pipeline import reconstruct_raw
+from sidescanpy.processing.slicing import slice_by_pings
 from sidescanpy.viz.investigation import (
     apply_stage4_fit_window_limits,
     plot_segments_overview,
@@ -293,16 +295,28 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_segment(args: argparse.Namespace) -> int:
+    """Every detector in ``find_segments`` needs the full ping axis's
+    arrays materialized at once (there's no per-chunk scanning logic --
+    a real, separate piece of work if a survey turns out to need it,
+    matching ``sidescan-correct --ping-chunk-size``'s own precedent).
+    ``--pings`` bounds *which* slice gets materialized, the same
+    memory-safety escape hatch every other narrow subcommand here
+    already has -- default (0, 8000) matches ``investigate``'s own
+    default, not "the whole file," since a real production `.ss.h5` can
+    be many GB.
+    """
     if not args.input.is_file():
         logger.error(f"Input file not found: {args.input}")
         return 1
 
-    survey = read_survey(args.input)
+    survey = read_survey(args.input, chunks={"ping": 500})
     if args.frequency:
         freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
     else:
         freq_key = sorted(survey.frequencies)[0]
     ds = survey.get_frequency(freq_key).dataset
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
 
     segments = find_segments(
         ds,
@@ -317,9 +331,22 @@ def run_segment(args: argparse.Namespace) -> int:
         min_segment_pings=args.min_segment_pings,
     )
 
+    # write_segments() needs every frequency channel sliced to the exact
+    # same [start:stop] window find_segments' own (0-indexed-from-start)
+    # ping numbers are relative to -- passing the original, full-range
+    # `survey` here would silently write the wrong pings whenever
+    # `start != 0`.
+    sliced_survey = SideScanSurvey(
+        source_files=survey.source_files, source_format=survey.source_format, survey_name=survey.survey_name,
+    )
+    for fk in survey.frequencies:
+        channel = survey.get_frequency(fk)
+        sliced = slice_by_pings(channel, start=start, stop=stop if stop is not None else channel.n_pings)
+        sliced_survey.add_frequency(fk, sliced.dataset.load())
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_segments_report(segments, args.output_dir / "segments.json")
-    written = write_segments(survey, segments, args.output_dir)
+    written = write_segments(sliced_survey, segments, args.output_dir)
 
     logger.info(f"{args.input.name} / {freq_key}: {ds.sizes['ping']} pings -> {len(segments)} segment(s)")
     for seg in segments:
@@ -632,6 +659,12 @@ def main() -> int:
         "--frequency", type=str, default=None,
         help="Which frequency channel to compute segmentation from (default: first, sorted). "
              "The resulting ping ranges are applied to every frequency channel when writing.",
+    )
+    p_seg.add_argument(
+        "--pings", type=_parse_ping_range, default=(0, 8000),
+        help="'start:stop' (stop empty = all). Every detector needs this whole window's arrays in "
+             "memory at once -- bound it explicitly on a large real .ss.h5 rather than risk loading "
+             "the whole file. Default matches investigate's own default, not 'the whole file'.",
     )
     p_seg.add_argument("--gap-factor", type=float, default=8.0, help="Along-track distance jump, as a multiple of the survey's own typical ping spacing, that counts as a gap")
     p_seg.add_argument("--sound-vel-rel-tol", type=float, default=0.05, help="Relative step in sound_vel_ms between consecutive pings that counts as a setting change")

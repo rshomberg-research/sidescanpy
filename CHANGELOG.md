@@ -7,6 +7,38 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### `sidescan-analyze segment --pings` — was the only new subcommand with no memory bound (2026-09-25)
+
+Found preparing to demo the new pipeline against a real multi-GB
+`project-a` survey file: `nadir`/`beam-geometry`/`usable-range`/
+`units`/`recommend-config`/`tvg-fit`/`investigate` all bound how much of
+a `.ss.h5` they materialize via `--pings` (default matching
+`investigate`'s own 8000), but `segment` had no such flag at all —
+`find_segments()`'s detectors need the whole requested ping window's
+arrays in memory at once (no per-chunk scanning logic, a separate,
+larger piece of work if a survey turns out to need it), so without a
+bound it would try to load an entire multi-GB production file.
+
+- `sidescan-analyze segment` gained `--pings` (default `(0, 8000)`,
+  same convention as every other subcommand).
+- **Second bug found fixing the first**: `write_segments()` needs every
+  frequency channel sliced to the exact same `[start:stop]` window
+  `find_segments()`'s own (0-indexed-from-`start`) ping numbers are
+  relative to — passing the original, full-range survey (the prior
+  behavior, harmless only because nothing had ever exercised `start !=
+  0` before this fix) would have silently written the wrong pings into
+  every section whenever a non-zero `--pings` start was used. Fixed:
+  `run_segment` now builds a genuinely `[start:stop]`-sliced
+  `SideScanSurvey` (every frequency channel, via `processing.slicing.
+  slice_by_pings`) before calling `write_segments()`.
+- Test: `tests/unit/cli/test_analyze.py::TestRunSegment::test_pings_bound_offsets_written_section_correctly`
+  — writes with a non-zero `--pings` start, reads the section back,
+  confirms its ping 0 matches the source survey's true ping 100, not
+  ping 0. Full suite: 1645 passing / 36 skipped (was 1644).
+- Version bumped 0.4.32 -> 0.4.33.
+
 ### Added
 
 #### `sidescan-analyze recommend-config` — evidence-commented recommended config YAML (2026-09-25)

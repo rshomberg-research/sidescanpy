@@ -80,7 +80,7 @@ class TestRunInvestigate:
 class TestRunSegment:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
-            input=input_path, frequency=None,
+            input=input_path, frequency=None, pings=(0, None),
             gap_factor=8.0, sound_vel_rel_tol=0.05,
             garbage_value_var="backscatter_raw", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
             stability_window_pings=50, stability_threshold=1.0, stability_min_run_pings=25,
@@ -149,6 +149,26 @@ class TestRunSegment:
         args = self._args(tmp_path, path, frequency="hz_547500")
         assert analyze.run_segment(args) == 0
         assert (tmp_path / "out" / "section1.ss.h5").exists()
+
+    def test_pings_bound_offsets_written_section_correctly(self, tmp_path):
+        """Real bug caught while adding --pings: writing sliced the
+        ORIGINAL full-range survey by find_segments' own window-relative
+        (0-indexed-from-start) ping numbers, silently writing the wrong
+        pings whenever start != 0."""
+        from sidescanpy.io.hdf5 import read_survey
+
+        survey = self._clean_survey(n_pings=400)
+        expected_lat_at_100 = survey.get_frequency("hz_1495000").dataset["latitude"].values[100]
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+
+        args = self._args(tmp_path, path, pings=(100, 300))
+        assert analyze.run_segment(args) == 0
+
+        written = read_survey(tmp_path / "out" / "section1.ss.h5")
+        written_ds = written.get_frequency("hz_1495000").dataset
+        assert written_ds.sizes["ping"] == 200
+        assert float(written_ds["latitude"].values[0]) == pytest.approx(float(expected_lat_at_100))
 
 
 class TestRunTvgFit:
