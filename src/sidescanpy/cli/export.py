@@ -579,6 +579,7 @@ def _build_position_index(ss_h5_dir: Path) -> dict[Path, dict]:
                 "lon": ds["longitude"].values.astype(float),
                 "sample_interval_m": sample_interval_m,
                 "n_samples": ds.sizes["sample"],
+                "n_pings": ds.sizes["ping"],
             }
         index[path] = channels
     return index
@@ -593,23 +594,57 @@ def _match_frequency(channels: dict, target_mps: float | None) -> str:
 def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
     """Find ``(ss_h5_path, freq_key, ping_idx, dist_m)`` for ``target`` by
     matching its recorded lat/lon against every candidate file+frequency's
-    own per-ping track. Returns ``None`` if nothing lands within
-    ``max_dist_m`` (or the target has no recorded position at all).
+    own per-ping track. Falls back to the target's own already-known
+    ``ping`` (see below) when GPS matching isn't available or fails.
+    Returns ``None`` if neither resolves it.
+
+    **Real bug this fallback exists to fix, found from a real field
+    report**: some source catalogs give a target's position directly as
+    a pixel location (e.g. vendor-format's targets.csv "Snippet"
+    columns, read by ``vendor_hdf5.targets.read_mission_targets`` into
+    ``Target.ping``/``.sample``, already correctly projected onto the
+    survey's own global ping index by
+    ``vendor_hdf5.targets.project_to_survey_pings`` before this ever
+    runs) with no GPS lat/lon at all, or a lat/lon recorded by a less
+    precise/independent system than the sonar's own nav log. Requiring a
+    GPS match for *every* target silently dropped any target lacking a
+    close-enough (or any) recorded lat/lon, even though its real,
+    already-known ping position was sitting right there on the object --
+    "no ss_h5 ping within Nm of its recorded position" on a real
+    production run, for a target that in fact had no recorded *GPS*
+    position to compare against at all.
+
+    The ping-based fallback only fires when it's genuinely unambiguous:
+    exactly one ``(path, freq_key)`` in ``index`` has ``target.ping``
+    within its own recorded ping range. Zero matches (out of range
+    everywhere) or more than one (which file/channel the ping number
+    belongs to is actually ambiguous) both still return ``None`` rather
+    than guess -- this can only *add* matches GPS search was dropping,
+    never change what a successful GPS match already resolves to.
     """
-    if target.latitude is None or target.longitude is None:
-        return None
     target_mps = target.extra_attributes.get("ping_meters_per_sample")
-    best = None
-    for path, channels in index.items():
-        freq_key = _match_frequency(channels, target_mps)
-        c = channels[freq_key]
-        d_m = np.sqrt((c["lat"] - target.latitude) ** 2 + (c["lon"] - target.longitude) ** 2) * 111000.0
-        idx = int(np.argmin(d_m))
-        if best is None or d_m[idx] < best[3]:
-            best = (path, freq_key, idx, float(d_m[idx]))
-    if best is None or best[3] > max_dist_m:
-        return None
-    return best
+    if target.latitude is not None and target.longitude is not None:
+        best = None
+        for path, channels in index.items():
+            freq_key = _match_frequency(channels, target_mps)
+            c = channels[freq_key]
+            d_m = np.sqrt((c["lat"] - target.latitude) ** 2 + (c["lon"] - target.longitude) ** 2) * 111000.0
+            idx = int(np.argmin(d_m))
+            if best is None or d_m[idx] < best[3]:
+                best = (path, freq_key, idx, float(d_m[idx]))
+        if best is not None and best[3] <= max_dist_m:
+            return best
+
+    if target.ping is not None:
+        candidates = []
+        for path, channels in index.items():
+            freq_key = _match_frequency(channels, target_mps)
+            if 0 <= target.ping < channels[freq_key]["n_pings"]:
+                candidates.append((path, freq_key, int(target.ping), 0.0))
+        if len(candidates) == 1:
+            return candidates[0]
+
+    return None
 
 
 _CHIP_STYLES = ("chip", "single-swath", "dual-swath")
@@ -711,6 +746,31 @@ def _rescale_co_targets(co_targets: list, native_shape: tuple[int, int], output_
     return rescaled
 
 
+def _with_bbox_size_px(t, scale_x: float, scale_y: float):
+    """Stash ``t.bbox``'s own real, measured ``(w, h)`` -- converted from
+    whatever native unit ``scale_x``/``scale_y`` convert from (source
+    sample/ping pixels for the raw-pixel styles, meters-per-sample/
+    meters-per-ping for the geo styles) into this specific window's
+    actual output pixel size -- into ``extra_attributes["bbox_size_px"]``.
+
+    Real bug this exists to fix: ``sidescan-export chip`` always wrote
+    every target's COCO/YOLO box at the shared ``--box-size`` (a fixed
+    placeholder), discarding a real, measured extent like vendor-format's
+    targets.csv 4-corner columns give every target -- "all the
+    bounding boxes are the same size" on real production output, found
+    from a real report, not a theoretical gap.
+
+    No-op (returns ``t`` unchanged) when ``t.bbox`` is ``None`` -- a
+    center-only pick (e.g. JSF/EdgeTech Discover's own catalog, which
+    has no measured extent) still falls back to the shared
+    ``--box-size`` placeholder exactly as before this existed.
+    """
+    if t.bbox is None:
+        return t
+    _x, _y, w, h = t.bbox
+    return replace(t, extra_attributes={**t.extra_attributes, "bbox_size_px": (float(w) * scale_x, float(h) * scale_y)})
+
+
 def _extract_pixel_style_window(
     masked, t, channel_idx: int, n_samples_single: int, local_ping: int, lo: int, style: str, level: str,
     size_px: int, jitter_px: int, rng: np.random.Generator, placed_by_channel: dict, placed_combined: list,
@@ -754,9 +814,15 @@ def _extract_pixel_style_window(
     window, co_targets = _orient_pixel_window(window, co_targets, channel_idx, style)
 
     native_shape = window.shape
+    # bbox_size_px scale: native window pixels ARE the same sample(x)/
+    # ping(y) units t.bbox was recorded in (this style never resamples,
+    # only crops) -- 1:1 until/unless the final resize below changes it.
+    row_scale, col_scale = 1.0, 1.0
     if native_shape != (size_px, size_px):
+        row_scale, col_scale = size_px / native_shape[0], size_px / native_shape[1]
         co_targets = _rescale_co_targets(co_targets, native_shape, (size_px, size_px))
         window = resize_to(window, size_px)
+    co_targets = [_with_bbox_size_px(ct, scale_x=col_scale, scale_y=row_scale) for ct in co_targets]
     return window, co_targets
 
 
@@ -840,6 +906,11 @@ def _extract_geo_style_window(
         candidates = [item for item in all_items if item[0].target_id != t.target_id]
         co_targets = _geo_targets_within_window(candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric)
         grid, targets_out = _flip_geo_vertical(grid, [primary_local] + co_targets, size_px)
+        # bbox_size_px scale: t.bbox's (w, h) is in source sample(x)/
+        # ping(y) pixel counts -- convert to real meters via mps/
+        # ping_spacing_m, then to this window's own output pixels via
+        # resolution_m (meters per output pixel).
+        targets_out = [_with_bbox_size_px(ct, scale_x=mps / resolution_m, scale_y=ping_spacing_m / resolution_m) for ct in targets_out]
         return grid, targets_out
     else:  # georef
         try:
@@ -872,6 +943,10 @@ def _extract_geo_style_window(
             grid = padded
         row, col = locate_point_georef(target_lat, target_lon, meta)
         primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
+        # Same conversion as the "geometric" branch above -- mps/
+        # ping_spacing_m/resolution_m are all computed once, shared by
+        # both branches.
+        primary_local = _with_bbox_size_px(primary_local, scale_x=mps / resolution_m, scale_y=ping_spacing_m / resolution_m)
         return grid, [primary_local]
 
 
@@ -1012,7 +1087,10 @@ def run_chip(args: argparse.Namespace) -> int:
 
             for co in co_targets:
                 coco_entries.append(
-                    CocoImageEntry(target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0])
+                    CocoImageEntry(
+                        target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0],
+                        bbox_size=co.extra_attributes.get("bbox_size_px"),
+                    )
                 )
             thumbnails.append(img_8bit)
             sheet_boxes.append(co_targets)

@@ -14,6 +14,7 @@ verified — not re-tested from scratch here.
 import argparse
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -535,6 +536,103 @@ class TestFlipGeoVertical:
         assert {t.extra_attributes["window_row"] for t in out} == {10, 1}
 
 
+class TestCorrelateTarget:
+    """Real field report: lots of "no ss_h5 ping within 25.0m of its
+    recorded position" warnings, and some targets missing from chip
+    output entirely -- traced to _correlate_target requiring a GPS
+    lat/lon match for *every* target, silently dropping any target with
+    no recorded GPS position (or one that doesn't match closely enough)
+    even when its real, already-known ping position (e.g. from a pixel-
+    based source catalog like vendor-format's targets.csv) was sitting
+    right there on the object. These test the fallback directly against
+    a hand-built index, rather than only indirectly through run_chip."""
+
+    def _index(self, *, lat, lon, n_pings, freq_key="hz_1495000", sample_interval_m=0.05, n_samples=1000):
+        return {
+            Path("a.ss.h5"): {
+                freq_key: {
+                    "lat": np.asarray(lat, dtype=float),
+                    "lon": np.asarray(lon, dtype=float),
+                    "sample_interval_m": sample_interval_m,
+                    "n_samples": n_samples,
+                    "n_pings": n_pings,
+                }
+            }
+        }
+
+    def test_gps_match_within_range_unchanged(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=float(lat[10]), longitude=float(lon[10]))
+
+        result = export._correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert ping_idx == 10
+        assert dist_m < 1.0
+
+    def test_no_gps_falls_back_to_known_ping(self):
+        """The exact reported bug: no recorded GPS position at all, but a
+        real, already-known ping -- must now match instead of being
+        silently dropped."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
+
+        result = export._correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert ping_idx == 7
+        assert dist_m == 0.0
+
+    def test_gps_too_far_falls_back_to_known_ping(self):
+        """Recorded GPS position exists but doesn't land within
+        max_dist_m of the survey's own track (e.g. a less precise/
+        independent positioning system) -- ping fallback still rescues
+        it rather than dropping it."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=41.0, longitude=-71.0, ping=7)
+
+        result = export._correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        assert result[2] == 7
+        assert result[3] == 0.0
+
+    def test_ping_out_of_range_returns_none(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=500)
+
+        assert export._correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_no_position_at_all_returns_none(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=None)
+
+        assert export._correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_ambiguous_ping_across_multiple_files_returns_none_not_a_guess(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        index[Path("b.ss.h5")] = {
+            "hz_1495000": {"lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000, "n_pings": 20},
+        }
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
+
+        assert export._correlate_target(t, index, max_dist_m=25.0) is None
+
+
 class TestRunChip:
     def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
         defaults = dict(
@@ -778,6 +876,128 @@ class TestRunChip:
 
         args = self._args(tmp_path, ss_h5_dir, targets_json, render_level="geometric", styles=["chip"])
         assert export.run_chip(args) == 1
+
+    def test_pixel_style_uses_real_bbox_size(self, tmp_path, georef_ss_h5_dir):
+        """Real field report: chip/COCO output had every target's box
+        at the same size, regardless of each target's own real, measured
+        extent (e.g. vendor-format's targets.csv 4-corner columns). "chip"
+        style's native window IS size_px already (extract_chip produces
+        that size directly, no separate resize step) -- size_px=8 here,
+        well inside georef_ss_h5_dir's 20 real pings, so no resize is
+        triggered on either axis and the expected bbox comes through
+        unscaled, an exact check."""
+        t = replace(self._matched_target(), bbox=(490.0, 95.0, 4.0, 3.0))
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([t], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], size_px=8)
+        assert export.run_chip(args) == 0
+
+        coco = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())
+        ann = coco["annotations"][0]
+        assert ann["bbox"][2] == pytest.approx(4.0)
+        assert ann["bbox"][3] == pytest.approx(3.0)
+
+    def test_pixel_style_no_bbox_falls_back_to_shared_box_size(self, tmp_path, georef_ss_h5_dir):
+        """A center-only pick (bbox=None, e.g. JSF/EdgeTech Discover's own
+        catalog) must still fall back to the shared --box-size placeholder
+        exactly as before this fix existed -- not a regression for the
+        format this project was originally built around."""
+        t = self._matched_target()
+        assert t.bbox is None
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([t], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], box_size=40.0)
+        assert export.run_chip(args) == 0
+
+        coco = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())
+        ann = coco["annotations"][0]
+        assert ann["bbox"][2] == pytest.approx(40.0)
+        assert ann["bbox"][3] == pytest.approx(40.0)
+
+    def test_pixel_style_different_targets_get_different_bbox_sizes(self, tmp_path, swath_ss_h5_dir):
+        """The actual "all bounding boxes are the same size" symptom,
+        reproduced directly: two targets with genuinely different
+        measured extents must come out with genuinely different COCO box
+        sizes, not the one shared placeholder for both. size_px=10 here,
+        well inside swath_ss_h5_dir's 30 real samples (and 300 real
+        pings), so no resize is triggered on either axis."""
+        n_pings = 300
+        lat = np.linspace(40.0000, 40.0010, n_pings)
+        lon = np.linspace(-70.0000, -70.0010, n_pings)
+        small = Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=float(lat[100]), longitude=float(lon[100]), channel=1, sample=15,
+            position_confidence="verified", bbox=(9.0, 145.0, 3.0, 2.0),
+        )
+        big = Target(
+            target_id="8", source_format="x", catalog_source="x",
+            latitude=float(lat[200]), longitude=float(lon[200]), channel=1, sample=15,
+            position_confidence="verified", bbox=(9.0, 245.0, 9.0, 7.0),
+        )
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([small, big], targets_json)
+
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], size_px=10)
+        assert export.run_chip(args) == 0
+
+        coco = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())
+        sizes = {
+            next(img["file_name"] for img in coco["images"] if img["id"] == ann["image_id"]): tuple(ann["bbox"][2:])
+            for ann in coco["annotations"]
+        }
+        assert sizes["target_7.png"] != sizes["target_8.png"]
+        assert sizes["target_7.png"] == pytest.approx((3.0, 2.0))
+        assert sizes["target_8.png"] == pytest.approx((9.0, 7.0))
+
+    def test_geometric_style_different_targets_get_different_bbox_sizes(self, tmp_path, swath_ss_h5_dir):
+        """Same real bug, geo-rendered path -- this is the render level
+        downstream-project's own batch script actually uses
+        (--render-level geometric), so this path mattered more than the
+        raw-pixel one for the report that found this. Exact pixel values
+        depend on real meters-per-sample/meters-per-ping/resolution_m
+        conversion, so this checks the sizes differ and are neither the
+        shared placeholder, not exact numbers."""
+        n_pings = 300
+        lat = np.linspace(40.0000, 40.0010, n_pings)
+        lon = np.linspace(-70.0000, -70.0010, n_pings)
+        small = Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=float(lat[100]), longitude=float(lon[100]), channel=1, sample=15,
+            position_confidence="verified", bbox=(9.0, 145.0, 4.0, 4.0),
+        )
+        big = Target(
+            target_id="8", source_format="x", catalog_source="x",
+            latitude=float(lat[200]), longitude=float(lon[200]), channel=1, sample=15,
+            position_confidence="verified", bbox=(9.0, 245.0, 40.0, 40.0),
+        )
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([small, big], targets_json)
+
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric", styles=["chip"], box_size=99.0)
+        assert export.run_chip(args) == 0
+
+        coco = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())
+        sizes = {
+            next(img["file_name"] for img in coco["images"] if img["id"] == ann["image_id"]): tuple(ann["bbox"][2:])
+            for ann in coco["annotations"]
+        }
+        # Not asserting *which* one comes out bigger -- resolution_m
+        # (meters per output pixel) is recomputed independently per
+        # target/window from that window's own local geometry, so it
+        # isn't necessarily comparable across two different ping
+        # positions the way it would be for two crops of the same
+        # window. The real bug this test guards is "every target gets
+        # the same box regardless of its own measured extent" -- these
+        # two assertions are the direct, robust check for that.
+        assert sizes["target_7.png"] != sizes["target_8.png"]
+        # neither equals the shared placeholder (chosen far from either
+        # target's real extent to avoid a coincidental collision) --
+        # confirms both actually used their own measured extent, not a
+        # fallback.
+        assert sizes["target_7.png"] != (99.0, 99.0)
+        assert sizes["target_8.png"] != (99.0, 99.0)
 
     def test_geometric_level_out_of_bounds_sample_skips_gracefully(self, tmp_path, swath_ss_h5_dir):
         """Real crash found running this against real Klein SDF data: a

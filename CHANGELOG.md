@@ -827,6 +827,69 @@ defeating that flag's entire purpose on a large real survey.
   (was 1552).
 - Version bumped 0.4.25 -> 0.4.26.
 
+##### `sidescan-export chip` real bugs found on real production data (2026-09-25)
+
+Two real, confirmed bugs from a real field report against real
+vendor-format output (`downstream-project`'s `batch script`): a lot of "no
+ss_h5 ping within 25.0m of its recorded position" warnings, some
+targets missing entirely, and "all the bounding boxes are the same
+size where I am expecting multiple sizes."
+
+**1. Every target's COCO/YOLO box was the shared `--box-size`
+placeholder, regardless of a real, measured extent.** `CocoImageEntry`
+has carried a per-entry `bbox_size` override since 2026-09-08
+specifically for catalogs with a real measured extent (e.g. vendor-format's
+targets.csv 4-corner columns, unlike JSF's center-only picks) --
+`run_chip` never actually populated it, so every entry fell back to the
+shared placeholder no matter what `Target.bbox` said.
+
+- New `_with_bbox_size_px(t, scale_x, scale_y)` converts `t.bbox`'s
+  `(w, h)` into this specific window's own output pixel units and
+  stashes it on `extra_attributes["bbox_size_px"]` (survives every
+  `replace()` call downstream unchanged, no signature threading
+  needed). Wired in at all 3 places a target's window-local position is
+  finalized: the raw-pixel styles (`chip`/`single-swath`/`dual-swath`
+  at `raw`/`radiometric` levels -- native window pixels are the same
+  sample/ping units `t.bbox` was recorded in, until/unless the final
+  resize step changes them) and both geo styles' `geometric`/`georef`
+  branches (`t.bbox`'s sample/ping counts converted to real meters via
+  `mps`/`ping_spacing_m`, then to this window's own pixel scale via
+  `resolution_m`). `None` (a center-only pick) still falls back to the
+  shared placeholder exactly as before.
+- Tests: `tests/unit/cli/test_export.py::TestRunChip` gained 4 --
+  exact-value check for the pixel-style path (chosen `size_px` avoids
+  any resize, so no scaling ambiguity), a center-only-pick-still-uses-
+  placeholder regression, and two-different-targets-get-two-different-
+  sizes for both the pixel-style and geo-style (the actual render level
+  `downstream-project`'s own pipeline uses) paths.
+
+**2. `_correlate_target` required a GPS lat/lon match for every target,
+silently dropping any target with no recorded GPS position (or one that
+didn't match closely enough) -- even when its real, already-known
+`ping` position (e.g. from a pixel-based source catalog, already
+correctly projected onto the survey's global ping index before this
+ever runs) was sitting right there on the object.** "No ss_h5 ping
+within Nm" was the wrong diagnosis on a real production run for a
+target that had no recorded *GPS* position to compare against at all.
+
+- `_correlate_target` now falls back to `target.ping` when GPS matching
+  is unavailable or fails -- but only when it's genuinely unambiguous:
+  exactly one `(path, freq_key)` in the index has that ping within its
+  own recorded range. Zero or multiple candidates both still return
+  `None` rather than guess. Can only *add* matches a GPS-only search was
+  dropping; never changes what an already-successful GPS match
+  resolves to.
+- `_build_position_index` now also caches each channel's `n_pings`
+  (needed for the range check above).
+- Tests: new `tests/unit/cli/test_export.py::TestCorrelateTarget` (6) --
+  GPS match unchanged when it already works, no-GPS-falls-back-to-ping,
+  GPS-too-far-falls-back-to-ping, ping-out-of-range still `None`,
+  no-position-at-all still `None`, ambiguous-ping-across-multiple-files
+  still `None` (not a guess).
+
+Full suite: 1563 passing / 36 skipped (was 1553). Version bumped
+0.4.26 -> 0.4.27.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.
