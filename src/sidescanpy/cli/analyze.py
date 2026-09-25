@@ -1,21 +1,33 @@
 """
 ``sidescan-analyze``: data-investigation and TVG decay-fit diagnostics.
 
-Three subcommands:
-
 - ``segment`` — cut gaps/hardware-setting-changes/garbage-dropout-runs/
   attitude-instability out of a mission *before* analyzing it, via
   ``sidescanpy.analysis.segmentation``. Every other subcommand here is
   only as trustworthy as the data it's pointed at; run this first on an
-  unfamiliar or long mission, then point ``investigate``/``tvg-fit`` at
-  one of its clean ``sectionN.ss.h5`` outputs rather than the raw file.
+  unfamiliar or long mission, then point every subcommand below at one
+  of its clean ``sectionN.ss.h5`` outputs rather than the raw file.
+
+- ``nadir`` / ``beam-geometry`` / ``usable-range`` / ``units`` — each of
+  ``run_investigation()``'s stages 2 / 2.5 / 3 / 1+5, runnable on its
+  own against one frequency channel, each writing only the plot(s) that
+  are the direct evidence for its own classification (not the full
+  per-stage diagnostic set ``investigate`` below produces) -- meant for
+  the iterative workflow of adjusting one ``--config`` value, re-running
+  just that one tool, and looking at the result before adjusting again,
+  rather than re-running the whole five-stage pass every time. Each
+  subcommand's own flags are its analysis parameters (seeds/thresholds),
+  already ``--config``-seedable via the same YAML loader every other
+  subcommand here uses.
 
 - ``investigate`` — promotes ``project-a/scripts/investigate_dataset.py``
   essentially unchanged: a thin driver over
   ``sidescanpy.investigation.run_investigation()`` (the
-  ``sidescan-data-investigation`` skill's pipeline), characterizing an
-  unknown/unfamiliar sidescan source's units, TVG status, nadir
-  handling, and usable range.
+  ``sidescan-data-investigation`` skill's pipeline), running every stage
+  in one pass and writing the full diagnostic set per stage -- the
+  occasional full-report use case; not the default day-to-day way to
+  iterate on one specific value (see the four subcommands above for
+  that).
 - ``tvg-fit`` — the TVG decay-curve fit recipe adopted after an extended
   real-data investigation (see ``sidescanpy``'s own ``CLAUDE.md``,
   "v0.14.0 follow-up 1" through "11" for the full history): bin raw
@@ -62,7 +74,14 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from sidescanpy.analysis.investigation import stage3_usable_range, stage4_decay
+from sidescanpy.analysis.investigation import (
+    stage1_characterize,
+    stage2_5_beam_geometry,
+    stage2_nadir,
+    stage3_usable_range,
+    stage4_decay,
+    stage5_units,
+)
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
@@ -71,7 +90,16 @@ from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.pipeline import reconstruct_raw
-from sidescanpy.viz.investigation import apply_stage4_fit_window_limits, plot_segments_overview, plot_stage4_residuals
+from sidescanpy.viz.investigation import (
+    apply_stage4_fit_window_limits,
+    plot_segments_overview,
+    plot_stage1_histograms,
+    plot_stage2_5_beam_geometry,
+    plot_stage2_nadir_zoom,
+    plot_stage2_waterfall,
+    plot_stage3_usable_range,
+    plot_stage4_residuals,
+)
 from sidescanpy.viz.tvg_diagnostics import plot_candidate_fit
 
 logger = logging.getLogger(__name__)
@@ -296,6 +324,184 @@ def run_segment(args: argparse.Namespace) -> int:
     return 0
 
 
+# ============================================================
+# nadir
+# ============================================================
+
+def run_nadir(args: argparse.Namespace) -> int:
+    """Stage 2 on its own: classify + locate nadir, write only the
+    zoomed boundary-detection plot by default (the direct evidence for
+    the classification) -- ``--verbose-diagnostics`` also writes the
+    full-survey waterfall boundary overlay.
+    """
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    survey = read_survey(args.input, chunks={"ping": 500})
+    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
+    ds = survey.get_frequency(freq_key).dataset
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
+    ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
+
+    stage2 = stage2_nadir(
+        ds_geo, value_var=args.value_var,
+        nadir_n_samples=args.nadir_n_samples,
+        strong_return_min_sample_buffer=args.strong_return_min_sample_buffer,
+        strong_return_peak_percentile=args.strong_return_peak_percentile,
+        min_first_bottom_return_sample=args.min_first_bottom_return_sample,
+        boundary_smoothing_window=args.boundary_smoothing_window,
+    )
+
+    logger.info(f"{args.input.name} / {freq_key}: nadir = {stage2.classification}")
+    for key in ("altitude_sample_median", "first_bottom_return_sample_median", "altitude_to_bottom_gap_sample_median"):
+        if key in stage2.metrics:
+            logger.info(f"  {key}: {stage2.metrics[key]:.2f}")
+    for note in stage2.notes:
+        logger.info(f"  note: {note}")
+
+    with open(args.output_dir / "metrics.json", "w") as f:
+        json.dump(stage2.to_json_dict(), f, indent=2, default=str)
+
+    fig, _ = plot_stage2_nadir_zoom(ds_geo, args.value_var, stage2=stage2, nadir_n_samples=args.nadir_n_samples)
+    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_zoom.png"
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    logger.info(f"wrote {out_path}")
+
+    if args.verbose_diagnostics:
+        fig, _ = plot_stage2_waterfall(ds_geo, args.value_var, stage2=stage2)
+        wf_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_waterfall.png"
+        fig.savefig(wf_path, dpi=140)
+        plt.close(fig)
+        logger.info(f"wrote {wf_path}")
+
+    return 0
+
+
+# ============================================================
+# beam-geometry
+# ============================================================
+
+def run_beam_geometry(args: argparse.Namespace) -> int:
+    """Stage 2.5 on its own: triangulate the beam's near/far edges from
+    Stage 2's nadir boundary and Stage 3's usable range (both run here
+    as prerequisites, not separately configurable beyond the flags
+    below -- run the ``nadir``/``usable-range`` subcommands directly
+    first if either needs closer tuning on its own). Writes only the
+    beam-geometry diagram, the direct evidence for the classification.
+    """
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    survey = read_survey(args.input, chunks={"ping": 500})
+    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
+    ds = survey.get_frequency(freq_key).dataset
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
+    ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
+
+    stage2 = stage2_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    stage3 = stage3_usable_range(
+        ds_geo, value_var=args.value_var, bin_width_m=args.stage3_bin_width_m, snr_threshold=args.snr_threshold,
+    )
+    stage2_5 = stage2_5_beam_geometry(
+        ds_geo, stage2, stage3, value_var=args.value_var,
+        near_angle_max_std_deg=args.near_angle_max_std_deg, min_valid_fraction=args.min_valid_fraction,
+    )
+
+    logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {stage2_5.classification}")
+    for key in ("near_angle_deg_median", "far_angle_deg", "beam_center_angle_deg", "beam_width_deg"):
+        if stage2_5.metrics.get(key) is not None:
+            logger.info(f"  {key}: {stage2_5.metrics[key]:.2f}")
+    for note in stage2_5.notes:
+        logger.info(f"  note: {note}")
+
+    with open(args.output_dir / "metrics.json", "w") as f:
+        json.dump(stage2_5.to_json_dict(), f, indent=2, default=str)
+
+    fig, _ = plot_stage2_5_beam_geometry(ds_geo, stage2_5, value_var=args.value_var)
+    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_beam_geometry.png"
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    logger.info(f"wrote {out_path}")
+
+    return 0
+
+
+# ============================================================
+# usable-range
+# ============================================================
+
+def run_usable_range(args: argparse.Namespace) -> int:
+    """Stage 3 on its own: bin backscatter by range, find the usable-
+    range boundary, write only the median/std-vs-range plot -- the
+    direct evidence for the number.
+    """
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    survey = read_survey(args.input, chunks={"ping": 500})
+    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
+    ds = survey.get_frequency(freq_key).dataset
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
+    ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
+
+    stage3 = stage3_usable_range(
+        ds_geo, value_var=args.value_var, range_var=args.range_var, bin_width_m=args.bin_width_m,
+        snr_threshold=args.snr_threshold, reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
+    )
+
+    usable_range_m = stage3.metrics.get("usable_range_m")
+    logger.info(f"{args.input.name} / {freq_key}: usable_range_m = {usable_range_m}")
+    for note in stage3.notes:
+        logger.info(f"  note: {note}")
+
+    with open(args.output_dir / "metrics.json", "w") as f:
+        json.dump(stage3.to_json_dict(), f, indent=2, default=str)
+
+    fig, _ = plot_stage3_usable_range(stage3)
+    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_usable_range.png"
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    logger.info(f"wrote {out_path}")
+
+    return 0
+
+
+# ============================================================
+# units
+# ============================================================
+
+def run_units(args: argparse.Namespace) -> int:
+    """Stage 1 + Stage 5 on their own: classify units from the raw
+    value-range signature, write only the distribution histogram -- the
+    direct evidence for the classification. Doesn't cross-check against
+    a Stage 4 TVG-fit result (``run_investigation()``'s fuller version
+    can) -- run ``tvg-fit`` separately if that cross-check matters for
+    a specific source.
+    """
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    survey = read_survey(args.input, chunks={"ping": 500})
+    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
+    ds = survey.get_frequency(freq_key).dataset
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
+
+    stage1 = stage1_characterize(ds, value_var=args.value_var)
+    stage5 = stage5_units(stage1)
+
+    logger.info(f"{args.input.name} / {freq_key}: units = {stage5.classification}")
+    for note in stage5.notes:
+        logger.info(f"  note: {note}")
+
+    with open(args.output_dir / "metrics.json", "w") as f:
+        json.dump(stage5.to_json_dict(), f, indent=2, default=str)
+
+    fig, _ = plot_stage1_histograms(ds, args.value_var)
+    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_units.png"
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    logger.info(f"wrote {out_path}")
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -361,7 +567,53 @@ def main() -> int:
     p_seg.add_argument("--output-dir", required=True, type=Path)
     p_seg.set_defaults(func=run_segment)
 
-    for p in (p_inv, p_tvg, p_seg):
+    def _common_single_channel_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--input", required=True, type=Path, help="Path to a .ss.h5 file")
+        p.add_argument(
+            "--frequency", type=str, required=True,
+            help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "
+                 "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
+        )
+        p.add_argument("--pings", type=_parse_ping_range, default=(0, 8000), help="'start:stop' (stop empty = all)")
+        p.add_argument("--value-var", default="backscatter_raw")
+        p.add_argument("--output-dir", required=True, type=Path)
+
+    p_nadir = subparsers.add_parser("nadir", help="Classify + locate nadir (Stage 2 on its own)")
+    _common_single_channel_args(p_nadir)
+    p_nadir.add_argument("--nadir-n-samples", type=int, default=50)
+    p_nadir.add_argument("--strong-return-min-sample-buffer", type=float, default=0.0)
+    p_nadir.add_argument("--strong-return-peak-percentile", type=float, default=100.0)
+    p_nadir.add_argument("--min-first-bottom-return-sample", type=float, default=None)
+    p_nadir.add_argument("--boundary-smoothing-window", type=int, default=15)
+    p_nadir.add_argument(
+        "--verbose-diagnostics", action="store_true",
+        help="Also write the full-survey waterfall boundary overlay, not just the zoomed plot",
+    )
+    p_nadir.set_defaults(func=run_nadir)
+
+    p_beam = subparsers.add_parser("beam-geometry", help="Triangulate the beam's near/far edges (Stage 2.5 on its own)")
+    _common_single_channel_args(p_beam)
+    p_beam.add_argument("--nadir-n-samples", type=int, default=50)
+    p_beam.add_argument("--stage3-bin-width-m", type=float, default=2.0)
+    p_beam.add_argument("--snr-threshold", type=float, default=3.0)
+    p_beam.add_argument("--near-angle-max-std-deg", type=float, default=15.0)
+    p_beam.add_argument("--min-valid-fraction", type=float, default=0.2)
+    p_beam.set_defaults(func=run_beam_geometry)
+
+    p_ur = subparsers.add_parser("usable-range", help="Find the usable-range boundary (Stage 3 on its own)")
+    _common_single_channel_args(p_ur)
+    p_ur.add_argument("--range-var", default="slant_range_m", choices=("slant_range_m", "ground_range_m"))
+    p_ur.add_argument("--bin-width-m", type=float, default=2.0)
+    p_ur.add_argument("--snr-threshold", type=float, default=3.0)
+    p_ur.add_argument("--reject-outliers", action="store_true")
+    p_ur.add_argument("--outlier-mad-k", type=float, default=3.5)
+    p_ur.set_defaults(func=run_usable_range)
+
+    p_units = subparsers.add_parser("units", help="Classify raw-value units from their range signature (Stage 1+5 on their own)")
+    _common_single_channel_args(p_units)
+    p_units.set_defaults(func=run_units)
+
+    for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units):
         p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
@@ -374,7 +626,7 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        for p in (p_inv, p_tvg, p_seg):
+        for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units):
             apply_config_defaults(p, config)
 
     args = parser.parse_args(argv)

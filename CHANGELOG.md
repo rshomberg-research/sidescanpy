@@ -9,6 +9,41 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+#### `sidescan-analyze nadir` / `beam-geometry` / `usable-range` / `units` — per-tool subcommands, not one monolithic pass (2026-09-25)
+
+Same session, second increment of the analyze/config redesign (after
+`sidescan-analyze segment` below). Direct user request: "each 'stage' of
+analysis is a different analysis tool that I will want to run. The
+script is set up to run them all, but the cli should make it easy to
+run them individually" -- and analysis needs to be an iterative process
+(adjust a config value, re-run one tool, look at the result, adjust
+again), which a five-stage-at-once `investigate` pass doesn't support
+cheaply.
+
+- Four new subcommands, each `run_investigation()`'s corresponding stage
+  on its own against one frequency channel (`--frequency` required,
+  matching `tvg-fit`'s existing single-channel convention rather than
+  `investigate`'s all/one-frequency choice): `nadir` (Stage 2),
+  `beam-geometry` (Stage 2.5 -- runs Stage 2/3 internally as
+  prerequisites, matching `stage2_5_beam_geometry()`'s own real
+  dependency), `usable-range` (Stage 3), `units` (Stage 1 + Stage 5).
+- Each writes only the plot(s) that are the *direct evidence* for its
+  own classification -- not the full per-stage diagnostic set
+  `investigate` produces (e.g. `nadir` writes just the zoomed
+  boundary-detection plot by default; `--verbose-diagnostics` adds the
+  full-survey waterfall overlay). `investigate` itself is unchanged --
+  still the occasional full five-stage report, not touched or
+  refactored, since it already thinly wraps `run_investigation()`.
+- Every new subcommand's flags are its own analysis parameters (nadir
+  search windows, stability thresholds, bin widths, SNR thresholds --
+  the "initial guess" the user described adjusting between reruns) --
+  already `--config`-seedable via the existing YAML loader, no changes
+  needed there, same mechanism every other subcommand already uses.
+- Tests: `tests/unit/cli/test_analyze.py` gained `TestRunNadir` (3),
+  `TestRunBeamGeometry`/`TestRunUsableRange`/`TestRunUnits` (1 each).
+  Full suite: 1625 passing / 36 skipped (was 1619).
+- Version bumped 0.4.30 -> 0.4.31.
+
 #### `sidescan-analyze segment` — cut gaps/garbage/setting-changes out of a mission before analyzing it (2026-09-25)
 
 Same session, direct follow-up to the `--resolution-m` fix and the

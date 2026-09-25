@@ -248,6 +248,119 @@ class TestRunTvgFit:
         assert len(pngs) == 1
 
 
+class TestRunNadir:
+    def _args(self, tmp_path, ss_h5_path, **overrides):
+        defaults = dict(
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            nadir_n_samples=10, strong_return_min_sample_buffer=0.0, strong_return_peak_percentile=100.0,
+            min_first_bottom_return_sample=None, boundary_smoothing_window=15, verbose_diagnostics=False,
+            output_dir=tmp_path / "out",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_writes_zoom_plot_and_metrics(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_nadir(args) == 0
+
+        pngs = list((tmp_path / "out").glob("*_nadir_zoom.png"))
+        assert len(pngs) == 1
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["stage"] == "stage2_nadir"
+        assert metrics["classification"] is not None
+
+    def test_verbose_diagnostics_also_writes_waterfall(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path, verbose_diagnostics=True)
+        assert analyze.run_nadir(args) == 0
+        assert list((tmp_path / "out").glob("*_nadir_waterfall.png"))
+
+    def test_no_verbose_diagnostics_by_default(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_nadir(args) == 0
+        assert not list((tmp_path / "out").glob("*_nadir_waterfall.png"))
+
+
+class TestRunBeamGeometry:
+    def _args(self, tmp_path, ss_h5_path, **overrides):
+        defaults = dict(
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            nadir_n_samples=10, stage3_bin_width_m=2.0, snr_threshold=3.0,
+            near_angle_max_std_deg=15.0, min_valid_fraction=0.2,
+            output_dir=tmp_path / "out",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_writes_diagram_and_metrics(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_beam_geometry(args) == 0
+
+        pngs = list((tmp_path / "out").glob("*_beam_geometry.png"))
+        assert len(pngs) == 1
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["stage"] == "stage2_5_beam_geometry"
+
+
+class TestRunUsableRange:
+    def _args(self, tmp_path, ss_h5_path, **overrides):
+        defaults = dict(
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            range_var="slant_range_m", bin_width_m=1.0, snr_threshold=3.0,
+            reject_outliers=False, outlier_mad_k=3.5,
+            output_dir=tmp_path / "out",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_writes_plot_and_metrics(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_usable_range(args) == 0
+
+        pngs = list((tmp_path / "out").glob("*_usable_range.png"))
+        assert len(pngs) == 1
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["stage"] == "stage3_usable_range"
+        assert "usable_range_m" in metrics["metrics"]
+
+
+class TestRunUnits:
+    def _args(self, tmp_path, ss_h5_path, **overrides):
+        defaults = dict(
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            output_dir=tmp_path / "out",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_writes_histogram_and_metrics(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_units(args) == 0
+
+        pngs = list((tmp_path / "out").glob("*_units.png"))
+        assert len(pngs) == 1
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["stage"] == "stage5_units"
+        assert metrics["classification"] is not None
+
+
 class TestParseHelpers:
     def test_parse_ping_range(self):
         assert analyze._parse_ping_range("0:100") == (0, 100)
