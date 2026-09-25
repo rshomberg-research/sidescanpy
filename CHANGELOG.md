@@ -890,6 +890,38 @@ target that had no recorded *GPS* position to compare against at all.
 Full suite: 1563 passing / 36 skipped (was 1553). Version bumped
 0.4.26 -> 0.4.27.
 
+##### Scale bars on track and gridded map plots (2026-09-25)
+
+Same field session, same-day follow-up request: "track and any maps
+need a scale bar as well." Neither `viz.track.plot_track_and_scanlines()`
+nor `viz.gridded.plot_gridded_raster()` had one -- a real gap for output
+meant to be read as a map, not just a diagnostic view.
+
+- New `sidescanpy.viz.scalebar` module -- `add_scale_bar(ax, *,
+  meters_per_data_unit=1.0, location="lower right", ...)`, a
+  cartographic line-plus-ticks-plus-label scale bar drawn in
+  axes-fraction coordinates (robust to whatever the current data range
+  is), rounded to a "nice" 1-2-5x10^n length
+  (`_nice_scale_length`/`_format_scale_label`, switches to km at
+  1000m). `meters_per_data_unit=1.0` is correct as-is for both this
+  library's map plots, since both already default to real projected
+  (auto-UTM) meters, not raw lat/lon degrees -- no per-plot conversion
+  math needed at the call site.
+- Wired in as `show_scale_bar: bool = True` on
+  `viz.track.plot_track_and_scanlines()`/`export_track_and_scanlines_png()`
+  and `viz.gridded.plot_gridded_raster()`/`export_gridded_png()`,
+  default on for every existing caller. Deliberately skipped (not drawn,
+  not an error) whenever the plot's own CRS is geographic (WGS84
+  degrees) rather than projected -- meters-per-degree isn't a single
+  constant across a plot's extent, so a correct bar would need the
+  plot's own latitude, which neither function has a principled way to
+  supply automatically.
+- Tests: new `tests/unit/viz/test_scalebar.py` (19), plus
+  shown-by-default/disable/skipped-for-geographic-CRS cases added to
+  both `tests/unit/viz/test_track.py` and `tests/unit/viz/test_gridded.py`.
+  Full suite: 1588 passing / 36 skipped (was 1563).
+- Version bumped 0.4.27 -> 0.4.28.
+
 #### Gridding module
 - **`sidescanpy.grids.GridDefinition`** — grid schema with bounding box
   (south, west, north, east), resolution in meters, and CRS support.

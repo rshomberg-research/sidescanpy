@@ -260,6 +260,21 @@ class TestPlotGriddedRaster:
         assert ax_ret is ax
         plt.close(fig)
 
+    def test_scale_bar_shown_by_default_for_projected_crs(self, utm_raster):
+        fig, ax = plot_gridded_raster(utm_raster)
+        assert len(ax.texts) >= 1
+        plt.close(fig)
+
+    def test_scale_bar_can_be_disabled(self, utm_raster):
+        fig, ax = plot_gridded_raster(utm_raster, show_scale_bar=False)
+        assert len(ax.texts) == 0
+        plt.close(fig)
+
+    def test_scale_bar_skipped_for_geographic_crs(self, sample_raster):
+        fig, ax = plot_gridded_raster(sample_raster)
+        assert len(ax.texts) == 0
+        plt.close(fig)
+
     def test_plot_with_nan_data(self):
         """Plot raster with partial NaN."""
         grid = GridDefinition(

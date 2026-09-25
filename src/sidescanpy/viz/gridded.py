@@ -67,6 +67,7 @@ def plot_gridded_raster(
     show_grid: bool = False,
     show_land: bool = False,
     show_locator: bool = False,
+    show_scale_bar: bool = True,
     title: Optional[str] = None,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
@@ -129,6 +130,12 @@ def plot_gridded_raster(
         Add a small inset (bottom-left) showing this raster's location
         zoomed way out, with a marker box — "where is this, relative to
         the coast." Requires the optional ``maps`` extra.
+    show_scale_bar : bool, default True
+        Draw a scale bar (see ``sidescanpy.viz.scalebar``). Only drawn
+        for a projected raster (``raster.is_geographic`` False, the
+        common case — auto-UTM-selected grids) -- a geographic raster
+        is skipped, not drawn wrong, since meters-per-degree isn't a
+        single constant this function can infer.
     title : str, optional
         Plot title. If None, auto-generate from raster metadata,
         including the CRS (see ``_crs_label``).
@@ -233,6 +240,13 @@ def plot_gridded_raster(
         center_lat = (bbox_wgs84[1] + bbox_wgs84[3]) / 2.0
         inset_ax = ax.inset_axes([0.02, 0.02, 0.22, 0.22])
         plot_locator_thumbnail(center_lon, center_lat, mark_bbox_wgs84=bbox_wgs84, ax=inset_ax, fig=fig)
+
+    if show_scale_bar:
+        if raster.is_geographic:
+            logger.debug("add_scale_bar: skipped, raster is geographic (meters-per-degree isn't a single constant)")
+        else:
+            from sidescanpy.viz.scalebar import add_scale_bar
+            add_scale_bar(ax, meters_per_data_unit=1.0)
 
     return fig, ax
 
@@ -476,6 +490,7 @@ def export_gridded_png(
     show_colorbar: bool = True,
     show_land: bool = False,
     show_locator: bool = False,
+    show_scale_bar: bool = True,
 ) -> None:
     """
     Export gridded raster to PNG file.
@@ -505,6 +520,8 @@ def export_gridded_png(
     show_locator : bool, default False
         Add a zoomed-out locator inset — see ``plot_gridded_raster``.
         Requires the optional ``maps`` extra.
+    show_scale_bar : bool, default True
+        Draw a scale bar — see ``plot_gridded_raster``.
     """
     fig, ax = plot_gridded_raster(
         raster,
@@ -517,6 +534,7 @@ def export_gridded_png(
         show_colorbar=show_colorbar,
         show_land=show_land,
         show_locator=show_locator,
+        show_scale_bar=show_scale_bar,
     )
 
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")

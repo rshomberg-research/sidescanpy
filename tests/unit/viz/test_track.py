@@ -107,6 +107,32 @@ class TestPlotTrackAndScanlines:
         finally:
             plt.close(fig)
 
+    def test_scale_bar_shown_by_default_for_projected_crs(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so)
+        try:
+            assert len(ax.texts) >= 1
+        finally:
+            plt.close(fig)
+
+    def test_scale_bar_can_be_disabled(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so, show_scale_bar=False)
+        try:
+            assert len(ax.texts) == 0
+        finally:
+            plt.close(fig)
+
+    def test_scale_bar_skipped_for_geographic_crs(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(
+            lat, lon, pl, po, sl, so, crs=CRS.from_epsg(4326),
+        )
+        try:
+            assert len(ax.texts) == 0
+        finally:
+            plt.close(fig)
+
 
 class TestExportTrackAndScanlinesPng:
     def test_export_creates_file(self, tmp_path):

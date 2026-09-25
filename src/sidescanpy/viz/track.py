@@ -55,6 +55,7 @@ def plot_track_and_scanlines(
     title: Optional[str] = None,
     show_land: bool = False,
     show_locator: bool = False,
+    show_scale_bar: bool = True,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot a survey's nadir track plus periodic port/starboard scan-line
@@ -87,6 +88,11 @@ def plot_track_and_scanlines(
         Add a small inset (bottom-left) showing this survey's location
         zoomed way out, with a marker box. Requires the optional
         ``maps`` extra.
+    show_scale_bar : bool, default True
+        Draw a scale bar (see ``sidescanpy.viz.scalebar``). Only drawn
+        for a projected ``crs`` (the default) -- a caller-supplied
+        geographic CRS is skipped, not drawn wrong, since meters-per-
+        degree isn't a single constant this function can infer.
 
     Returns
     -------
@@ -159,6 +165,13 @@ def plot_track_and_scanlines(
         inset_ax = ax.inset_axes([0.02, 0.02, 0.22, 0.22])
         plot_locator_thumbnail(center_lon, center_lat, mark_bbox_wgs84=bbox_wgs84, ax=inset_ax, fig=fig)
 
+    if show_scale_bar:
+        if is_geo:
+            logger.debug("add_scale_bar: skipped, crs is geographic (meters-per-degree isn't a single constant)")
+        else:
+            from sidescanpy.viz.scalebar import add_scale_bar
+            add_scale_bar(ax, meters_per_data_unit=1.0)
+
     return fig, ax
 
 
@@ -175,6 +188,7 @@ def export_track_and_scanlines_png(
     dpi: int = 150,
     show_land: bool = False,
     show_locator: bool = False,
+    show_scale_bar: bool = True,
 ) -> None:
     """Plot and save a survey track + scan lines PNG. See plot_track_and_scanlines."""
     fig, ax = plot_track_and_scanlines(
@@ -183,6 +197,7 @@ def export_track_and_scanlines_png(
         scan_stbd_lat, scan_stbd_lon,
         crs=crs,
         show_land=show_land,
+        show_scale_bar=show_scale_bar,
         show_locator=show_locator,
     )
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
