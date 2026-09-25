@@ -52,6 +52,24 @@ class TestDetectGaps:
         assert boundary[50]
         assert boundary.sum() == 1
 
+    def test_detects_injected_time_gap_without_a_position_jump(self):
+        """A logging pause/resume can replay a stale-but-plausible
+        position while the clock jumps -- along-track distance alone
+        wouldn't catch it, so the time check is independent."""
+        ds = _uniform_track_dataset(n_pings=100)
+        t = ds["time"].values.copy()
+        t[50:] = t[50:] + np.timedelta64(1, "h")
+        ds["time"] = ("ping", t)
+        boundary = detect_gaps(ds)
+        assert boundary[50]
+
+    def test_time_gap_factor_controls_time_sensitivity(self):
+        ds = _uniform_track_dataset(n_pings=100)
+        t = ds["time"].values.copy()
+        t[50:] = t[50:] + np.timedelta64(1, "h")
+        ds["time"] = ("ping", t)
+        assert not detect_gaps(ds, gap_factor=1e9, time_gap_factor=1e9).any()
+
     def test_short_survey_returns_all_false(self):
         ds = _uniform_track_dataset(n_pings=2)
         assert not detect_gaps(ds).any()
@@ -189,6 +207,31 @@ class TestFindSegments:
     def test_empty_survey_returns_no_segments(self):
         ds = _uniform_track_dataset(n_pings=0)
         assert find_segments(ds) == []
+
+    def test_short_excluded_span_does_not_taint_the_surrounding_clean_pings(self):
+        """Real bug, found via real-data testing (see sidescanpy's own
+        CHANGELOG): an earlier version merged raw intervals by order
+        regardless of status, then computed status from the *merged*
+        range's own overlap with the excluded spans -- a short excluded
+        span (here, 100 pings, under min_segment_pings=200) merging into
+        a much larger clean interval flipped the ENTIRE merged range to
+        "excluded", not just its own 100 pings. Reproduces the exact
+        real shape: a short garbage run sitting inside a long clean
+        stretch."""
+        ds = _uniform_track_dataset(n_pings=2000)
+        arr = ds["backscatter_raw"].values.copy()
+        arr[1000:1100] = 0.0  # 100-ping garbage run, shorter than min_segment_pings
+        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+
+        segments = find_segments(ds, garbage_min_run_pings=20, min_segment_pings=200)
+
+        excluded = [s for s in segments if s.status == "excluded"]
+        assert excluded and all(s.start >= 1000 and s.stop <= 1100 for s in excluded)
+        # The bulk of the survey, on both sides of the short excluded
+        # run, must still be reported clean -- not swallowed into it.
+        clean = [s for s in segments if s.status == "clean"]
+        assert any(s.start <= 0 and s.stop >= 900 for s in clean)
+        assert any(s.start >= 1100 and s.stop >= 1900 for s in clean)
 
 
 class TestWriteSegments:

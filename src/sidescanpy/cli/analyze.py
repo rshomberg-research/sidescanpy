@@ -321,6 +321,7 @@ def run_segment(args: argparse.Namespace) -> int:
     segments = find_segments(
         ds,
         gap_factor=args.gap_factor,
+        time_gap_factor=args.time_gap_factor,
         sound_vel_rel_tol=args.sound_vel_rel_tol,
         garbage_value_var=args.garbage_value_var,
         garbage_min_run_pings=args.garbage_min_run_pings,
@@ -667,6 +668,7 @@ def main() -> int:
              "the whole file. Default matches investigate's own default, not 'the whole file'.",
     )
     p_seg.add_argument("--gap-factor", type=float, default=8.0, help="Along-track distance jump, as a multiple of the survey's own typical ping spacing, that counts as a gap")
+    p_seg.add_argument("--time-gap-factor", type=float, default=8.0, help="Raw ping-timestamp jump, as a multiple of the survey's own typical ping interval, that counts as a gap (independent of the distance check -- either can fire)")
     p_seg.add_argument("--sound-vel-rel-tol", type=float, default=0.05, help="Relative step in sound_vel_ms between consecutive pings that counts as a setting change")
     p_seg.add_argument("--garbage-value-var", type=str, default="backscatter_raw")
     p_seg.add_argument("--garbage-min-run-pings", type=int, default=20)

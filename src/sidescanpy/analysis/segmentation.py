@@ -83,27 +83,48 @@ class Segment:
         }
 
 
-def detect_gaps(ds: xr.Dataset, *, gap_factor: float = 8.0) -> np.ndarray:
+def detect_gaps(ds: xr.Dataset, *, gap_factor: float = 8.0, time_gap_factor: float = 8.0) -> np.ndarray:
     """Per-ping boolean array; ``True`` at index ``i`` means a boundary
-    between ping ``i-1`` and ``i`` -- a jump in cumulative along-track
-    distance (``viz.waterfall.along_track_distance_m``, the same
-    primitive ``cli/export.py`` already uses for real ping-spacing math)
-    ``gap_factor`` times the survey's own typical (median nonzero)
-    spacing. Index 0 is never flagged -- nothing before it to jump from.
+    between ping ``i-1`` and ``i``. Two independent checks, either can
+    fire -- a real discontinuity (a paused/resumed recording, a GPS
+    glitch) isn't guaranteed to show up in both signals at once:
+
+    - a jump in cumulative along-track distance (``viz.waterfall.
+      along_track_distance_m``, the same primitive ``cli/export.py``
+      already uses for real ping-spacing math) ``gap_factor`` times the
+      survey's own typical (median nonzero) spacing -- catches a
+      position discontinuity (e.g. a GPS glitch) even if ping timing
+      stayed regular.
+    - a jump in the raw per-ping ``time`` coordinate itself
+      ``time_gap_factor`` times the survey's own typical (median
+      nonzero) ping interval -- catches a logging pause/resume even if
+      the position happened to replay a stale-but-plausible value
+      through it (so along-track distance alone wouldn't show it).
+
+    Index 0 is never flagged -- nothing before it to jump from.
     """
     n_pings = ds.sizes["ping"]
     boundary = np.zeros(n_pings, dtype=bool)
     if n_pings < 3:
         return boundary
+
     dist = along_track_distance_m(ds)
     diffs = np.abs(np.diff(dist))
     nonzero = diffs[diffs > 0]
-    if nonzero.size == 0:
-        return boundary
-    typical = float(np.median(nonzero))
-    if typical <= 0:
-        return boundary
-    boundary[1:] = diffs > (gap_factor * typical)
+    if nonzero.size:
+        typical = float(np.median(nonzero))
+        if typical > 0:
+            boundary[1:] |= diffs > (gap_factor * typical)
+
+    if "time" in ds:
+        t = ds["time"].values
+        dt = np.abs(np.diff(t).astype("timedelta64[ms]").astype(np.float64))
+        nonzero_dt = dt[dt > 0]
+        if nonzero_dt.size:
+            typical_dt = float(np.median(nonzero_dt))
+            if typical_dt > 0:
+                boundary[1:] |= dt > (time_gap_factor * typical_dt)
+
     return boundary
 
 
@@ -269,6 +290,7 @@ def find_segments(
     ds: xr.Dataset,
     *,
     gap_factor: float = 8.0,
+    time_gap_factor: float = 8.0,
     sound_vel_rel_tol: float = 0.05,
     garbage_value_var: str = "backscatter_raw",
     garbage_min_run_pings: int = 20,
@@ -284,22 +306,31 @@ def find_segments(
     that fired inside or at its boundary -- the evidence for the
     decision, not just the decision itself.
 
-    Adjacent raw intervals narrower than ``min_segment_pings`` are
-    merged into a neighbor (preferring the previous interval, matching
-    the family's existing "return something smaller rather than nothing"
-    convention for a region too short for the configured span -- see
+    Status is resolved per raw interval *before* any merging, then only
+    a too-short **clean** interval gets merged into an adjacent clean
+    neighbor (preferring the previous one, matching the family's
+    existing "return something smaller rather than nothing" convention
+    for a region too short for the configured span -- see
     ``apply_config_pipeline.py:resolve_sections``'s own short-region
-    fallback). **Known coarse edge case**: merging a too-short clean
-    sliver next to an excluded span extends that span's own boundary
-    without re-checking the merged sliver's own content -- acceptable
-    for a first version (a human reviews ``segments.json`` before
-    trusting it), not silently assumed perfect.
+    fallback). ``min_segment_pings`` only exists to avoid a clean
+    section too short to be practically usable -- a short **excluded**
+    interval has no such requirement (nothing downstream reads it) and
+    is never merged into a clean neighbor, which would silently taint
+    real clean pings as excluded. **Real bug this fixes, found from
+    real-data testing**: an earlier version merged by raw interval
+    order regardless of status, then computed status from the *merged*
+    range's own overlap with the excluded spans -- a 100-ping excluded
+    span merging into a 1000-ping clean interval flipped the *entire*
+    1100-ping result to ``"excluded"``, not just its own 100 pings.
+    A too-short clean interval with no clean neighbor to merge into
+    (e.g. it's the whole survey) is kept as its own short segment
+    rather than forced into something else.
     """
     n_pings = ds.sizes["ping"]
     if n_pings == 0:
         return []
 
-    gap_boundary = detect_gaps(ds, gap_factor=gap_factor)
+    gap_boundary = detect_gaps(ds, gap_factor=gap_factor, time_gap_factor=time_gap_factor)
     setting_boundary = detect_setting_changes(ds, sound_vel_rel_tol=sound_vel_rel_tol)
     garbage_spans = detect_garbage_runs(
         ds, garbage_value_var, min_run_pings=garbage_min_run_pings, degenerate_frac=garbage_degenerate_frac,
@@ -333,28 +364,31 @@ def find_segments(
         for i in range(len(sorted_points) - 1) if sorted_points[i] < sorted_points[i + 1]
     ]
 
-    merged: list[list[int]] = []
-    for s, e in raw_intervals:
-        if merged and (e - s) < min_segment_pings:
-            merged[-1][1] = e
-        else:
-            merged.append([s, e])
-
-    segments: list[Segment] = []
-    for i, (s, e) in enumerate(merged, 1):
+    def _status_and_reasons(s: int, e: int) -> tuple[str, list[str]]:
         reasons: list[str] = []
-        for p, rs in point_reasons.items():
-            if s < p < e:
-                reasons.extend(rs)
         status = "clean"
         for (gs, ge), rs in span_reasons.items():
             if max(0, min(e, ge) - max(s, gs)) > 0:
                 status = "excluded"
                 reasons.extend(rs)
-        segments.append(Segment(
-            label=f"section{i}", start=s, stop=e, status=status,
-            reasons=sorted(set(reasons)) if reasons else ["clean"],
-        ))
+        for p, rs in point_reasons.items():
+            if s < p < e:
+                reasons.extend(rs)
+        return status, reasons
+
+    merged: list[list] = []  # [start, stop, status, reasons]
+    for s, e in raw_intervals:
+        status, reasons = _status_and_reasons(s, e)
+        if status == "clean" and (e - s) < min_segment_pings and merged and merged[-1][2] == "clean":
+            merged[-1][1] = e
+            merged[-1][3] = sorted(set(merged[-1][3] + reasons))
+        else:
+            merged.append([s, e, status, reasons])
+
+    segments = [
+        Segment(label=f"section{i}", start=s, stop=e, status=status, reasons=sorted(set(reasons)) if reasons else ["clean"])
+        for i, (s, e, status, reasons) in enumerate(merged, 1)
+    ]
     return segments
 
 

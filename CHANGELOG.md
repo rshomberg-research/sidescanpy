@@ -9,6 +9,46 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### `find_segments` merge bug + `detect_gaps` now also checks raw ping timing (2026-09-25)
+
+Found retuning `STABILITY_THRESHOLD` against the real `project-a` survey
+from the pipeline-demo artifact: raising the threshold to correctly stop
+flagging ordinary attitude wobble as "unstable" (see the `segment`
+overview finding two entries below) exposed a real, more serious bug
+than that entry's own "known coarse edge case" note had characterized.
+
+- **`find_segments`**: merging raw intervals shorter than
+  `min_segment_pings` computed each merged range's status from its own
+  post-merge overlap with the excluded spans — so a short **excluded**
+  span (100 pings, under the 200-ping default) merging into a much
+  larger clean interval flipped the *entire* merged range to
+  `"excluded"`, not just its own 100 pings. Confirmed on real data: a
+  1100-ping range that was ~900 pings genuinely clean and 100 pings
+  genuinely unstable came back entirely `"excluded"`. Fixed: status is
+  now resolved per raw interval *before* any merging, and only a
+  too-short **clean** interval is ever merged into a clean neighbor —
+  `min_segment_pings` exists to avoid an unusably-short *clean* output
+  section; a short excluded interval has no such requirement (nothing
+  downstream reads it) and must never be merged into a clean one.
+- **`detect_gaps`** (direct user request, prompted by the real
+  segmentation result above turning out to be an attitude, not a
+  position/time, event: "I am really looking for discontinuities...
+  I suspect they correspond to jumps in time or locations as well") —
+  gained a second, independent check: a jump in the raw per-ping `time`
+  coordinate itself (`time_gap_factor`, same convention as the existing
+  distance-based `gap_factor`), not just along-track distance. A real
+  discontinuity (a paused/resumed recording) isn't guaranteed to show
+  up in both signals — a logging pause could replay a stale-but-
+  plausible position through it, which along-track distance alone
+  wouldn't catch. New `sidescan-analyze segment --time-gap-factor`.
+- Tests: `TestDetectGaps` gained 2 (an injected time-only jump with no
+  position jump, both factors independently controllable);
+  `TestFindSegments` gained a direct reproduction of the real bug (a
+  short garbage run inside a long clean stretch — confirms the clean
+  pings on both sides stay clean, not swallowed into the short excluded
+  span). Full suite: 1648 passing / 36 skipped (was 1645).
+- Version bumped 0.4.33 -> 0.4.34.
+
 #### `sidescan-analyze segment --pings` — was the only new subcommand with no memory bound (2026-09-25)
 
 Found preparing to demo the new pipeline against a real multi-GB

@@ -81,7 +81,7 @@ class TestRunSegment:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
             input=input_path, frequency=None, pings=(0, None),
-            gap_factor=8.0, sound_vel_rel_tol=0.05,
+            gap_factor=8.0, time_gap_factor=8.0, sound_vel_rel_tol=0.05,
             garbage_value_var="backscatter_raw", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
             stability_window_pings=50, stability_threshold=1.0, stability_min_run_pings=25,
             min_segment_pings=50,
