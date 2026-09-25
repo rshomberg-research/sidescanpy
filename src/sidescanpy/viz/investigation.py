@@ -717,3 +717,41 @@ def plot_stage5_distribution(
     fig, axes = plot_stage1_histograms(ds, value_var, bins=bins)
     fig.suptitle(f"Distribution shape ({value_var})")
     return fig, axes
+
+
+# ============================================================
+# SEGMENTATION
+# ============================================================
+
+
+def plot_segments_overview(ds: xr.Dataset, segments) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Altitude + pitch vs. ping index, with each segment's boundary
+    marked and excluded spans shaded -- the "bare minimum visual aid"
+    for reviewing `analysis.segmentation.find_segments()`'s output
+    before trusting it (not a full diagnostic report; this deliberately
+    stays two panels).
+    """
+    n_pings = ds.sizes["ping"]
+    ping_idx = np.arange(n_pings)
+    fig, (ax_alt, ax_pitch) = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
+
+    if "altitude_m" in ds:
+        ax_alt.plot(ping_idx, ds["altitude_m"].values, color="C0", linewidth=0.8)
+    ax_alt.set_ylabel("Altitude (m)")
+    ax_alt.set_title("Segmentation overview")
+
+    if "pitch_deg" in ds:
+        ax_pitch.plot(ping_idx, ds["pitch_deg"].values, color="C1", linewidth=0.8)
+    ax_pitch.set_ylabel("Pitch (deg)")
+    ax_pitch.set_xlabel("Ping index")
+
+    for ax in (ax_alt, ax_pitch):
+        for seg in segments:
+            if seg.status == "excluded":
+                ax.axvspan(seg.start, seg.stop, color="red", alpha=0.15)
+            ax.axvline(seg.start, color="k", linewidth=0.6, alpha=0.5)
+        if segments:
+            ax.axvline(segments[-1].stop, color="k", linewidth=0.6, alpha=0.5)
+
+    fig.tight_layout()
+    return fig, (ax_alt, ax_pitch)

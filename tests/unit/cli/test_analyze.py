@@ -77,6 +77,80 @@ class TestRunInvestigate:
         assert analyze.run_investigate(args) == 1
 
 
+class TestRunSegment:
+    def _args(self, tmp_path, input_path, **overrides):
+        defaults = dict(
+            input=input_path, frequency=None,
+            gap_factor=8.0, sound_vel_rel_tol=0.05,
+            garbage_value_var="backscatter_raw", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
+            stability_window_pings=50, stability_threshold=1.0, stability_min_run_pings=25,
+            min_segment_pings=50,
+            output_dir=tmp_path / "out",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _clean_survey(self, n_pings=200, n_samples=50):
+        survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples, freq_hz_start=1_495_000)
+        ds["latitude"] = ("ping", np.linspace(41.0000, 41.0100, n_pings))
+        ds["longitude"] = ("ping", np.linspace(-71.0000, -71.0000, n_pings))
+        survey.add_frequency("hz_1495000", ds)
+        return survey
+
+    def test_missing_input_returns_1(self, tmp_path):
+        args = self._args(tmp_path, tmp_path / "nope.ss.h5")
+        assert analyze.run_segment(args) == 1
+
+    def test_clean_survey_writes_one_section_and_report(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(self._clean_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_segment(args) == 0
+
+        out_dir = tmp_path / "out"
+        assert (out_dir / "section1.ss.h5").exists()
+        assert (out_dir / "segments.json").exists()
+        assert (out_dir / "overview.png").exists()
+        report = json.loads((out_dir / "segments.json").read_text())
+        assert len(report["segments"]) == 1
+        assert report["segments"][0]["status"] == "clean"
+
+    def test_garbage_run_produces_excluded_segment_not_written(self, tmp_path):
+        survey = self._clean_survey(n_pings=200)
+        ds = survey.get_frequency("hz_1495000").dataset
+        arr = ds["backscatter_raw"].values.copy()
+        arr[80:130] = 0.0
+        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+
+        args = self._args(tmp_path, path, garbage_min_run_pings=20)
+        assert analyze.run_segment(args) == 0
+
+        out_dir = tmp_path / "out"
+        report = json.loads((out_dir / "segments.json").read_text())
+        statuses = {s["status"] for s in report["segments"]}
+        assert "excluded" in statuses
+        n_written = len(list(out_dir.glob("section*.ss.h5")))
+        n_clean = sum(1 for s in report["segments"] if s["status"] == "clean")
+        assert n_written == n_clean
+
+    def test_explicit_frequency_used(self, tmp_path):
+        survey = self._clean_survey()
+        ds2 = make_minimal_sidescan_dataset(n_pings=200, n_samples=50, freq_hz_start=547_500)
+        ds2["latitude"] = ("ping", np.linspace(41.0000, 41.0100, 200))
+        ds2["longitude"] = ("ping", np.linspace(-71.0000, -71.0000, 200))
+        survey.add_frequency("hz_547500", ds2)
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+
+        args = self._args(tmp_path, path, frequency="hz_547500")
+        assert analyze.run_segment(args) == 0
+        assert (tmp_path / "out" / "section1.ss.h5").exists()
+
+
 class TestRunTvgFit:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(

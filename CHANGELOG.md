@@ -9,6 +9,63 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+#### `sidescan-analyze segment` — cut gaps/garbage/setting-changes out of a mission before analyzing it (2026-09-25)
+
+Same session, direct follow-up to the `--resolution-m` fix and the
+resulting audit of what `sidescan-analyze` actually feeds into a real
+config decision (see the entry below). The user's own framing: every
+other analysis tool (nadir detection, beam geometry, usable range, TVG
+fit) is only as trustworthy as the data it's pointed at, and there was
+no way to cut garbage, gaps, or mid-file hardware setting changes out of
+a mission before running any of them. First increment of a larger
+analyze/config redesign (config-driven analysis parameters, per-tool CLI
+subcommands, evidence-based recommended-config emission) — this piece
+was singled out as the biggest, genuinely prerequisite gap, and is
+scoped and delivered on its own rather than bundled with the rest.
+
+- New `sidescanpy.analysis.segmentation` module — four independent
+  detectors, each producing real evidence, not just a boolean:
+  `detect_gaps` (an along-track distance jump between consecutive pings
+  far beyond the survey's own typical spacing), `detect_setting_changes`
+  (`valid_samples`, when present, or a `sound_vel_ms` step — see the
+  function's own docstring for a real, stated limitation: a raw sample-
+  count/range change already padded away by an upstream format-specific
+  converter, e.g. JSF/vendor-format as of this writing, isn't detectable
+  after the fact from the written `.ss.h5` alone), `detect_garbage_runs`
+  (a sustained NaN/zero run across the ping axis, distinct from the
+  nadir gap's own per-ping leading blanking run), and
+  `detect_unstable_spans` (a rolling attitude/altitude stability check,
+  `score_stability` ported from `downstream-project/scripts/apply_config_pipeline.py:
+  _section_stability_score` — flags deployment/turn transients like the
+  real site-c ping 0-500 case already documented above in this file).
+- `find_segments()` combines all four into a list of `Segment`s covering
+  the whole file with no gaps between them, each labeled `"clean"` or
+  `"excluded"` with human-readable `reasons` — the evidence for the
+  decision, not just the decision itself.
+- `write_segments()` slices every frequency channel (via
+  `processing.slicing.slice_by_pings`, no new slicing logic) to each
+  `"clean"` segment's ping range and writes one independent `.ss.h5`
+  per segment; `write_segments_report()` writes the full evidence as
+  JSON.
+- New `sidescan-analyze segment --input ... --output-dir ...` CLI —
+  writes `sectionN.ss.h5` per clean segment, `segments.json`, and one
+  minimal two-panel overview plot (altitude + pitch vs. ping index,
+  boundaries and excluded spans marked — `viz.investigation.
+  plot_segments_overview`, deliberately not a full diagnostic report).
+  Every detector threshold is a CLI flag, already config-file-settable
+  via the existing YAML `--config` loader (no changes needed there).
+- Tests: `tests/unit/analysis/test_segmentation.py` (24) +
+  `tests/unit/cli/test_analyze.py::TestRunSegment` (4), synthetic
+  fixtures with deliberately injected gaps/setting-changes/garbage-runs/
+  instability. Full suite: 1619 passing / 36 skipped (was 1591).
+- **Explicitly deferred, not this pass** (tracked as the same redesign's
+  next increments): pulling `nadir`/`beam-geometry`/`usable-range`/
+  `units` out of the monolithic `investigate` into their own
+  subcommands; evidence-based recommended-config YAML emission; the
+  `apply_config_pipeline.py`/`investigate_vendor-format_dataset.py`/
+  `generate_full_survey_overview.py` keep-or-archive decision.
+- Version bumped 0.4.29 -> 0.4.30.
+
 #### `sidescan-export chip --resolution-m` — config-driven, not auto-calculated (2026-09-25)
 
 Real field report, direct follow-up to the scale-bar work above:

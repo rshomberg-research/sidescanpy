@@ -1,7 +1,14 @@
 """
 ``sidescan-analyze``: data-investigation and TVG decay-fit diagnostics.
 
-Two subcommands:
+Three subcommands:
+
+- ``segment`` — cut gaps/hardware-setting-changes/garbage-dropout-runs/
+  attitude-instability out of a mission *before* analyzing it, via
+  ``sidescanpy.analysis.segmentation``. Every other subcommand here is
+  only as trustworthy as the data it's pointed at; run this first on an
+  unfamiliar or long mission, then point ``investigate``/``tvg-fit`` at
+  one of its clean ``sectionN.ss.h5`` outputs rather than the raw file.
 
 - ``investigate`` — promotes ``project-a/scripts/investigate_dataset.py``
   essentially unchanged: a thin driver over
@@ -30,6 +37,9 @@ Two subcommands:
   cropped out of frame).
 
 Usage:
+    sidescan-analyze segment --input data/active/unknown/ss_h5/20241017181822.ss.h5 \\
+        --output-dir data/active/unknown/exports/segments/
+
     sidescan-analyze investigate --input data/active/unknown/ss_h5/20241017181822.ss.h5 \\
         --all-frequencies --pings 0:8000 \\
         --output-dir data/active/unknown/exports/investigation/
@@ -53,6 +63,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sidescanpy.analysis.investigation import stage3_usable_range, stage4_decay
+from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.investigation import run_investigation
@@ -60,7 +71,7 @@ from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.pipeline import reconstruct_raw
-from sidescanpy.viz.investigation import apply_stage4_fit_window_limits, plot_stage4_residuals
+from sidescanpy.viz.investigation import apply_stage4_fit_window_limits, plot_segments_overview, plot_stage4_residuals
 from sidescanpy.viz.tvg_diagnostics import plot_candidate_fit
 
 logger = logging.getLogger(__name__)
@@ -238,6 +249,53 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
     return 0
 
 
+# ============================================================
+# segment
+# ============================================================
+
+def run_segment(args: argparse.Namespace) -> int:
+    if not args.input.is_file():
+        logger.error(f"Input file not found: {args.input}")
+        return 1
+
+    survey = read_survey(args.input)
+    if args.frequency:
+        freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
+    else:
+        freq_key = sorted(survey.frequencies)[0]
+    ds = survey.get_frequency(freq_key).dataset
+
+    segments = find_segments(
+        ds,
+        gap_factor=args.gap_factor,
+        sound_vel_rel_tol=args.sound_vel_rel_tol,
+        garbage_value_var=args.garbage_value_var,
+        garbage_min_run_pings=args.garbage_min_run_pings,
+        garbage_degenerate_frac=args.garbage_degenerate_frac,
+        stability_window_pings=args.stability_window_pings,
+        stability_threshold=args.stability_threshold,
+        stability_min_run_pings=args.stability_min_run_pings,
+        min_segment_pings=args.min_segment_pings,
+    )
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    write_segments_report(segments, args.output_dir / "segments.json")
+    written = write_segments(survey, segments, args.output_dir)
+
+    logger.info(f"{args.input.name} / {freq_key}: {ds.sizes['ping']} pings -> {len(segments)} segment(s)")
+    for seg in segments:
+        logger.info(f"  {seg.label}: [{seg.start}:{seg.stop}] {seg.status} ({', '.join(seg.reasons)})")
+    logger.info(f"Wrote {len(written)} clean segment .ss.h5 file(s) + segments.json to {args.output_dir}")
+
+    fig, _ = plot_segments_overview(ds, segments)
+    overview_path = args.output_dir / "overview.png"
+    fig.savefig(overview_path, dpi=120)
+    plt.close(fig)
+    logger.info(f"wrote {overview_path}")
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -282,7 +340,28 @@ def main() -> int:
     p_tvg.add_argument("--output-dir", required=True, type=Path)
     p_tvg.set_defaults(func=run_tvg_fit)
 
-    for p in (p_inv, p_tvg):
+    p_seg = subparsers.add_parser(
+        "segment", help="Cut gaps/setting-changes/garbage/unstable stretches out of a mission before analyzing it",
+    )
+    p_seg.add_argument("--input", required=True, type=Path, help="Path to a .ss.h5 file")
+    p_seg.add_argument(
+        "--frequency", type=str, default=None,
+        help="Which frequency channel to compute segmentation from (default: first, sorted). "
+             "The resulting ping ranges are applied to every frequency channel when writing.",
+    )
+    p_seg.add_argument("--gap-factor", type=float, default=8.0, help="Along-track distance jump, as a multiple of the survey's own typical ping spacing, that counts as a gap")
+    p_seg.add_argument("--sound-vel-rel-tol", type=float, default=0.05, help="Relative step in sound_vel_ms between consecutive pings that counts as a setting change")
+    p_seg.add_argument("--garbage-value-var", type=str, default="backscatter_raw")
+    p_seg.add_argument("--garbage-min-run-pings", type=int, default=20)
+    p_seg.add_argument("--garbage-degenerate-frac", type=float, default=0.999)
+    p_seg.add_argument("--stability-window-pings", type=int, default=100)
+    p_seg.add_argument("--stability-threshold", type=float, default=1.0)
+    p_seg.add_argument("--stability-min-run-pings", type=int, default=50)
+    p_seg.add_argument("--min-segment-pings", type=int, default=200)
+    p_seg.add_argument("--output-dir", required=True, type=Path)
+    p_seg.set_defaults(func=run_segment)
+
+    for p in (p_inv, p_tvg, p_seg):
         p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
@@ -295,7 +374,7 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        for p in (p_inv, p_tvg):
+        for p in (p_inv, p_tvg, p_seg):
             apply_config_defaults(p, config)
 
     args = parser.parse_args(argv)
