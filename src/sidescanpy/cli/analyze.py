@@ -20,6 +20,16 @@
   already ``--config``-seedable via the same YAML loader every other
   subcommand here uses.
 
+- ``recommend-config`` — runs Stage 4 (TVG term selection) and a new
+  ping-geometry measurement (``resolution_m``) against a clean section,
+  plus ``nadir``/``beam-geometry``/``usable-range``/``units`` for
+  evidence, and writes one heavily-commented recommended config YAML
+  (``sidescanpy.analysis.recommend``) -- only the two stages with a
+  real downstream config consumer today emit a settable key; every
+  other finding is reported as a comment, not invented as a key nothing
+  reads. Meant to run against a clean ``sectionN.ss.h5`` from
+  ``segment``, and to be reviewed/edited before use, not trusted as-is.
+
 - ``investigate`` — promotes ``project-a/scripts/investigate_dataset.py``
   essentially unchanged: a thin driver over
   ``sidescanpy.investigation.run_investigation()`` (the
@@ -82,6 +92,7 @@ from sidescanpy.analysis.investigation import (
     stage4_decay,
     stage5_units,
 )
+from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
@@ -502,6 +513,73 @@ def run_units(args: argparse.Namespace) -> int:
     return 0
 
 
+# ============================================================
+# recommend-config
+# ============================================================
+
+def run_recommend_config(args: argparse.Namespace) -> int:
+    """Run every stage that has a real downstream config consumer today
+    (Stage 4 TVG term selection, plus the ping-geometry measurement
+    behind ``resolution_m``) against one clean section, plus the
+    informational-only stages (nadir/beam-geometry/usable-range/units)
+    for evidence -- and write one heavily-commented recommended config
+    YAML (``analysis.recommend.render_recommended_config``). Meant to
+    run against an already-segmented, clean ``sectionN.ss.h5`` (see
+    ``segment``) -- running it against a raw, unsegmented mission mixes
+    whatever heterogeneity that file has into every number below.
+    """
+    if not args.input.is_file():
+        logger.error(f"Input file not found: {args.input}")
+        return 1
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    survey = read_survey(args.input, chunks={"ping": 500})
+    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
+    ds = survey.get_frequency(freq_key).dataset
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
+    ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
+
+    stage1 = stage1_characterize(ds_geo, value_var=args.value_var)
+    stage5 = stage5_units(stage1)
+    stage2 = stage2_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    stage3 = stage3_usable_range(
+        ds_geo, value_var=args.value_var, range_var="slant_range_m",
+        bin_width_m=args.bin_width_m, snr_threshold=args.snr_threshold,
+    )
+    try:
+        stage2_5 = stage2_5_beam_geometry(ds_geo, stage2, stage3, value_var=args.value_var)
+    except (ValueError, KeyError) as exc:
+        logger.warning(f"beam-geometry could not be computed ({exc}) -- omitting from the recommendation")
+        stage2_5 = None
+
+    usable_range_m = stage3.metrics.get("usable_range_m")
+    stage4 = None
+    if usable_range_m is not None:
+        stage4 = stage4_decay(
+            ds_geo, range_var="slant_range_m", bin_width_m=args.bin_width_m,
+            usable_range_m=usable_range_m, r_ref_m="auto", r_fit_min_m="auto",
+        )
+
+    geometry = measure_ping_geometry(ds_geo)
+
+    text = render_recommended_config(
+        source_name=args.input.name, freq_key=freq_key, ping_range=(start, stop), value_var=args.value_var,
+        stage1=stage1, stage2=stage2, stage2_5=stage2_5, stage3=stage3, stage4=stage4, stage5=stage5,
+        geometry=geometry,
+    )
+    args.output.write_text(text)
+
+    logger.info(
+        f"{args.input.name} / {freq_key}: tvg_status="
+        f"{stage4.classification if stage4 else None}  nadir={stage2.classification}  "
+        f"usable_range_m={usable_range_m}  ping_spacing_m={geometry.get('ping_spacing_m_median')}"
+    )
+    logger.info(f"wrote {args.output}")
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -613,7 +691,26 @@ def main() -> int:
     _common_single_channel_args(p_units)
     p_units.set_defaults(func=run_units)
 
-    for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units):
+    p_rec = subparsers.add_parser(
+        "recommend-config",
+        help="Write one evidence-commented recommended config YAML for a clean section (TVG terms + resolution_m; "
+             "nadir/beam-geometry/usable-range/units reported as evidence only, no config flag consumes them yet)",
+    )
+    p_rec.add_argument("--input", required=True, type=Path, help="Path to a clean (already-segmented) .ss.h5 file")
+    p_rec.add_argument(
+        "--frequency", type=str, required=True,
+        help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "
+             "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
+    )
+    p_rec.add_argument("--pings", type=_parse_ping_range, default=(0, None), help="'start:stop' (stop empty = all -- default: the whole section)")
+    p_rec.add_argument("--value-var", default="backscatter_raw")
+    p_rec.add_argument("--nadir-n-samples", type=int, default=50)
+    p_rec.add_argument("--bin-width-m", type=float, default=1.0, help="Shared by usable-range and the adopted TVG-fit recipe, matching tvg-fit's own default")
+    p_rec.add_argument("--snr-threshold", type=float, default=3.0)
+    p_rec.add_argument("--output", required=True, type=Path, help="Where to write the recommended config YAML")
+    p_rec.set_defaults(func=run_recommend_config)
+
+    for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_rec):
         p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
@@ -626,7 +723,7 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units):
+        for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_rec):
             apply_config_defaults(p, config)
 
     args = parser.parse_args(argv)

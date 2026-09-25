@@ -361,6 +361,61 @@ class TestRunUnits:
         assert metrics["classification"] is not None
 
 
+class TestRunRecommendConfig:
+    def _args(self, tmp_path, ss_h5_path, **overrides):
+        defaults = dict(
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            nadir_n_samples=10, bin_width_m=1.0, snr_threshold=3.0,
+            output=tmp_path / "out" / "recommended_config.yaml",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_missing_input_returns_1(self, tmp_path):
+        args = self._args(tmp_path, tmp_path / "nope.ss.h5")
+        assert analyze.run_recommend_config(args) == 1
+
+    def test_writes_yaml_with_resolution_m(self, tmp_path):
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_recommend_config(args) == 0
+
+        text = (tmp_path / "out" / "recommended_config.yaml").read_text()
+        assert "resolution_m:" in text
+        assert "sidescan-correct" in text
+        assert "sidescan-export chip" in text
+
+    def test_output_is_valid_yaml(self, tmp_path):
+        import yaml
+
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_recommend_config(args) == 0
+        parsed = yaml.safe_load((tmp_path / "out" / "recommended_config.yaml").read_text())
+        assert isinstance(parsed, dict)
+
+    def test_flat_data_omits_tvg_recommendation_gracefully(self, tmp_path):
+        """Same known Klein SDF failure mode TestRunTvgFit covers below --
+        Stage 3 can't determine usable_range_m on flat data, so Stage 4
+        never runs. recommend-config must still write a file (with the
+        other sections' evidence), not crash."""
+        flat = _decay_survey()
+        ds = flat.get_frequency("hz_1495000").dataset
+        ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
+        ds["backscatter_intensity"] = ds["backscatter_raw"].copy()
+        path = tmp_path / "a.ss.h5"
+        write_survey(flat, path)
+
+        args = self._args(tmp_path, path)
+        assert analyze.run_recommend_config(args) == 0
+        text = (tmp_path / "out" / "recommended_config.yaml").read_text()
+        assert "could not be determined" in text
+
+
 class TestParseHelpers:
     def test_parse_ping_range(self):
         assert analyze._parse_ping_range("0:100") == (0, 100)

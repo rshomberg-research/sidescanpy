@@ -9,6 +9,51 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+#### `sidescan-analyze recommend-config` — evidence-commented recommended config YAML (2026-09-25)
+
+Same session, third increment of the analyze/config redesign (after
+`sidescan-analyze segment` and the `nadir`/`beam-geometry`/
+`usable-range`/`units` subcommands, both below). Direct user request:
+"I would even be interested in analyze generating a config file for
+each dataset, but with the opportunity for me to edit it manually, and
+the analysis should provide evidence for every decision it suggests."
+
+- New `sidescanpy.analysis.recommend` module. `measure_ping_geometry()`
+  is the actual missing measurement behind `sidescan-export chip
+  --resolution-m` (added earlier this session) -- real local **median**
+  ping spacing and a **percentile-bounded** swath width for an
+  already-clean section, robust to a handful of outlier jumps the same
+  way `analysis.segmentation`'s own detectors already are (a plain
+  mean/exact-span was exactly the bug `--resolution-m` was added to let
+  operators route around in the first place). `render_recommended_config()`
+  turns a section's already-computed `StageResult`s plus that
+  measurement into one hand-formatted (not `yaml.dump`-generated --
+  a plain dump can't attach a comment to a specific key) YAML: every
+  emitted key states its evidence directly above it, using the same key
+  names as real `sidescan-correct`/`sidescan-export` CLI flag dests, so
+  the result is directly usable via `--config` once reviewed.
+- **Only two stages currently map to a real downstream config key**,
+  confirmed by the same audit that motivated this whole redesign:
+  Stage 4 (TVG term selection -- `no_spreading`/`no_absorption`, the
+  same boolean-disable convention already established in this family's
+  own `configs/default.yaml`) and the new geometry measurement
+  (`resolution_m`). `nadir`/`beam_geometry`/`usable_range_m`/`units`
+  are reported as evidence/context in a comment, not invented as
+  settable keys nothing downstream reads yet.
+- New `sidescan-analyze recommend-config --input <section.ss.h5>
+  --frequency <hz> --output <path.yaml>` -- runs Stage 1/2/2.5/3/4/5
+  against one clean section (meant to follow `segment`), using the
+  same adopted TVG-fit recipe `tvg-fit` itself uses
+  (`r_ref_m="auto"`/`r_fit_min_m="auto"`, `range_var="slant_range_m"`).
+  Degrades gracefully, not a hard failure, when Stage 3 can't determine
+  `usable_range_m` (the known Klein SDF AGC failure mode already
+  documented elsewhere in this file) -- Stage 4 is simply omitted, with
+  a comment explaining why, rather than the whole command aborting.
+- Tests: `tests/unit/analysis/test_recommend.py` (15) +
+  `tests/unit/cli/test_analyze.py::TestRunRecommendConfig` (4). Full
+  suite: 1644 passing / 36 skipped (was 1625).
+- Version bumped 0.4.31 -> 0.4.32.
+
 #### `sidescan-analyze nadir` / `beam-geometry` / `usable-range` / `units` — per-tool subcommands, not one monolithic pass (2026-09-25)
 
 Same session, second increment of the analyze/config redesign (after
