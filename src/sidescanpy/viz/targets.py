@@ -164,8 +164,18 @@ def export_track_with_targets_png(
     show_locator: bool = False,
 ) -> None:
     """Plot and save a survey track + scan-lines + target overlay PNG.
-    See ``plot_track_with_targets``."""
+    See ``plot_track_with_targets``.
+
+    Saves at the figure's own full, fixed size, no ``bbox_inches="tight"``
+    -- see ``export_track_and_scanlines_png``'s docstring (``viz/track.py``)
+    for why: that flag crops the saved PNG to the drawn content's own
+    bounding box, making saved dimensions vary with a survey's real
+    aspect ratio despite the figure always being created at one fixed
+    size. This is the function `sidescan-export track` actually calls
+    whenever `--targets-json` is given -- i.e. every real mission with
+    an `targets.csv` -- so it needed the identical fix.
+    """
     fig, _ax = plot_track_with_targets(track, targets, crs=crs, show_land=show_land, show_locator=show_locator)
-    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    fig.savefig(output_path, dpi=dpi)
     logger.info(f"Exported track + targets to {output_path}")
     plt.close(fig)

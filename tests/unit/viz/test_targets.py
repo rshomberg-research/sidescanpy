@@ -102,6 +102,34 @@ class TestExportTrackWithTargetsPng:
         assert out_path.exists()
         assert out_path.stat().st_size > 0
 
+    def test_saved_dimensions_constant_regardless_of_track_shape(self, tmp_path):
+        """Real user report: every saved track.png should be the same
+        pixel dimensions regardless of the real survey's own aspect
+        ratio -- this is the function sidescan-export track actually
+        calls whenever --targets-json is given (every real mission with
+        an targets.csv), so it needed the same fix as the plain
+        track export (see viz/track.py's own matching test)."""
+        from PIL import Image
+
+        wide_track = _make_track(n_pings=50, n_rungs=10)
+        targets = [_make_target("0001", 41.505, -71.395)]
+        wide_path = tmp_path / "wide.png"
+        export_track_with_targets_png(wide_track, targets, str(wide_path))
+
+        n_pings = 50
+        narrow_lat = np.linspace(41.00, 41.45, n_pings)
+        narrow_lon = np.full(n_pings, -71.40)
+        idx = np.linspace(0, n_pings - 1, 10).astype(int)
+        narrow_track = {
+            "track_lat": narrow_lat, "track_lon": narrow_lon,
+            "scan_port_lat": narrow_lat[idx], "scan_port_lon": narrow_lon[idx] - 0.0002,
+            "scan_stbd_lat": narrow_lat[idx], "scan_stbd_lon": narrow_lon[idx] + 0.0002,
+        }
+        narrow_path = tmp_path / "narrow.png"
+        export_track_with_targets_png(narrow_track, targets, str(narrow_path))
+
+        assert Image.open(wide_path).size == Image.open(narrow_path).size
+
 
 class TestPlotTargetPositionScatter:
     def test_returns_none_when_no_target_has_position(self):

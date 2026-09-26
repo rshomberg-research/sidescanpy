@@ -9,6 +9,50 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### `sidescan-export track` output dimensions weren't consistent across surveys (2026-09-26)
+
+Real user report: track output should all look the same regardless of
+how long/skinny or wide a given survey's real track is. It turned out
+the figure itself was already created at one fixed size
+(`figsize=(12, 10)`) with `ax.set_aspect("equal")` (correctly preserving
+real-world geographic proportions, not distorting a skinny survey) --
+the bug was in how the file got *saved*, not how it was plotted.
+
+- Both `export_track_and_scanlines_png` (`viz/track.py`) and
+  `export_track_with_targets_png` (`viz/targets.py` -- the one
+  `sidescan-export track` actually calls whenever `--targets-json` is
+  given, i.e. every real mission with an `targets.csv`) called
+  `fig.savefig(..., bbox_inches="tight")`, which crops the saved PNG
+  down to just the drawn content's own bounding box -- discarding the
+  letterboxed blank margins `set_aspect("equal")` reserves for a
+  non-square survey extent. A wide/square survey (already filling the
+  canvas) saved close to the full 12x10in size; a long/skinny one
+  (mostly blank canvas, a thin diagonal strip of real content) got
+  cropped down to that thin strip -- so saved files ended up
+  inconsistently sized despite the figure always being created the same
+  way. Confirmed directly: a real repro before the fix saved
+  983x1313px for a wide track vs. 614x1335px for a skinny one from the
+  identical code path.
+- Fixed: dropped `bbox_inches="tight"` from both calls. Every saved
+  `track.png` is now exactly `figsize * dpi` pixels (`1800x1500` at the
+  current 12x10in/150dpi defaults), full stop, regardless of the real
+  survey's shape -- padding fills the rest, per the user's own explicit
+  direction ("keep the geographic accuracy... can use padding to fill
+  the space if needed").
+- Tests: both `tests/unit/viz/test_track.py` and `test_targets.py`
+  gained a regression test asserting identical saved-PNG pixel
+  dimensions for a wide-aspect vs. a genuinely long/skinny synthetic
+  track -- confirmed each fails against the pre-fix code (983x1313 vs.
+  614x1335) before confirming it passes against the fix. Full suite:
+  1650 passing / 36 skipped (was 1648).
+- **Not touched, flagged only**: `viz/gridded.py`'s `export_gridded_png`
+  has the identical `bbox_inches="tight"` pattern -- grid tiling was
+  separately discussed the same session (leave the multi-tile chunking
+  as-is, just clarify the terminology) without this specific
+  save-dimension question being asked, so left alone; worth a follow-up
+  if grid output turns out to have the same complaint.
+- Version bumped 0.4.34 -> 0.4.35.
+
 #### `find_segments` merge bug + `detect_gaps` now also checks raw ping timing (2026-09-25)
 
 Found retuning `STABILITY_THRESHOLD` against the real `project-a` survey

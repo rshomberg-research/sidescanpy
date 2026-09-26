@@ -142,6 +142,35 @@ class TestExportTrackAndScanlinesPng:
         assert out_path.exists()
         assert out_path.stat().st_size > 0
 
+    def test_saved_dimensions_constant_regardless_of_track_shape(self, tmp_path):
+        """Real user report: every saved track.png should be the same
+        pixel dimensions regardless of the real survey's own aspect
+        ratio -- previously bbox_inches="tight" cropped a long/skinny
+        survey's mostly-blank canvas down to just its thin strip of real
+        content, while a wide/square survey (already filling the canvas)
+        saved close to the full size, so saved files came out
+        inconsistently sized despite the figure always being created at
+        one fixed size."""
+        from PIL import Image
+
+        wide_lat, wide_lon, w_pl, w_po, w_sl, w_so = _make_track(n_pings=50, n_rungs=10)
+        wide_path = tmp_path / "wide.png"
+        export_track_and_scanlines_png(wide_lat, wide_lon, w_pl, w_po, w_sl, w_so, str(wide_path))
+
+        # A genuinely long/skinny real-world track: latitude spans ~50km,
+        # longitude barely moves at all -- a real aspect ratio nothing
+        # like the wide/square fixture above.
+        n_pings = 50
+        narrow_lat = np.linspace(41.00, 41.45, n_pings)
+        narrow_lon = np.full(n_pings, -71.40)
+        idx = np.linspace(0, n_pings - 1, 10).astype(int)
+        n_pl, n_po = narrow_lat[idx], narrow_lon[idx] - 0.0002
+        n_sl, n_so = narrow_lat[idx], narrow_lon[idx] + 0.0002
+        narrow_path = tmp_path / "narrow.png"
+        export_track_and_scanlines_png(narrow_lat, narrow_lon, n_pl, n_po, n_sl, n_so, str(narrow_path))
+
+        assert Image.open(wide_path).size == Image.open(narrow_path).size
+
 
 class TestBuildSurveyTrack:
     def test_none_when_no_file_has_frequency(self, sample_multi_frequency_survey):

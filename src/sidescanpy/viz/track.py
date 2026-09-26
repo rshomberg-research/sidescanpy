@@ -190,7 +190,23 @@ def export_track_and_scanlines_png(
     show_locator: bool = False,
     show_scale_bar: bool = True,
 ) -> None:
-    """Plot and save a survey track + scan lines PNG. See plot_track_and_scanlines."""
+    """Plot and save a survey track + scan lines PNG. See plot_track_and_scanlines.
+
+    Deliberately saves at the figure's own full, fixed size (no
+    ``bbox_inches="tight"``) -- ``plot_track_and_scanlines`` already
+    creates a fixed-size figure (``figsize=(12, 10)``) with
+    ``ax.set_aspect("equal")`` (correctly preserving real-world
+    geographic proportions -- a long/skinny survey's plotted content is
+    legitimately shrunk to fit, not distorted). ``bbox_inches="tight"``
+    used to crop the *saved* PNG down to just the drawn content's own
+    bounding box, discarding those letterboxed margins -- so a
+    wide/square survey (which already filled the canvas) saved close to
+    the full size while a long/skinny one got cropped down to a thin
+    strip, making saved file dimensions inconsistent across surveys
+    despite the figure itself always being created at one fixed size.
+    Real user report: every saved track.png should be the same
+    dimensions regardless of survey shape, padding is fine.
+    """
     fig, ax = plot_track_and_scanlines(
         track_lat, track_lon,
         scan_port_lat, scan_port_lon,
@@ -200,7 +216,7 @@ def export_track_and_scanlines_png(
         show_scale_bar=show_scale_bar,
         show_locator=show_locator,
     )
-    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    fig.savefig(output_path, dpi=dpi)
     logger.info(f"Exported track + scan lines to {output_path}")
     plt.close(fig)
 
