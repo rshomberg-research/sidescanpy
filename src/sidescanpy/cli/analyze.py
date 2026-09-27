@@ -219,9 +219,9 @@ def run_investigate(args: argparse.Namespace) -> int:
     with open(args.output_dir / "summary.json", "w") as f:
         json.dump(summary_rows, f, indent=2, default=str)
 
-    logger.info("Summary:")
+    logger.debug("Summary:")
     for row in summary_rows:
-        logger.info(f"  {row}")
+        logger.debug(f"  {row}")
     logger.info(f"Done. Artifacts written to {args.output_dir}")
     return 0
 
@@ -278,19 +278,23 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
     )
     m = stage4.metrics
 
-    logger.info("=" * 70)
-    logger.info(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
-    logger.info(f"  range_var:        {args.range_var}")
-    logger.info(f"  usable_range_m:   {usable_range_m:.2f}")
-    logger.info(f"  r_ref_m:          {m['r_ref_m']:.2f}")
-    logger.info(f"  fit window:       [{m['r_fit_min_m']:.2f}, {m['r_fit_max_m']:.2f}]")
-    logger.info(f"  classification:   {stage4.classification}")
-    logger.info(f"  best_candidate:   {m['best_candidate']}")
-    logger.info(f"  best_rmse_db:     {m['best_rmse_db']:.3f}  (fixed-scale)")
-    logger.info(f"  n_bins_used:      {m['n_bins_used']}")
+    logger.info(
+        f"{args.ss_h5.name} {freq_key}: tvg-fit classification={stage4.classification} "
+        f"best_candidate={m['best_candidate']} rmse={m['best_rmse_db']:.2f}dB",
+    )
+    logger.debug("=" * 70)
+    logger.debug(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
+    logger.debug(f"  range_var:        {args.range_var}")
+    logger.debug(f"  usable_range_m:   {usable_range_m:.2f}")
+    logger.debug(f"  r_ref_m:          {m['r_ref_m']:.2f}")
+    logger.debug(f"  fit window:       [{m['r_fit_min_m']:.2f}, {m['r_fit_max_m']:.2f}]")
+    logger.debug(f"  classification:   {stage4.classification}")
+    logger.debug(f"  best_candidate:   {m['best_candidate']}")
+    logger.debug(f"  best_rmse_db:     {m['best_rmse_db']:.3f}  (fixed-scale)")
+    logger.debug(f"  n_bins_used:      {m['n_bins_used']}")
     for note in stage4.notes:
-        logger.info(f"  note: {note}")
-    logger.info("=" * 70)
+        logger.debug(f"  note: {note}")
+    logger.debug("=" * 70)
 
     fit_result = stage4.data["fit_result"]
 
@@ -382,14 +386,14 @@ def run_segment(args: argparse.Namespace) -> int:
 
     logger.info(f"{args.input.name} / {freq_key}: {ds.sizes['ping']} pings -> {len(segments)} segment(s)")
     for seg in segments:
-        logger.info(f"  {seg.label}: [{seg.start}:{seg.stop}] {seg.status} ({', '.join(seg.reasons)})")
+        logger.debug(f"  {seg.label}: [{seg.start}:{seg.stop}] {seg.status} ({', '.join(seg.reasons)})")
     logger.info(f"Wrote {len(written)} clean segment .ss.h5 file(s) + segments.json to {args.output_dir}")
 
     fig, _ = plot_segments_overview(ds, segments)
     overview_path = args.output_dir / "overview.png"
     fig.savefig(overview_path, dpi=120)
     plt.close(fig)
-    logger.info(f"wrote {overview_path}")
+    logger.debug(f"wrote {overview_path}")
 
     return 0
 
@@ -422,9 +426,9 @@ def run_nadir(args: argparse.Namespace) -> int:
     logger.info(f"{args.input.name} / {freq_key}: nadir = {stage2.classification}")
     for key in ("altitude_sample_median", "first_bottom_return_sample_median", "altitude_to_bottom_gap_sample_median"):
         if key in stage2.metrics:
-            logger.info(f"  {key}: {stage2.metrics[key]:.2f}")
+            logger.debug(f"  {key}: {stage2.metrics[key]:.2f}")
     for note in stage2.notes:
-        logger.info(f"  note: {note}")
+        logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
         json.dump(stage2.to_json_dict(), f, indent=2, default=str)
@@ -433,14 +437,14 @@ def run_nadir(args: argparse.Namespace) -> int:
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_zoom.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
-    logger.info(f"wrote {out_path}")
+    logger.debug(f"wrote {out_path}")
 
     if args.verbose_diagnostics:
         fig, _ = plot_stage2_waterfall(ds_geo, args.value_var, stage2=stage2)
         wf_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_waterfall.png"
         fig.savefig(wf_path, dpi=140)
         plt.close(fig)
-        logger.info(f"wrote {wf_path}")
+        logger.debug(f"wrote {wf_path}")
 
     return 0
 
@@ -475,9 +479,9 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {stage2_5.classification}")
     for key in ("near_angle_deg_median", "far_angle_deg", "beam_center_angle_deg", "beam_width_deg"):
         if stage2_5.metrics.get(key) is not None:
-            logger.info(f"  {key}: {stage2_5.metrics[key]:.2f}")
+            logger.debug(f"  {key}: {stage2_5.metrics[key]:.2f}")
     for note in stage2_5.notes:
-        logger.info(f"  note: {note}")
+        logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
         json.dump(stage2_5.to_json_dict(), f, indent=2, default=str)
@@ -486,7 +490,7 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_beam_geometry.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
-    logger.info(f"wrote {out_path}")
+    logger.debug(f"wrote {out_path}")
 
     return 0
 
@@ -514,7 +518,7 @@ def run_usable_range(args: argparse.Namespace) -> int:
     usable_range_m = stage3.metrics.get("usable_range_m")
     logger.info(f"{args.input.name} / {freq_key}: usable_range_m = {usable_range_m}")
     for note in stage3.notes:
-        logger.info(f"  note: {note}")
+        logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
         json.dump(stage3.to_json_dict(), f, indent=2, default=str)
@@ -523,7 +527,7 @@ def run_usable_range(args: argparse.Namespace) -> int:
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_usable_range.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
-    logger.info(f"wrote {out_path}")
+    logger.debug(f"wrote {out_path}")
 
     return 0
 
@@ -550,7 +554,7 @@ def run_units(args: argparse.Namespace) -> int:
 
     logger.info(f"{args.input.name} / {freq_key}: units = {stage5.classification}")
     for note in stage5.notes:
-        logger.info(f"  note: {note}")
+        logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
         json.dump(stage5.to_json_dict(), f, indent=2, default=str)
@@ -559,7 +563,7 @@ def run_units(args: argparse.Namespace) -> int:
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_units.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
-    logger.info(f"wrote {out_path}")
+    logger.debug(f"wrote {out_path}")
 
     return 0
 

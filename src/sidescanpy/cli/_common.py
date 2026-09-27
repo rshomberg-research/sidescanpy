@@ -172,7 +172,7 @@ def process_files_in_place_chunked(
     results = []
     for i, path in enumerate(files, 1):
         elapsed = time.time() - start_time
-        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s, chunk={ping_chunk_size} pings)")
+        logger.debug(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s, chunk={ping_chunk_size} pings)")
         result = {"path": path, "status": "", "error": ""}
 
         if not check_disk_space(path, disk_multiplier):
@@ -196,10 +196,10 @@ def process_files_in_place_chunked(
 
         if applied:
             result["status"] = "success"
-            logger.info(f"    ✓ {stage_label} applied in place (chunked)")
+            logger.debug(f"    ✓ {stage_label} applied in place (chunked)")
         else:
             result["status"] = "skipped"
-            logger.info("    ⤤ skipped (already done)")
+            logger.debug("    ⤤ skipped (already done)")
         results.append(result)
 
     total_elapsed = time.time() - start_time
@@ -283,7 +283,7 @@ def process_files_in_place(
     results = []
     for i, path in enumerate(files, 1):
         elapsed = time.time() - start_time
-        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
+        logger.debug(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
         result = {"path": path, "status": "", "error": ""}
 
         if not check_disk_space(path, disk_multiplier):
@@ -308,7 +308,7 @@ def process_files_in_place(
         if already_done_fn(survey):
             result["status"] = "skipped"
             results.append(result)
-            logger.info("    ⤤ skipped (already done)")
+            logger.debug("    ⤤ skipped (already done)")
             continue
 
         try:
@@ -323,7 +323,7 @@ def process_files_in_place(
 
         result["status"] = "success"
         results.append(result)
-        logger.info(f"    ✓ {stage_label} applied in place")
+        logger.debug(f"    ✓ {stage_label} applied in place")
 
     total_elapsed = time.time() - start_time
     n_success = sum(1 for r in results if r["status"] == "success")

@@ -7,6 +7,45 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+#### CLI logging: per-item progress moved to DEBUG, INFO reserved for milestones (2026-09-28)
+
+Real user complaint: a full field pipeline run (many missions x
+part files x analyze tools) produced an overwhelming amount of INFO
+output, and there was no way to quiet it down -- every CLI subcommand
+already defaulted to `logging.INFO` (not `--verbose`), but essentially
+nothing in `convert.py`/`_common.py`/`analyze.py` used `logger.debug`
+at all, so there was no level to actually filter on.
+
+- `convert.py: run_survey()`, `_common.py: process_files_in_place()`/
+  the chunked-correction loop -- per-file `[i/N] <name> (elapsed: ...)`
+  progress lines and per-file success/skip lines moved to DEBUG. The
+  "Found N file(s)" line and the final `Success/Skipped/Failed` summary
+  block stay at INFO -- these are the real milestones for a batch run,
+  not each file individually.
+- `analyze.py`: every per-tool subcommand (`nadir`/`beam-geometry`/
+  `usable-range`/`units`/`tvg-fit`/`segment`/`investigate`) now logs
+  exactly one INFO-level result line (classification + the one or two
+  headline numbers) instead of a multi-line `"="*70`-bordered report
+  block -- the per-metric breakdown, `note:` lines, and `wrote <path>`
+  lines all moved to DEBUG. `tvg-fit`'s prior 12-line block collapses to
+  one line: `<file> <freq>: tvg-fit classification=... best_candidate=...
+  rmse=...dB`. Real effect on a pipeline run with N missions x M part
+  files x 5 analyze tools x K frequencies: INFO output drops from
+  roughly one block per (mission, file, tool, frequency) to one line per
+  (mission, tool, frequency) -- part-file-level and per-metric detail is
+  still there under `-v`/`--verbose`, just not printed by default.
+- No behavior change to what's computed or written to disk -- this is
+  purely which log level each existing message uses. `-v`/`--verbose`
+  (already wired to `logging.DEBUG` on every subcommand) recovers the
+  full previous verbosity exactly.
+- Full suite: 1666 passing / 36 skipped (unchanged -- no test asserted
+  on any of the demoted messages' log level; one existing test
+  (`test_export.py`'s `test_matched_target_gets_a_box_drawn`) already
+  asserted an unrelated INFO message via `caplog.at_level("INFO")` and
+  still passes unchanged).
+
 ### Added
 
 #### `sidescan-export chip --value-var` -- raw vs. radiometric, independently of the geometric/georef coordinate choice; `--with-context` follows `--render-level` (2026-09-28)

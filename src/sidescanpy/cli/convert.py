@@ -132,14 +132,14 @@ def run_survey(args: argparse.Namespace) -> int:
     results = []
     for i, path in enumerate(files, 1):
         elapsed = time.time() - start_time
-        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
+        logger.debug(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
         result = _convert_one_file(path, output_dir=output_dir, force=args.force)
         results.append(result)
         if result["status"] == "success":
             cropped = {k: v for k, v in result["cutoffs"].items() if v is not None}
-            logger.info(f"    ✓ wrote .ss.h5 (far-range cropped: {cropped})" if cropped else "    ✓ wrote .ss.h5")
+            logger.debug(f"    ✓ wrote .ss.h5 (far-range cropped: {cropped})" if cropped else "    ✓ wrote .ss.h5")
         elif result["status"] == "skipped":
-            logger.info("    ⤳ skipped (output exists; use --force to reprocess)")
+            logger.debug("    ⤳ skipped (output exists; use --force to reprocess)")
         else:
             logger.error(f"    ✗ {result['status']}: {result['error']}")
 
