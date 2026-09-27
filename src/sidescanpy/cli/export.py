@@ -94,6 +94,7 @@ from PIL import Image
 
 from sidescanpy.cli._common import concat_survey_frequency, resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
+from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.export import (
     ReferenceStats,
     WindowExtent,
@@ -127,7 +128,14 @@ from sidescanpy.viz.waterfall import along_track_distance_m
 logger = logging.getLogger(__name__)
 
 _CONFIDENCE_RANK = {"unknown": 0, "approximate": 1, "verified": 2}
-_DEFAULT_SEGMENT_SIZE = 2000
+# Was 2000 -- not a multiple of HDF5_CHUNK_PING (the on-disk chunk size
+# write_survey() actually stores, 256). run_grid's own --segment-size
+# (this same default) feeds directly into read_survey(chunks=...), so a
+# misaligned value made xr.open_dataset split real HDF5 chunks to match,
+# degrading read performance and printing a UserWarning on every call
+# (found from a real user report, 2026-09-28). 2048 = 8x256, close to
+# the original round-number default, never splits a real chunk.
+_DEFAULT_SEGMENT_SIZE = HDF5_CHUNK_PING * 8
 
 
 # ============================================================
@@ -455,7 +463,7 @@ def run_track(args: argparse.Namespace) -> int:
         logger.error(f"No .ss.h5 files found in {args.ss_h5_dir}")
         return 1
     logger.info(f"Loading {len(paths)} .ss.h5 file(s) (lazy)")
-    surveys = {p: read_survey(p, chunks={"ping": 2000}) for p in paths}
+    surveys = {p: read_survey(p, chunks={"ping": _DEFAULT_SEGMENT_SIZE}) for p in paths}
 
     freq_keys = _resolve_frequencies(surveys, args.frequency)
     if not freq_keys:

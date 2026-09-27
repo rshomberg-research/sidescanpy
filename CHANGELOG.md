@@ -9,6 +9,42 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### Lazy-read chunk sizes across the CLI weren't multiples of the on-disk HDF5 chunk size (2026-09-28)
+
+Real user report: a `UserWarning` ("The specified chunks separate the
+stored chunks along dimension 'ping'... This could degrade
+performance...") fired on every `sidescan-analyze segment` call against
+real data -- and, once traced, on several other commands too. Root
+cause: `write_survey()` stores each frequency channel's backscatter on
+disk chunked at `HDF5_CHUNK_PING` (256) pings; every lazy
+`read_survey(..., chunks={"ping": N})` call across the CLI is a
+*virtual* re-chunking request, and when `N` isn't a multiple of 256,
+`xr.open_dataset` has to split real HDF5 chunks to satisfy it --
+genuinely degraded read performance, not just console noise.
+
+- `cli/analyze.py`: every one of `segment`/`nadir`/`beam-geometry`/
+  `usable-range`/`units`/`tvg-fit`/`recommend-config`'s lazy reads
+  hardcoded `chunks={"ping": 500}` -- replaced with a shared
+  `_PING_CHUNKS = {"ping": HDF5_CHUNK_PING * 2}` (512) constant.
+- `cli/export.py`: `_DEFAULT_SEGMENT_SIZE` (shared by `waterfall
+  --window-pings` and, more consequentially, `grid --segment-size`,
+  which feeds directly into a lazy read) was `2000`; `run_track`'s own
+  chunk size was also `2000` independently. Both now
+  `HDF5_CHUNK_PING * 8` (2048).
+- User-facing tunables that legitimately vary per machine/mission
+  (`sidescan-correct --ping-chunk-size`, `sidescan-export grid
+  --segment-size` when explicitly overridden) are NOT forced to a
+  specific value -- picking an aligned one is now documented as the
+  right way to tune them, not silently overridden.
+- Tests: `TestPingChunksAlignment` added to both `test_analyze.py` and
+  `test_export.py` -- the relevant constant is an exact multiple of
+  `HDF5_CHUNK_PING`, and reading a real >1-chunk survey with it raises
+  no alignment warning. Full suite: 1662 passing / 36 skipped (was
+  1658) -- the only remaining instances of this warning anywhere in the
+  suite are `test_chunked.py`'s own deliberately-tiny (3-7 ping) test
+  fixtures, unrelated to production code.
+- Version bumped 0.4.37 -> 0.4.38.
+
 #### `sidescan-export chip`'s ping-fallback target correlation assumed every file's ping axis starts at 0 (2026-09-27)
 
 Real bug, found from a downstream consumer's multi-part-converted

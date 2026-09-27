@@ -13,6 +13,7 @@ verified — not re-tested from scratch here.
 
 import argparse
 import json
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,8 +22,9 @@ import pytest
 import xarray as xr
 
 from sidescanpy.cli import export
+from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.hdf5 import write_survey
+from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.processing import run_correction_steps
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.targets.core import Target
@@ -1121,3 +1123,31 @@ class TestRunChip:
 
         args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric", styles=["chip"])
         assert export.run_chip(args) == 1  # gracefully -- not a crash
+
+
+class TestPingChunksAlignment:
+    """Real user report, 2026-09-28: a UserWarning ("specified chunks
+    separate the stored chunks...") fired repeatedly during real
+    pipeline runs. Root cause here: _DEFAULT_SEGMENT_SIZE (shared by
+    --window-pings and --segment-size, the latter feeding directly into
+    read_survey(chunks=...) for run_grid) and run_track's own chunk size
+    were both 2000, not a multiple of HDF5_CHUNK_PING (the on-disk chunk
+    size write_survey() actually stores, 256)."""
+
+    def test_default_segment_size_is_aligned(self):
+        assert export._DEFAULT_SEGMENT_SIZE % HDF5_CHUNK_PING == 0
+
+    def test_reading_a_real_multi_chunk_survey_raises_no_alignment_warning(self, tmp_path):
+        n_pings = HDF5_CHUNK_PING * 3
+        survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=200, freq_hz_start=1_495_000)
+        survey.add_frequency("hz_1495000", ds)
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            read_survey(path, chunks={"ping": export._DEFAULT_SEGMENT_SIZE})
+
+        alignment_warnings = [w for w in caught if "specified chunks separate the stored chunks" in str(w.message)]
+        assert not alignment_warnings

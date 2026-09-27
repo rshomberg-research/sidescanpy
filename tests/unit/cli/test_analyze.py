@@ -9,12 +9,14 @@ r_ref_m="auto"/r_fit_min_m="auto" support).
 
 import argparse
 import json
+import warnings
 
 import numpy as np
 import pytest
 
 from sidescanpy.cli import analyze
-from sidescanpy.io.hdf5 import write_survey
+from sidescanpy.core import HDF5_CHUNK_PING
+from sidescanpy.io.hdf5 import read_survey, write_survey
 from tests.conftest import make_minimal_sidescan_dataset
 from sidescanpy.core.survey import SideScanSurvey
 
@@ -564,6 +566,38 @@ class TestDirectoryInput:
         args = TestRunNadir()._args(tmp_path, empty_dir)
         with pytest.raises(FileNotFoundError):
             analyze.run_nadir(args)
+
+
+class TestPingChunksAlignment:
+    """Real user report, 2026-09-28: a UserWarning ("specified chunks
+    separate the stored chunks...") fired on every sidescan-analyze call
+    against real data. Root cause: every lazy read here hardcoded
+    chunks={"ping": 500}, not a multiple of HDF5_CHUNK_PING (the on-disk
+    chunk size write_survey() actually stores, 256) -- xr.open_dataset
+    had to split real HDF5 chunks to match, both the warning and real
+    degraded read performance, not just noise."""
+
+    def test_ping_chunks_constant_is_aligned(self):
+        assert analyze._PING_CHUNKS["ping"] % HDF5_CHUNK_PING == 0
+
+    def test_reading_a_real_multi_chunk_survey_raises_no_alignment_warning(self, tmp_path):
+        # More pings than one on-disk chunk (256), so write_survey()
+        # genuinely writes >1 HDF5 chunk -- the real scenario the
+        # warning was about, not a degenerate single-chunk file too
+        # small to ever trigger it either way.
+        n_pings = HDF5_CHUNK_PING * 3
+        survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=200, freq_hz_start=1_495_000)
+        survey.add_frequency("hz_1495000", ds)
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            read_survey(path, chunks=analyze._PING_CHUNKS)
+
+        alignment_warnings = [w for w in caught if "specified chunks separate the stored chunks" in str(w.message)]
+        assert not alignment_warnings
 
 
 class TestParseHelpers:

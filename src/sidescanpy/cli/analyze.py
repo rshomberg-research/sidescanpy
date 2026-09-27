@@ -97,6 +97,7 @@ from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommen
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import available_frequencies, load_channel_dataset, resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
+from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
@@ -119,6 +120,17 @@ from sidescanpy.viz.tvg_diagnostics import plot_candidate_fit
 logger = logging.getLogger(__name__)
 
 _HDF5_SUFFIXES = (".h5", ".hdf5")
+
+# Real bug, found from a real user report (2026-09-28): every lazy read
+# below used to hardcode chunks={"ping": 500} -- not a multiple of
+# HDF5_CHUNK_PING (the on-disk chunk size write_survey() actually
+# stores, 256), so xr.open_dataset had to split real HDF5 chunks to
+# match the requested virtual chunking, both degrading read performance
+# and (xarray's own diagnostic) printing a UserWarning on every call.
+# An exact multiple of HDF5_CHUNK_PING never splits a real chunk --
+# 512 = 2x256, matching cli/export.py's own long-standing (if
+# coincidental) convention for the same read pattern.
+_PING_CHUNKS = {"ping": HDF5_CHUNK_PING * 2}
 
 
 def _parse_ping_range(spec: str) -> tuple[int, int | None]:
@@ -221,7 +233,7 @@ def run_investigate(args: argparse.Namespace) -> int:
 def run_tvg_fit(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    freq_key, ds = _resolve_and_load(args.ss_h5, args.frequency, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.ss_h5, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
 
@@ -323,8 +335,8 @@ def run_segment(args: argparse.Namespace) -> int:
         logger.error(f"Input not found: {args.input}")
         return 1
 
-    all_freq_keys = available_frequencies(args.input, {"ping": 500})
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
+    all_freq_keys = available_frequencies(args.input, _PING_CHUNKS)
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
 
@@ -354,12 +366,12 @@ def run_segment(args: argparse.Namespace) -> int:
         source_files = sorted(args.input.glob("*.ss.h5"))
         source_format, survey_name = "ss_h5", args.input.name
     else:
-        _meta_survey = read_survey(args.input, chunks={"ping": 500})
+        _meta_survey = read_survey(args.input, chunks=_PING_CHUNKS)
         source_files = _meta_survey.source_files
         source_format, survey_name = _meta_survey.source_format, _meta_survey.survey_name
     sliced_survey = SideScanSurvey(source_files=source_files, source_format=source_format, survey_name=survey_name)
     for fk in all_freq_keys:
-        channel_ds = load_channel_dataset(args.input, fk, {"ping": 500})
+        channel_ds = load_channel_dataset(args.input, fk, _PING_CHUNKS)
         channel = SideScanFrequencyChannel(channel_ds, freq_key=fk)
         sliced = slice_by_pings(channel, start=start, stop=stop if stop is not None else channel.n_pings)
         sliced_survey.add_frequency(fk, sliced.dataset.load())
@@ -393,7 +405,7 @@ def run_nadir(args: argparse.Namespace) -> int:
     full-survey waterfall boundary overlay.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
@@ -446,7 +458,7 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     beam-geometry diagram, the direct evidence for the classification.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
@@ -489,7 +501,7 @@ def run_usable_range(args: argparse.Namespace) -> int:
     direct evidence for the number.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
@@ -529,7 +541,7 @@ def run_units(args: argparse.Namespace) -> int:
     a specific source.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
 
@@ -572,7 +584,7 @@ def run_recommend_config(args: argparse.Namespace) -> int:
         return 1
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
