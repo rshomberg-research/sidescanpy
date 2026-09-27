@@ -92,7 +92,7 @@ import numpy as np
 import xarray as xr
 from PIL import Image
 
-from sidescanpy.cli._common import resolve_freq_keys
+from sidescanpy.cli._common import concat_survey_frequency, resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
 from sidescanpy.export import (
     ReferenceStats,
@@ -251,32 +251,6 @@ def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset,
         plt.close(fig)
 
 
-def _concat_survey_frequency(files: list[Path], freq_key: str, chunks: dict) -> tuple[xr.Dataset | None, dict]:
-    """Lazily concatenate ``freq_key``'s channel across every file in
-    ``files`` (sorted, so typically time order) into one dask-backed
-    dataset spanning the whole survey -- no per-file restart.
-
-    Returns ``(concatenated_ds, file_start_ping)`` where
-    ``file_start_ping[path]`` is that file's own first ping's position in
-    the concatenated dataset's global ping axis (0 for the first file).
-    ``concatenated_ds`` is ``None`` if no file has this frequency at all.
-    """
-    datasets = []
-    file_start_ping: dict[Path, int] = {}
-    cumulative = 0
-    for path in files:
-        survey = read_survey(path, chunks=chunks)
-        if freq_key not in survey.frequencies:
-            continue
-        ds = survey.get_frequency(freq_key).dataset
-        file_start_ping[path] = cumulative
-        cumulative += ds.sizes["ping"]
-        datasets.append(ds)
-    if not datasets:
-        return None, {}
-    return xr.concat(datasets, dim="ping"), file_start_ping
-
-
 def run_waterfall(args: argparse.Namespace) -> int:
     if args.range_mode == "ground":
         # Forces the distance-axis branch regardless of --x-axis/--y-axis
@@ -333,7 +307,7 @@ def run_waterfall(args: argparse.Namespace) -> int:
     freq_keys = resolve_freq_keys(ds_first.frequencies, args.frequency)
 
     for freq_key in freq_keys:
-        ds_all, file_start_ping = _concat_survey_frequency(files, freq_key, chunks={"ping": 512})
+        ds_all, file_start_ping = concat_survey_frequency(files, freq_key, chunks={"ping": 512})
         if ds_all is None:
             logger.warning(f"{freq_key}: no file has this frequency, skipping")
             continue

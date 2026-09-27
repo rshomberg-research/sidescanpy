@@ -24,6 +24,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import xarray as xr
+
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
 
@@ -48,6 +50,91 @@ def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list
     if candidate in available:
         return [candidate]
     return [requested]
+
+
+def concat_survey_frequency(files: list[Path], freq_key: str, chunks: dict) -> tuple["xr.Dataset | None", dict]:
+    """Lazily concatenate ``freq_key``'s channel across every file in
+    ``files`` (sorted, so typically time order) into one dask-backed
+    dataset spanning the whole survey -- no per-file restart.
+
+    Promoted here from ``cli/export.py`` (2026-09-27, unchanged body) so
+    ``cli/analyze.py``'s subcommands can accept a multi-file
+    ``--input``/``--ss-h5`` directory the same way ``sidescan-export``'s
+    ``--ss-h5-dir`` already does -- see :func:`load_channel_dataset`/
+    :func:`available_frequencies` below, which are the actual entry
+    points most callers want.
+
+    Returns ``(concatenated_ds, file_start_ping)`` where
+    ``file_start_ping[path]`` is that file's own first ping's position in
+    the concatenated dataset's global ping axis (0 for the first file).
+    ``concatenated_ds`` is ``None`` if no file has this frequency at all.
+    """
+    datasets = []
+    file_start_ping: dict[Path, int] = {}
+    cumulative = 0
+    for path in files:
+        survey = read_survey(path, chunks=chunks)
+        if freq_key not in survey.frequencies:
+            continue
+        ds = survey.get_frequency(freq_key).dataset
+        file_start_ping[path] = cumulative
+        cumulative += ds.sizes["ping"]
+        datasets.append(ds)
+    if not datasets:
+        return None, {}
+    return xr.concat(datasets, dim="ping"), file_start_ping
+
+
+def available_frequencies(input_path: Path, chunks: dict) -> set[str]:
+    """Every frequency key present at ``input_path`` -- a single
+    ``.ss.h5`` file (its own ``.frequencies``) or a directory of them
+    (the union across every file -- not every file need carry every key,
+    same as :func:`concat_survey_frequency`'s own per-file tolerance).
+
+    Raises ``FileNotFoundError`` if ``input_path`` is a directory with no
+    ``.ss.h5`` files in it.
+    """
+    if input_path.is_dir():
+        files = sorted(input_path.glob("*.ss.h5"))
+        if not files:
+            raise FileNotFoundError(f"No .ss.h5 files found in {input_path}")
+        keys: set[str] = set()
+        for p in files:
+            keys |= set(read_survey(p, chunks=chunks).frequencies)
+        return keys
+    return set(read_survey(input_path, chunks=chunks).frequencies)
+
+
+def load_channel_dataset(input_path: Path, freq_key: str, chunks: dict) -> "xr.Dataset":
+    """One frequency channel's dataset from ``input_path``.
+
+    ``input_path`` may be a single ``.ss.h5`` file (original behavior,
+    byte-identical -- calls ``read_survey`` exactly as every caller
+    already did directly) or a directory of them, lazily dask-concatenated
+    in filename/acquisition order via :func:`concat_survey_frequency` --
+    the same multi-file convention ``sidescan-export``'s own
+    ``--ss-h5-dir`` already uses. Added 2026-09-27 so a real mission that
+    was never concatenated into one file at conversion time (a genuine
+    memory-safety need on a constrained container -- see
+    ``downstream-project``'s own docs) can still be analyzed as one logical survey.
+
+    Raises ``FileNotFoundError``/``ValueError`` if ``freq_key`` isn't
+    present anywhere at ``input_path`` -- never returns ``None``, unlike
+    :func:`concat_survey_frequency` itself, so every caller here can
+    treat this as a normal "the dataset I asked for" return.
+    """
+    if input_path.is_dir():
+        files = sorted(input_path.glob("*.ss.h5"))
+        if not files:
+            raise FileNotFoundError(f"No .ss.h5 files found in {input_path}")
+        ds, _file_start_ping = concat_survey_frequency(files, freq_key, chunks)
+        if ds is None:
+            raise ValueError(f"{freq_key!r}: no file in {input_path} has this frequency channel")
+        return ds
+    survey = read_survey(input_path, chunks=chunks)
+    if freq_key not in survey.frequencies:
+        raise ValueError(f"{freq_key!r}: not present in {input_path} (available: {sorted(survey.frequencies)})")
+    return survey.get_frequency(freq_key).dataset
 
 
 def process_files_in_place_chunked(

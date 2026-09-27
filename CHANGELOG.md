@@ -7,6 +7,58 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+#### `sidescan-analyze`'s subcommands accept a directory of `.ss.h5` files, same convention as `sidescan-export --ss-h5-dir` (2026-09-27)
+
+Motivated by a real field OOM in a downstream consumer project
+(`downstream-project`) converting a large multi-file vendor-format mission: the
+container's memory ceiling can't hold one fully-assembled,
+concatenated mission dataset in memory during conversion. The fix on
+that side is to stop concatenating at conversion time and write one
+`.ss.h5` per source file instead -- but every `sidescan-analyze`
+subcommand (`segment`/`nadir`/`beam-geometry`/`usable-range`/`units`/
+`tvg-fit`/`recommend-config`) only accepted a single file, unlike
+`sidescan-export`'s `--ss-h5-dir`, which already lazily (dask-backed)
+concatenates a directory of `.ss.h5` files into one logical survey.
+Without this, a consumer switching to per-file conversion output would
+lose `segment`'s whole point: detecting gaps/instability *across* what
+used to be separate files, by looking at one concatenated timeline.
+
+- `cli/_common.py` gained `available_frequencies()` and
+  `load_channel_dataset()` (plus `concat_survey_frequency()`, promoted
+  from `cli/export.py`'s previously-private `_concat_survey_frequency`,
+  unchanged body) -- both accept a single `.ss.h5` file (byte-identical
+  original behavior) or a directory of them (lazily dask-concatenated in
+  filename/acquisition order). `cli/export.py` now imports the promoted
+  function instead of keeping its own copy.
+- `cli/analyze.py`: every one of the 7 subcommands above now resolves
+  `--input`/`--ss-h5` through these shared helpers instead of a direct
+  `read_survey(args.input, ...)` call. `segment`'s own multi-frequency
+  write-out loop (needs every channel, not just the one segmentation was
+  computed from) works identically for either input shape. No CLI flag
+  changes -- `--input`/`--ss-h5` simply accept either a file or a
+  directory now (help text updated to say so); every existing
+  single-file caller's behavior is unchanged (confirmed: full suite
+  green with zero pre-existing test modifications needed).
+- Tests: `tests/unit/cli/test_analyze.py` gained `TestDirectoryInput` (6
+  tests) -- `nadir` against a directory matches a single-file run
+  byte-for-byte on classification/metrics; `tvg-fit`/`recommend-config`
+  succeed against a directory; a missing/empty directory raises
+  `FileNotFoundError`; and the one that actually matters:
+  `segment` against a 2-file directory with a deliberate ~440km position
+  jump exactly at the file seam correctly produces two clean segments
+  split precisely at that seam, not one falsely-merged 200-ping segment
+  (what a gap-blind concatenation would produce) and not two independent
+  "section1"s with no relationship to each other (what two separate
+  per-file calls would produce, the alternative this capability exists
+  to avoid). Full suite: 1655 passing / 36 skipped (was 1650).
+- Not done: `investigate` (the older monolithic subcommand, superseded
+  by the 7 above for iterative use) was NOT extended -- it dispatches on
+  file *format* (`.jsf`/`.sdf`/`.ss.h5`) via `detect_format`, a
+  meaningfully different code path; out of scope for what was asked.
+- Version bumped 0.4.35 -> 0.4.36.
+
 ### Fixed
 
 #### `sidescan-export track` output dimensions weren't consistent across surveys (2026-09-26)

@@ -80,6 +80,7 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import xarray as xr
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -94,9 +95,9 @@ from sidescanpy.analysis.investigation import (
 )
 from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
-from sidescanpy.cli._common import resolve_freq_keys
+from sidescanpy.cli._common import available_frequencies, load_channel_dataset, resolve_freq_keys
 from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
-from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
@@ -125,6 +126,21 @@ def _parse_ping_range(spec: str) -> tuple[int, int | None]:
         raise argparse.ArgumentTypeError(f"must be 'start:stop', got {spec!r}")
     start_s, stop_s = spec.split(":", 1)
     return (int(start_s) if start_s else 0), (int(stop_s) if stop_s else None)
+
+
+def _resolve_and_load(input_path: Path, requested_frequency: str | None, chunks: dict) -> tuple[str, xr.Dataset]:
+    """``freq_key`` + its dataset from ``input_path``, which may be a
+    single ``.ss.h5`` file (original behavior, byte-identical) or a
+    directory of them (lazily dask-concatenated in acquisition/filename
+    order, added 2026-09-27 -- see ``cli._common.load_channel_dataset``'s
+    own docstring for why: a real mission too large to convert into one
+    file at once on a memory-constrained container can be analyzed as
+    several files without losing this pipeline's cross-file gap/
+    instability detection).
+    """
+    available = available_frequencies(input_path, chunks)
+    freq_key = resolve_freq_keys(available, requested_frequency)[0] if requested_frequency else sorted(available)[0]
+    return freq_key, load_channel_dataset(input_path, freq_key, chunks)
 
 
 def _parse_numeric_or_literal(value: str | None) -> float | str | None:
@@ -205,9 +221,7 @@ def run_investigate(args: argparse.Namespace) -> int:
 def run_tvg_fit(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    survey = read_survey(args.ss_h5, chunks={"ping": 500})
-    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    freq_key, ds = _resolve_and_load(args.ss_h5, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
 
@@ -305,16 +319,12 @@ def run_segment(args: argparse.Namespace) -> int:
     default, not "the whole file," since a real production `.ss.h5` can
     be many GB.
     """
-    if not args.input.is_file():
-        logger.error(f"Input file not found: {args.input}")
+    if not (args.input.is_file() or args.input.is_dir()):
+        logger.error(f"Input not found: {args.input}")
         return 1
 
-    survey = read_survey(args.input, chunks={"ping": 500})
-    if args.frequency:
-        freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    else:
-        freq_key = sorted(survey.frequencies)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    all_freq_keys = available_frequencies(args.input, {"ping": 500})
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
 
@@ -335,13 +345,22 @@ def run_segment(args: argparse.Namespace) -> int:
     # write_segments() needs every frequency channel sliced to the exact
     # same [start:stop] window find_segments' own (0-indexed-from-start)
     # ping numbers are relative to -- passing the original, full-range
-    # `survey` here would silently write the wrong pings whenever
-    # `start != 0`.
-    sliced_survey = SideScanSurvey(
-        source_files=survey.source_files, source_format=survey.source_format, survey_name=survey.survey_name,
-    )
-    for fk in survey.frequencies:
-        channel = survey.get_frequency(fk)
+    # dataset here would silently write the wrong pings whenever
+    # `start != 0`. Works identically whether args.input is a single file
+    # (source_files/source_format/survey_name taken from it directly) or
+    # a directory (every *.ss.h5 in it, "ss_h5" as a reasonable
+    # source_format label -- see cli._common.load_channel_dataset).
+    if args.input.is_dir():
+        source_files = sorted(args.input.glob("*.ss.h5"))
+        source_format, survey_name = "ss_h5", args.input.name
+    else:
+        _meta_survey = read_survey(args.input, chunks={"ping": 500})
+        source_files = _meta_survey.source_files
+        source_format, survey_name = _meta_survey.source_format, _meta_survey.survey_name
+    sliced_survey = SideScanSurvey(source_files=source_files, source_format=source_format, survey_name=survey_name)
+    for fk in all_freq_keys:
+        channel_ds = load_channel_dataset(args.input, fk, {"ping": 500})
+        channel = SideScanFrequencyChannel(channel_ds, freq_key=fk)
         sliced = slice_by_pings(channel, start=start, stop=stop if stop is not None else channel.n_pings)
         sliced_survey.add_frequency(fk, sliced.dataset.load())
 
@@ -374,9 +393,7 @@ def run_nadir(args: argparse.Namespace) -> int:
     full-survey waterfall boundary overlay.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    survey = read_survey(args.input, chunks={"ping": 500})
-    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
@@ -429,9 +446,7 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     beam-geometry diagram, the direct evidence for the classification.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    survey = read_survey(args.input, chunks={"ping": 500})
-    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
@@ -474,9 +489,7 @@ def run_usable_range(args: argparse.Namespace) -> int:
     direct evidence for the number.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    survey = read_survey(args.input, chunks={"ping": 500})
-    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
@@ -516,9 +529,7 @@ def run_units(args: argparse.Namespace) -> int:
     a specific source.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    survey = read_survey(args.input, chunks={"ping": 500})
-    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
 
@@ -556,14 +567,12 @@ def run_recommend_config(args: argparse.Namespace) -> int:
     ``segment``) -- running it against a raw, unsegmented mission mixes
     whatever heterogeneity that file has into every number below.
     """
-    if not args.input.is_file():
-        logger.error(f"Input file not found: {args.input}")
+    if not (args.input.is_file() or args.input.is_dir()):
+        logger.error(f"Input not found: {args.input}")
         return 1
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    survey = read_survey(args.input, chunks={"ping": 500})
-    freq_key = resolve_freq_keys(survey.frequencies, args.frequency)[0]
-    ds = survey.get_frequency(freq_key).dataset
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, {"ping": 500})
     start, stop = args.pings
     ds = ds.isel(ping=slice(start, stop)).load()
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
@@ -631,7 +640,11 @@ def main() -> int:
     p_inv.set_defaults(func=run_investigate)
 
     p_tvg = subparsers.add_parser("tvg-fit", help="TVG decay-curve fit + residuals, using the adopted auto-window recipe")
-    p_tvg.add_argument("--ss-h5", required=True, type=Path)
+    p_tvg.add_argument(
+        "--ss-h5", required=True, type=Path,
+        help="Path to a .ss.h5 file, or a directory of them (lazily concatenated, same convention as "
+             "sidescan-export's own --ss-h5-dir)",
+    )
     p_tvg.add_argument(
         "--frequency", type=str, required=True,
         help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "
@@ -655,7 +668,11 @@ def main() -> int:
     p_seg = subparsers.add_parser(
         "segment", help="Cut gaps/setting-changes/garbage/unstable stretches out of a mission before analyzing it",
     )
-    p_seg.add_argument("--input", required=True, type=Path, help="Path to a .ss.h5 file")
+    p_seg.add_argument(
+        "--input", required=True, type=Path,
+        help="Path to a .ss.h5 file, or a directory of them (lazily concatenated, same convention as "
+             "sidescan-export's own --ss-h5-dir)",
+    )
     p_seg.add_argument(
         "--frequency", type=str, default=None,
         help="Which frequency channel to compute segmentation from (default: first, sorted). "
@@ -681,7 +698,11 @@ def main() -> int:
     p_seg.set_defaults(func=run_segment)
 
     def _common_single_channel_args(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--input", required=True, type=Path, help="Path to a .ss.h5 file")
+        p.add_argument(
+            "--input", required=True, type=Path,
+            help="Path to a .ss.h5 file, or a directory of them (lazily concatenated, same convention "
+                 "as sidescan-export's own --ss-h5-dir)",
+        )
         p.add_argument(
             "--frequency", type=str, required=True,
             help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "
@@ -731,7 +752,11 @@ def main() -> int:
         help="Write one evidence-commented recommended config YAML for a clean section (TVG terms + resolution_m; "
              "nadir/beam-geometry/usable-range/units reported as evidence only, no config flag consumes them yet)",
     )
-    p_rec.add_argument("--input", required=True, type=Path, help="Path to a clean (already-segmented) .ss.h5 file")
+    p_rec.add_argument(
+        "--input", required=True, type=Path,
+        help="Path to a clean (already-segmented) .ss.h5 file, or a directory of them (lazily "
+             "concatenated, same convention as sidescan-export's own --ss-h5-dir)",
+    )
     p_rec.add_argument(
         "--frequency", type=str, required=True,
         help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "

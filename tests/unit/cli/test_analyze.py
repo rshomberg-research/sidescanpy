@@ -436,6 +436,136 @@ class TestRunRecommendConfig:
         assert "could not be determined" in text
 
 
+def _write_survey_in_parts(survey: SideScanSurvey, out_dir, n_parts: int) -> list:
+    """Split `survey` into `n_parts` contiguous-ping-range `.ss.h5` files
+    under `out_dir` -- simulates a mission that was converted part-by-part
+    (never concatenated into one file) rather than pre-splitting a
+    single already-written file."""
+    from sidescanpy.processing.slicing import slice_by_pings
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    freq_keys = list(survey.frequencies)
+    n_pings = survey.get_frequency(freq_keys[0]).n_pings
+    bounds = np.linspace(0, n_pings, n_parts + 1).astype(int)
+    paths = []
+    for i in range(n_parts):
+        start, stop = int(bounds[i]), int(bounds[i + 1])
+        part_survey = SideScanSurvey(
+            source_files=survey.source_files, source_format=survey.source_format,
+            survey_name=f"{survey.survey_name}_part{i}",
+        )
+        for fk in freq_keys:
+            sliced = slice_by_pings(survey.get_frequency(fk), start=start, stop=stop)
+            part_survey.add_frequency(fk, sliced.dataset)
+        path = out_dir / f"part{i:02d}.ss.h5"
+        write_survey(part_survey, path)
+        paths.append(path)
+    return paths
+
+
+class TestDirectoryInput:
+    """``--input``/``--ss-h5`` accepting a directory of ``.ss.h5`` files
+    (lazily dask-concatenated in filename order, same convention
+    ``sidescan-export``'s own ``--ss-h5-dir`` already uses), added
+    2026-09-27 -- see ``cli._common.load_channel_dataset``'s own
+    docstring for the real motivation: a mission too large to
+    concatenate into one file at conversion time on a memory-constrained
+    container can now still be analyzed as one logical survey, without
+    losing cross-file gap/instability detection (the actual concern that
+    made a naive per-file-only analysis a real regression, not just an
+    inconvenience)."""
+
+    def test_nadir_directory_matches_single_file_result(self, tmp_path):
+        survey = _decay_survey(n_pings=10, n_samples=200)
+        single_path = tmp_path / "single.ss.h5"
+        write_survey(survey, single_path)
+        part_dir = tmp_path / "parts"
+        _write_survey_in_parts(survey, part_dir, n_parts=2)
+
+        single_args = TestRunNadir()._args(tmp_path, single_path, output_dir=tmp_path / "out_single")
+        dir_args = TestRunNadir()._args(tmp_path, part_dir, output_dir=tmp_path / "out_dir")
+        assert analyze.run_nadir(single_args) == 0
+        assert analyze.run_nadir(dir_args) == 0
+
+        single_metrics = json.loads((tmp_path / "out_single" / "metrics.json").read_text())
+        dir_metrics = json.loads((tmp_path / "out_dir" / "metrics.json").read_text())
+        assert single_metrics["classification"] == dir_metrics["classification"]
+        assert single_metrics["metrics"]["nadir_mean"] == pytest.approx(dir_metrics["metrics"]["nadir_mean"])
+
+    def test_tvg_fit_directory_input_succeeds(self, tmp_path):
+        survey = _decay_survey(n_pings=10, n_samples=800)
+        part_dir = tmp_path / "parts"
+        _write_survey_in_parts(survey, part_dir, n_parts=2)
+
+        args = TestRunTvgFit()._args(tmp_path, part_dir)
+        assert analyze.run_tvg_fit(args) == 0
+        assert list((tmp_path / "out").glob("*.png"))
+
+    def test_recommend_config_directory_input_succeeds(self, tmp_path):
+        survey = _decay_survey(n_pings=10, n_samples=800)
+        part_dir = tmp_path / "parts"
+        _write_survey_in_parts(survey, part_dir, n_parts=2)
+
+        args = TestRunRecommendConfig()._args(tmp_path, part_dir)
+        assert analyze.run_recommend_config(args) == 0
+        text = (tmp_path / "out" / "recommended_config.yaml").read_text()
+        assert "resolution_m:" in text
+
+    def test_segment_directory_input_detects_gap_across_file_boundary(self, tmp_path):
+        """The actual point of this whole capability: a real position
+        jump right at the seam between two originally-separate files
+        must still be detected and placed as a real segment boundary
+        when analyzing the directory as one concatenated timeline --
+        proving this isn't just "runs without crashing" but genuinely
+        preserves cross-file detection. Two independent per-file calls
+        (the alternative without directory support) would each just
+        report their own [0:100] as "section1", with no way to know they
+        were ever adjacent or where the real seam was; one continuous
+        (but gap-blind) concatenation would instead wrongly merge them
+        into one falsely-continuous [0:200) clean stretch. Either failure
+        mode is avoided here: exactly two segments, split precisely at
+        the real file boundary."""
+        n_pings = 100
+        near_survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        ds_near = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=50, freq_hz_start=1_495_000)
+        ds_near["latitude"] = ("ping", np.linspace(41.0000, 41.0100, n_pings))
+        ds_near["longitude"] = ("ping", np.linspace(-71.0000, -71.0000, n_pings))
+        near_survey.add_frequency("hz_1495000", ds_near)
+
+        far_survey = SideScanSurvey(source_files=["b.jsf"], source_format="JSF", survey_name="b")
+        ds_far = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=50, freq_hz_start=1_495_000)
+        # A real position jump relative to near_survey's own ping spacing
+        # (~0.0001 deg/ping above) -- several degrees away, unmistakably
+        # a gap, not ordinary ping-to-ping noise.
+        ds_far["latitude"] = ("ping", np.linspace(45.0000, 45.0100, n_pings))
+        ds_far["longitude"] = ("ping", np.linspace(-71.0000, -71.0000, n_pings))
+        far_survey.add_frequency("hz_1495000", ds_far)
+
+        part_dir = tmp_path / "parts"
+        part_dir.mkdir()
+        write_survey(near_survey, part_dir / "part00.ss.h5")
+        write_survey(far_survey, part_dir / "part01.ss.h5")
+
+        args = TestRunSegment()._args(tmp_path, part_dir, pings=(0, None))
+        assert analyze.run_segment(args) == 0
+
+        report = json.loads((tmp_path / "out" / "segments.json").read_text())
+        segments = report["segments"]
+        assert len(segments) == 2
+        assert all(s["status"] == "clean" for s in segments)
+        boundaries = sorted(s["start"] for s in segments) + sorted(s["stop"] for s in segments)
+        assert n_pings in boundaries  # the real file seam, not silently merged or lost
+        total_pings = sum(s["stop"] - s["start"] for s in segments)
+        assert total_pings == 2 * n_pings
+
+    def test_missing_ss_h5_dir_raises_file_not_found(self, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        args = TestRunNadir()._args(tmp_path, empty_dir)
+        with pytest.raises(FileNotFoundError):
+            analyze.run_nadir(args)
+
+
 class TestParseHelpers:
     def test_parse_ping_range(self):
         assert analyze._parse_ping_range("0:100") == (0, 100)
