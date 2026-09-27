@@ -547,7 +547,7 @@ class TestCorrelateTarget:
     right there on the object. These test the fallback directly against
     a hand-built index, rather than only indirectly through run_chip."""
 
-    def _index(self, *, lat, lon, n_pings, freq_key="hz_1495000", sample_interval_m=0.05, n_samples=1000):
+    def _index(self, *, lat, lon, n_pings, freq_key="hz_1495000", sample_interval_m=0.05, n_samples=1000, ping_start=0):
         return {
             Path("a.ss.h5"): {
                 freq_key: {
@@ -556,6 +556,7 @@ class TestCorrelateTarget:
                     "sample_interval_m": sample_interval_m,
                     "n_samples": n_samples,
                     "n_pings": n_pings,
+                    "ping_start": ping_start,
                 }
             }
         }
@@ -626,11 +627,69 @@ class TestCorrelateTarget:
         lon = np.linspace(-70.0, -70.001, 20)
         index = self._index(lat=lat, lon=lon, n_pings=20)
         index[Path("b.ss.h5")] = {
-            "hz_1495000": {"lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000, "n_pings": 20},
+            "hz_1495000": {
+                "lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000,
+                "n_pings": 20, "ping_start": 0,
+            },
         }
         t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
 
         assert export._correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_ping_fallback_uses_global_ping_start_not_local_zero_based_index(self):
+        """Real bug, found 2026-09-27 from a downstream consumer's
+        multi-part-converted mission: every target failed to correlate
+        (all "no ss_h5 ping within Nm" warnings) once a survey's own
+        ping/ping_number coordinate stopped starting at 0 for every file
+        -- true for ANY directory of several globally-renumbered .ss.h5
+        files (segment's own sectionN.ss.h5 outputs already do this,
+        not just the new per-source-file conversion output that
+        triggered this report). The old `0 <= target.ping < n_pings`
+        check silently assumed every file's own ping axis is locally
+        zero-based, which was only ever true for a single, lone file."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        # This file covers mission-global pings [100, 120) -- NOT [0, 20).
+        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=100)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=107)
+
+        result = export._correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert ping_idx == 7  # 107 - ping_start(100) -- the correct LOCAL array index
+        assert dist_m == 0.0
+
+    def test_ping_fallback_global_ping_before_this_files_range_returns_none(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=100)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
+
+        assert export._correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_ping_fallback_across_two_globally_offset_files_picks_the_right_one(self):
+        """The real multi-part scenario: two files, each internally
+        zero-based-*looking* by n_pings alone, but covering disjoint
+        global ping ranges -- exactly one must claim a given global
+        ping, at the right LOCAL index within it."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=0)
+        index[Path("b.ss.h5")] = {
+            "hz_1495000": {
+                "lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000,
+                "n_pings": 20, "ping_start": 20,
+            },
+        }
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=25)
+
+        result = export._correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert path == Path("b.ss.h5")
+        assert ping_idx == 5  # 25 - ping_start(20)
 
 
 class TestRunChip:

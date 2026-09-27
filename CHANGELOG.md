@@ -7,6 +7,42 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### `sidescan-export chip`'s ping-fallback target correlation assumed every file's ping axis starts at 0 (2026-09-27)
+
+Real bug, found from a downstream consumer's multi-part-converted
+mission (see the "Added" entry above -- built the same day for the same
+underlying need): `_correlate_target()`'s ping-based fallback (for a
+target with no recorded GPS lat/lon, or one too far from the survey's
+own track -- the exact case `vendor_hdf5`'s vendor-format `targets.csv`
+targets always hit, since that catalog has no GPS column at all) checked
+`0 <= target.ping < n_pings` -- a bare ping-*count* bound that silently
+assumed every `.ss.h5` file's own ping axis is locally zero-based. True
+for a single, lone file (the only case ever exercised before), false for
+ANY directory of several `.ss.h5` files sharing one globally-renumbered
+ping/ping_number coordinate -- which includes `sidescan-analyze
+segment`'s own `sectionN.ss.h5` outputs, not just the new per-source-file
+conversion output that actually triggered this report. Every target on
+such a mission failed to correlate at all ("no ss_h5 ping within Nm of
+its recorded position" for every single one, `sidescan-export chip`
+producing zero output).
+
+- `_build_position_index()` now also records each channel's own
+  `ping_start` (that file's first ping's value on the mission-global
+  axis -- 0 for a lone/first file, not always 0 otherwise).
+- `_correlate_target()`'s ping fallback converts `target.ping` (always
+  mission-global) into the correct LOCAL array index via
+  `target.ping - ping_start`, instead of assuming they're the same
+  number.
+- Tests: `TestCorrelateTarget` gained 3 (`ping_fallback_uses_global_
+  ping_start_not_local_zero_based_index`, `..._before_this_files_range_
+  returns_none`, `..._across_two_globally_offset_files_picks_the_right_
+  one`); the existing 6 updated to set `ping_start` explicitly (default
+  0, preserving their exact prior behavior/assertions). Full suite: 1658
+  passing / 36 skipped (was 1655).
+- Version bumped 0.4.36 -> 0.4.37.
+
 ### Added
 
 #### `sidescan-analyze`'s subcommands accept a directory of `.ss.h5` files, same convention as `sidescan-export --ss-h5-dir` (2026-09-27)

@@ -554,6 +554,16 @@ def _build_position_index(ss_h5_dir: Path) -> dict[Path, dict]:
                 "sample_interval_m": sample_interval_m,
                 "n_samples": ds.sizes["sample"],
                 "n_pings": ds.sizes["ping"],
+                # This file's own first ping's value on the survey's
+                # MISSION-GLOBAL ping axis -- 0 for a lone/first file,
+                # but NOT always 0 for a directory of several .ss.h5
+                # files (segment's own sectionN.ss.h5 outputs, or any
+                # per-source-file conversion output that globally
+                # renumbers ping/ping_number across files) -- see
+                # _correlate_target's ping-fallback branch, which needs
+                # this to convert a target's global ping into the right
+                # LOCAL array index for this specific file.
+                "ping_start": int(ds["ping"].values[0]),
             }
         index[path] = channels
     return index
@@ -613,8 +623,19 @@ def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
         candidates = []
         for path, channels in index.items():
             freq_key = _match_frequency(channels, target_mps)
-            if 0 <= target.ping < channels[freq_key]["n_pings"]:
-                candidates.append((path, freq_key, int(target.ping), 0.0))
+            c = channels[freq_key]
+            # target.ping is a MISSION-GLOBAL ping index (see module
+            # docstring / project_to_survey_pings) -- convert to this
+            # file's own LOCAL array index via its recorded ping_start,
+            # not a bare 0..n_pings-1 check, which silently assumed every
+            # file's own ping axis starts at 0 (true for a lone file, not
+            # true for a directory of several globally-renumbered files
+            # -- a real bug this fixes, found from a real field
+            # report: every target on a multi-part-converted mission
+            # failed to correlate at all).
+            local_idx = int(target.ping) - c["ping_start"]
+            if 0 <= local_idx < c["n_pings"]:
+                candidates.append((path, freq_key, local_idx, 0.0))
         if len(candidates) == 1:
             return candidates[0]
 
