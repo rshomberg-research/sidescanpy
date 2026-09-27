@@ -833,6 +833,7 @@ def _extract_geo_style_window(
     masked, t, channel_idx: int, local_ping: int, style: str, level: str, size_px: int, jitter_px: int,
     rng: np.random.Generator, mps: float, items_by_channel: dict, lo: int,
     resolution_m_override: float | None = None,
+    backscatter_var: str = "backscatter_intensity",
 ) -> tuple[np.ndarray, list] | None:
     """``geometric``/``georef`` (real-meters) window + the primary target's
     own position within it.
@@ -873,6 +874,15 @@ def _extract_geo_style_window(
     is still computed either way; it also feeds ``bbox_size_px``'s own
     unit conversion, independent of which resolution the crop itself
     renders at.
+
+    ``backscatter_var``, added 2026-09-28 (real user ask: raw vs.
+    radiometric values weren't independently selectable once a
+    geometric/georef *coordinate* system was chosen -- render-level
+    conflated the two axes), selects which variable the resampled grid
+    is actually built from -- passed straight through to
+    ``extract_geometric_window``/``extract_georef_window``, which
+    already supported this at the library level; only the CLI wiring
+    was missing.
     """
     if t.sample is None or not (0 <= t.sample < masked.sizes["sample"]):
         return None
@@ -908,7 +918,7 @@ def _extract_geo_style_window(
             grid, meta = extract_geometric_window(
                 masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
                 center_across_m=center_across_m, channel_idx=geom_channel_idx, search_radius_m=geo_search_radius_m,
-                avoid_edge_gaps=True,
+                avoid_edge_gaps=True, backscatter_var=backscatter_var,
             )
         except ValueError:
             return None
@@ -937,12 +947,12 @@ def _extract_geo_style_window(
         if not combine:
             excluded = 1 - channel_idx
             georef_input = masked.copy()
-            georef_input["backscatter_intensity"] = georef_input["backscatter_intensity"].copy()
-            georef_input["backscatter_intensity"][{"channel": excluded}] = np.nan
+            georef_input[backscatter_var] = georef_input[backscatter_var].copy()
+            georef_input[backscatter_var][{"channel": excluded}] = np.nan
         try:
             raster, meta = extract_georef_window(
                 georef_input, size_px, resolution_m=resolution_m, center_lat=center_lat, center_lon=center_lon,
-                max_search_radius_m=geo_search_radius_m,
+                max_search_radius_m=geo_search_radius_m, backscatter_var=backscatter_var,
             )
         except (ValueError, KeyError):
             return None
@@ -970,6 +980,19 @@ def run_chip(args: argparse.Namespace) -> int:
             "(native pixel crop, no resolution_m concept) -- ignoring it",
         )
         resolution_m_override = None
+
+    # --render-level raw/radiometric already fully determines pixel-style
+    # values (see _extract_pixel_style_window); --value-var only matters
+    # once a geometric/georef coordinate system is in play (chip styles,
+    # and --with-context in either coordinate mode -- see run_chip's own
+    # --with-context handling below).
+    value_var = getattr(args, "value_var", "radiometric")
+    if value_var == "raw" and args.render_level in ("raw", "radiometric"):
+        logger.warning(
+            f"--value-var=raw has no effect under --render-level {args.render_level!r} -- that flag alone already "
+            "selects raw vs. radiometric for pixel-space styles; ignoring --value-var",
+        )
+    backscatter_var = "backscatter_raw" if value_var == "raw" else "backscatter_intensity"
 
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
@@ -1055,19 +1078,53 @@ def run_chip(args: argparse.Namespace) -> int:
                 mps = _sample_interval_m(masked)
 
                 if args.with_context:
-                    port_2d = masked["backscatter_intensity"].isel(channel=0).values
-                    stbd_2d = masked["backscatter_intensity"].isel(channel=1).values
-                    combined = _combine_channels_mirrored(port_2d, stbd_2d)
-                    combined_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
-                    context_target = replace(t, sample=combined_col, extra_attributes={**t.extra_attributes, "window_row": local_ping})
-                    # "combined" is the same port-mirrored dual-swath layout
-                    # _extract_pixel_style_window builds -- reuse the same
-                    # orientation fix (style="dual-swath" skips the
-                    # already-applied horizontal mirror, only flips vertically).
-                    combined, (context_target,) = _orient_pixel_window(combined, [context_target], channel_idx, "dual-swath")
-                    fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size))
-                    fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                    plt.close(fig)
+                    if args.render_level in ("raw", "radiometric"):
+                        # Native pixel-space QA view -- always the FULL
+                        # loaded neighborhood (both channels, mirrored/
+                        # combined), never a jittered/cropped target
+                        # window, matching its "ground truth" purpose.
+                        # --value-var (default radiometric, matching this
+                        # branch's own long-standing behavior) is the only
+                        # thing that varies here -- coordinate system was
+                        # always native pixel space and stays that way.
+                        port_2d = masked[backscatter_var].isel(channel=0).values
+                        stbd_2d = masked[backscatter_var].isel(channel=1).values
+                        combined = _combine_channels_mirrored(port_2d, stbd_2d)
+                        combined_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
+                        context_target = replace(t, sample=combined_col, extra_attributes={**t.extra_attributes, "window_row": local_ping})
+                        # "combined" is the same port-mirrored dual-swath layout
+                        # _extract_pixel_style_window builds -- reuse the same
+                        # orientation fix (style="dual-swath" skips the
+                        # already-applied horizontal mirror, only flips vertically).
+                        combined, (context_target,) = _orient_pixel_window(combined, [context_target], channel_idx, "dual-swath")
+                        fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size))
+                        fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                        plt.close(fig)
+                    else:
+                        # Geometric/georef QA view (2026-09-28, real user
+                        # ask): the same "whole loaded neighborhood, both
+                        # channels pooled" shape as the pixel branch above,
+                        # but resampled into real-world coordinates --
+                        # reuses "dual-swath"'s own extraction (already
+                        # pools both channels into one real-meters grid
+                        # covering the swath), just with jitter_px=0 so the
+                        # drawn box sits at the TRUE position, matching
+                        # this feature's QA purpose (chip's own jitter is a
+                        # training-data augmentation, not appropriate
+                        # here). Uses --swath-size-px, same as single-swath/
+                        # dual-swath chip styles, not a separate size knob.
+                        context_result = _extract_geo_style_window(
+                            masked, t, channel_idx, local_ping, "dual-swath", args.render_level,
+                            args.swath_size_px, 0, rng, mps, items_by_channel, lo,
+                            resolution_m_override=resolution_m_override, backscatter_var=backscatter_var,
+                        )
+                        if context_result is None:
+                            logger.warning(f"target {t.target_id}: context/{args.render_level} window unavailable, skipping context")
+                        else:
+                            grid, context_targets = context_result
+                            fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size))
+                            fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                            plt.close(fig)
 
                 for style in styles:
                     size_px = _style_size_px(style, args)
@@ -1079,7 +1136,7 @@ def run_chip(args: argparse.Namespace) -> int:
                     else:
                         result = _extract_geo_style_window(
                             masked, t, channel_idx, local_ping, style, args.render_level, size_px, args.jitter_px, rng, mps,
-                            items_by_channel, lo, resolution_m_override=resolution_m_override,
+                            items_by_channel, lo, resolution_m_override=resolution_m_override, backscatter_var=backscatter_var,
                         )
                     if result is None:
                         logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")
@@ -1648,13 +1705,24 @@ def main() -> int:
              "'raw'/'radiometric' render level, which crops in native pixel space and has no resolution_m "
              "concept at all.",
     )
+    p_chip.add_argument(
+        "--value-var", choices=["raw", "radiometric"], default="radiometric",
+        help="backscatter_raw vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
+             "styles AND --with-context, in either coordinate mode) -- independent of --render-level, "
+             "which already fully determines this for 'raw'/'radiometric' render levels (no effect there, "
+             "logged not an error). Added 2026-09-28 so coordinate system and value processing are "
+             "independently selectable, instead of --render-level conflating both.",
+    )
     p_chip.add_argument("--box-size", type=float, default=40.0, help="COCO/YOLO annotation box size AND (with --with-context) the drawn box size, in pixels")
     p_chip.add_argument(
         "--with-context", action="store_true",
         help="Also save context/context_<id>.png -- the full loaded ping neighborhood, BOTH channels "
              "combined (port+starboard), with a real box drawn at the target's true position, via "
-             "sidescanpy.viz.render_target_context. Independent of --styles/--render-level -- always "
-             "radiometric-level, matching this feature's existing QA-visualization purpose.",
+             "sidescanpy.viz.render_target_context. Independent of --styles -- but, as of 2026-09-28, "
+             "follows --render-level's own coordinate choice (native pixel space for 'raw'/'radiometric', "
+             "a real-meters resampled grid -- same shape as the 'dual-swath' style -- for "
+             "'geometric'/'georef') and --value-var's raw/radiometric choice, rather than always being a "
+             "fixed radiometric pixel-space view.",
     )
     p_chip.add_argument("--jitter-px", type=int, default=0)
     p_chip.add_argument("--gamma", type=float, default=common["gamma"])

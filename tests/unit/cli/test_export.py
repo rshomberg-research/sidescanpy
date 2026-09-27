@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
+from PIL import Image
 
 from sidescanpy.cli import export
 from sidescanpy.core import HDF5_CHUNK_PING
@@ -737,6 +738,69 @@ class TestRunChip:
         context_path = tmp_path / "out" / "context" / "context_7.png"
         assert context_path.exists()
         assert context_path.stat().st_size > 0
+
+    def test_with_context_geometric_render_level_writes_boxed_context_image(self, tmp_path, georef_ss_h5_dir):
+        """Real user ask, 2026-09-28: context in geometric/georef
+        coordinates, not just native pixel space -- context now follows
+        --render-level's own coordinate choice instead of always being a
+        fixed pixel-space view."""
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, with_context=True, render_level="geometric")
+        assert export.run_chip(args) == 0
+
+        context_path = tmp_path / "out" / "context" / "context_7.png"
+        assert context_path.exists()
+        assert context_path.stat().st_size > 0
+
+    def test_with_context_georef_render_level_writes_boxed_context_image(self, tmp_path, georef_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, with_context=True, render_level="georef")
+        assert export.run_chip(args) == 0
+
+        context_path = tmp_path / "out" / "context" / "context_7.png"
+        assert context_path.exists()
+        assert context_path.stat().st_size > 0
+
+    def test_value_var_raw_changes_geometric_chip_pixels(self, tmp_path, georef_ss_h5_dir):
+        """--value-var is the direct answer to the other half of the same
+        2026-09-28 request: raw vs. radiometric independently selectable
+        from the geometric/georef coordinate choice, not fixed to
+        radiometric. A real pixel-value difference, not just "doesn't
+        crash" -- backscatter_raw vs. backscatter_intensity are genuinely
+        different arrays (TVG correction changes the values)."""
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        out_radiometric = tmp_path / "out_radiometric"
+        args_radiometric = self._args(
+            tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric",
+            value_var="radiometric", output=out_radiometric, seed=0,
+        )
+        assert export.run_chip(args_radiometric) == 0
+
+        out_raw = tmp_path / "out_raw"
+        args_raw = self._args(
+            tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric",
+            value_var="raw", output=out_raw, seed=0,
+        )
+        assert export.run_chip(args_raw) == 0
+
+        img_radiometric = np.asarray(Image.open(out_radiometric / "chip" / "target_7.png"))
+        img_raw = np.asarray(Image.open(out_raw / "chip" / "target_7.png"))
+        assert img_radiometric.shape == img_raw.shape
+        assert not np.array_equal(img_radiometric, img_raw)
+
+    def test_value_var_raw_has_no_effect_and_warns_under_radiometric_render_level(self, tmp_path, georef_ss_h5_dir, caplog):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="radiometric", value_var="raw")
+        assert export.run_chip(args) == 0
+        assert any("--value-var=raw has no effect" in r.message for r in caplog.records)
 
     def test_min_confidence_reaches_coco_yolo_writers(self, tmp_path, georef_ss_h5_dir):
         """Real bug found running this against real Klein SDF data: Klein

@@ -7,6 +7,49 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+#### `sidescan-export chip --value-var` -- raw vs. radiometric, independently of the geometric/georef coordinate choice; `--with-context` follows `--render-level` (2026-09-28)
+
+Real user request: coordinate system (native pixel vs. geometric/georef
+real-meters) and value processing (raw vs. TVG-corrected) were
+conflated into one `--render-level` enum -- `raw`/`radiometric` only
+ever differed in *values* (both native pixel space), `geometric`/
+`georef` only ever differed in *coordinates* (both hardcoded
+radiometric). There was no way to get geometric coordinates with raw
+values, or vice versa. Also asked directly: does `--with-context`
+support a geometric/georef view at all? It didn't -- always a fixed
+native-pixel-space, always-radiometric QA snapshot, regardless of
+`--render-level`.
+
+- New `--value-var {raw,radiometric}` (default `radiometric`, matching
+  every existing caller's behavior exactly) on `chip` -- selects
+  `backscatter_raw` vs. `backscatter_intensity` for geometric/georef
+  chip styles and for `--with-context` in either coordinate mode.
+  `extract_geometric_window`/`extract_georef_window` (in
+  `sidescanpy.export`) already had a `backscatter_var` parameter for
+  this at the library level -- only the CLI wiring (`_extract_geo_style_
+  window`, `run_chip`) was missing. No effect (logged, not an error,
+  matching `--resolution-m`'s own existing pattern) under `--render-level
+  raw`/`radiometric`, which already fully determines this via
+  render-level itself.
+- `--with-context` now follows `--render-level`'s own coordinate choice
+  instead of being hardcoded to native pixel space: under `geometric`/
+  `georef`, it reuses the same "dual-swath" extraction (both channels
+  pooled into one real-meters grid, sized via `--swath-size-px`) with
+  `jitter_px=0` so the drawn box sits at the target's TRUE position
+  (chip's own jitter is a training-data augmentation, not appropriate
+  for a QA view). Under `raw`/`radiometric`, unchanged -- still the full
+  loaded pixel-space neighborhood, now honoring `--value-var` instead of
+  being hardcoded to `backscatter_intensity`.
+- Tests: `TestRunChip` gained 4 -- context under `geometric`/`georef`
+  writes a real, non-empty image; `--value-var raw` produces genuinely
+  different chip pixels than `radiometric` at the same
+  `render_level="geometric"`; `--value-var raw` under `render_level=
+  "radiometric"` has no effect and logs why. Full suite: 1666 passing /
+  36 skipped (was 1662).
+- Version bumped 0.4.38 -> 0.4.39.
+
 ### Fixed
 
 #### Lazy-read chunk sizes across the CLI weren't multiples of the on-disk HDF5 chunk size (2026-09-28)
