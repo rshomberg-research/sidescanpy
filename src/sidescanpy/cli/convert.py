@@ -132,7 +132,7 @@ def run_survey(args: argparse.Namespace) -> int:
     results = []
     for i, path in enumerate(files, 1):
         elapsed = time.time() - start_time
-        logger.debug(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
+        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
         result = _convert_one_file(path, output_dir=output_dir, force=args.force)
         results.append(result)
         if result["status"] == "success":

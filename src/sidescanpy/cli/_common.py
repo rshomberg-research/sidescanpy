@@ -172,7 +172,7 @@ def process_files_in_place_chunked(
     results = []
     for i, path in enumerate(files, 1):
         elapsed = time.time() - start_time
-        logger.debug(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s, chunk={ping_chunk_size} pings)")
+        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s, chunk={ping_chunk_size} pings)")
         result = {"path": path, "status": "", "error": ""}
 
         if not check_disk_space(path, disk_multiplier):
@@ -283,7 +283,7 @@ def process_files_in_place(
     results = []
     for i, path in enumerate(files, 1):
         elapsed = time.time() - start_time
-        logger.debug(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
+        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
         result = {"path": path, "status": "", "error": ""}
 
         if not check_disk_space(path, disk_multiplier):

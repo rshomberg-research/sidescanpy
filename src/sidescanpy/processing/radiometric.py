@@ -291,7 +291,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
             ds.attrs["freq_hz_start"]
         )
 
-    logger.info(
+    logger.debug(
         "Applying TVG: freq=%s Hz, spreading=%.1f dB/dec, absorption=%.4f dB/m",
         ds.attrs["freq_hz_start"],
         params.spreading_loss_db,
@@ -411,7 +411,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     ds_out.attrs["processing_level"] = "radiometric"
     ds_out.attrs["processing_history"] = json.dumps(history)
 
-    logger.info(
+    logger.debug(
         "TVG applied successfully. Output: processing_level='radiometric', "
         "processing_history appended with step 'tvg_correction'."
     )

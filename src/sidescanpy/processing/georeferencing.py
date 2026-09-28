@@ -178,7 +178,7 @@ def compute_georeferencing(
     )
     out.attrs["processing_history"] = json.dumps(history)
 
-    logger.info(
+    logger.debug(
         "compute_georeferencing: added latitude_per_sample and "
         "longitude_per_sample for %d pings × %d channels × %d samples "
         "(ellipsoid=%s)",

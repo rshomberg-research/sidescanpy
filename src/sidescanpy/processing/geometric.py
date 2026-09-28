@@ -252,7 +252,7 @@ def compute_geometric_ranges(
     )
     out.attrs["processing_history"] = json.dumps(history)
 
-    logger.info(
+    logger.debug(
         "compute_geometric_ranges: added 6 per-sample variables for %d "
         "pings × %d channels × %d samples",
         n_pings, n_channels, n_samples,
