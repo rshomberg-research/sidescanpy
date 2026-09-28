@@ -70,6 +70,20 @@ class TestPlotWaterfallPingOffset:
             plt.close(fig)
 
 
+class TestNanRendersBlack:
+    # 2026-09-28: standardized NaN-cell rendering to black across every
+    # sidescanpy output (user request) -- matplotlib's own default is
+    # transparent, which shows through to white in most exports.
+    def test_pcolormesh_cmap_has_black_bad_color(self, sample_dataset):
+        fig, ax = plt.subplots()
+        try:
+            plot_waterfall(sample_dataset, y_axis="ping", ax=ax)
+            mesh = ax.collections[-1]
+            np.testing.assert_array_equal(mesh.get_cmap().get_bad(), (0.0, 0.0, 0.0, 1.0))
+        finally:
+            plt.close(fig)
+
+
 class TestMaskFloorClip:
     """Floor-clip artifact values (sidescanpy/CLAUDE.md Known Issue #5) are
     not real backscatter returns and should be masked to NaN, not treated

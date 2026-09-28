@@ -92,6 +92,27 @@ def test_contact_sheet_multiple_targets_per_thumbnail(sample_target):
     assert len(ax.patches) == 2
 
 
+def test_contact_sheet_renders_nan_as_black():
+    # 2026-09-28: standardized NaN-cell rendering to black across every
+    # sidescanpy output (user request) -- matplotlib's own default is
+    # transparent, which shows through to white in most exports.
+    image = np.random.default_rng(0).random((10, 10))
+    image[3, 3] = np.nan
+    fig = contact_sheet([image], ["a"])
+    ax = fig.get_axes()[0]
+    im = ax.images[0]
+    np.testing.assert_array_equal(im.get_cmap().get_bad(), (0.0, 0.0, 0.0, 1.0))
+
+
+def test_render_target_context_renders_nan_as_black(sample_target):
+    window = np.random.default_rng(0).random((10, 30))
+    window[2, 2] = np.nan
+    fig = render_target_context(window, sample_target, box_size=(6, 6))
+    ax = fig.get_axes()[0]
+    im = ax.images[0]
+    np.testing.assert_array_equal(im.get_cmap().get_bad(), (0.0, 0.0, 0.0, 1.0))
+
+
 def test_render_target_context_draws_box(sample_target):
     rng = np.random.default_rng(0)
     window = rng.random((10, 30))

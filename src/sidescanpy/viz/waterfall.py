@@ -18,6 +18,8 @@ from matplotlib.axes import Axes
 from matplotlib.colors import Colormap, PowerNorm
 from matplotlib.ticker import FuncFormatter
 
+from sidescanpy.viz._cmap import resolve_cmap
+
 logger = logging.getLogger(__name__)
 
 
@@ -204,14 +206,15 @@ def plot_waterfall(
     # array and colorbar stay real dB (never renormalized to [0, 1]).
     norm = PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax) if gamma != 1.0 else None
     scale_kwargs = {"norm": norm} if norm is not None else {"vmin": vmin, "vmax": vmax}
+    resolved_cmap = resolve_cmap(cmap)
 
     ax.pcolormesh(
         x_port, y_port_clean, c_port,
-        cmap=cmap, shading="nearest", rasterized=True, **scale_kwargs,
+        cmap=resolved_cmap, shading="nearest", rasterized=True, **scale_kwargs,
     )
     mesh_stbd = ax.pcolormesh(
         x_stbd, y_stbd_clean, c_stbd,
-        cmap=cmap, shading="nearest", rasterized=True, **scale_kwargs,
+        cmap=resolved_cmap, shading="nearest", rasterized=True, **scale_kwargs,
     )
 
     if show_colorbar:

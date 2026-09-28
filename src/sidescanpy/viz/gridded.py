@@ -12,6 +12,7 @@ import matplotlib.colors as mcolors
 import numpy as np
 
 from sidescanpy.grids.raster import SideScanGriddedRaster
+from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +195,7 @@ def plot_gridded_raster(
         xs,
         ys,
         backscatter_masked,
-        cmap=cmap,
+        cmap=resolve_cmap(cmap),
         shading="auto",
         zorder=1,
         **scale_kwargs,
@@ -342,7 +343,7 @@ def plot_gridded_with_coverage(
     # Create RGBA image
     backscatter_masked = np.ma.masked_invalid(backscatter)
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-    cmap_obj = plt.get_cmap(cmap)
+    cmap_obj = resolve_cmap(cmap)
 
     # Map backscatter to colors, then apply alpha
     colors = cmap_obj(norm(backscatter))
@@ -451,7 +452,7 @@ def plot_gridded_multiple_methods(
             xs,
             ys,
             backscatter_masked,
-            cmap=cmap,
+            cmap=resolve_cmap(cmap),
             vmin=vmin,
             vmax=vmax,
             shading="auto",

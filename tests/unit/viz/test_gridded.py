@@ -198,6 +198,16 @@ class TestPlotGriddedRaster:
         assert fig is not None
         plt.close(fig)
 
+    def test_nan_renders_black(self, sample_raster):
+        # 2026-09-28: standardized NaN-cell rendering to black across
+        # every sidescanpy output (user request) -- matplotlib's own
+        # default is transparent, which shows through to white in most
+        # exports.
+        fig, ax = plot_gridded_raster(sample_raster)
+        mesh = ax.collections[-1]
+        np.testing.assert_array_equal(mesh.get_cmap().get_bad(), (0.0, 0.0, 0.0, 1.0))
+        plt.close(fig)
+
     def test_plot_with_vmin_vmax(self, sample_raster):
         """Specify colorbar range."""
         fig, ax = plot_gridded_raster(
@@ -395,6 +405,13 @@ class TestPlotMultipleMethods:
 
         assert fig is not None
         assert axes.shape == (1, 3)
+        plt.close(fig)
+
+    def test_multi_method_nan_renders_black(self, sample_raster):
+        rasters = {"mean": sample_raster, "max": sample_raster}
+        fig, axes = plot_gridded_multiple_methods(rasters)
+        mesh = axes[0, 0].collections[-1]
+        np.testing.assert_array_equal(mesh.get_cmap().get_bad(), (0.0, 0.0, 0.0, 1.0))
         plt.close(fig)
 
     def test_multi_method_many_subplots(self, sample_raster):

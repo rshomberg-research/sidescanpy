@@ -9,6 +9,38 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### NaN cells render black everywhere, not transparent-onto-white (2026-09-28)
+
+Real user instruction, from the same target-crop verification work as
+the anisotropic-search-radius fix below: "make sure that we always use
+black for nan across all of our outputs as the standard." No `set_bad`
+call existed anywhere in the codebase — NaN rendered via matplotlib's
+own default (transparent), which every export path checked composites
+over a white background, matching the user's "filled white" report
+exactly.
+
+- New `viz/_cmap.py: resolve_cmap()` — the one place a `cmap: str |
+  Colormap` argument gets resolved to an actual `Colormap` object,
+  applied by default (not opt-in) rather than duplicated per call site.
+  Accepts either a registered name or an existing `Colormap` instance;
+  always returns a copy via `with_extremes(bad="black")` so the shared,
+  registry-wide colormap a bare name resolves to is never mutated.
+- Wired into every real backscatter-imagery plotting call:
+  `viz/contact_sheet.py` (`contact_sheet()`, `render_target_context()`),
+  `viz/waterfall.py` (`plot_waterfall()`, and transitively
+  `plot_survey_overview()`), `viz/gridded.py` (`plot_gridded_raster()`,
+  `plot_gridded_with_coverage()`, `plot_gridded_multiple_methods()`, and
+  transitively `export_gridded_png()`). `cli/export.py`'s cmap-consuming
+  call sites all pass through to these functions already — no direct
+  `imshow`/`pcolormesh` calls of its own, so no changes needed there.
+- 10 new tests: `tests/unit/viz/test_cmap.py` (the helper directly —
+  NaN maps to the bad color, bad color is black, finite values
+  unaffected, accepts a name or a `Colormap` instance, never mutates
+  the shared registry colormap) plus one rendering-level regression
+  test per plotting function above confirming the actual returned
+  mesh/image's colormap has a black bad color. Full suite: 1703 passing
+  / 36 skipped (was 1693).
+
 #### `extract_geometric_window()`'s search radius is now anisotropic — blurry tight chips (2026-09-28)
 
 Real user report, direct follow-up to the earlier `resolution_m` fix:

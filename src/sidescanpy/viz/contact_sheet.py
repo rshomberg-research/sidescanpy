@@ -17,6 +17,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from sidescanpy.targets.core import Target, bbox_from_center
+from sidescanpy.viz._cmap import resolve_cmap
 
 _DEFAULT_CMAP = "copper"
 _DEFAULT_VMIN_PCT = 1.0
@@ -77,6 +78,7 @@ def contact_sheet(
     ncols = max(1, min(ncols, n)) if n else 1
     nrows = max(1, -(-n // ncols)) if n else 1
 
+    resolved_cmap = resolve_cmap(cmap)
     fig, axes = plt.subplots(
         nrows, ncols, figsize=(cell_size[0] * ncols, cell_size[1] * nrows), squeeze=False
     )
@@ -91,7 +93,7 @@ def contact_sheet(
             # chip file was confirmed square on disk, but contact sheets
             # made some look stretched -- a display bug here, not a data
             # bug in the export itself).
-            ax.imshow(image, cmap=cmap, vmin=vmin, vmax=vmax, aspect="equal")
+            ax.imshow(image, cmap=resolved_cmap, vmin=vmin, vmax=vmax, aspect="equal")
             ax.set_title(captions[idx], fontsize=8)
             for t in (boxes[idx] if boxes else []):
                 row = t.extra_attributes.get("window_row")
@@ -177,7 +179,7 @@ def render_target_context(
     fig_h = 5.0
     fig_w = fig_h * 2.56
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-    ax.imshow(window, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
+    ax.imshow(window, cmap=resolve_cmap(cmap), vmin=vmin, vmax=vmax, aspect="auto")
 
     x, y, w, h = bbox_from_center(row, col, box_size)
     ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="red", linewidth=1.5))
