@@ -20,6 +20,16 @@
   already ``--config``-seedable via the same YAML loader every other
   subcommand here uses.
 
+- ``nav-attitude`` — plots heading/pitch/roll/altitude/depth/heave and
+  the lon/lat position track for one ping range
+  (``sidescanpy.analysis.nav_attitude``), independent of backscatter
+  entirely. Flags a heading/yaw value that falls outside both the
+  [0,360) compass-bearing and [-180,180) signed conventions (this
+  library's own convention is compass bearing, CW from N) so it can be
+  visually distinguished from an ordinary survey-line turn. Meant for
+  the same targeted-ping-range workflow as ``nadir``/``beam-geometry``/
+  etc. above, not the full investigation pass.
+
 - ``recommend-config`` — runs Stage 4 (TVG term selection) and a new
   ping-geometry measurement (``resolution_m``) against a clean section,
   plus ``nadir``/``beam-geometry``/``usable-range``/``units`` for
@@ -93,6 +103,7 @@ from sidescanpy.analysis.investigation import (
     stage4_decay,
     stage5_units,
 )
+from sidescanpy.analysis.nav_attitude import nav_attitude_summary
 from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import available_frequencies, load_channel_dataset, resolve_freq_keys
@@ -115,6 +126,7 @@ from sidescanpy.viz.investigation import (
     plot_stage3_usable_range,
     plot_stage4_residuals,
 )
+from sidescanpy.viz.nav_attitude import plot_nav_attitude
 from sidescanpy.viz.tvg_diagnostics import plot_candidate_fit
 
 logger = logging.getLogger(__name__)
@@ -569,6 +581,41 @@ def run_units(args: argparse.Namespace) -> int:
 
 
 # ============================================================
+# nav-attitude
+# ============================================================
+
+def run_nav_attitude(args: argparse.Namespace) -> int:
+    """Navigation/attitude diagnostic (heading/pitch/roll/altitude/
+    depth/heave/position) for one ping range -- independent of
+    backscatter entirely, so unlike the other single-stage subcommands
+    above it needs neither ``--value-var`` nor geometric ranges. Point
+    it at the specific ping range a heading/attitude anomaly was
+    reported in and look at the trace directly.
+    """
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
+    start, stop = args.pings
+    ds = ds.isel(ping=slice(start, stop)).load()
+
+    result = nav_attitude_summary(ds, heading_var=args.heading_var)
+
+    logger.info(f"{args.input.name} / {freq_key}: {args.heading_var} classification = {result.classification}")
+    for note in result.notes:
+        logger.debug(f"  note: {note}")
+
+    with open(args.output_dir / "metrics.json", "w") as f:
+        json.dump(result.to_json_dict(), f, indent=2, default=str)
+
+    fig, _ = plot_nav_attitude(ds, ping_offset=start, result=result)
+    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nav_attitude.png"
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    logger.debug(f"wrote {out_path}")
+
+    return 0
+
+
+# ============================================================
 # recommend-config
 # ============================================================
 
@@ -763,6 +810,30 @@ def main() -> int:
     _common_single_channel_args(p_units)
     p_units.set_defaults(func=run_units)
 
+    p_nav = subparsers.add_parser(
+        "nav-attitude",
+        help="Plot heading/pitch/roll/altitude/depth/heave + position track for a ping range",
+    )
+    p_nav.add_argument(
+        "--input", required=True, type=Path,
+        help="Path to a .ss.h5 file, or a directory of them (lazily concatenated, same convention "
+             "as sidescan-export's own --ss-h5-dir)",
+    )
+    p_nav.add_argument(
+        "--frequency", type=str, default=None,
+        help="freq_hz_start (e.g. 1495000, resolved to freq_key 'hz_1495000') for JSF/SDF-style "
+             "surveys, or a literal freq_key for any other convention -- optional here since "
+             "nav/attitude fields are identical across every frequency channel of the same file "
+             "(default: first, sorted)",
+    )
+    p_nav.add_argument("--pings", type=_parse_ping_range, default=(0, 8000), help="'start:stop' (stop empty = all)")
+    p_nav.add_argument(
+        "--heading-var", type=str, default="heading_deg",
+        help="Which field to run the compass/signed convention check against",
+    )
+    p_nav.add_argument("--output-dir", required=True, type=Path)
+    p_nav.set_defaults(func=run_nav_attitude)
+
     p_rec = subparsers.add_parser(
         "recommend-config",
         help="Write one evidence-commented recommended config YAML for a clean section (TVG terms + resolution_m; "
@@ -786,7 +857,7 @@ def main() -> int:
     p_rec.add_argument("--output", required=True, type=Path, help="Where to write the recommended config YAML")
     p_rec.set_defaults(func=run_recommend_config)
 
-    for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_rec):
+    for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec):
         p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
@@ -799,7 +870,7 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_rec):
+        for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec):
             apply_config_defaults(p, config)
 
     args = parser.parse_args(argv)
