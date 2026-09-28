@@ -7,6 +7,122 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### Correction-loop progress line was DEBUG-only; per-chunk TVG/geometric/georef summaries weren't (2026-09-27)
+
+Real user complaint, follow-up to the 2026-09-28 CLI logging cleanup:
+"too many log messages, impossible to tell progress." Two separate
+problems, opposite direction each:
+
+- The 2026-09-28 cleanup moved the per-file `[i/N] <name> (elapsed:
+  ...)` progress line to DEBUG along with everything else — but that
+  line *is* the "what file and how far along" signal, so hiding it was
+  backwards. Promoted back to INFO in all three places it exists:
+  `cli/_common.py`'s chunked and non-chunked correction loops, and
+  `cli/convert.py`'s own loop.
+- The real dominant noise source wasn't touched by that cleanup at all:
+  `processing/radiometric.py: apply_tvg()` (2 calls),
+  `processing/geometric.py: compute_geometric_ranges()`, and
+  `processing/georeferencing.py: compute_georeferencing()` each log an
+  "applied successfully" line at INFO on *every call* — fine for the
+  non-chunked path (once per file), but `sidescan-correct
+  --ping-chunk-size` (`processing/chunked.py: correct_file_chunked()`)
+  calls all of these once **per chunk**, not once per file. A 5000-ping
+  file at `--ping-chunk-size 512` produced ~10 chunks x 4 lines = ~40
+  lines from correction alone, per file, with no `-v` involved. Demoted
+  all four to DEBUG.
+- Real-data verification: 5 real `project-a` files through
+  `sidescan-correct --tvg --geometric --georef --ping-chunk-size 512`
+  produced 24 lines total (one `[i/N]` line per file + final summary +
+  unrelated pre-existing warnings) — previously this would have been
+  dozens of lines per file from the chunked per-step summaries alone.
+  Full suite unaffected (no test asserts these specific log levels):
+  1686 passing / 36 skipped.
+
+#### `recommend-config`'s `resolution_m` now checks the range-axis sample interval too, not just ping spacing (2026-09-27)
+
+Real user question: "why is the recommended resolution equal to the
+ping spacing -- should it be at least 1/2 that for Nyquist, and why not
+use the sampling resolution instead since that's much lower?"
+`measure_ping_geometry()` measured only the along-track ping spacing
+and `render_recommended_config()` emitted it directly as `resolution_m`
+-- silently assuming ping spacing is always the coarser (limiting) of
+the sidescan swath's two anisotropic axes, without ever measuring the
+across-track range-axis sample interval to check. That assumption
+usually holds (ping rate is Hz-scale, sample rate is kHz-scale --
+confirmed on real data below, ~12x apart) but was never verified, and
+didn't match `sidescan-export chip`'s own runtime auto-calculation
+(`cli/export.py`), which already computes `max(mps, ping_spacing_m)` --
+the correct principle for a single isotropic output pixel size: it
+can't be finer than either axis actually supports without inventing
+detail on whichever axis is coarser.
+
+(Nyquist itself argues the opposite direction from "half": a sampled
+signal's smallest *reliably resolvable* feature is about 2x the sample
+spacing, not less than it -- if `resolution_m` meant "smallest
+resolvable feature" a literal Nyquist correction would make it
+*coarser*, not finer. What `resolution_m` actually is here is an output
+pixel/grid size fed straight to `sidescan-export`'s resampling, where
+the established convention -- already implemented in `export.py`, this
+fix just brings `recommend-config` in line with it -- is 1:1 with
+whichever native axis is coarser.)
+
+- `analysis/recommend.py: measure_ping_geometry()` now also returns
+  `sample_interval_m` -- measured directly off `slant_range_m` (constant
+  per ping, since it's linear in sample index) rather than recomputed
+  from `sound_vel_ms`/`sample_rate_hz` a second time, so it stays
+  correct regardless of how the caller's geometry was computed.
+- `render_recommended_config()` now emits `resolution_m =
+  max(ping_spacing_m_median, sample_interval_m)`, with both measured
+  numbers shown as evidence and the limiting axis named -- not just
+  ping spacing silently assumed. Backward compatible: a `geometry` dict
+  without `sample_interval_m` (or `None`) falls back to the prior
+  ping-spacing-only behavior exactly.
+- Real-data check, `project-a` `20251015170335.ss.h5`/`hz_1495000`,
+  pings 0:3000: ping spacing 0.0772 m vs. sample interval 0.0062 m --
+  ping spacing is indeed the coarser axis on this survey (as usually
+  expected), so the emitted number is numerically unchanged from
+  before, but now measured and shown, not assumed.
+- Tests: `tests/unit/analysis/test_recommend.py` (4 new, including an
+  edge case where the sample interval actually is the coarser axis, to
+  prove `max()` doesn't just always pick ping spacing by habit). Full
+  suite: 1686 passing / 36 skipped (was 1682).
+
+### Added
+
+#### `sidescan-analyze nav-attitude` -- navigation/attitude diagnostic plot (2026-09-27)
+
+New subcommand, independent of the 5-stage TVG/geometry investigation
+pipeline: plots heading/pitch/roll/altitude/depth/heave and the lon/lat
+position track for one ping range, entirely from the aux-stream fields
+already on every `.ss.h5` channel -- no backscatter, no geometric ranges
+needed. Motivated by a heading/yaw value reported outside both
+conventional ranges ([0,360) compass bearing, [-180,180) signed --
+this library's own convention is compass bearing, CW from N, see
+`CLAUDE.md`'s "Sign Conventions") during an upstream conversion step's
+own plausibility checks: a human needs to see the actual
+heading/attitude/position trace for the affected ping range to tell a
+real sensor/conversion problem apart from an ordinary survey-line turn.
+
+- `sidescanpy.analysis.nav_attitude.nav_attitude_summary()` -- per-field
+  min/max/mean/NaN-count for heading/pitch/roll/altitude/depth/heave,
+  plus a heading-convention check against `heading_deg` (or any field
+  via `--heading-var`) mirroring the compass-vs-signed bucket test;
+  `classification` is `"compass_bearing"`/`"signed"`/`"ambiguous"`/`None`.
+- `sidescanpy.viz.nav_attitude.plot_nav_attitude()` -- heading (with the
+  two convention bands shaded and any out-of-both-range points marked
+  red), pitch+roll, altitude+depth+heave, and a ping-colored position
+  track, sharing one ping-number x-axis across the first three panels.
+- `sidescan-analyze nav-attitude --input <.ss.h5 or dir> --pings
+  start:stop --output-dir <dir>` -- writes `metrics.json` +
+  `<stem>_<freq>_nav_attitude.png`, same convention as every other
+  per-tool subcommand here (`nadir`/`beam-geometry`/`usable-range`/
+  `units`).
+- Tests: `tests/unit/analysis/test_nav_attitude.py`,
+  `tests/unit/viz/test_nav_attitude.py` (16 new). Full suite: 1682
+  passing / 36 skipped (was 1666).
+
 ### Changed
 
 #### CLI logging: per-item progress moved to DEBUG, INFO reserved for milestones (2026-09-28)
