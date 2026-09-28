@@ -107,3 +107,27 @@ def test_render_target_context_requires_computed_position():
     window = np.zeros((10, 10))
     with pytest.raises(ValueError):
         render_target_context(window, t)
+
+
+def test_render_target_context_defaults_to_pixel_labels(sample_target):
+    window = np.zeros((10, 30))
+    fig = render_target_context(window, sample_target, box_size=(6, 6))
+    ax = fig.get_axes()[0]
+    assert ax.get_xlabel() == "Sample"
+    assert ax.get_ylabel() == "Ping (window-local)"
+
+
+def test_render_target_context_geometric_labels_along_across_track(sample_target):
+    window = np.zeros((10, 30))
+    fig = render_target_context(window, sample_target, box_size=(6, 6), coordinate_system="geometric")
+    ax = fig.get_axes()[0]
+    assert "across-track" in ax.get_xlabel().lower()
+    assert "along-track" in ax.get_ylabel().lower()
+
+
+def test_render_target_context_georef_labels_easting_northing(sample_target):
+    window = np.zeros((10, 30))
+    fig = render_target_context(window, sample_target, box_size=(6, 6), coordinate_system="georef")
+    ax = fig.get_axes()[0]
+    assert "easting" in ax.get_xlabel().lower()
+    assert "northing" in ax.get_ylabel().lower()

@@ -109,6 +109,13 @@ def contact_sheet(
     return fig
 
 
+_CONTEXT_AXIS_LABELS = {
+    "pixel": ("Sample", "Ping (window-local)"),
+    "geometric": ("Across-track (m, window-local)", "Along-track (m, window-local)"),
+    "georef": ("Easting (m, window-local)", "Northing (m, window-local)"),
+}
+
+
 def render_target_context(
     window: np.ndarray,
     target: Target,
@@ -118,15 +125,31 @@ def render_target_context(
     vmin_pct: float = _DEFAULT_VMIN_PCT,
     vmax_pct: float = _DEFAULT_VMAX_PCT,
     title: str | None = None,
+    coordinate_system: str = "pixel",
 ) -> Figure:
     """Full ping-window image with a box drawn at ``target``'s computed
     position, for visual QA of the localization formula.
 
-    ``box_size`` is a fixed placeholder (width, height in samples/pings)
-    around the computed center — no real measured target dimensions exist
-    in the source catalog (``LengthMeters``/``WidthMeters`` unpopulated),
-    so this is explicitly not derived from anything measured.
+    ``box_size`` is a fixed placeholder (width, height in samples/pings
+    -- or, under a real-meters ``coordinate_system``, output pixels of
+    that resample, i.e. ``box_size * resolution_m`` meters) around the
+    computed center — no real measured target dimensions exist in the
+    source catalog (``LengthMeters``/``WidthMeters`` unpopulated), so
+    this is explicitly not derived from anything measured.
+
+    ``coordinate_system`` -- one of ``"pixel"`` (default, native
+    sample/ping space -- ``export.py``'s ``raw``/``radiometric``
+    render levels), ``"geometric"`` (``extract_geometric_window``'s
+    local along/across-track meters frame), or ``"georef"``
+    (``extract_georef_window``'s northing/easting meters frame) --
+    controls only the axis labels below; ``window`` itself must already
+    be built in that coordinate system by the caller. Found real
+    (2026-09-28, user report): this always labeled axes "Sample"/"Ping"
+    even when ``--with-context`` rendered a geometric/georef real-meters
+    resample (added 2026-09-28 to follow ``--render-level``'s own
+    coordinate choice) -- correct-looking image, mislabeled axes.
     """
+    x_label, y_label = _CONTEXT_AXIS_LABELS.get(coordinate_system, _CONTEXT_AXIS_LABELS["pixel"])
     row = target.extra_attributes.get("window_row")
     col = target.sample
     if row is None or col is None:
@@ -159,8 +182,8 @@ def render_target_context(
     x, y, w, h = bbox_from_center(row, col, box_size)
     ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="red", linewidth=1.5))
 
-    ax.set_xlabel("Sample")
-    ax.set_ylabel("Ping (window-local)")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
     ax.set_title(
         title
         or f"Target {target.target_id}  "

@@ -1097,7 +1097,7 @@ def run_chip(args: argparse.Namespace) -> int:
                         # orientation fix (style="dual-swath" skips the
                         # already-applied horizontal mirror, only flips vertically).
                         combined, (context_target,) = _orient_pixel_window(combined, [context_target], channel_idx, "dual-swath")
-                        fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size))
+                        fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size), coordinate_system="pixel")
                         fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                         plt.close(fig)
                     else:
@@ -1122,7 +1122,7 @@ def run_chip(args: argparse.Namespace) -> int:
                             logger.warning(f"target {t.target_id}: context/{args.render_level} window unavailable, skipping context")
                         else:
                             grid, context_targets = context_result
-                            fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size))
+                            fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size), coordinate_system=args.render_level)
                             fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                             plt.close(fig)
 

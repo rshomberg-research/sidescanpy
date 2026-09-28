@@ -9,6 +9,21 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### `--with-context` mislabeled geometric/georef QA views as pixel space (2026-09-28)
+
+Real user report from a full real-data pipeline run: "the context
+images look geocorrected, but they are labeled as ping x sample."
+`viz/contact_sheet.py: render_target_context()` always labeled axes
+"Sample"/"Ping (window-local)" -- correct for the `raw`/`radiometric`
+render levels, but the `geometric`/`georef` QA view (added 2026-09-28,
+resamples into real-world meters) never updated the labels to match,
+so a genuinely correct real-meters image carried leftover pixel-space
+axis text. Added `coordinate_system` param (`"pixel"` default,
+`"geometric"` -> across/along-track meters, `"georef"` ->
+easting/northing meters); `cli/export.py`'s two `render_target_context`
+call sites now pass the right one. 3 new tests. Full suite: 1689
+passing / 36 skipped (was 1686).
+
 #### Correction-loop progress line was DEBUG-only; per-chunk TVG/geometric/georef summaries weren't (2026-09-27)
 
 Real user complaint, follow-up to the 2026-09-28 CLI logging cleanup:
