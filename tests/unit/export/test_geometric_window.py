@@ -109,6 +109,80 @@ class TestExtractGeometricWindow:
         assert np.isnan(grid_avoid).sum() < np.isnan(grid_default).sum()
 
 
+class TestAnisotropicSearchRadius:
+    """2026-09-28: real user report (blurry chips at a tight resolution_m)
+    traced to the isotropic search radius pooling far more across-track
+    real detail than the data's own resolution supports, since the
+    radius had to stay wide enough to bridge real along-track ping gaps.
+    along_search_radius_m/across_search_radius_m let a caller separate
+    the two."""
+
+    def test_isotropic_via_new_params_matches_old_search_radius_m(self, geometric_channel):
+        # Equal along/across radii must reproduce search_radius_m's own
+        # behavior exactly -- this is a generalization, not a behavior
+        # change, when both radii are the same.
+        center_along, center_across = _real_center(geometric_channel)
+        grid_old, meta_old = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            search_radius_m=3.0,
+        )
+        grid_new, meta_new = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_search_radius_m=3.0, across_search_radius_m=3.0,
+        )
+        np.testing.assert_array_equal(grid_old, grid_new)
+        assert meta_old == meta_new
+
+    def test_narrowing_across_radius_only_increases_nans(self, geometric_channel):
+        # A narrow across_search_radius_m (much smaller than the
+        # along-track-driven default) should leave MORE cells without a
+        # real neighbor within reach -- the direct, generic signature of
+        # "the ellipse is actually narrower on that axis", without
+        # needing to hand-engineer exact point positions.
+        center_along, center_across = _real_center(geometric_channel)
+        wide_radius = 5.0
+        grid_isotropic, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=0.5, center_along_m=center_along, center_across_m=center_across,
+            along_search_radius_m=wide_radius, across_search_radius_m=wide_radius,
+        )
+        grid_narrow_across, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=0.5, center_along_m=center_along, center_across_m=center_across,
+            along_search_radius_m=wide_radius, across_search_radius_m=0.05,
+        )
+        assert np.isnan(grid_narrow_across).sum() > np.isnan(grid_isotropic).sum()
+        # ... but not EVERYTHING went to NaN -- a reasonably-scaled
+        # narrow radius should still find real nearby samples on the
+        # across axis, not just fail outright.
+        assert np.isfinite(grid_narrow_across).any()
+
+    def test_narrowing_along_radius_only_also_increases_nans(self, geometric_channel):
+        # Symmetric check on the other axis, same reasoning.
+        center_along, center_across = _real_center(geometric_channel)
+        wide_radius = 5.0
+        grid_isotropic, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=0.5, center_along_m=center_along, center_across_m=center_across,
+            along_search_radius_m=wide_radius, across_search_radius_m=wide_radius,
+        )
+        grid_narrow_along, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=0.5, center_along_m=center_along, center_across_m=center_across,
+            along_search_radius_m=0.01, across_search_radius_m=wide_radius,
+        )
+        assert np.isnan(grid_narrow_along).sum() > np.isnan(grid_isotropic).sum()
+
+    def test_omitting_new_params_falls_back_to_search_radius_m_default(self, geometric_channel):
+        # Omitting all three radius params must still reproduce the
+        # original 1.5 * resolution_m isotropic default exactly.
+        center_along, center_across = _real_center(geometric_channel)
+        grid_default, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+        )
+        grid_explicit, _ = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            search_radius_m=1.5,
+        )
+        np.testing.assert_array_equal(grid_default, grid_explicit)
+
+
 class TestClampCenter:
     def test_no_change_when_window_fits_away_from_edges(self):
         assert _clamp_center(5.0, half_extent=2.0, data_min=0.0, data_max=10.0) == 5.0

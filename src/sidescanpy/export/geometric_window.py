@@ -53,6 +53,8 @@ def extract_geometric_window(
     channel_idx: int | None = 0,
     backscatter_var: str = "backscatter_intensity",
     search_radius_m: float | None = None,
+    along_search_radius_m: float | None = None,
+    across_search_radius_m: float | None = None,
     avoid_edge_gaps: bool = False,
 ) -> tuple[np.ndarray, dict]:
     """Resample a ``size_px x size_px`` square region, centered on
@@ -101,17 +103,47 @@ def extract_geometric_window(
         Restrict to one physical channel (0=port, 1=starboard), or
         ``None`` to pool both.
     search_radius_m : float, optional
-        KDTree query radius; defaults to ``1.5 * resolution_m``. A
-        survey whose along-track position updates at a much lower rate
-        than its ping rate (real case: a Klein SDF survey whose GPS
-        fixes only every ~8 pings, jumping ~2m each time) has real gaps
-        between along-track fixes wider than a resolution chosen from
-        the *average* distance/ping can bridge at the default radius —
-        the result grid shows periodic empty stripes at exactly the
-        fix-to-fix interval, since most cells' nearest real point sits
-        outside ``1.5 * resolution_m``. Passing a wider radius (e.g. the
-        real fix-to-fix jump distance) bridges those gaps without also
-        needing a coarser (more zoomed-out) ``resolution_m``.
+        Isotropic KDTree query radius (same in both directions);
+        defaults to ``1.5 * resolution_m``. A survey whose along-track
+        position updates at a much lower rate than its ping rate (real
+        case: a Klein SDF survey whose GPS fixes only every ~8 pings,
+        jumping ~2m each time) has real gaps between along-track fixes
+        wider than a resolution chosen from the *average* distance/ping
+        can bridge at the default radius — the result grid shows
+        periodic empty stripes at exactly the fix-to-fix interval,
+        since most cells' nearest real point sits outside
+        ``1.5 * resolution_m``. Passing a wider radius (e.g. the real
+        fix-to-fix jump distance) bridges those gaps without also
+        needing a coarser (more zoomed-out) ``resolution_m``. Ignored
+        if either of the two params below is given.
+    along_search_radius_m, across_search_radius_m : float, optional
+        Independent along-track / across-track search radii — an
+        ellipse instead of a circle, in real (along_m, across_m) space.
+        Each axis is rescaled by its own radius before the ``cKDTree``
+        is built/queried (then queried with a unit ball), which is
+        exactly equivalent to an elliptical search with no custom
+        distance metric needed. Default (``None``) for either falls
+        back to ``search_radius_m`` (or its own default) — fully
+        backward compatible with every existing caller.
+
+        Real motivation (2026-09-28): a swath's along-track (ping
+        spacing) and across-track (sample interval) native resolutions
+        can differ by an order of magnitude or more. The single
+        isotropic ``search_radius_m`` this function used to have had to
+        be wide enough to bridge real along-track gaps — which meant
+        *every* cell's average also pooled far more across-track real
+        detail than the data's own resolution supports, regardless of
+        how fine ``resolution_m`` was set. A caller requesting a finer
+        ``resolution_m`` for more real detail got more pixels of an
+        equally over-smoothed image, not more detail — confirmed
+        directly on real data as the cause of a "chips are blurry"
+        report. Passing a narrow ``across_search_radius_m`` (sized to
+        the real sample interval) alongside a wide
+        ``along_search_radius_m`` (still sized to bridge real ping
+        gaps) fixes this: real across-track texture is preserved
+        instead of averaged away, without reintroducing along-track
+        gaps. See ``docs/planning/anisotropic-crop-search-radius.md``
+        for the full investigation.
     avoid_edge_gaps : bool, default False
         When True and the requested center is close enough to the edge
         of this channel's own recorded extent that the window would
@@ -171,18 +203,28 @@ def extract_geometric_window(
     along_min = center_along_m - half_extent
     across_min = center_across_m - half_extent
 
-    tree = cKDTree(np.column_stack([along_valid, across_valid]))
+    default_radius = search_radius_m if search_radius_m is not None else 1.5 * resolution_m
+    along_radius = along_search_radius_m if along_search_radius_m is not None else default_radius
+    across_radius = across_search_radius_m if across_search_radius_m is not None else default_radius
+
+    # Anisotropic search via axis rescaling: dividing each axis by its
+    # own radius before building/querying the tree, then querying a
+    # unit ball, is exactly equivalent to an ellipse with semi-axes
+    # (along_radius, across_radius) in real space -- no custom distance
+    # metric needed, cKDTree handles the rescaled Euclidean case
+    # natively. Isotropic (along_radius == across_radius) reproduces
+    # the prior behavior exactly.
+    tree = cKDTree(np.column_stack([along_valid / along_radius, across_valid / across_radius]))
 
     cell_centers = (np.arange(size_px) + 0.5) * resolution_m
     grid_along = along_min + cell_centers
     grid_across = across_min + cell_centers
     gg_along, gg_across = np.meshgrid(grid_along, grid_across, indexing="ij")
-    query_points = np.column_stack([gg_along.ravel(), gg_across.ravel()])
+    query_points = np.column_stack([gg_along.ravel() / along_radius, gg_across.ravel() / across_radius])
 
-    search_radius = search_radius_m if search_radius_m is not None else 1.5 * resolution_m
     grid_values = np.full(query_points.shape[0], np.nan)
     for i, pt in enumerate(query_points):
-        idx = tree.query_ball_point(pt, r=search_radius)
+        idx = tree.query_ball_point(pt, r=1.0)
         if idx:
             grid_values[i] = np.mean(values_valid[idx])
 

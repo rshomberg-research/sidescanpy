@@ -9,6 +9,42 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### `extract_geometric_window()`'s search radius is now anisotropic — blurry tight chips (2026-09-28)
+
+Real user report, direct follow-up to the earlier `resolution_m` fix:
+a chip exported at a tight, correctly-sized `resolution_m` still came
+out blurry. Root cause, already anticipated and documented in
+`docs/planning/anisotropic-crop-search-radius.md`: the KDTree
+averaging neighborhood was a single isotropic radius, and it had to
+stay wide enough to bridge real along-track ping gaps regardless of
+how fine `resolution_m` was set — so every output pixel, no matter how
+small, still averaged over that same wide real neighborhood. More
+pixels at a finer resolution just meant more pixels of an equally
+over-smoothed image.
+
+- `export/geometric_window.py: extract_geometric_window()` gained
+  `along_search_radius_m`/`across_search_radius_m` (an ellipse instead
+  of a circle, via axis-rescaling before the `cKDTree` build/query —
+  no custom distance metric needed). `search_radius_m` still works
+  exactly as before (isotropic); the new params are opt-in and fully
+  backward compatible (verified: equal along/across radii reproduce
+  `search_radius_m`'s output byte-for-byte).
+- `cli/export.py`'s target-crop path (`chip`/`single-swath`/
+  `dual-swath` styles, and the `--with-context` QA view — all share
+  one code path) now passes `along_search_radius_m` (still
+  `max(1.5*resolution_m, gap_p95_m)`, unchanged — has to keep bridging
+  real ping gaps) and a much narrower `across_search_radius_m`
+  (`max(1.5*resolution_m, 1.5*mps)`, sized to the real sample
+  interval) instead of one shared radius for both axes. The `georef`
+  render level (northing/easting frame) is unchanged — a real fix
+  there needs a heading-oriented ellipse, not just two fixed axes; see
+  the planning doc's Tier 2.
+- 4 new tests in `tests/unit/export/test_geometric_window.py`
+  (isotropic-via-new-params matches old `search_radius_m` exactly;
+  narrowing either axis alone increases NaN count without zeroing out
+  the whole grid; omitting all radius params still reproduces the
+  original default). Full suite: 1693 passing / 36 skipped (was 1689).
+
 #### `--with-context` mislabeled geometric/georef QA views as pixel space (2026-09-28)
 
 Real user report from a full real-data pipeline run: "the context

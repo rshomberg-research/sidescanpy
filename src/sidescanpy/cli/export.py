@@ -909,7 +909,19 @@ def _extract_geo_style_window(
         swath_width_m = float(across_finite.max() - across_finite.min()) if across_finite.size else size_px * mps
         resolution_m = resolution_m_override if resolution_m_override is not None else max(swath_width_m / size_px, ping_spacing_m, 1e-6)
         center_across_m = 0.0 if combine else (float((across_finite.max() + across_finite.min()) / 2.0) if across_finite.size else 0.0)
+    # Anisotropic search radii (2026-09-28, real user report: tight
+    # chips came out blurry). along_search_radius_m still has to bridge
+    # real ping gaps (gap_p95_m); across_search_radius_m only needs to
+    # reach real neighboring samples (~mps apart) -- pinning it to the
+    # same wide along-track radius (the old isotropic
+    # geo_search_radius_m, kept below and still used as-is for the
+    # georef branch -- Tier 2, a harder, separate fix, see the planning
+    # doc) smeared real across-track detail into a neighborhood far
+    # bigger than the data supports. See
+    # docs/planning/anisotropic-crop-search-radius.md.
     geo_search_radius_m = max(1.5 * resolution_m, gap_p95_m)
+    along_search_radius_m = geo_search_radius_m
+    across_search_radius_m = max(1.5 * resolution_m, 1.5 * mps)
 
     if level == "geometric":
         geom_channel_idx = None if combine else channel_idx
@@ -917,7 +929,8 @@ def _extract_geo_style_window(
         try:
             grid, meta = extract_geometric_window(
                 masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
-                center_across_m=center_across_m, channel_idx=geom_channel_idx, search_radius_m=geo_search_radius_m,
+                center_across_m=center_across_m, channel_idx=geom_channel_idx,
+                along_search_radius_m=along_search_radius_m, across_search_radius_m=across_search_radius_m,
                 avoid_edge_gaps=True, backscatter_var=backscatter_var,
             )
         except ValueError:
