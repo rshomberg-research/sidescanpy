@@ -9,6 +9,7 @@ import pytest
 
 from sidescanpy.analysis.investigation import StageResult
 from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
+from sidescanpy.processing.geometric import compute_geometric_ranges
 from tests.conftest import make_minimal_sidescan_dataset
 
 
@@ -47,6 +48,19 @@ class TestMeasurePingGeometry:
         )
         result = measure_ping_geometry(ds)
         assert result["swath_width_m"] == pytest.approx(100.0, rel=0.05)
+
+    def test_sample_interval_measured_from_slant_range(self):
+        # sound_vel_ms=1500.0, sample_rate_hz=400_000 (tests/conftest.py's
+        # own fixture defaults) -> 1500 / (2 * 400_000) = 0.001875 m.
+        ds = compute_geometric_ranges(_uniform_track_dataset())
+        result = measure_ping_geometry(ds)
+        assert result["sample_interval_m"] == pytest.approx(0.001875)
+
+    def test_no_slant_range_m_returns_none_sample_interval(self):
+        ds = _uniform_track_dataset()
+        assert "slant_range_m" not in ds
+        result = measure_ping_geometry(ds)
+        assert result["sample_interval_m"] is None
 
     def test_outlier_jump_does_not_dominate_median(self):
         ds = _uniform_track_dataset(n_pings=100)
@@ -117,6 +131,22 @@ class TestRenderRecommendedConfig:
     def test_resolution_m_emitted_from_geometry(self):
         text = render_recommended_config(**self._base_kwargs())
         assert "resolution_m: 0.1800" in text
+
+    def test_resolution_m_uses_coarser_of_spacing_and_sample_interval(self):
+        # Typical real case: ping spacing (along-track) coarser than the
+        # range-axis sample interval -- resolution_m should still be the
+        # ping spacing, not the finer sample interval.
+        geometry = {"ping_spacing_m_median": 0.18, "swath_width_m": 132.4, "sample_interval_m": 0.0019}
+        text = render_recommended_config(**self._base_kwargs(geometry=geometry))
+        assert "resolution_m: 0.1800" in text
+        assert "sample interval" in text
+
+    def test_resolution_m_uses_sample_interval_when_it_is_coarser(self):
+        # Edge case: sample interval coarser than ping spacing -- max()
+        # must pick it, not always default to ping spacing.
+        geometry = {"ping_spacing_m_median": 0.02, "swath_width_m": 132.4, "sample_interval_m": 0.05}
+        text = render_recommended_config(**self._base_kwargs(geometry=geometry))
+        assert "resolution_m: 0.0500" in text
 
     def test_missing_geometry_notes_manual_value_needed(self):
         text = render_recommended_config(**self._base_kwargs(geometry={"ping_spacing_m_median": None, "swath_width_m": None}))

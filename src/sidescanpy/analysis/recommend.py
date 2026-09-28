@@ -70,12 +70,27 @@ def measure_ping_geometry(ds: xr.Dataset, *, low_pct: float = 1.0, high_pct: flo
     exact min/max, for the same reason: one far-flung outlier sample
     shouldn't set the number.
 
+    Also measures the range-axis (across-track) sample interval directly
+    from ``slant_range_m`` -- real user question (2026-09-27): a sidescan
+    swath is anisotropic, and this function used to report only the
+    along-track (ping) spacing, silently assuming it's always the
+    coarser of the two axes without checking. Measuring both lets
+    ``render_recommended_config`` pick the true limiting axis, matching
+    ``sidescan-export``'s own ``max(mps, ping_spacing_m)`` auto-
+    calculation (``cli/export.py``) rather than recommending a value
+    that could exceed what the coarser axis actually supports. Read
+    directly off ``slant_range_m`` (constant per ping, since it's a
+    linear function of sample index) rather than recomputed from
+    ``sound_vel_ms``/``sample_rate_hz`` a second time, so this stays
+    correct even if a caller's geometry came from a non-default path.
+
     Returns ``{"ping_spacing_m_median": float | None, "swath_width_m":
-    float | None}`` -- ``None`` where the input doesn't support the
-    measurement (too few pings, no ``across_track_m``) rather than a
-    fabricated number.
+    float | None, "sample_interval_m": float | None}`` -- ``None`` where
+    the input doesn't support the measurement (too few pings, no
+    ``across_track_m``/``slant_range_m``) rather than a fabricated
+    number.
     """
-    result: dict = {"ping_spacing_m_median": None, "swath_width_m": None}
+    result: dict = {"ping_spacing_m_median": None, "swath_width_m": None, "sample_interval_m": None}
     n_pings = ds.sizes["ping"]
     if n_pings >= 2:
         dist = along_track_distance_m(ds)
@@ -89,6 +104,12 @@ def measure_ping_geometry(ds: xr.Dataset, *, low_pct: float = 1.0, high_pct: flo
         if finite.size:
             lo, hi = np.percentile(finite, [low_pct, high_pct])
             result["swath_width_m"] = float(hi - lo)
+    if "slant_range_m" in ds and ds.sizes.get("sample", 0) >= 2:
+        slant = np.asarray(ds["slant_range_m"].isel(channel=0).values, dtype=np.float64)
+        per_ping_interval = slant[:, 1] - slant[:, 0]
+        finite = per_ping_interval[np.isfinite(per_ping_interval) & (per_ping_interval > 0)]
+        if finite.size:
+            result["sample_interval_m"] = float(np.median(finite))
     return result
 
 
@@ -176,10 +197,27 @@ def render_recommended_config(
     lines.append("# ---- sidescan-export chip ----")
     spacing = geometry.get("ping_spacing_m_median")
     swath = geometry.get("swath_width_m")
+    sample_interval = geometry.get("sample_interval_m")
     if spacing is not None:
         lines.append(f"# Local median ping spacing = {_fmt(spacing, '.4f')} m, swath width = {_fmt(swath)} m")
         lines.append("# (measured over this section's own real navigation/geometry).")
-        lines.append(f"resolution_m: {_fmt(spacing, '.4f')}")
+        if sample_interval is not None:
+            resolution_m = max(spacing, sample_interval)
+            limiting = "ping spacing (along-track)" if resolution_m == spacing else "sample interval (across-track)"
+            lines.append(f"# Range-axis sample interval = {_fmt(sample_interval, '.4f')} m (across-track).")
+            lines.append(
+                f"# resolution_m = max(ping spacing, sample interval) = {_fmt(resolution_m, '.4f')} m -- "
+                f"{limiting} is the coarser, limiting axis (a single isotropic pixel size can't exceed "
+                "what either axis truly supports without inventing detail on the other -- matches "
+                "sidescan-export chip's own max(mps, ping_spacing_m) auto-calculation, cli/export.py)."
+            )
+        else:
+            resolution_m = spacing
+            lines.append(
+                "# Range-axis sample interval unavailable (no slant_range_m) -- assuming ping spacing "
+                "is the coarser axis; verify with sidescan-export chip's own auto-calculation if unsure."
+            )
+        lines.append(f"resolution_m: {_fmt(resolution_m, '.4f')}")
     else:
         lines.append("# Could not measure ping spacing for this section (fewer than 2 pings, or no")
         lines.append("# along-track navigation) -- resolution_m needs a manually chosen value; see")
