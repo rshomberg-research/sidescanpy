@@ -1278,6 +1278,29 @@ class TestRunChip:
         assert ann["bbox"][2] == pytest.approx(4.0)
         assert ann["bbox"][3] == pytest.approx(3.0)
 
+    def test_contact_sheet_and_context_draw_the_coco_box(self, tmp_path, georef_ss_h5_dir, mocker):
+        """QA images used to draw the --box-size placeholder even when the
+        COCO/YOLO files carried the catalog's real extent, so real boxes
+        looked generated."""
+        from sidescanpy.viz.contact_sheet import _target_box_size
+
+        sheet = mocker.spy(export, "contact_sheet")
+        context = mocker.spy(export, "render_target_context")
+        t = replace(self._matched_target(), bbox=(490.0, 95.0, 4.0, 3.0))
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([t], targets_json)
+
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric", styles=["chip"],
+                          size_px=16, box_size=40.0, with_context=True)
+        assert export.run_chip(args) == 0
+
+        ann = json.loads((tmp_path / "out" / "chip" / "targets.coco.json").read_text())["annotations"][0]
+        drawn = _target_box_size(sheet.call_args.kwargs["boxes"][0][0], (40.0, 40.0))
+        assert drawn == pytest.approx((ann["bbox"][2], ann["bbox"][3]))
+        assert drawn != pytest.approx((40.0, 40.0))
+        context_target = context.call_args.args[1]
+        assert _target_box_size(context_target, (40.0, 40.0)) != pytest.approx((40.0, 40.0))
+
     def test_pixel_style_no_bbox_falls_back_to_shared_box_size(self, tmp_path, georef_ss_h5_dir):
         """A center-only pick (bbox=None, e.g. JSF/EdgeTech Discover's own
         catalog) must still fall back to the shared --box-size placeholder

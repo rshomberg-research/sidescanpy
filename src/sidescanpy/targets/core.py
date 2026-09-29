@@ -100,10 +100,11 @@ def bbox_from_center(row: float, col: float, box_size: tuple[float, float]) -> t
     centered on ``(col, row)``.
 
     Shared by box-drawing QA visualization and COCO export so both agree
-    on exactly the same box for a given target — there is no measured
-    target size in the source catalogs seen so far (``LengthMeters``/
-    ``WidthMeters`` unpopulated), so ``box_size`` is always a caller-
-    supplied placeholder, not a real dimension.
+    on exactly the same box for a given target. ``box_size`` is either a
+    catalog's real measured extent already converted to this window's
+    pixels (``extra_attributes["bbox_size_px"]``, set by ``sidescan-export
+    chip`` when the target carries a ``bbox``) or, for center-only
+    catalogs (JSF/Discover picks), a caller-supplied placeholder.
     """
     w, h = box_size
     return (col - w / 2, row - h / 2, w, h)

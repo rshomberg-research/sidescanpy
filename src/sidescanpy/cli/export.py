@@ -1214,6 +1214,7 @@ def _extract_geo_style_window(
         # resolution_m (meters per output pixel) -- same on both axes
         # again now that every resample_method produces square output.
         targets_out = [_with_bbox_size_px(ct, scale_x=mps / resolution_m, scale_y=ping_spacing_m / resolution_m) for ct in targets_out]
+        targets_out = [replace(ct, extra_attributes={**ct.extra_attributes, "window_resolution_m": resolution_m}) for ct in targets_out]
         return grid, targets_out
     else:  # georef
         try:
@@ -1250,6 +1251,7 @@ def _extract_geo_style_window(
         # ping_spacing_m/resolution_m are all computed once, shared by
         # both branches.
         primary_local = _with_bbox_size_px(primary_local, scale_x=mps / resolution_m, scale_y=ping_spacing_m / resolution_m)
+        primary_local = replace(primary_local, extra_attributes={**primary_local.extra_attributes, "window_resolution_m": resolution_m})
         return grid, [primary_local]
 
 
@@ -1413,6 +1415,8 @@ def run_chip(args: argparse.Namespace) -> int:
                         combined = _combine_channels_mirrored(port_2d, stbd_2d)
                         combined_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
                         context_target = replace(t, sample=combined_col, extra_attributes={**t.extra_attributes, "window_row": local_ping})
+                        # Native, un-resized pixels: t.bbox's own (w, h) is already in this window's units.
+                        context_target = _with_bbox_size_px(context_target, scale_x=1.0, scale_y=1.0)
                         # "combined" is the same port-mirrored dual-swath layout
                         # _extract_pixel_style_window builds -- reuse the same
                         # orientation fix (style="dual-swath" skips the
@@ -1446,7 +1450,8 @@ def run_chip(args: argparse.Namespace) -> int:
                                 logger.warning(f"target {t.target_id}: context/{args.render_level} window unavailable, skipping context")
                             else:
                                 grid, context_targets = context_result
-                                fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size), coordinate_system=args.render_level)
+                                fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size), coordinate_system=args.render_level,
+                                                    resolution_m=context_targets[0].extra_attributes.get("window_resolution_m"))
                                 fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                                 plt.close(fig)
 
@@ -1467,7 +1472,8 @@ def run_chip(args: argparse.Namespace) -> int:
                     window_meta[style].append((co_targets, t, path.stem, freq_key))
                     if style == "dual-swath" and geo and args.with_context:
                         primary = next((ct for ct in co_targets if ct.target_id == t.target_id), co_targets[0])
-                        fig = render_target_context(window, primary, box_size=(args.box_size, args.box_size), coordinate_system=args.render_level)
+                        fig = render_target_context(window, primary, box_size=(args.box_size, args.box_size), coordinate_system=args.render_level,
+                                                    resolution_m=primary.extra_attributes.get("window_resolution_m"))
                         fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                         plt.close(fig)
 

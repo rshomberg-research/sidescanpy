@@ -152,3 +152,52 @@ def test_render_target_context_georef_labels_easting_northing(sample_target):
     ax = fig.get_axes()[0]
     assert "easting" in ax.get_xlabel().lower()
     assert "northing" in ax.get_ylabel().lower()
+
+
+def _with_measured_box(t: Target, w: float, h: float) -> Target:
+    from dataclasses import replace
+
+    return replace(t, extra_attributes={**t.extra_attributes, "bbox_size_px": (w, h)})
+
+
+def test_contact_sheet_draws_measured_box_not_placeholder(sample_target):
+    """A catalog with real extents (bbox_size_px, as sidescan-export chip
+    sets it) must be drawn at that size -- drawing the --box-size
+    placeholder made real annotations look generated."""
+    images = [np.random.default_rng(0).random((40, 40))]
+    fig = contact_sheet(images, ["a"], boxes=[[_with_measured_box(sample_target, 10, 4)]], box_size=(6, 6))
+    patch = fig.get_axes()[0].patches[0]
+    assert (patch.get_width(), patch.get_height()) == (10, 4)
+
+
+def test_contact_sheet_placeholder_when_no_measured_box(sample_target):
+    images = [np.random.default_rng(0).random((20, 20))]
+    fig = contact_sheet(images, ["a"], boxes=[[sample_target]], box_size=(6, 6))
+    patch = fig.get_axes()[0].patches[0]
+    assert (patch.get_width(), patch.get_height()) == (6, 6)
+
+
+def test_render_target_context_draws_measured_box(sample_target):
+    window = np.random.default_rng(0).random((10, 30))
+    fig = render_target_context(window, _with_measured_box(sample_target, 12, 3), box_size=(6, 6))
+    patch = fig.get_axes()[0].patches[0]
+    assert (patch.get_width(), patch.get_height()) == (12, 3)
+
+
+def test_geometric_context_axes_in_meters_when_resolution_known(sample_target):
+    window = np.random.default_rng(0).random((40, 40))
+    fig = render_target_context(window, sample_target, box_size=(6, 6), coordinate_system="geometric", resolution_m=0.5)
+    ax = fig.get_axes()[0]
+    assert "(m," in ax.get_xlabel() and "(m," in ax.get_ylabel()
+    assert ax.get_xlim() == pytest.approx((0, 20.0))
+    patch = ax.patches[0]
+    assert (patch.get_width(), patch.get_height()) == pytest.approx((3.0, 3.0))
+
+
+def test_geometric_context_axes_say_pixels_without_resolution(sample_target):
+    """The labels used to claim meters while the ticks counted pixels."""
+    window = np.random.default_rng(0).random((40, 40))
+    fig = render_target_context(window, sample_target, box_size=(6, 6), coordinate_system="geometric")
+    ax = fig.get_axes()[0]
+    assert "(px," in ax.get_xlabel() and "(px," in ax.get_ylabel()
+    assert "sample" not in ax.get_title()

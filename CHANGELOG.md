@@ -7,6 +7,27 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+#### QA images draw each target's real box, not the --box-size placeholder (2026-09-29)
+
+For catalogs that record a real target extent (a `bbox` on the target),
+`sidescan-export chip` already wrote that measured size, converted to
+output pixels, into COCO/YOLO. But `contact_sheet.png` and
+`context/context_<id>.png` always drew the fixed `--box-size` square, so
+real annotations looked generated. Both now draw
+`extra_attributes["bbox_size_px"]` when present (new
+`viz.contact_sheet._target_box_size`, the same choice COCO/YOLO make),
+falling back to `--box-size` for center-only catalogs (JSF/Discover
+picks). The native-pixel context view carries the target's extent at
+1:1. The geometric/georef context view now renders square
+(`aspect="equal"`) instead of the fixed 2.56:1 landscape meant for
+native-pixel windows, with axes in meters (the export passes the
+window's resolution; `render_target_context(resolution_m=...)`) -- they
+were labeled meters while counting output pixels. Without a resolution,
+geometric/georef axes are labeled as pixels. The geometric/georef title
+no longer shows the resampled column as a "sample".
+
 ### Changed
 
 #### Geometric export speed: crop before griddata, context reuses the dual-swath window (2026-09-29)

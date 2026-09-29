@@ -24,6 +24,16 @@ _DEFAULT_VMIN_PCT = 1.0
 _DEFAULT_VMAX_PCT = 99.0
 
 
+def _target_box_size(t: Target, box_size: tuple[float, float]) -> tuple[float, float]:
+    """The target's own measured box (``extra_attributes["bbox_size_px"]``,
+    set by ``sidescan-export chip`` from a catalog extent, in this
+    window's pixels) if it has one, else the shared placeholder -- the
+    same choice COCO/YOLO export makes, so QA images draw what the
+    annotation files contain."""
+    size = t.extra_attributes.get("bbox_size_px")
+    return (float(size[0]), float(size[1])) if size is not None else box_size
+
+
 def _vlimits(image: np.ndarray, vmin_pct: float, vmax_pct: float) -> tuple[float, float]:
     finite = image[np.isfinite(image)]
     if finite.size == 0:
@@ -100,7 +110,7 @@ def contact_sheet(
                 col = t.sample
                 if row is None or col is None:
                     continue
-                x, y, w, h = bbox_from_center(row, col, box_size)
+                x, y, w, h = bbox_from_center(row, col, _target_box_size(t, box_size))
                 ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="red", linewidth=1.0))
         ax.set_xticks([])
         ax.set_yticks([])
@@ -128,6 +138,7 @@ def render_target_context(
     vmax_pct: float = _DEFAULT_VMAX_PCT,
     title: str | None = None,
     coordinate_system: str = "pixel",
+    resolution_m: float | None = None,
 ) -> Figure:
     """Full ping-window image with a box drawn at ``target``'s computed
     position, for visual QA of the localization formula.
@@ -152,6 +163,13 @@ def render_target_context(
     coordinate choice) -- correct-looking image, mislabeled axes.
     """
     x_label, y_label = _CONTEXT_AXIS_LABELS.get(coordinate_system, _CONTEXT_AXIS_LABELS["pixel"])
+    # Geometric/georef axes are only in meters when the window's
+    # resolution is known (sidescan-export chip passes it); otherwise
+    # say what they really count -- output pixels.
+    if coordinate_system != "pixel" and resolution_m is None:
+        x_label = x_label.replace("(m, ", "(px, ")
+        y_label = y_label.replace("(m, ", "(px, ")
+    scale = resolution_m if (coordinate_system != "pixel" and resolution_m is not None) else 1.0
     row = target.extra_attributes.get("window_row")
     col = target.sample
     if row is None or col is None:
@@ -176,20 +194,25 @@ def render_target_context(
     # deliberately compressed, reasonable landscape aspect (~512x200,
     # ~2.56:1) rather than 1:1 or square — so this uses a comparable
     # fixed aspect instead of trying to derive a "correct" one.
-    fig_h = 5.0
-    fig_w = fig_h * 2.56
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-    ax.imshow(window, cmap=resolve_cmap(cmap), vmin=vmin, vmax=vmax, aspect="auto")
+    # A geometric/georef window is already square in real meters -- show
+    # it undistorted; the fixed landscape aspect is for native pixels only.
+    if coordinate_system == "pixel":
+        fig, ax = plt.subplots(figsize=(5.0 * 2.56, 5.0))
+        ax.imshow(window, cmap=resolve_cmap(cmap), vmin=vmin, vmax=vmax, aspect="auto")
+    else:
+        fig, ax = plt.subplots(figsize=(7.0, 7.0))
+        n_rows, n_cols = window.shape[:2]
+        ax.imshow(window, cmap=resolve_cmap(cmap), vmin=vmin, vmax=vmax, aspect="equal",
+                  extent=(0, n_cols * scale, n_rows * scale, 0))
 
-    x, y, w, h = bbox_from_center(row, col, box_size)
-    ax.add_patch(Rectangle((x, y), w, h, fill=False, edgecolor="red", linewidth=1.5))
+    x, y, w, h = bbox_from_center(row, col, _target_box_size(target, box_size))
+    ax.add_patch(Rectangle((x * scale, y * scale), w * scale, h * scale, fill=False, edgecolor="red", linewidth=1.5))
 
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
-    ax.set_title(
-        title
-        or f"Target {target.target_id}  "
-        f"(ping {target.ping}, sample {target.sample}, confidence={target.position_confidence})"
-    )
+    # A geometric/georef target's .sample is its column in the resampled
+    # window, not a sensor sample index -- leave it out of the title there.
+    where = f"ping {target.ping}, sample {target.sample}" if coordinate_system == "pixel" else f"ping {target.ping}"
+    ax.set_title(title or f"Target {target.target_id}  ({where}, confidence={target.position_confidence})")
     fig.tight_layout()
     return fig
