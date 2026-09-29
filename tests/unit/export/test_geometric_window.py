@@ -5,7 +5,12 @@
 import numpy as np
 import pytest
 
-from sidescanpy.export.geometric_window import _clamp_center, extract_geometric_window, locate_point
+from sidescanpy.export.geometric_window import (
+    _clamp_center,
+    extract_geometric_window,
+    extract_geometric_window_binned,
+    locate_point,
+)
 from sidescanpy.viz.waterfall import along_track_distance_m
 
 
@@ -270,6 +275,119 @@ class TestAnisotropicPixels:
         # near the middle of the 32-col axis -- not swapped/confused.
         assert 0 <= row <= 8
         assert 0 <= col <= 32
+
+
+class TestExtractGeometricWindowBinned:
+    """2026-09-29: scipy.stats.binned_statistic_2d version of
+    extract_geometric_window, same (grid, meta) contract, no search
+    radius (strict rectangular binning instead)."""
+
+    def test_output_shape_matches_request(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across
+        )
+        assert grid.shape == (16, 16)
+
+    def test_has_some_finite_values(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across
+        )
+        assert np.isfinite(grid).any()
+
+    def test_center_is_reported_at_the_true_middle(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across
+        )
+        assert meta["center_row"] == pytest.approx(8.0, abs=0.5)
+        assert meta["center_col"] == pytest.approx(8.0, abs=0.5)
+
+    def test_all_water_column_raises(self, geometric_channel_factory):
+        ds = geometric_channel_factory(n_pings=5, n_samples=10, altitude_m=1_000_000.0)
+        with pytest.raises(ValueError):
+            extract_geometric_window_binned(ds, 8, resolution_m=1.0, center_along_m=0.0, center_across_m=0.0)
+
+    def test_independent_resolution_produces_non_square_array(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=10, across_size_px=40,
+        )
+        assert grid.shape == (10, 40)
+
+    def test_meta_matches_extract_geometric_window_meta_shape(self, geometric_channel):
+        # Same meta keys/values, so locate_point() and any caller reading
+        # meta directly works identically against either function's output.
+        center_along, center_across = _real_center(geometric_channel)
+        _grid_kdtree, meta_kdtree = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        _grid_binned, meta_binned = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        assert set(meta_binned.keys()) == set(meta_kdtree.keys())
+        for key in meta_kdtree:
+            assert meta_binned[key] == pytest.approx(meta_kdtree[key])
+
+    def test_locate_point_uses_per_axis_resolution(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        row, col = locate_point(center_along, center_across, meta)
+        assert row == pytest.approx(meta["center_row"])
+        assert col == pytest.approx(meta["center_col"])
+
+    def test_avoid_edge_gaps_reduces_nans_near_edge(self, geometric_channel):
+        across = geometric_channel["across_track_m"].isel(channel=1).values  # starboard, positive
+        along = along_track_distance_m(geometric_channel)
+        finite = np.isfinite(across)
+        masked_across = np.where(finite, across, -np.inf)
+        ping_idx, sample_idx = np.unravel_index(np.argmax(masked_across), masked_across.shape)
+        center_along = float(along[ping_idx])
+        center_across = float(across[ping_idx, sample_idx])
+
+        grid_avoid, _ = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            channel_idx=1, avoid_edge_gaps=True,
+        )
+        grid_default, _ = extract_geometric_window_binned(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across, channel_idx=1,
+        )
+        assert np.isnan(grid_avoid).sum() < np.isnan(grid_default).sum()
+
+    def test_shares_meta_frame_and_produces_finite_overlap_with_kdtree_version(self, geometric_channel):
+        """Real-fixture comparison against extract_geometric_window at
+        the same resolution/center: same (along_min, across_min) frame
+        (both place the window identically), and both produce at least
+        some finite cells over the same real data. Deliberately NOT
+        asserting the two grids' VALUES are close -- see this class's
+        own docstring and extract_geometric_window_binned's docstring
+        for why they're different resampling philosophies by design
+        (KDTree's radius ball is centered per-cell and, by construction,
+        wider than the cell itself -- ``1.5 * resolution_m`` -- so it
+        always pools a larger, overlapping neighborhood than binned's
+        exact non-overlapping rectangle, even at a coarse resolution;
+        confirmed by an earlier version of this test that wrongly
+        expected close agreement and failed on this fixture's synthetic
+        random backscatter, which has no real spatial smoothness for a
+        larger-vs-exact neighborhood to converge over)."""
+        center_along, center_across = _real_center(geometric_channel)
+        grid_kdtree, meta_kdtree = extract_geometric_window(
+            geometric_channel, 12, resolution_m=3.0, center_along_m=center_along, center_across_m=center_across,
+        )
+        grid_binned, meta_binned = extract_geometric_window_binned(
+            geometric_channel, 12, resolution_m=3.0, center_along_m=center_along, center_across_m=center_across,
+        )
+        assert meta_kdtree["along_min"] == pytest.approx(meta_binned["along_min"])
+        assert meta_kdtree["across_min"] == pytest.approx(meta_binned["across_min"])
+        assert np.isfinite(grid_kdtree).sum() > 0
+        assert np.isfinite(grid_binned).sum() > 0
 
 
 class TestClampCenter:

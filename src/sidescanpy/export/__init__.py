@@ -44,7 +44,7 @@ from sidescanpy.export.windows import (
     sample_negative_window,
     targets_within_window,
 )
-from sidescanpy.export.geometric_window import extract_geometric_window
+from sidescanpy.export.geometric_window import extract_geometric_window, extract_geometric_window_binned
 from sidescanpy.export.geometric_window import locate_point as locate_point_geometric
 from sidescanpy.export.georef_window import extract_georef_window
 from sidescanpy.export.georef_window import locate_point as locate_point_georef
@@ -63,6 +63,7 @@ __all__ = [
     "targets_within_window",
     "rescale_target_position",
     "extract_geometric_window",
+    "extract_geometric_window_binned",
     "extract_georef_window",
     "locate_point_geometric",
     "locate_point_georef",

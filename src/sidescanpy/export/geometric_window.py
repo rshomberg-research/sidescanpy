@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 from scipy.spatial import cKDTree
+from scipy.stats import binned_statistic_2d
 
 from sidescanpy.viz.waterfall import along_track_distance_m
 
@@ -309,6 +310,131 @@ def extract_geometric_window(
         "across_resolution_m": across_resolution_m,
     }
     return grid, meta
+
+
+def extract_geometric_window_binned(
+    channel_ds: xr.Dataset,
+    size_px: int,
+    *,
+    resolution_m: float,
+    center_along_m: float,
+    center_across_m: float,
+    channel_idx: int | None = 0,
+    backscatter_var: str = "backscatter_intensity",
+    avoid_edge_gaps: bool = False,
+    along_resolution_m: float | None = None,
+    across_resolution_m: float | None = None,
+    along_size_px: int | None = None,
+    across_size_px: int | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Same contract as :func:`extract_geometric_window` (same params,
+    same ``(grid, meta)`` shape, same ``meta`` keys, drop-in
+    interchangeable with :func:`locate_point`) but resamples via
+    ``scipy.stats.binned_statistic_2d`` instead of a hand-written
+    ``cKDTree.query_ball_point`` loop over every output cell.
+
+    2026-09-29, real user request, following this file's own
+    established-libraries-first convention (see ``sidescanpy/CLAUDE.md``'s
+    "Dependencies" section): once per-axis pixel resolution existed
+    (``along_resolution_m``/``across_resolution_m`` above), each output
+    cell is really just "the mean of every real sample whose
+    (along, across) position falls inside this cell's rectangle" — an
+    ordinary 2D histogram-style binning, not a radius search. scipy
+    already ships exactly that as a single vectorized call, so a custom
+    per-cell loop wasn't buying anything.
+
+    **Not a superset of the KDTree version — a genuinely different
+    resampling philosophy, not just a faster implementation of the
+    same one:**
+
+    - No ``search_radius_m``/``along_search_radius_m``/
+      ``across_search_radius_m`` — a point either falls inside a cell's
+      exact rectangle or it doesn't, there is no overlap/gap-bridging
+      radius to tune. A cell with zero real samples inside its own
+      rectangle is NaN, even if a real sample sits just across the
+      boundary in the neighboring cell. This means a coarse
+      ``along_resolution_m`` chosen to bridge real ping-to-ping gaps
+      (the KDTree version's ``along_search_radius_m`` role) still works
+      here — a wide-enough bin naturally contains the next ping's
+      point — but an ``along_resolution_m`` finer than the real
+      ping-to-ping spacing will show real empty cells between pings
+      instead of the KDTree version's radius-bridged fill.
+    - Strictly faster on real data (one vectorized scipy call instead of
+      one Python-level ``query_ball_point`` call per output pixel), but
+      not chosen for speed — chosen because "one real neighborhood per
+      pixel, no radius tuning" is a more direct match for what
+      ``along_resolution_m``/``across_resolution_m`` were already
+      designed to express once they exist per-axis. See
+      ``export/geometric_window.py``'s module tests
+      (``TestExtractGeometricWindowBinned``) for a real-data comparison
+      against the KDTree version at matching resolution.
+
+    Raises
+    ------
+    ValueError
+        If no finite ``across_track_m``/backscatter samples exist in
+        ``channel_ds`` at all (e.g. entirely water column).
+    """
+    along = along_track_distance_m(channel_ds)  # (ping,)
+    if channel_idx is None:
+        across = channel_ds["across_track_m"].values  # (ping, channel, sample)
+        values = channel_ds[backscatter_var].values
+        along_grid = np.broadcast_to(along[:, None, None], across.shape)
+    else:
+        across = channel_ds["across_track_m"].isel(channel=channel_idx).values  # (ping, sample)
+        values = channel_ds[backscatter_var].isel(channel=channel_idx).values
+        along_grid = np.broadcast_to(along[:, None], across.shape)
+
+    finite = np.isfinite(across) & np.isfinite(values)
+    if not finite.any():
+        raise ValueError("no finite across_track_m/backscatter samples in this window")
+
+    along_valid = along_grid[finite]
+    across_valid = across[finite]
+    values_valid = values[finite]
+
+    along_resolution_m = along_resolution_m if along_resolution_m is not None else resolution_m
+    across_resolution_m = across_resolution_m if across_resolution_m is not None else resolution_m
+    along_size_px = along_size_px if along_size_px is not None else size_px
+    across_size_px = across_size_px if across_size_px is not None else size_px
+
+    along_half_extent = along_size_px * along_resolution_m / 2.0
+    across_half_extent = across_size_px * across_resolution_m / 2.0
+    if avoid_edge_gaps:
+        center_along_m = _clamp_center(center_along_m, along_half_extent, along_valid.min(), along_valid.max())
+        center_across_m = _clamp_center(center_across_m, across_half_extent, across_valid.min(), across_valid.max())
+    along_min = center_along_m - along_half_extent
+    across_min = center_across_m - across_half_extent
+    along_max = along_min + along_size_px * along_resolution_m
+    across_max = across_min + across_size_px * across_resolution_m
+
+    along_edges = np.linspace(along_min, along_max, along_size_px + 1)
+    across_edges = np.linspace(across_min, across_max, across_size_px + 1)
+
+    # binned_statistic_2d returns NaN for an empty bin under "mean" --
+    # matches extract_geometric_window's own no-sample-in-radius NaN
+    # convention with no extra masking needed. statistic[i, j] pairs
+    # with (along_edges[i:i+2], across_edges[j:j+2]) -- row=along,
+    # col=across, same axis convention as the KDTree version's
+    # meshgrid(..., indexing="ij").
+    statistic, _, _, _ = binned_statistic_2d(
+        along_valid,
+        across_valid,
+        values_valid,
+        statistic="mean",
+        bins=[along_edges, across_edges],
+    )
+
+    meta = {
+        "center_row": (center_along_m - along_min) / along_resolution_m,
+        "center_col": (center_across_m - across_min) / across_resolution_m,
+        "along_min": along_min,
+        "across_min": across_min,
+        "resolution_m": along_resolution_m,  # legacy key -- see extract_geometric_window's docstring
+        "along_resolution_m": along_resolution_m,
+        "across_resolution_m": across_resolution_m,
+    }
+    return statistic, meta
 
 
 def locate_point(along_m: float, across_m: float, meta: dict) -> tuple[float, float]:

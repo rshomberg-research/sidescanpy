@@ -229,6 +229,52 @@ whichever native axis is coarser.)
 
 ### Added
 
+#### `extract_geometric_window_binned()` -- scipy-native alternative resampling, same contract (2026-09-29)
+
+Real user request, direct follow-up to the anisotropic-pixel-resolution
+addition below: once each axis gets its own pixel resolution, each
+output cell is really just "mean of every real sample whose (along,
+across) position falls inside this cell's rectangle" -- an ordinary 2D
+binning, not a radius search. `export/geometric_window.py`'s existing
+`extract_geometric_window()` computes this via a hand-written Python
+loop over `cKDTree.query_ball_point()` per output cell; per this
+project's own established-libraries-first convention (see
+`sidescanpy/CLAUDE.md`'s "Dependencies" section, added same day),
+`scipy.stats.binned_statistic_2d` already does exactly this in one
+vectorized call.
+
+- New `export/geometric_window.py: extract_geometric_window_binned()`
+  -- same signature/contract as `extract_geometric_window()` (same
+  `(grid, meta)` return, same `meta` keys, drop-in interchangeable with
+  `locate_point()`), minus the `search_radius_m`/
+  `along_search_radius_m`/`across_search_radius_m` params, which have
+  no equivalent here -- a point either falls inside a cell's exact
+  rectangle or it doesn't, there's no overlap/gap-bridging radius to
+  tune. **Not a superset, a genuinely different resampling
+  philosophy** -- see the function's own docstring for why a bin
+  finer than real ping-to-ping spacing shows real empty cells instead
+  of the KDTree version's radius-bridged fill, and why the two
+  methods' output values are NOT expected to closely agree even at a
+  coarse shared resolution (KDTree's default search radius,
+  `1.5 * resolution_m`, is centered per-cell and by construction wider
+  than the cell itself, so it always pools a different, larger,
+  overlapping neighborhood than binned's exact rectangle).
+- Re-exported from `sidescanpy.export`.
+- Tests: `tests/unit/export/test_geometric_window.py::
+  TestExtractGeometricWindowBinned` (9 tests) -- mirrors
+  `TestExtractGeometricWindow`'s/`TestAnisotropicPixels`'s own cases
+  (shape, finite-values, centering, all-water-column raises,
+  non-square output, `avoid_edge_gaps`, `locate_point` compatibility)
+  plus a real-fixture same-frame comparison against the KDTree version
+  (confirms both place the window identically and both produce finite
+  output over the same real data -- deliberately not asserting the
+  grid *values* match, per the different-philosophy note above; an
+  earlier version of this test wrongly expected close numeric
+  agreement and failed against this fixture's synthetic random
+  backscatter, which has no real spatial smoothness for the two
+  differently-shaped neighborhoods to converge over). Full suite: 1724
+  passing / 36 skipped (was 1715).
+
 #### `extract_geometric_window()` gains independent along/across-track pixel resolution -- non-square output (2026-09-29)
 
 Real user report, direct follow-up to the anisotropic-search-radius

@@ -265,6 +265,16 @@ longitude_per_sample: (ping, channel, sample)
 - **Restraint:** Only add deps with justification
 - **Current stack:** numpy, scipy, xarray, h5netcdf, pyproj, matplotlib, pandas
 - **New deps:** Discuss before adding
+- **Prefer established libraries over custom implementations, except in
+  extreme cases.** When a generic capability (resampling, gridding,
+  interpolation, reprojection, etc.) has a well-established
+  implementation in an already-used dependency (numpy/scipy/xarray/
+  pyproj) or a well-justified new one, reach for that before writing
+  custom logic — even if a hand-written version would be faster to
+  produce initially. Custom code is acceptable where the established
+  option doesn't fit the domain need (e.g. a library assumes isotropic
+  binning and the real data is genuinely anisotropic) — but that's a
+  documented exception, not the default.
 
 ---
 
