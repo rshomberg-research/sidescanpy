@@ -129,24 +129,23 @@ class TestRenderRecommendedConfig:
         assert "no_absorption: true" not in text
 
     def test_resolution_m_emitted_from_geometry(self):
+        # No sample interval in the base geometry: half the ping spacing.
         text = render_recommended_config(**self._base_kwargs())
-        assert "resolution_m: 0.1800" in text
+        assert "resolution_m: 0.0900" in text
 
-    def test_resolution_m_uses_coarser_of_spacing_and_sample_interval(self):
-        # Typical real case: ping spacing (along-track) coarser than the
-        # range-axis sample interval -- resolution_m should still be the
-        # ping spacing, not the finer sample interval.
-        geometry = {"ping_spacing_m_median": 0.18, "swath_width_m": 132.4, "sample_interval_m": 0.0019}
+    def test_resolution_m_is_half_the_finer_of_spacing_and_sample_interval(self):
+        # Project decision (2026-09-29): oversample to half the finest
+        # native axis and interpolate. Typical real case: sample interval
+        # much finer than ping spacing.
+        geometry = {"ping_spacing_m_median": 0.30, "swath_width_m": 132.4, "sample_interval_m": 0.02}
         text = render_recommended_config(**self._base_kwargs(geometry=geometry))
-        assert "resolution_m: 0.1800" in text
-        assert "sample interval" in text
+        assert "resolution_m: 0.0100" in text
+        assert "max(ping spacing, sample interval) = 0.3000" in text  # coarse alternative still shown
 
-    def test_resolution_m_uses_sample_interval_when_it_is_coarser(self):
-        # Edge case: sample interval coarser than ping spacing -- max()
-        # must pick it, not always default to ping spacing.
+    def test_resolution_m_uses_ping_spacing_when_it_is_finer(self):
         geometry = {"ping_spacing_m_median": 0.02, "swath_width_m": 132.4, "sample_interval_m": 0.05}
         text = render_recommended_config(**self._base_kwargs(geometry=geometry))
-        assert "resolution_m: 0.0500" in text
+        assert "resolution_m: 0.0100" in text
 
     def test_missing_geometry_notes_manual_value_needed(self):
         text = render_recommended_config(**self._base_kwargs(geometry={"ping_spacing_m_median": None, "swath_width_m": None}))
@@ -163,4 +162,4 @@ class TestRenderRecommendedConfig:
         text = render_recommended_config(**self._base_kwargs())
         parsed = yaml.safe_load(text)
         assert parsed["no_spreading"] is True
-        assert parsed["resolution_m"] == pytest.approx(0.18)
+        assert parsed["resolution_m"] == pytest.approx(0.09)

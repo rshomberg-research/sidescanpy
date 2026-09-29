@@ -7,6 +7,21 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+#### `sidescan-analyze recommend-config`: resolution_m = half the finer axis (2026-09-29)
+
+Recommended `resolution_m` is now `min(ping spacing, sample interval) / 2`
+instead of `max(...)`, matching the project decision to oversample past
+the finest native axis and let the geometric resample (griddata by
+default) interpolate. The report still prints the old `max(...)` value
+as the no-interpolation alternative, the interpolation ratio along the
+coarser axis, and the resulting 300 px chip footprint. Without a
+measured sample interval it falls back to half the ping spacing.
+Affects every consumer's recommendations, e.g. ~0.06m -> ~0.004m on
+survey-a. Size `size_px`/`box_size` to the targets
+accordingly.
+
 ### Added
 
 #### `sidescan-export chip`: `db` processing level and `--bit-depth 16` (2026-09-29)

@@ -75,10 +75,9 @@ def measure_ping_geometry(ds: xr.Dataset, *, low_pct: float = 1.0, high_pct: flo
     swath is anisotropic, and this function used to report only the
     along-track (ping) spacing, silently assuming it's always the
     coarser of the two axes without checking. Measuring both lets
-    ``render_recommended_config`` pick the true limiting axis, matching
-    ``sidescan-export``'s own ``max(mps, ping_spacing_m)`` auto-
-    calculation (``cli/export.py``) rather than recommending a value
-    that could exceed what the coarser axis actually supports. Read
+    ``render_recommended_config`` recommend half the finer axis (the
+    2026-09-29 oversample-and-interpolate decision) and still show the
+    coarser axis as the no-interpolation alternative. Read
     directly off ``slant_range_m`` (constant per ping, since it's a
     linear function of sample index) rather than recomputed from
     ``sound_vel_ms``/``sample_rate_hz`` a second time, so this stays
@@ -202,20 +201,34 @@ def render_recommended_config(
         lines.append(f"# Local median ping spacing = {_fmt(spacing, '.4f')} m, swath width = {_fmt(swath)} m")
         lines.append("# (measured over this section's own real navigation/geometry).")
         if sample_interval is not None:
-            resolution_m = max(spacing, sample_interval)
-            limiting = "ping spacing (along-track)" if resolution_m == spacing else "sample interval (across-track)"
+            # Project decision (2026-09-29): oversample past the finest
+            # native axis and let the geometric resample (griddata by
+            # default) interpolate, rather than stopping at the coarser
+            # axis. Half the finer spacing keeps every real sample on
+            # that axis in its own pixel.
+            finest = min(spacing, sample_interval)
+            resolution_m = finest / 2.0
+            finest_axis = "ping spacing (along-track)" if finest == spacing else "sample interval (across-track)"
+            coarse = max(spacing, sample_interval)
             lines.append(f"# Range-axis sample interval = {_fmt(sample_interval, '.4f')} m (across-track).")
             lines.append(
-                f"# resolution_m = max(ping spacing, sample interval) = {_fmt(resolution_m, '.4f')} m -- "
-                f"{limiting} is the coarser, limiting axis (a single isotropic pixel size can't exceed "
-                "what either axis truly supports without inventing detail on the other -- matches "
-                "sidescan-export chip's own max(mps, ping_spacing_m) auto-calculation, cli/export.py)."
+                f"# resolution_m = min(ping spacing, sample interval) / 2 = {_fmt(resolution_m, '.4f')} m "
+                f"(half the {finest_axis}). Along the coarser axis most pixels are interpolated, "
+                f"not measured: ~{coarse / resolution_m:.0f} output pixels per real sample there."
+            )
+            lines.append(
+                f"# Coarsest-axis alternative (no interpolation, much larger footprint): "
+                f"max(ping spacing, sample interval) = {_fmt(coarse, '.4f')} m."
+            )
+            lines.append(
+                f"# Chip footprint = size_px x resolution_m, e.g. 300 px -> {_fmt(300 * resolution_m, '.2f')} m; "
+                "set size_px (and box_size) to suit the targets."
             )
         else:
-            resolution_m = spacing
+            resolution_m = spacing / 2.0
             lines.append(
-                "# Range-axis sample interval unavailable (no slant_range_m) -- assuming ping spacing "
-                "is the coarser axis; verify with sidescan-export chip's own auto-calculation if unsure."
+                "# Range-axis sample interval unavailable (no slant_range_m) -- using half the ping "
+                "spacing; the sample interval is usually finer, so check it and prefer half of that."
             )
         lines.append(f"resolution_m: {_fmt(resolution_m, '.4f')}")
     else:
