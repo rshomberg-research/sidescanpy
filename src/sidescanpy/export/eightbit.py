@@ -171,11 +171,34 @@ def to_uint8(
     return img_8bit, metadata
 
 
+def to_uint16(
+    array: np.ndarray,
+    *,
+    gamma: float = 1.0,
+    pct_low: float = _DEFAULT_PCT_LOW,
+    pct_high: float = _DEFAULT_PCT_HIGH,
+    reference_stats: ReferenceStats | None = None,
+) -> tuple[np.ndarray, ReversalMetadata]:
+    """16-bit counterpart of :func:`to_uint8` — identical percentile
+    stretch and gamma (same bounds, same :class:`ReversalMetadata`), just
+    quantized to 65536 levels instead of 256. For datasets where a model
+    or analyst should see finer backscatter gradations than 8-bit keeps;
+    ``to_uint16(a)[0] >> 8`` equals ``to_uint8(a)[0]`` to within one
+    level of rounding."""
+    img_8bit, metadata = to_uint8(array, gamma=gamma, pct_low=pct_low, pct_high=pct_high, reference_stats=reference_stats)
+    normalized = (np.nan_to_num(array, nan=metadata.p_min).astype(np.float64) - metadata.p_min) / (metadata.p_max - metadata.p_min + 1e-8)
+    normalized = np.clip(normalized, 0.0, 1.0)
+    img_16bit = np.clip(np.power(normalized, gamma) * 65535.0, 0, 65535).astype(np.uint16)
+    return img_16bit, metadata
+
+
 def from_uint8(img_8bit: np.ndarray, metadata: ReversalMetadata) -> np.ndarray:
-    """Reverse :func:`to_uint8` back to (an approximation of) the
-    original array's dtype and scale. Lossy — 8-bit quantization is not
-    exactly reversible."""
-    normalized = img_8bit.astype(np.float64) / 255.0
+    """Reverse :func:`to_uint8` (or, given a ``uint16`` image,
+    :func:`to_uint16`) back to (an approximation of) the original
+    array's dtype and scale. Lossy — quantization is not exactly
+    reversible."""
+    full_scale = 65535.0 if img_8bit.dtype == np.uint16 else 255.0
+    normalized = img_8bit.astype(np.float64) / full_scale
     reversed_data = (
         np.power(normalized, 1.0 / metadata.gamma) * (metadata.p_max - metadata.p_min) + metadata.p_min
     )

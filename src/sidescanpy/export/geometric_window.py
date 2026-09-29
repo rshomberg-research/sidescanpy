@@ -453,6 +453,7 @@ def extract_geometric_window_griddata(
     along_size_px: int | None = None,
     across_size_px: int | None = None,
     interp_method: str = "linear",
+    max_fill_distance_m: float | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Same contract as :func:`extract_geometric_window`/
     :func:`extract_geometric_window_binned` (same params, same
@@ -494,6 +495,17 @@ def extract_geometric_window_griddata(
     ``method="nearest"`` pass so this function never returns a gap
     regardless of ``interp_method`` -- ``"nearest"`` itself is already
     gap-free after the first pass.
+    ``max_fill_distance_m`` : cells farther than this from every real
+    sample are NaN -- outside the recorded swath (past max range, the
+    nadir gap, the excluded channel of a single-channel window), where
+    either pass above would otherwise extend the nearest edge sample
+    into smeared wedges/streaks of invented seafloor (seen on real
+    survey-a chips wider than the swath, 2026-09-29).
+    ``None`` (default) derives it from the data: 1.5x the larger of
+    the 95th-percentile along-track ping gap, the median across-track
+    sample step, and the output resolution -- so gaps *between* real
+    pings/samples still interpolate. ``np.inf`` restores the old
+    never-NaN behavior.
 
     Raises
     ------
@@ -546,6 +558,19 @@ def extract_geometric_window_griddata(
         # gap-free regardless of interp_method (its whole point, per the
         # real user request this exists to satisfy).
         grid_values[nan_mask] = griddata(points, values_valid, query_points[nan_mask], method="nearest")
+    if max_fill_distance_m is None:
+        along_gaps = np.abs(np.diff(along))
+        along_gaps = along_gaps[along_gaps > 0]
+        across_steps = np.abs(np.diff(across, axis=-1))
+        across_steps = across_steps[np.isfinite(across_steps) & (across_steps > 0)]
+        max_fill_distance_m = 1.5 * max(
+            float(np.percentile(along_gaps, 95)) if along_gaps.size else 0.0,
+            float(np.median(across_steps)) if across_steps.size else 0.0,
+            along_resolution_m, across_resolution_m,
+        )
+    if np.isfinite(max_fill_distance_m):
+        dist, _ = cKDTree(points).query(query_points, distance_upper_bound=max_fill_distance_m)
+        grid_values[~np.isfinite(dist)] = np.nan
 
     grid = grid_values.reshape(along_size_px, across_size_px)
     meta = {

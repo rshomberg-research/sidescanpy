@@ -927,6 +927,19 @@ class TestRunChip:
         assert img_radiometric.shape == img_raw.shape
         assert not np.array_equal(img_radiometric, img_raw)
 
+    def test_value_var_db_changes_geometric_chip_pixels(self, tmp_path, georef_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._matched_target()], targets_json)
+
+        imgs = {}
+        for value_var in ("raw", "db"):
+            out = tmp_path / f"out_{value_var}"
+            args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric", value_var=value_var, output=out, seed=0)
+            assert export.run_chip(args) == 0
+            imgs[value_var] = np.asarray(Image.open(out / "chip" / "target_7.png"))
+        assert imgs["db"].shape == imgs["raw"].shape
+        assert not np.array_equal(imgs["db"], imgs["raw"])
+
     def test_value_var_raw_has_no_effect_and_warns_under_radiometric_render_level(self, tmp_path, georef_ss_h5_dir, caplog):
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._matched_target()], targets_json)
@@ -1172,6 +1185,44 @@ class TestRunChip:
         raw_img = np.array(Image.open(tmp_path / "raw_out" / "chip" / "target_7.png"))
         rad_img = np.array(Image.open(tmp_path / "rad_out" / "chip" / "target_7.png"))
         assert not np.array_equal(raw_img, rad_img)
+
+    def test_bit_depth_16_writes_16bit_png_with_same_annotations(self, tmp_path, swath_ss_h5_dir):
+        from PIL import Image
+
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        out8, out16 = tmp_path / "out8", tmp_path / "out16"
+        assert export.run_chip(self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], output=out8)) == 0
+        assert export.run_chip(self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], output=out16, bit_depth=16)) == 0
+
+        img8 = np.array(Image.open(out8 / "chip" / "target_7.png"))
+        img16 = np.array(Image.open(out16 / "chip" / "target_7.png"))
+        assert img8.dtype == np.uint8
+        assert img16.dtype == np.uint16
+        assert img16.max() > 255
+        assert np.abs((img16 >> 8).astype(int) - img8.astype(int)).max() <= 1
+        coco8 = json.loads((out8 / "chip" / "targets.coco.json").read_text())
+        coco16 = json.loads((out16 / "chip" / "targets.coco.json").read_text())
+        assert coco8["annotations"] == coco16["annotations"]
+
+    def test_db_render_level_differs_from_raw(self, tmp_path, swath_ss_h5_dir):
+        """'db' is 20*log10(backscatter_raw) with no TVG -- a nonlinear
+        transform of raw, so its percentile-stretched 8-bit render differs
+        from raw's. (Not compared against radiometric: this fixture's whole
+        swath is ~0.06m, all inside TVG's min_range_m clamp, so its gain is
+        a constant offset that percentile stretching removes.)"""
+        from PIL import Image
+
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        imgs = {}
+        for level in ("raw", "db"):
+            args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level=level, styles=["chip"], output=tmp_path / f"{level}_out")
+            assert export.run_chip(args) == 0
+            imgs[level] = np.array(Image.open(tmp_path / f"{level}_out" / "chip" / "target_7.png"))
+        assert not np.array_equal(imgs["db"], imgs["raw"])
 
     def test_geometric_level_without_geometric_correction_returns_1(self, tmp_path, ss_h5_dir):
         """ss_h5_dir's survey was never run through sidescan-correct
@@ -1433,3 +1484,57 @@ class TestPingChunksAlignment:
 
         alignment_warnings = [w for w in caught if "specified chunks separate the stored chunks" in str(w.message)]
         assert not alignment_warnings
+
+
+class TestSwathPreResampleDownsample:
+    """Geometric/georef single-swath/dual-swath block-average the source
+    neighborhood before resampling (_load_swath_neighborhood) -- the
+    fix for ~3GB-per-target loads plus the resample's own working set
+    on real survey-a data."""
+
+    def test_factors_keep_two_cells_per_output_pixel(self, georef_ss_h5_dir):
+        ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset
+        mps = export._sample_interval_m(ds)
+        half_span, fp, fs = export._geo_decimation(ds, 10, "dual-swath", size_px=64, jitter_px=0, resolution_m=0.1)
+        assert fs == int(0.1 / (export._SWATH_OVERSAMPLE * mps))
+        assert fs > 1
+        assert fp >= 1
+
+    def test_neighborhood_covers_the_window_in_meters(self, georef_ss_h5_dir):
+        """Sized from size_px * resolution_m along-track, not from
+        size_px pings -- a pings-sized neighborhood left real geometric
+        chips short of data at top/bottom (griddata nearest-fill streaks)."""
+        ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset
+        spacing = export._neighborhood_ping_spacing_m(ds, 0, ds.sizes["ping"])
+        half_span, _fp, _fs = export._geo_decimation(ds, 10, "chip", size_px=100, jitter_px=10, resolution_m=spacing)
+        assert half_span * spacing >= (100 / 2 + 10) * spacing
+
+    def test_loaded_neighborhood_is_averaged_and_rescaled(self, georef_ss_h5_dir):
+        ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset
+        out = export._load_swath_neighborhood(ds, 0, ds.sizes["ping"], 1, 10, with_db=True)
+        assert out.sizes["sample"] == ds.sizes["sample"] // 10
+        assert out.sizes["ping"] == ds.sizes["ping"]
+        assert "backscatter_db" in out
+        assert "slant_range_m" not in out
+        assert export._sample_interval_m(out) == pytest.approx(10 * export._sample_interval_m(ds))
+
+    def test_annotation_matches_full_resolution_resample(self, tmp_path, georef_ss_h5_dir, monkeypatch):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([TestRunChip()._matched_target()], targets_json)
+
+        def run(out, oversample):
+            monkeypatch.setattr(export, "_SWATH_OVERSAMPLE", oversample)
+            args = TestRunChip()._args(
+                tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric",
+                styles=["single-swath", "dual-swath"], swath_size_px=64, output=out,
+            )
+            assert export.run_chip(args) == 0
+            return {
+                style: json.loads((out / style / "targets.coco.json").read_text())["annotations"][0]["bbox"]
+                for style in ("single-swath", "dual-swath")
+            }
+
+        averaged = run(tmp_path / "averaged", 2.0)
+        full = run(tmp_path / "full", 1e9)  # every factor clamps to 1: no averaging
+        for style in averaged:
+            np.testing.assert_allclose(averaged[style][:2], full[style][:2], atol=2.0)

@@ -34,6 +34,7 @@ from sidescanpy.export.eightbit import (
     compute_reference_stats,
     from_uint8,
     to_uint8,
+    to_uint16,
 )
 from sidescanpy.export.windows import (
     WindowExtent,
@@ -58,6 +59,7 @@ __all__ = [
     "ReversalMetadata",
     "compute_reference_stats",
     "to_uint8",
+    "to_uint16",
     "from_uint8",
     "WindowExtent",
     "extract_chip",

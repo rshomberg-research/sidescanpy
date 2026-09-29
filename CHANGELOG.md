@@ -7,6 +7,64 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+#### `sidescan-export chip`: `db` processing level and `--bit-depth 16` (2026-09-29)
+
+- `--render-level db`: native pixel-space crop of `20*log10(backscatter_raw)`
+  with no TVG gain, between `raw` (linear) and `radiometric` (dB + TVG).
+  The progression grid already had this stage; chip export didn't.
+  `--value-var db` does the same for `geometric`/`georef` levels.
+  `backscatter_db` is computed per loaded neighborhood, only when one of
+  those two flags asks for it, and never written to the `.ss.h5`.
+- `--bit-depth {8,16}` (default 8): 16 writes single-channel 16-bit PNGs
+  with the same percentile stretch and `--gamma`, via new
+  `sidescanpy.export.to_uint16()`. `from_uint8()` now also inverts a
+  `uint16` image. Contact sheets stay 8-bit. COCO/YOLO annotations are
+  unchanged.
+
+### Fixed
+
+#### Geometric chips: neighborhood sized in meters, no invented seafloor past the swath (2026-09-29)
+
+- Geometric/georef `chip` loaded `size_px` pings around the target, but
+  the window covers `size_px * resolution_m` meters. At
+  survey-a's ~6cm ping spacing a 300px / 0.1m chip (30m) got
+  ~25m of pings, and griddata's nearest fill smeared the top/bottom
+  rows into streaks. All geometric/georef styles now size the ping
+  neighborhood from the output footprint in meters (plus jitter and
+  1.5x slack) via `_geo_decimation`, and load through the same
+  block-average path as the swath styles below.
+- `extract_geometric_window_griddata()` gained `max_fill_distance_m`:
+  cells with no real sample within that distance are NaN instead of
+  nearest-filled. Default derives it from the data (1.5x the larger of
+  the p95 ping gap, median sample step, and output resolution), so gaps
+  between real pings still interpolate; `np.inf` restores never-NaN.
+  Real case: 512px/0.1m and 256px/0.4m single-channel chips extend past
+  the port swath's max range and across nadir, and were filled with
+  wedge/streak artifacts there.
+
+#### Geometric/georef swath exports: block-average before resampling (2026-09-29)
+
+`single-swath`/`dual-swath` (and the geometric `--with-context` view) at
+`--render-level geometric|georef` loaded a native-resolution neighborhood
+of ~2x n_samples pings with every per-sample array in the corrected
+file (~3GB per target on survey-a), then resampled all of it.
+One 4-target run reached 44GB RSS. These styles now:
+
+1. Estimate the output resolution (`--resolution-m`, or the same auto
+   value as before: ground swath width / `--swath-size-px`).
+2. Load the neighborhood in 2048-ping blocks, only the variables the
+   resample and nadir mask read, mask each block at native resolution,
+   and block-average it to ~2 source cells per output pixel per axis
+   (`_SWATH_OVERSAMPLE`).
+3. Resample and crop to the final size exactly as before.
+
+Target positions are looked up on the averaged array (error at most
+half an averaged cell, i.e. about 1/4 output pixel). The `chip` style
+and the pixel-space levels are unchanged and still use native
+resolution.
+
 ### Changed
 
 #### Geometric chip export gains a selectable `resample_method` (kdtree/binned/griddata), default switched to griddata (2026-09-29)

@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 
-from sidescanpy.export.eightbit import compute_reference_stats, from_uint8, to_uint8
+from sidescanpy.export.eightbit import compute_reference_stats, from_uint8, to_uint8, to_uint16
 
 
 class TestToUint8:
@@ -100,3 +100,20 @@ class TestComputeReferenceStats:
         stats = compute_reference_stats(np.array([np.nan, np.nan]))
         assert stats.p_min == 0.0
         assert stats.p_max == 1.0
+
+
+class TestToUint16:
+    def test_same_stretch_as_uint8_at_finer_quantization(self):
+        rng = np.random.default_rng(0)
+        array = rng.gamma(2.0, 10.0, size=(64, 64)).astype(np.float32)
+        img8, meta8 = to_uint8(array, gamma=2.0)
+        img16, meta16 = to_uint16(array, gamma=2.0)
+        assert img16.dtype == np.uint16
+        assert meta16 == meta8
+        assert np.abs((img16 >> 8).astype(int) - img8.astype(int)).max() <= 1
+        assert len(np.unique(img16)) > len(np.unique(img8))
+
+    def test_round_trips_through_from_uint8(self):
+        array = np.linspace(0.0, 100.0, 1000, dtype=np.float32).reshape(10, 100)
+        img16, meta = to_uint16(array, pct_low=0.0, pct_high=100.0)
+        np.testing.assert_allclose(from_uint8(img16, meta), array, atol=0.01)

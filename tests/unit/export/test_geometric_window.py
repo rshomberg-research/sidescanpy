@@ -393,9 +393,10 @@ class TestExtractGeometricWindowBinned:
 
 class TestExtractGeometricWindowGriddata:
     """2026-09-29: scipy.interpolate.griddata version of
-    extract_geometric_window -- full interpolation, gap-free by
-    construction (linear/cubic's own convex-hull NaN edge is filled by
-    a nearest-neighbor second pass)."""
+    extract_geometric_window -- full interpolation, gap-free within the
+    recorded coverage (linear/cubic's own convex-hull NaN edge is
+    filled by a nearest-neighbor second pass); cells with no real
+    sample within max_fill_distance_m are NaN."""
 
     def test_output_shape_matches_request(self, geometric_channel):
         center_along, center_across = _real_center(geometric_channel)
@@ -482,6 +483,28 @@ class TestExtractGeometricWindowGriddata:
         grid, _meta = extract_geometric_window_griddata(
             geometric_channel, 16, resolution_m=0.05, center_along_m=center_along, center_across_m=center_across,
             interp_method="nearest",
+        )
+        assert np.isfinite(grid).all()
+
+    def test_cells_beyond_recorded_coverage_are_nan(self, geometric_channel):
+        """A window far wider than the recorded swath: griddata's
+        nearest pass used to smear edge samples across all of it."""
+        center_along, center_across = _real_center(geometric_channel)
+        across = geometric_channel["across_track_m"].isel(channel=0).values
+        swath_m = float(np.nanmax(across) - np.nanmin(across))
+        grid, _meta = extract_geometric_window_griddata(
+            geometric_channel, 32, resolution_m=4 * swath_m / 32, center_along_m=center_along, center_across_m=center_across,
+        )
+        assert np.isnan(grid).any()
+        assert np.isfinite(grid).any()
+
+    def test_infinite_fill_distance_restores_gap_free_output(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        across = geometric_channel["across_track_m"].isel(channel=0).values
+        swath_m = float(np.nanmax(across) - np.nanmin(across))
+        grid, _meta = extract_geometric_window_griddata(
+            geometric_channel, 32, resolution_m=4 * swath_m / 32, center_along_m=center_along, center_across_m=center_across,
+            max_fill_distance_m=np.inf,
         )
         assert np.isfinite(grid).all()
 
