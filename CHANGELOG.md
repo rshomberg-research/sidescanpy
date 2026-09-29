@@ -9,6 +9,61 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### Port/starboard "geometric" render-level windows were unflipped mirror images of each other (2026-09-29)
+
+Real user report, found while diagnosing a customer-facing slide tool
+(a separate, project-local consumer script): different targets in the
+same comparison grid showed inconsistent left-right orientation, and
+the user correctly traced it to channel handling. Confirmed via direct
+real-coordinate inspection, not a guess: `extract_geometric_window()`
+builds columns in ascending `across_track_m` order. Port's
+`across_track_m` is negative, so ascending order puts the
+least-negative (nearest-nadir) value LAST — near-range lands on the
+right edge. Starboard's is positive, so ascending order puts the
+smallest (nearest-nadir) value FIRST — near-range lands on the left
+edge. Every `"geometric"` render-level window for a single physical
+channel (`chip`/`single-swath`'s own per-channel crops, and this
+family's processing-slide tooling) has been rendering port and
+starboard as genuine, uncorrected mirror images of each other — real
+target coordinates confirmed it directly (target 0001, port,
+`across_min=-16.28m`; target 0002, starboard, `across_min=+15.55m` —
+near-range on opposite sides).
+
+- New `cli/export.py: _orient_geo_window()` — wraps the existing
+  `_flip_geo_vertical()` (unchanged, still tested independently) with
+  an additional horizontal port-mirror flip for a single port
+  channel's own window (`combine=False, channel_idx=0`). `combine=True`
+  (dual-swath, a pooled real-meters point cloud spanning both true
+  signs at once) never needs this — nadir is already correctly placed
+  in the middle from the data's own real coordinates, same reasoning
+  `_orient_pixel_window` already applies for its own dual-swath case.
+  This is a **different reason** than `_orient_pixel_window`'s own
+  port-mirror flip, which exists purely to match EdgeTech Discover's
+  vendor display convention for pixel-space renders (sample-index
+  ordering has no inherent near/far-range sign issue to begin with) —
+  there is no Discover convention to match in real-meters geometric
+  space; this fix exists purely for genuine near/far-range consistency
+  between channels, with no vendor precedent either way. `georef`
+  render-level windows are unaffected — northing/easting are absolute
+  map coordinates with no port/starboard sign convention to invert.
+- The one real call site (`_extract_geo_style_window`'s `"geometric"`
+  branch) now calls `_orient_geo_window()` instead of
+  `_flip_geo_vertical()` directly.
+- 6 new tests (`tests/unit/cli/test_export.py::TestOrientGeoWindow`):
+  port gets both flips, starboard gets only the vertical flip,
+  dual-swath never gets the horizontal flip even if passed
+  `channel_idx=0` directly, target column remapping is correct for
+  port and correctly absent for starboard, and a real-data check
+  (`_geo_channel_ds()`) confirming a real port window's near-range edge
+  actually moves to column 0 after orientation. Full suite: 1709
+  passing / 36 skipped (was 1703).
+- **Not fixed here, confirmed unaffected:** the `georef` render level
+  (no port/starboard sign concept), and the anisotropic-search-radius
+  Tier 2 gap already documented in
+  `docs/planning/anisotropic-crop-search-radius.md` (unrelated —
+  orientation vs. resampling neighborhood shape are independent
+  issues).
+
 #### NaN cells render black everywhere, not transparent-onto-white (2026-09-28)
 
 Real user instruction, from the same target-crop verification work as

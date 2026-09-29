@@ -738,6 +738,51 @@ def _flip_geo_vertical(grid: np.ndarray, positioned_targets: list, size_px: int)
     return grid, positioned_targets
 
 
+def _orient_geo_window(
+    grid: np.ndarray, positioned_targets: list, size_px: int, *, combine: bool, channel_idx: int | None,
+) -> tuple[np.ndarray, list]:
+    """Full orientation correction for a "geometric" render-level window:
+    the vertical flip (``_flip_geo_vertical``, always) plus a horizontal
+    port-mirror flip for a single port channel's own window.
+
+    Real, confirmed finding (2026-09-29, direct coordinate inspection,
+    not a guess): ``extract_geometric_window`` builds columns in
+    ascending ``across_track_m`` order. Port's across_track_m is
+    negative, so ascending order puts the LEAST negative (nearest-nadir)
+    value LAST -- near-range lands on the right edge. Starboard's is
+    positive, so ascending order puts the smallest (nearest-nadir) value
+    FIRST -- near-range lands on the left edge. A port window and a
+    starboard window are therefore genuine mirror images of each other
+    with no correction applied, which is exactly what every "geometric"
+    render-level output (chip/single-swath/dual-swath's own per-channel
+    windows, and this project's processing-slide tooling) has been doing
+    -- confirmed via real target coordinates (0001, port, across_min=
+    -16.28m; 0002, starboard, across_min=+15.55m -- near-range on
+    opposite sides).
+
+    This is a DIFFERENT reason than ``_orient_pixel_window``'s own
+    port-mirror flip, which exists purely to match EdgeTech Discover's
+    vendor display convention for pixel-space renders (sample-index
+    ordering has no inherent near/far-range sign issue to begin with).
+    There is no Discover convention to match in real-meters geometric
+    space -- this fix exists purely for genuine near/far-range
+    consistency between channels, with no vendor precedent either way.
+
+    combine=True (dual-swath, channel_idx=None) never needs this: a
+    pooled real-meters point cloud spans both true signs at once, so
+    nadir is already correctly placed in the middle from the data's own
+    real coordinates -- same reasoning ``_orient_pixel_window`` already
+    applies for its own dual-swath case (already mirrored at combination
+    time by ``_combine_channels_mirrored``).
+    """
+    grid, positioned_targets = _flip_geo_vertical(grid, positioned_targets, size_px)
+    if not combine and channel_idx == 0:
+        n_cols = grid.shape[1]
+        grid = grid[:, ::-1]
+        positioned_targets = [replace(pt, sample=n_cols - 1 - pt.sample) for pt in positioned_targets]
+    return grid, positioned_targets
+
+
 def _rescale_co_targets(co_targets: list, native_shape: tuple[int, int], output_shape: tuple[int, int]) -> list:
     """Move every co-target's (row, col) from a native-resolution window
     into its resized output space, matching :func:`resize_to`'s own
@@ -940,7 +985,7 @@ def _extract_geo_style_window(
         all_items = [item for items in items_by_channel.values() for item in items] if combine else items_by_channel.get(channel_idx, [])
         candidates = [item for item in all_items if item[0].target_id != t.target_id]
         co_targets = _geo_targets_within_window(candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric)
-        grid, targets_out = _flip_geo_vertical(grid, [primary_local] + co_targets, size_px)
+        grid, targets_out = _orient_geo_window(grid, [primary_local] + co_targets, size_px, combine=combine, channel_idx=channel_idx)
         # bbox_size_px scale: t.bbox's (w, h) is in source sample(x)/
         # ping(y) pixel counts -- convert to real meters via mps/
         # ping_spacing_m, then to this window's own output pixels via

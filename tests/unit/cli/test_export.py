@@ -539,6 +539,92 @@ class TestFlipGeoVertical:
         assert {t.extra_attributes["window_row"] for t in out} == {10, 1}
 
 
+class TestOrientGeoWindow:
+    """Real, confirmed finding (2026-09-29): extract_geometric_window's
+    ascending-across_track_m column order puts near-range on the RIGHT
+    for a port window (negative across_track_m) but on the LEFT for a
+    starboard window (positive) -- port and starboard windows were
+    genuine mirror images of each other with no correction applied
+    anywhere in this codebase, confirmed via real target coordinates
+    (0001 port: across_min=-16.28m; 0002 starboard: across_min=+15.55m).
+    """
+
+    def _co_target(self, sample, window_row):
+        return Target(target_id="1", source_format="x", catalog_source="x", sample=sample, extra_attributes={"window_row": window_row})
+
+    def test_port_gets_horizontal_flip_on_top_of_vertical(self):
+        grid = np.array([[1, 2, 3], [4, 5, 6]])
+        oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=False, channel_idx=0)
+        # vertical flip first (rows reversed), then horizontal (cols reversed)
+        expected = grid[::-1, :][:, ::-1]
+        np.testing.assert_array_equal(oriented, expected)
+
+    def test_starboard_gets_only_vertical_flip(self):
+        grid = np.array([[1, 2, 3], [4, 5, 6]])
+        oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=False, channel_idx=1)
+        np.testing.assert_array_equal(oriented, grid[::-1, :])
+
+    def test_dual_swath_never_gets_horizontal_flip_even_with_channel_idx_zero(self):
+        # combine=True always passes channel_idx=None in the real caller
+        # (_extract_geo_style_window's geom_channel_idx), but this
+        # function is tested directly against combine as the deciding
+        # flag, not channel_idx alone -- confirms combine wins.
+        grid = np.array([[1, 2, 3], [4, 5, 6]])
+        oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=True, channel_idx=None)
+        np.testing.assert_array_equal(oriented, grid[::-1, :])
+
+    def test_port_flip_remaps_target_column(self):
+        grid = np.zeros((4, 5))
+        targets = [self._co_target(sample=0, window_row=0), self._co_target(sample=4, window_row=3)]
+        _, out = export._orient_geo_window(grid, targets, size_px=4, combine=False, channel_idx=0)
+        assert {o.sample for o in out} == {4, 0}
+
+    def test_starboard_does_not_remap_target_column(self):
+        grid = np.zeros((4, 5))
+        targets = [self._co_target(sample=0, window_row=0), self._co_target(sample=4, window_row=3)]
+        _, out = export._orient_geo_window(grid, targets, size_px=4, combine=False, channel_idx=1)
+        assert {o.sample for o in out} == {0, 4}
+
+    def test_port_near_range_moves_to_column_zero_after_orientation(self):
+        """The actual point of this fix, verified directly from real
+        window geometry (not just the flip mechanics tested above): a
+        real port window's near-range (nadir-ward) edge is at the LAST
+        column before orientation (ascending across_track_m puts port's
+        least-negative/nearest-zero value last) and must be at column 0
+        after -- matching starboard's own, already-correct column-0-is-
+        near-range convention (starboard's smallest/nearest-zero value
+        is ascending-order-first already, so it needs no flip)."""
+        from sidescanpy.export.geometric_window import extract_geometric_window
+        from sidescanpy.viz.waterfall import along_track_distance_m
+
+        ds = _geo_channel_ds()
+        along = along_track_distance_m(ds)
+        across_port = ds["across_track_m"].isel(channel=0).values
+        finite_port = np.isfinite(across_port)
+        p_ping, p_sample = np.argwhere(finite_port)[len(np.argwhere(finite_port)) // 2]
+        port_across_m = float(across_port[p_ping, p_sample])
+        size_px = 16
+        resolution_m = 0.5
+        grid_port, meta_port = extract_geometric_window(
+            ds, size_px, resolution_m=resolution_m, center_along_m=float(along[p_ping]),
+            center_across_m=port_across_m, channel_idx=0,
+        )
+        # Pre-flip: column 0's real across_track_m is meta["across_min"]
+        # (most negative = far-range for port); the last column is
+        # across_min + (size_px-1)*resolution_m (least negative = near-range).
+        across_min = meta_port["across_min"]
+        pre_flip_col0_across_m = across_min
+        pre_flip_last_col_across_m = across_min + (size_px - 1) * resolution_m
+        assert abs(pre_flip_last_col_across_m) < abs(pre_flip_col0_across_m), (
+            "test setup assumption broken: expected port's near-range (closer to 0) "
+            "to be the LAST column before orientation"
+        )
+
+        oriented, _ = export._orient_geo_window(grid_port, [], size_px=size_px, combine=False, channel_idx=0)
+        # After the horizontal flip, oriented column 0 == pre-flip (vertically-flipped) last column.
+        np.testing.assert_array_equal(oriented[:, 0], grid_port[::-1, :][:, -1])
+
+
 class TestCorrelateTarget:
     """Real field report: lots of "no ss_h5 ping within 25.0m of its
     recorded position" warnings, and some targets missing from chip
