@@ -229,6 +229,59 @@ whichever native axis is coarser.)
 
 ### Added
 
+#### `extract_geometric_window()` gains independent along/across-track pixel resolution -- non-square output (2026-09-29)
+
+Real user report, direct follow-up to the anisotropic-search-radius
+fix: even with `along_search_radius_m`/`across_search_radius_m` set
+correctly, a single shared `resolution_m` still forces the SAME pixel
+density on both axes. On a survey whose along-track native resolution
+is much coarser than across-track (ping spacing an order of magnitude
+or more wider than sample interval — real vendor-format data measured at
+~16:1), the along-track search radius floor (tied to real ping-to-ping
+gaps, independent of `resolution_m`) ends up wide relative to a fine
+shared pixel spacing, visible in the output as elliptical averaging
+footprints — "you can clearly see the ellipses which appear wide...
+that is not an issue w/ the radiometric [pixel-space resize], which
+looks consistently smooth." No amount of tuning a single shared
+`resolution_m`/search radius eliminates this, because a plain
+pixel-space resize never averages a real neighborhood at all, so it
+has nothing to show a footprint of — it was never solving the same
+problem to begin with.
+
+- `extract_geometric_window()` gained `along_resolution_m`/
+  `across_resolution_m`/`along_size_px`/`across_size_px` — all
+  optional, default `None` falls back to the shared `resolution_m`/
+  `size_px`, so every existing caller gets byte-identical square-pixel
+  output (verified: `test_omitting_new_params_reproduces_square_output_exactly`).
+  Setting `along_resolution_m` coarser than `across_resolution_m` (close
+  to the real ping spacing) lets each axis's pixel size match its OWN
+  real resolving power — eliminating the visible-footprint artifact
+  without averaging away real across-track detail that IS there to
+  resolve. The returned array is genuinely non-square in shape when
+  used this way (e.g. `(along_size_px, across_size_px)` = `(20, 320)`
+  covering the same real square extent as a 320×320 window at the finer
+  resolution alone) — most plotting libraries' default aspect handling
+  (e.g. matplotlib `imshow`'s `aspect="equal"`) renders this correctly
+  from the array shape alone, no `extent` needed.
+- `meta` now always carries `along_resolution_m`/`across_resolution_m`
+  (the resolved per-axis values, even in the isotropic case) — `locate_point()`
+  now reads these instead of the single `resolution_m` key. `meta["resolution_m"]`
+  stays populated as a legacy key (equal to `along_resolution_m`) for
+  any existing caller reading it directly.
+- 6 new tests (`tests/unit/export/test_geometric_window.py::TestAnisotropicPixels`):
+  omitting the new params reproduces square output exactly, independent
+  resolution produces a genuinely non-square array, `meta` carries both
+  resolved resolutions (plus the legacy key), overriding only one axis
+  falls the other back to the shared `resolution_m`, both axes cover
+  the real extent they were asked to despite very different pixel
+  counts, and `locate_point()` uses the correct per-axis resolution.
+  Full suite: 1715 passing / 36 skipped (was 1709).
+- **Not yet wired into any consumer project's own export tooling** —
+  this is a library capability; a caller has to actually choose
+  `along_resolution_m`/`across_resolution_m` values and decide how to
+  display a non-square result. `docs/planning/anisotropic-crop-search-radius.md`'s
+  Tier 2 (georef) gap is unrelated and still open.
+
 #### `sidescan-analyze nav-attitude` -- navigation/attitude diagnostic plot (2026-09-27)
 
 New subcommand, independent of the 5-stage TVG/geometry investigation

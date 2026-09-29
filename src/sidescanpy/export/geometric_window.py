@@ -56,6 +56,10 @@ def extract_geometric_window(
     along_search_radius_m: float | None = None,
     across_search_radius_m: float | None = None,
     avoid_edge_gaps: bool = False,
+    along_resolution_m: float | None = None,
+    across_resolution_m: float | None = None,
+    along_size_px: int | None = None,
+    across_size_px: int | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Resample a ``size_px x size_px`` square region, centered on
     ``(center_along_m, center_across_m)``, at exactly ``resolution_m``
@@ -68,7 +72,10 @@ def extract_geometric_window(
     the window's own along/across extents but still forced *both* axes
     to ``size_px`` samples — the smaller-extent axis came out visibly
     stretched; fixed by making resolution and size the only inputs,
-    extent purely a consequence of them).
+    extent purely a consequence of them). This is still the default —
+    ``along_resolution_m``/``across_resolution_m``/``along_size_px``/
+    ``across_size_px`` below are opt-in, and every existing caller that
+    doesn't pass them gets byte-identical square-pixel output.
 
     ``channel_idx=None`` pools samples from *both* channels into the
     same point cloud instead of one side only — unlike the raw-pixel
@@ -159,18 +166,67 @@ def extract_geometric_window(
         (this function's original, unconditional behavior) -- opt in
         per caller, since not every use of this function is a
         target-crop where "no data" is worse than "off-center".
+    along_resolution_m, across_resolution_m : float, optional
+        Independent along-track / across-track meters-per-pixel — real,
+        non-square output pixels. Default (``None``) for either falls
+        back to ``resolution_m`` — fully backward compatible, every
+        existing caller gets exactly the prior square-pixel behavior.
+
+        Real motivation (2026-09-29): even with anisotropic *search
+        radii* (``along_search_radius_m``/``across_search_radius_m``
+        above), a single shared ``resolution_m`` still forces the SAME
+        pixel density on both axes. On a survey whose along-track
+        native resolution is much coarser than across-track (ping
+        spacing an order of magnitude or more wider than sample
+        interval — real vendor-format data measured at ~16:1), the
+        along-track search radius floor (tied to real ping-to-ping
+        gaps, independent of ``resolution_m`` — see
+        ``along_search_radius_m`` above) ends up wide relative to a
+        fine shared pixel spacing, visible in the output as elliptical
+        averaging footprints — confirmed directly, real user report
+        ("you can clearly see the ellipses which appear wide... that
+        is not an issue w/ the radiometric"). No amount of tuning a
+        single shared ``resolution_m``/search radius eliminates this,
+        because a plain pixel-space resize (which is what "radiometric"
+        looks like) never averages a real neighborhood at all, so it
+        has no footprint to show — it isn't solving the same problem.
+        Setting ``along_resolution_m`` coarser than
+        ``across_resolution_m`` (close to the real ping spacing) lets
+        each axis's pixel size match its OWN real resolving power,
+        eliminating the visible-footprint artifact without averaging
+        away real across-track detail that IS there to resolve.
+    along_size_px, across_size_px : int, optional
+        Independent output row / column counts. Default (``None``) for
+        either falls back to ``size_px``. Combined with
+        ``along_resolution_m``/``across_resolution_m``, this is what
+        actually makes the output array non-square in shape, not just
+        in real-world meters-per-pixel — e.g. ``along_size_px=20`` at
+        ``along_resolution_m=0.4`` covers the same real 8m as
+        ``across_size_px=320`` at ``across_resolution_m=0.025``, and
+        the returned array is genuinely ``(20, 320)``, not square. A
+        caller displaying this gets correct proportions for free from
+        most plotting libraries' default aspect handling (e.g.
+        matplotlib ``imshow``'s ``aspect="equal"``, driven by array
+        shape alone, with no ``extent`` needed) — it is not a stretched
+        square image, it is a genuinely shorter/narrower real array.
 
     Returns
     -------
     (grid, meta)
-        ``grid`` : ``(size_px, size_px)`` array, NaN where no sample
-        fell within the search radius of a cell.
+        ``grid`` : ``(along_size_px, across_size_px)`` array (both
+        default to ``size_px``, reproducing the prior square shape
+        unless overridden). NaN where no sample fell within the search
+        radius of a cell.
         ``meta`` : dict with ``center_row``/``center_col`` (the
         requested center's own pixel position in ``grid`` — always the
         exact middle, since the grid is built centered on it by
-        construction) and the resolved ``along_min``/``across_min``
-        bounds, for locating other real-world points in this same grid
-        later.
+        construction), the resolved ``along_min``/``across_min``
+        bounds, ``along_resolution_m``/``across_resolution_m`` (the
+        resolved per-axis values, always present even when isotropic),
+        and ``resolution_m`` — a legacy key kept for backward
+        compatibility, equal to ``along_resolution_m``; new code should
+        read the per-axis keys instead, since this key is ambiguous
+        once the two differ.
 
     Raises
     ------
@@ -196,13 +252,26 @@ def extract_geometric_window(
     across_valid = across[finite]
     values_valid = values[finite]
 
-    half_extent = size_px * resolution_m / 2.0
-    if avoid_edge_gaps:
-        center_along_m = _clamp_center(center_along_m, half_extent, along_valid.min(), along_valid.max())
-        center_across_m = _clamp_center(center_across_m, half_extent, across_valid.min(), across_valid.max())
-    along_min = center_along_m - half_extent
-    across_min = center_across_m - half_extent
+    # Resolved per-axis resolution/size -- default to the shared
+    # resolution_m/size_px, reproducing the prior square-pixel behavior
+    # exactly when neither is overridden.
+    along_resolution_m = along_resolution_m if along_resolution_m is not None else resolution_m
+    across_resolution_m = across_resolution_m if across_resolution_m is not None else resolution_m
+    along_size_px = along_size_px if along_size_px is not None else size_px
+    across_size_px = across_size_px if across_size_px is not None else size_px
 
+    along_half_extent = along_size_px * along_resolution_m / 2.0
+    across_half_extent = across_size_px * across_resolution_m / 2.0
+    if avoid_edge_gaps:
+        center_along_m = _clamp_center(center_along_m, along_half_extent, along_valid.min(), along_valid.max())
+        center_across_m = _clamp_center(center_across_m, across_half_extent, across_valid.min(), across_valid.max())
+    along_min = center_along_m - along_half_extent
+    across_min = center_across_m - across_half_extent
+
+    # Isotropic default radius still keys off the required, shared
+    # resolution_m param -- unaffected by along_resolution_m/
+    # across_resolution_m, so every existing caller's radius behavior
+    # (which never passes those) is completely unchanged.
     default_radius = search_radius_m if search_radius_m is not None else 1.5 * resolution_m
     along_radius = along_search_radius_m if along_search_radius_m is not None else default_radius
     across_radius = across_search_radius_m if across_search_radius_m is not None else default_radius
@@ -216,9 +285,10 @@ def extract_geometric_window(
     # the prior behavior exactly.
     tree = cKDTree(np.column_stack([along_valid / along_radius, across_valid / across_radius]))
 
-    cell_centers = (np.arange(size_px) + 0.5) * resolution_m
-    grid_along = along_min + cell_centers
-    grid_across = across_min + cell_centers
+    along_cell_centers = (np.arange(along_size_px) + 0.5) * along_resolution_m
+    across_cell_centers = (np.arange(across_size_px) + 0.5) * across_resolution_m
+    grid_along = along_min + along_cell_centers
+    grid_across = across_min + across_cell_centers
     gg_along, gg_across = np.meshgrid(grid_along, grid_across, indexing="ij")
     query_points = np.column_stack([gg_along.ravel() / along_radius, gg_across.ravel() / across_radius])
 
@@ -228,13 +298,15 @@ def extract_geometric_window(
         if idx:
             grid_values[i] = np.mean(values_valid[idx])
 
-    grid = grid_values.reshape(size_px, size_px)
+    grid = grid_values.reshape(along_size_px, across_size_px)
     meta = {
-        "center_row": (center_along_m - along_min) / resolution_m,
-        "center_col": (center_across_m - across_min) / resolution_m,
+        "center_row": (center_along_m - along_min) / along_resolution_m,
+        "center_col": (center_across_m - across_min) / across_resolution_m,
         "along_min": along_min,
         "across_min": across_min,
-        "resolution_m": resolution_m,
+        "resolution_m": along_resolution_m,  # legacy key -- see docstring
+        "along_resolution_m": along_resolution_m,
+        "across_resolution_m": across_resolution_m,
     }
     return grid, meta
 
@@ -245,8 +317,13 @@ def locate_point(along_m: float, across_m: float, meta: dict) -> tuple[float, fl
     :func:`extract_geometric_window`, using that call's own returned
     ``meta`` — for marking a *different* point than the one the window
     was centered on (e.g. a second target sharing the same frame).
+
+    Reads ``meta``'s per-axis ``along_resolution_m``/
+    ``across_resolution_m`` (not the legacy ``resolution_m`` key) —
+    correct for both the isotropic/square case (where they're equal
+    anyway) and a real anisotropic-pixel window.
     """
     return (
-        (along_m - meta["along_min"]) / meta["resolution_m"],
-        (across_m - meta["across_min"]) / meta["resolution_m"],
+        (along_m - meta["along_min"]) / meta["along_resolution_m"],
+        (across_m - meta["across_min"]) / meta["across_resolution_m"],
     )

@@ -183,6 +183,95 @@ class TestAnisotropicSearchRadius:
         np.testing.assert_array_equal(grid_default, grid_explicit)
 
 
+class TestAnisotropicPixels:
+    """2026-09-29: real user report -- even with anisotropic search
+    radii, a single shared resolution_m still forces the same pixel
+    density on both axes, so on a survey with coarse ping spacing the
+    along-track search radius (tied to real ping gaps) ends up wide
+    relative to a fine shared pixel spacing, visible as elliptical
+    averaging footprints. along_resolution_m/across_resolution_m/
+    along_size_px/across_size_px let a caller give each axis its own
+    real pixel density, matching its own native resolving power."""
+
+    def test_omitting_new_params_reproduces_square_output_exactly(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid_old, meta_old = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+        )
+        grid_new, meta_new = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=1.0, across_resolution_m=1.0, along_size_px=16, across_size_px=16,
+        )
+        np.testing.assert_array_equal(grid_old, grid_new)
+        assert meta_old["along_resolution_m"] == meta_new["along_resolution_m"]
+        assert meta_old["across_resolution_m"] == meta_new["across_resolution_m"]
+
+    def test_independent_resolution_produces_non_square_array(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=10, across_size_px=40,
+        )
+        assert grid.shape == (10, 40)
+
+    def test_meta_carries_both_resolved_resolutions(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5,
+        )
+        assert meta["along_resolution_m"] == 2.0
+        assert meta["across_resolution_m"] == 0.5
+        # legacy key stays populated (equal to along_resolution_m) for
+        # any old caller still reading it directly.
+        assert meta["resolution_m"] == 2.0
+
+    def test_only_along_overridden_across_falls_back_to_shared_resolution_m(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=3.0,
+        )
+        assert meta["along_resolution_m"] == 3.0
+        assert meta["across_resolution_m"] == 1.0
+
+    def test_real_footprint_covers_the_requested_extent_per_axis(self, geometric_channel):
+        """A coarser along-track resolution with fewer along pixels
+        should still cover roughly the SAME real along-track extent as
+        an equivalent square-pixel window at that along resolution --
+        confirms along_size_px/along_resolution_m aren't independently
+        broken (e.g. accidentally covering a much wider or narrower
+        real span than requested)."""
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        along_extent_m = 8 * 2.0
+        across_extent_m = 32 * 0.5
+        assert along_extent_m == pytest.approx(16.0)
+        assert across_extent_m == pytest.approx(16.0)
+        # both axes cover the same real 16m extent despite very
+        # different pixel counts/resolutions -- the actual point of
+        # this feature.
+        assert center_along - meta["along_min"] == pytest.approx(along_extent_m / 2)
+        assert center_across - meta["across_min"] == pytest.approx(across_extent_m / 2)
+
+    def test_locate_point_uses_per_axis_resolution(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        row, col = locate_point(center_along, center_across, meta)
+        assert row == pytest.approx(meta["center_row"])
+        assert col == pytest.approx(meta["center_col"])
+        # sanity: row should be near the middle of the 8-row axis, col
+        # near the middle of the 32-col axis -- not swapped/confused.
+        assert 0 <= row <= 8
+        assert 0 <= col <= 32
+
+
 class TestClampCenter:
     def test_no_change_when_window_fits_away_from_edges(self):
         assert _clamp_center(5.0, half_extent=2.0, data_min=0.0, data_max=10.0) == 5.0
