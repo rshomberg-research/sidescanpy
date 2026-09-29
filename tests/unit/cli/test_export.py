@@ -1067,6 +1067,21 @@ class TestRunChip:
         for style in ("chip", "single-swath", "dual-swath"):
             assert (tmp_path / "out" / style / "target_7.png").exists()
 
+    def test_geometric_context_reuses_dual_swath_window(self, tmp_path, swath_ss_h5_dir, mocker):
+        """--with-context used to run a second, identical dual-swath
+        griddata pass per target (~11s each on real data)."""
+        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._swath_matched_target()], targets_json)
+
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric",
+            styles=["dual-swath"], swath_size_px=64, with_context=True,
+        )
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 1
+        assert (tmp_path / "out" / "context" / "context_7.png").exists()
+
     def test_resolution_m_override_reaches_geometric_extraction_for_every_style(self, tmp_path, swath_ss_h5_dir, mocker):
         """Real production report: some targets' chip/single-swath/dual-swath
         came out 'way zoomed out', mostly-black with the real swath tiny in

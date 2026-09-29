@@ -549,15 +549,6 @@ def extract_geometric_window_griddata(
     gg_along, gg_across = np.meshgrid(along_cell_centers, across_cell_centers, indexing="ij")
     query_points = np.column_stack([gg_along.ravel(), gg_across.ravel()])
 
-    points = np.column_stack([along_valid, across_valid])
-    grid_values = griddata(points, values_valid, query_points, method=interp_method)
-    nan_mask = np.isnan(grid_values)
-    if nan_mask.any():
-        # linear/cubic leave NaN outside the real data's convex hull --
-        # fill with nearest-neighbor extrapolation so this function is
-        # gap-free regardless of interp_method (its whole point, per the
-        # real user request this exists to satisfy).
-        grid_values[nan_mask] = griddata(points, values_valid, query_points[nan_mask], method="nearest")
     if max_fill_distance_m is None:
         along_gaps = np.abs(np.diff(along))
         along_gaps = along_gaps[along_gaps > 0]
@@ -568,12 +559,48 @@ def extract_geometric_window_griddata(
             float(np.median(across_steps)) if across_steps.size else 0.0,
             along_resolution_m, across_resolution_m,
         )
+
+    points = np.column_stack([along_valid, across_valid])
+    if np.isfinite(max_fill_distance_m):
+        # Triangulate only the points near this window, not the whole
+        # loaded neighborhood (the full swath across-track, plus along-
+        # track slack) -- Delaunay cost scales with point count, and a
+        # tight chip can be a few percent of what's loaded (real case:
+        # ~11s per dual-swath window on survey-a before this).
+        # A margin of 2x max_fill_distance_m keeps every point that can
+        # affect a cell: cells with no point within max_fill_distance_m
+        # are NaN below anyway, and interpolation triangles near the
+        # window edge still get their neighbors.
+        margin = 2.0 * max_fill_distance_m
+        near = (
+            (along_valid >= along_min - margin) & (along_valid <= along_min + along_size_px * along_resolution_m + margin)
+            & (across_valid >= across_min - margin) & (across_valid <= across_min + across_size_px * across_resolution_m + margin)
+        )
+        points, values_valid = points[near], values_valid[near]
+    if len(points) == 0:
+        grid = np.full((along_size_px, across_size_px), np.nan)
+        return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
+    if len(points) < 3:
+        grid_values = griddata(points, values_valid, query_points, method="nearest")
+    else:
+        grid_values = griddata(points, values_valid, query_points, method=interp_method)
+    nan_mask = np.isnan(grid_values)
+    if nan_mask.any():
+        # linear/cubic leave NaN outside the real data's convex hull --
+        # fill with nearest-neighbor extrapolation so this function is
+        # gap-free regardless of interp_method (its whole point, per the
+        # real user request this exists to satisfy).
+        grid_values[nan_mask] = griddata(points, values_valid, query_points[nan_mask], method="nearest")
     if np.isfinite(max_fill_distance_m):
         dist, _ = cKDTree(points).query(query_points, distance_upper_bound=max_fill_distance_m)
         grid_values[~np.isfinite(dist)] = np.nan
 
     grid = grid_values.reshape(along_size_px, across_size_px)
-    meta = {
+    return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
+
+
+def _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m) -> dict:
+    return {
         "center_row": (center_along_m - along_min) / along_resolution_m,
         "center_col": (center_across_m - across_min) / across_resolution_m,
         "along_min": along_min,
@@ -582,7 +609,6 @@ def extract_geometric_window_griddata(
         "along_resolution_m": along_resolution_m,
         "across_resolution_m": across_resolution_m,
     }
-    return grid, meta
 
 
 def locate_point(along_m: float, across_m: float, meta: dict) -> tuple[float, float]:

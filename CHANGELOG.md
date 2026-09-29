@@ -9,6 +9,28 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Changed
 
+#### Geometric export speed: crop before griddata, context reuses the dual-swath window (2026-09-29)
+
+- `extract_geometric_window_griddata()` triangulates only the points
+  within 2x `max_fill_distance_m` of the output window, not the whole
+  loaded neighborhood (full swath across-track plus along-track slack).
+  Delaunay cost scales with point count; a tight chip can be a few
+  percent of what's loaded. Cells, NaN areas and box positions are
+  unchanged; ~5% of interpolated pixels differ slightly because Qhull
+  breaks ties between the two diagonals of each near-regular sample
+  cell differently for a different point set (reordering the same
+  points does the same, ~half of cells on a regular grid).
+- `sidescan-export chip --with-context` at a geometric/georef level
+  reuses the dual-swath window when `dual-swath` is also being exported,
+  instead of a second, identical griddata pass per target. The context
+  view then carries the dual-swath jitter; its box is still the target's
+  true position. Seeded outputs are unchanged (the jitter-0 context call
+  never drew from the RNG).
+- survey-a, one target, dual-swath + context: ~22s of griddata
+  -> 11.5s total run.
+
+### Changed
+
 #### `sidescan-analyze recommend-config`: resolution_m = half the finer axis (2026-09-29)
 
 Recommended `resolution_m` is now `min(ping spacing, sample interval) / 2`

@@ -1434,14 +1434,21 @@ def run_chip(args: argparse.Namespace) -> int:
                         # training-data augmentation, not appropriate
                         # here). Uses --swath-size-px, same as single-swath/
                         # dual-swath chip styles, not a separate size knob.
-                        context_result = geo_window("dual-swath", args.swath_size_px, 0)
-                        if context_result is None:
-                            logger.warning(f"target {t.target_id}: context/{args.render_level} window unavailable, skipping context")
-                        else:
-                            grid, context_targets = context_result
-                            fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size), coordinate_system=args.render_level)
-                            fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                            plt.close(fig)
+                        # When dual-swath is itself being exported, the
+                        # context reuses that window (rendered after the
+                        # style loop below) instead of a second, identical
+                        # griddata pass (~11s per target on
+                        # survey-a) -- jittered, but the box
+                        # still sits at the target's true position.
+                        if "dual-swath" not in styles:
+                            context_result = geo_window("dual-swath", args.swath_size_px, 0)
+                            if context_result is None:
+                                logger.warning(f"target {t.target_id}: context/{args.render_level} window unavailable, skipping context")
+                            else:
+                                grid, context_targets = context_result
+                                fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size), coordinate_system=args.render_level)
+                                fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                                plt.close(fig)
 
                 for style in styles:
                     size_px = _style_size_px(style, args)
@@ -1458,6 +1465,11 @@ def run_chip(args: argparse.Namespace) -> int:
                     window, co_targets = result
                     raw_windows[style].append(window)
                     window_meta[style].append((co_targets, t, path.stem, freq_key))
+                    if style == "dual-swath" and geo and args.with_context:
+                        primary = next((ct for ct in co_targets if ct.target_id == t.target_id), co_targets[0])
+                        fig = render_target_context(window, primary, box_size=(args.box_size, args.box_size), coordinate_system=args.render_level)
+                        fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                        plt.close(fig)
 
     total_written = 0
     for style in styles:
