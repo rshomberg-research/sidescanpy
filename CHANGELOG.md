@@ -7,6 +7,76 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+#### "geometric" render-level chip/progression export now uses scipy binned_statistic_2d, with anisotropic along-track pixel resolution (2026-09-29)
+
+Real user direction, after reviewing the new `extract_geometric_window_binned()`
+comparison panel directly: "I want to use this as the standard for
+geometric correction." `cli/export.py`'s `_extract_geo_style_window()`
+(the shared helper behind `sidescan-export chip`'s `chip`/`single-swath`/
+`dual-swath` styles) and `run_progression()`'s geometric stage both now
+call `extract_geometric_window_binned()` instead of
+`extract_geometric_window()` for the `"geometric"` render level.
+`"georef"` is unaffected (still `extract_georef_window()`, its own
+separate, still-isotropic KDTree path -- Tier 2, a harder, separate fix,
+see `docs/planning/anisotropic-crop-search-radius.md`).
+
+**Real quality regression found and fixed before shipping, not shipped
+blind:** a first version kept output square (`size_px x size_px`,
+matching the prior KDTree behavior exactly) and just swapped the
+function call. Real-data check (project-a stand-in, one real target)
+showed **16.25% of rows entirely NaN/black** -- a visible venetian-blind
+striping pattern -- because `extract_geometric_window_binned()` has no
+search-radius/gap-bridging at all (a bin with no exact sample inside it
+is just NaN), unlike the KDTree version's `along_search_radius_m`
+(tuned to real ping-to-ping gaps specifically to avoid this). Shown to
+the user directly (rendered chip + exact NaN-row percentage) before
+deciding how to proceed.
+
+**Fix, user-confirmed:** widen the along-track pixel itself
+(`along_resolution_m`, same value the KDTree call used to use as
+`along_search_radius_m`) so each along-track bin is sized to actually
+contain a real sample -- same treatment
+`generate_processing_slides.py`'s own "Anisotropic pixels"/"Anisotropic
+pixels (scipy binned)" comparison panels already use. Re-verified on the
+same real target: 0/213 rows NaN, real target clearly visible, no
+striping.
+
+**Known, accepted, deliberately-not-yet-resolved consequence: `"geometric"`
+render-level chip/single-swath/dual-swath output is no longer
+guaranteed square.** A chip that would have been `320x320` may now come
+out e.g. `213x320` (fewer along-track rows, same real extent). COCO/YOLO
+width/height are read from the actual array shape, so those stay
+correct -- but this hasn't been checked against every downstream
+consumer of these chips (e.g. training code that may assume square
+input images). Flagged for follow-up, not silently assumed safe.
+
+Two real, pre-existing bugs found and fixed while making this change
+(both only reachable once row count and column count can genuinely
+differ, which the prior square-only code path never exercised):
+`_flip_geo_vertical()`'s vertical-flip math and `_geo_targets_within_window()`'s
+co-target row-bound check both used to reuse `size_px` (the column
+count) for the row axis too -- renamed/added an explicit
+`along_size_px` param to both (and to `_orient_geo_window()`, which
+threads it through), defaulting to `size_px` so every existing
+square-only caller is unaffected.
+
+`run_survey_window()`'s own `"geometric"` mode (a separate, `survey-window`
+subcommand) was found, while auditing every `extract_geometric_window`
+call site, to already be missing required `resolution_m`/
+`center_along_m`/`center_across_m` arguments -- a pre-existing, unrelated
+bug (this call would raise `TypeError` if ever exercised), left
+untouched and not conflated with this change.
+
+Tests: `tests/unit/cli/test_export.py` -- 2 existing tests updated to
+spy on `extract_geometric_window_binned` instead of
+`extract_geometric_window`; 3 new regression tests
+(`TestFlipGeoVertical::test_uses_along_size_px_not_column_count_when_non_square`,
+`TestOrientGeoWindow::test_uses_along_size_px_for_vertical_flip_when_non_square`,
+`TestGeoTargetsWithinWindow::test_along_size_px_bounds_row_independent_of_size_px`).
+Full suite: 1727 passing / 36 skipped (was 1724).
+
 ### Fixed
 
 #### Port/starboard "geometric" render-level windows were unflipped mirror images of each other (2026-09-29)

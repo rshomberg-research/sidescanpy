@@ -522,6 +522,31 @@ class TestGeoTargetsWithinWindow:
         found = export._geo_targets_within_window([(bogus, 9999)], ds, 0, along, 16, meta, locate_point)
         assert found == []
 
+    def test_along_size_px_bounds_row_independent_of_size_px(self):
+        # Real bug regression, 2026-09-29: the row bound used to reuse
+        # size_px (the column count) for both axes -- a co-target whose
+        # locate_fn-reported row falls inside size_px but outside a
+        # smaller real along_size_px must now be excluded. A stub
+        # locate_fn pins the row deterministically (row=8), avoiding any
+        # dependence on this fixture's own real geometry.
+        from sidescanpy.viz.waterfall import along_track_distance_m
+
+        ds = _geo_channel_ds()
+        along = along_track_distance_m(ds)
+        across = ds["across_track_m"].isel(channel=0).values
+        finite = np.isfinite(across)
+        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
+
+        def stub_locate(*_args, **_kwargs):
+            return 8, 2  # row=8: inside size_px=16, outside along_size_px=4
+
+        co_target = Target(target_id="co", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
+        candidates = [(co_target, int(ping_idx))]
+        found_no_limit = export._geo_targets_within_window(candidates, ds, 0, along, 16, {}, stub_locate)
+        found_with_limit = export._geo_targets_within_window(candidates, ds, 0, along, 16, {}, stub_locate, along_size_px=4)
+        assert len(found_no_limit) == 1  # demonstrates the stale size_px bound over-accepts
+        assert found_with_limit == []
+
 
 class TestFlipGeoVertical:
     def _co_target(self, sample, window_row):
@@ -529,14 +554,26 @@ class TestFlipGeoVertical:
 
     def test_flips_grid_vertically(self):
         grid = np.array([[1, 2], [3, 4], [5, 6]])
-        flipped, _ = export._flip_geo_vertical(grid, [], size_px=3)
+        flipped, _ = export._flip_geo_vertical(grid, [], along_size_px=3)
         np.testing.assert_array_equal(flipped, grid[::-1, :])
 
     def test_remaps_every_target_window_row(self):
         grid = np.zeros((10, 10))
         targets = [self._co_target(sample=1, window_row=0), self._co_target(sample=4, window_row=9)]
-        _, out = export._flip_geo_vertical(grid, targets, size_px=10)
+        _, out = export._flip_geo_vertical(grid, targets, along_size_px=10)
         assert {t.extra_attributes["window_row"] for t in out} == {10, 1}
+
+    def test_uses_along_size_px_not_column_count_when_non_square(self):
+        # Real bug regression, 2026-09-29: along-track pixel resolution
+        # can now differ from across-track, so a grid's row count and
+        # column count can genuinely differ -- the flip must mirror
+        # against the actual ROW count, not whatever size_px happens to
+        # be passed for the (unrelated) column axis.
+        grid = np.arange(12).reshape(4, 3)  # 4 rows, 3 cols -- non-square
+        targets = [self._co_target(sample=1, window_row=0), self._co_target(sample=1, window_row=4)]
+        flipped, out = export._flip_geo_vertical(grid, targets, along_size_px=4)
+        np.testing.assert_array_equal(flipped, grid[::-1, :])
+        assert {t.extra_attributes["window_row"] for t in out} == {4, 0}
 
 
 class TestOrientGeoWindow:
@@ -563,6 +600,16 @@ class TestOrientGeoWindow:
         grid = np.array([[1, 2, 3], [4, 5, 6]])
         oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=False, channel_idx=1)
         np.testing.assert_array_equal(oriented, grid[::-1, :])
+
+    def test_uses_along_size_px_for_vertical_flip_when_non_square(self):
+        # Real bug regression, 2026-09-29: a non-square grid (anisotropic
+        # along-track pixel resolution) must flip against its own real
+        # row count, not size_px (the across-track/column count).
+        grid = np.arange(12).reshape(4, 3)  # 4 rows, 3 cols
+        targets = [self._co_target(sample=1, window_row=0)]
+        oriented, out = export._orient_geo_window(grid, targets, size_px=3, combine=False, channel_idx=1, along_size_px=4)
+        np.testing.assert_array_equal(oriented, grid[::-1, :])
+        assert out[0].extra_attributes["window_row"] == 4
 
     def test_dual_swath_never_gets_horizontal_flip_even_with_channel_idx_zero(self):
         # combine=True always passes channel_idx=None in the real caller
@@ -987,7 +1034,11 @@ class TestRunChip:
         assert combined_array.shape[1] == 2 * 30  # n_samples from _swath_friendly_survey's default
 
     def test_geometric_render_level_calls_geometric_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
-        spy = mocker.spy(export, "extract_geometric_window")
+        # extract_geometric_window_binned (scipy), not extract_geometric_window
+        # (KDTree) -- 2026-09-29, real user direction to make the scipy
+        # implementation the production standard for geometric render-level
+        # windows (see cli/export.py's own comment at the call site).
+        spy = mocker.spy(export, "extract_geometric_window_binned")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -1008,7 +1059,7 @@ class TestRunChip:
         for a target sitting in a locally slow/dense-ping region. --resolution-m
         lets the operator set a known-good value directly, bypassing that
         auto-calculation entirely for every style."""
-        spy = mocker.spy(export, "extract_geometric_window")
+        spy = mocker.spy(export, "extract_geometric_window_binned")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 

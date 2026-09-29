@@ -102,6 +102,7 @@ from sidescanpy.export import (
     extract_chip,
     extract_full_channel,
     extract_geometric_window,
+    extract_geometric_window_binned,
     extract_georef_window,
     locate_point_geometric,
     locate_point_georef,
@@ -690,6 +691,7 @@ def _orient_pixel_window(window: np.ndarray, co_targets: list, channel_idx: int,
 
 def _geo_targets_within_window(
     candidates: list[tuple], masked, lo: int, along_dist: np.ndarray, size_px: int, meta: dict, locate_fn,
+    along_size_px: int | None = None,
 ) -> list:
     """Real-world equivalent of ``targets_within_window`` for a
     geometric window: which of ``candidates`` (``(Target, global_ping_idx)``
@@ -699,7 +701,17 @@ def _geo_targets_within_window(
     ``_flip_geo_vertical``). Mirrors ``_extract_geo_style_window``'s own
     per-target lookup, so a bad/out-of-range candidate is skipped, not a
     crash.
+
+    ``along_size_px``, default ``None`` (falls back to ``size_px``,
+    reproducing the prior square-only behavior exactly): the grid's real
+    row count, when it differs from ``size_px`` (the column count) --
+    real bug, found 2026-09-29 while making "geometric" render-level
+    output genuinely non-square (anisotropic along-track pixel
+    resolution, scipy binned): this function's row bound check used to
+    reuse ``size_px`` for BOTH axes, silently accepting/rejecting
+    co-targets against the wrong row limit once the two diverged.
     """
+    row_limit = along_size_px if along_size_px is not None else size_px
     included = []
     for candidate_t, ping_idx in candidates:
         local_ping = ping_idx - lo
@@ -716,23 +728,31 @@ def _geo_targets_within_window(
             continue
         t_along = float(along_dist[local_ping])
         row, col = locate_fn(t_along, t_across, meta)
-        if 0 <= row < size_px and 0 <= col < size_px:
+        if 0 <= row < row_limit and 0 <= col < size_px:
             included.append(replace(candidate_t, sample=col, extra_attributes={**candidate_t.extra_attributes, "window_row": row}))
     return included
 
 
-def _flip_geo_vertical(grid: np.ndarray, positioned_targets: list, size_px: int) -> tuple[np.ndarray, list]:
+def _flip_geo_vertical(grid: np.ndarray, positioned_targets: list, along_size_px: int) -> tuple[np.ndarray, list]:
     """Match Discover's ping-order display convention (see
     ``_orient_pixel_window``'s docstring for the raw-pixel equivalent) for
-    a geometric window: ``extract_geometric_window`` builds row 0 = the
-    minimum along-track distance (ascending ping order, top-down), the
-    opposite of Discover's own display. ``positioned_targets`` must
-    already carry window-local ``sample``/``extra_attributes["window_row"]``
-    (e.g. from ``locate_point_geometric`` via ``_geo_targets_within_window``).
+    a geometric window: ``extract_geometric_window``/
+    ``extract_geometric_window_binned`` build row 0 = the minimum
+    along-track distance (ascending ping order, top-down), the opposite
+    of Discover's own display. ``positioned_targets`` must already carry
+    window-local ``sample``/``extra_attributes["window_row"]`` (e.g. from
+    ``locate_point_geometric`` via ``_geo_targets_within_window``).
+
+    ``along_size_px`` -- the grid's actual ROW count (real bug, found
+    2026-09-29: this used to be a ``size_px`` param reused for both axes,
+    which silently mis-flipped ``window_row`` once along-track pixel
+    resolution went anisotropic and row count stopped matching column
+    count -- ``size_px - row`` only correctly mirrors an index when
+    ``size_px`` IS the row count).
     """
     grid = grid[::-1, :]
     positioned_targets = [
-        replace(pt, extra_attributes={**pt.extra_attributes, "window_row": size_px - pt.extra_attributes["window_row"]})
+        replace(pt, extra_attributes={**pt.extra_attributes, "window_row": along_size_px - pt.extra_attributes["window_row"]})
         for pt in positioned_targets
     ]
     return grid, positioned_targets
@@ -740,6 +760,7 @@ def _flip_geo_vertical(grid: np.ndarray, positioned_targets: list, size_px: int)
 
 def _orient_geo_window(
     grid: np.ndarray, positioned_targets: list, size_px: int, *, combine: bool, channel_idx: int | None,
+    along_size_px: int | None = None,
 ) -> tuple[np.ndarray, list]:
     """Full orientation correction for a "geometric" render-level window:
     the vertical flip (``_flip_geo_vertical``, always) plus a horizontal
@@ -775,7 +796,7 @@ def _orient_geo_window(
     applies for its own dual-swath case (already mirrored at combination
     time by ``_combine_channels_mirrored``).
     """
-    grid, positioned_targets = _flip_geo_vertical(grid, positioned_targets, size_px)
+    grid, positioned_targets = _flip_geo_vertical(grid, positioned_targets, along_size_px if along_size_px is not None else size_px)
     if not combine and channel_idx == 0:
         n_cols = grid.shape[1]
         grid = grid[:, ::-1]
@@ -954,43 +975,74 @@ def _extract_geo_style_window(
         swath_width_m = float(across_finite.max() - across_finite.min()) if across_finite.size else size_px * mps
         resolution_m = resolution_m_override if resolution_m_override is not None else max(swath_width_m / size_px, ping_spacing_m, 1e-6)
         center_across_m = 0.0 if combine else (float((across_finite.max() + across_finite.min()) / 2.0) if across_finite.size else 0.0)
-    # Anisotropic search radii (2026-09-28, real user report: tight
-    # chips came out blurry). along_search_radius_m still has to bridge
-    # real ping gaps (gap_p95_m); across_search_radius_m only needs to
-    # reach real neighboring samples (~mps apart) -- pinning it to the
-    # same wide along-track radius (the old isotropic
-    # geo_search_radius_m, kept below and still used as-is for the
-    # georef branch -- Tier 2, a harder, separate fix, see the planning
-    # doc) smeared real across-track detail into a neighborhood far
-    # bigger than the data supports. See
-    # docs/planning/anisotropic-crop-search-radius.md.
+    # geo_search_radius_m: kept for the georef branch below (Tier 2, a
+    # harder, separate fix -- see docs/planning/anisotropic-crop-search-
+    # radius.md), which still uses extract_georef_window's own isotropic
+    # KDTree radius search.
     geo_search_radius_m = max(1.5 * resolution_m, gap_p95_m)
-    along_search_radius_m = geo_search_radius_m
-    across_search_radius_m = max(1.5 * resolution_m, 1.5 * mps)
 
     if level == "geometric":
+        # scipy binned_statistic_2d (2026-09-29, real user direction:
+        # "use this as the standard for geometric correction").
+        # extract_geometric_window_binned() has no search-radius/gap-
+        # bridging concept at all, unlike extract_geometric_window()'s
+        # prior KDTree call here -- a bin with no exact sample inside it
+        # is just NaN. A first version of this swap kept resolution_m/
+        # size_px square and accepted that (real check on real vendor-format-
+        # stand-in data: 16.25% of rows entirely NaN on one real target,
+        # a visible venetian-blind striping pattern -- too severe).
+        # **Current, user-confirmed choice: widen the along-track pixel
+        # itself to match real ping spacing (along_resolution_new_m,
+        # same value the old KDTree call used as along_search_radius_m)
+        # -- same treatment generate_processing_slides.py's "Anisotropic
+        # pixels"/"Anisotropic pixels (scipy binned)" panels already use.
+        # This makes chip/single-swath/dual-swath's "geometric" render-
+        # level output genuinely non-square (along_size_px_new rows x
+        # size_px cols) instead of size_px x size_px.**
+        #
+        # KNOWN ISSUE, accepted deliberately, not yet resolved: this
+        # shape change hasn't been checked against every downstream
+        # consumer of these chips (e.g. training code that may assume
+        # square input images) -- flagged in CHANGELOG.md/consumer
+        # CLAUDE.md docs for follow-up, not silently shipped as if fully
+        # verified end-to-end.
         geom_channel_idx = None if combine else channel_idx
         center_along_m = target_along_m + _jitter_offset_m(jitter_px, resolution_m, rng)
+        along_resolution_new_m = geo_search_radius_m
+        along_size_px_new = max(1, round(size_px * resolution_m / along_resolution_new_m))
         try:
-            grid, meta = extract_geometric_window(
+            grid, meta = extract_geometric_window_binned(
                 masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
                 center_across_m=center_across_m, channel_idx=geom_channel_idx,
-                along_search_radius_m=along_search_radius_m, across_search_radius_m=across_search_radius_m,
+                along_resolution_m=along_resolution_new_m, across_resolution_m=resolution_m,
+                along_size_px=along_size_px_new, across_size_px=size_px,
                 avoid_edge_gaps=True, backscatter_var=backscatter_var,
             )
         except ValueError:
             return None
+        along_size_px_actual = grid.shape[0]
         row, col = locate_point_geometric(target_along_m, target_across_m, meta)
         primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
         all_items = [item for items in items_by_channel.values() for item in items] if combine else items_by_channel.get(channel_idx, [])
         candidates = [item for item in all_items if item[0].target_id != t.target_id]
-        co_targets = _geo_targets_within_window(candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric)
-        grid, targets_out = _orient_geo_window(grid, [primary_local] + co_targets, size_px, combine=combine, channel_idx=channel_idx)
+        co_targets = _geo_targets_within_window(
+            candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric, along_size_px=along_size_px_actual,
+        )
+        grid, targets_out = _orient_geo_window(
+            grid, [primary_local] + co_targets, size_px, combine=combine, channel_idx=channel_idx, along_size_px=along_size_px_actual,
+        )
         # bbox_size_px scale: t.bbox's (w, h) is in source sample(x)/
         # ping(y) pixel counts -- convert to real meters via mps/
-        # ping_spacing_m, then to this window's own output pixels via
-        # resolution_m (meters per output pixel).
-        targets_out = [_with_bbox_size_px(ct, scale_x=mps / resolution_m, scale_y=ping_spacing_m / resolution_m) for ct in targets_out]
+        # ping_spacing_m, then to this window's own output pixels.
+        # scale_y uses along_resolution_new_m (this axis's REAL output
+        # resolution now that it's anisotropic), not resolution_m --
+        # real bug caught while making this change: using resolution_m
+        # here would silently under/overstate every target's bbox
+        # height once the along axis stopped being resolution_m too.
+        targets_out = [
+            _with_bbox_size_px(ct, scale_x=mps / resolution_m, scale_y=ping_spacing_m / along_resolution_new_m)
+            for ct in targets_out
+        ]
         return grid, targets_out
     else:  # georef
         try:
@@ -1585,13 +1637,28 @@ def run_progression(args: argparse.Namespace) -> None:
             geom_center_along_m = target_along_m + _jitter_offset_m(args.jitter_px, geo_resolution_m, rng)
             geom_center_across_m = target_across_m + _jitter_offset_m(args.jitter_px, geo_resolution_m, rng)
 
+        # geo_search_radius_m: kept for the georef branch below, which
+        # still uses extract_georef_window's own isotropic KDTree radius
+        # search -- see _extract_geo_style_window's own comment for why
+        # the geometric branch here no longer uses a search radius at
+        # all (scipy binned_statistic_2d, real user direction 2026-09-29).
+        # Reused here as along_resolution_new_m too (same value, same
+        # reasoning as _extract_geo_style_window) -- this stage's own
+        # image is saved standalone (see _PROGRESSION_STAGES loop below,
+        # no montage/stacking assumes a fixed shape), so a genuinely
+        # non-square geometric.png (fewer along-track rows than columns)
+        # is safe here with no further orientation/bbox-scaling fixes
+        # needed, unlike _extract_geo_style_window's chip/dataset path.
         geo_search_radius_m = max(1.5 * geo_resolution_m, gap_p95_m)
+        along_resolution_new_m = geo_search_radius_m
+        along_size_px_new = max(1, round(geo_size_px * geo_resolution_m / along_resolution_new_m))
 
         try:
-            geom_grid, geom_meta = extract_geometric_window(
+            geom_grid, geom_meta = extract_geometric_window_binned(
                 masked, geo_size_px, resolution_m=geo_resolution_m,
                 center_along_m=geom_center_along_m, center_across_m=geom_center_across_m, channel_idx=geo_channel_idx,
-                search_radius_m=geo_search_radius_m,
+                along_resolution_m=along_resolution_new_m, across_resolution_m=geo_resolution_m,
+                along_size_px=along_size_px_new, across_size_px=geo_size_px,
             )
             geom_img, _ = to_uint8(geom_grid, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high)
             geom_pos = locate_point_geometric(target_along_m, target_across_m, geom_meta)
