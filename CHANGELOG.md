@@ -9,6 +9,68 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Changed
 
+#### Geometric chip export gains a selectable `resample_method` (kdtree/binned/griddata), default switched to griddata (2026-09-29)
+
+Direct follow-up to the same-day "scipy binned as the standard" change
+above. Real user pushback after seeing production output: the
+non-square shape that change introduced ("KNOWN ISSUE" entry below) was
+confirmed a hard blocker for training ("That is actually a huge problem
+for training. I need them to be square and to have the same pixel
+resolution to meters."). Investigated the user's own proposed fix
+(oversample well past the finest native resolution, then interpolate)
+and explained concretely why it doesn't work: at a resolution finer
+than the real along-track ping spacing, interpolation doesn't recover
+resolution that was never sampled — it fabricates the large majority of
+the image between real, independent measurements, which risks a model
+learning the interpolator's own smoothing signature as real seafloor
+texture. Built a real-data, established-library comparison (5 methods,
+two real targets, same square resolution) and published it before
+picking a direction — see this repo's git history/session notes for the
+artifact. **User's own conclusion after reviewing the real images,
+explicitly overriding the recommendation above: adopt
+`scipy.interpolate.griddata` as the default anyway** ("show me the
+interpolation. This is exactly what it is for."), with `kdtree`/`binned`
+kept available as explicit alternatives.
+
+- New `export/geometric_window.py: extract_geometric_window_griddata()`
+  -- same `(grid, meta)` contract as the other two
+  `extract_geometric_window*` functions, built on
+  `scipy.interpolate.griddata`. Full scattered-data interpolation, never
+  NaN: `linear`/`cubic`'s own convex-hull edge NaN is filled by an
+  automatic second `method="nearest"` pass. `interp_method` param
+  (`"linear"` default, `"cubic"`, `"nearest"`) passed straight through.
+  Real-data cost, confirmed by direct benchmark at production settings
+  (320x320, ~0.073m resolution, one real target): **~14x slower than
+  the KDTree average, ~68x slower than binned** (14.4s vs. 1.1s vs.
+  0.2s) — a real, not-yet-optimized cost of using the full scattered
+  point cloud for every window rather than a locally-bounded subset;
+  worth knowing before a large dataset-scale export.
+- `cli/export.py`'s `_extract_geo_style_window()`/`run_progression()`
+  gained a `resample_method: "kdtree" | "binned" | "griddata"` param
+  (**default `"griddata"`**), reverting the non-square anisotropic-pixel
+  workaround from the entry below entirely — **every `resample_method`
+  now produces plain square `size_px x size_px` output**, one fixed
+  `resolution_m` on both axes, no exceptions. `sidescan-export chip`
+  gained `--resample-method {kdtree,binned,griddata}`; `progression`
+  gained the same flag. `_flip_geo_vertical()`/`_geo_targets_within_window()`/
+  `_orient_geo_window()` keep their `along_size_px` param from the
+  entry below (harmless, optional, unused by every current caller now
+  that none of them produce non-square output) rather than being
+  reverted/removed — still real, still tested, available if a future
+  caller needs it again.
+- Tests: `tests/unit/cli/test_export.py::TestRunChipResampleMethod` (6
+  tests: each option dispatches to its own function, omitting the flag
+  defaults to griddata, all three options produce square output) plus
+  `tests/unit/export/test_geometric_window.py::
+  TestExtractGeometricWindowGriddata` (8 tests). 2 existing `TestRunChip`
+  tests updated to spy on `extract_geometric_window_griddata` (the new
+  default) instead of `extract_geometric_window_binned`. Full suite:
+  1741 passing / 36 skipped (was 1727).
+- Real-data re-check, same target that showed the 16.25% NaN regression
+  under the entry below: griddata default now produces `320x320`, 0
+  near-black rows, target clearly visible -- confirmed via direct pixel
+  inspection, not just trusted from the unit tests.
+
 #### "geometric" render-level chip/progression export now uses scipy binned_statistic_2d, with anisotropic along-track pixel resolution (2026-09-29)
 
 Real user direction, after reviewing the new `extract_geometric_window_binned()`

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 import xarray as xr
+from scipy.interpolate import griddata
 from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_2d
 
@@ -435,6 +436,128 @@ def extract_geometric_window_binned(
         "across_resolution_m": across_resolution_m,
     }
     return statistic, meta
+
+
+def extract_geometric_window_griddata(
+    channel_ds: xr.Dataset,
+    size_px: int,
+    *,
+    resolution_m: float,
+    center_along_m: float,
+    center_across_m: float,
+    channel_idx: int | None = 0,
+    backscatter_var: str = "backscatter_intensity",
+    avoid_edge_gaps: bool = False,
+    along_resolution_m: float | None = None,
+    across_resolution_m: float | None = None,
+    along_size_px: int | None = None,
+    across_size_px: int | None = None,
+    interp_method: str = "linear",
+) -> tuple[np.ndarray, dict]:
+    """Same contract as :func:`extract_geometric_window`/
+    :func:`extract_geometric_window_binned` (same params, same
+    ``(grid, meta)`` shape, same ``meta`` keys, drop-in interchangeable
+    with :func:`locate_point`) but resamples via
+    ``scipy.interpolate.griddata`` -- full scattered-data interpolation
+    across the whole requested grid, not a radius search (KDTree) or
+    strict rectangle membership (binned).
+
+    2026-09-29, real user request/direction: an established-library
+    resampling option with **no NaN gaps by construction** -- unlike
+    :func:`extract_geometric_window_binned`, every output cell gets a
+    value regardless of how sparse the real along-track sampling is
+    relative to ``resolution_m``, because ``griddata`` interpolates
+    (and, for the small edge fraction outside the real data's convex
+    hull, nearest-neighbor-extrapolates -- see below) rather than
+    reporting "no real sample here."
+
+    **This is a genuinely different tradeoff than the other two
+    functions, not a strict improvement — say so plainly:** at a
+    resolution much finer than the real along-track sampling, the large
+    majority of a griddata window's pixels are constructed by
+    interpolation, not measured by the sensor. Real-data check (two
+    real targets, ``resolution_m=0.03m``, ~60-66% of cells with no real
+    sample at that resolution): griddata never shows a gap, but most of
+    what fills those gaps is triangulated from real points several real
+    ping-widths away, not a resolved local measurement. See
+    ``docs/planning/`` or the artifact this session's comparison work
+    produced for the real-image side-by-side against
+    :func:`extract_geometric_window` (zero fabrication, real radius
+    averaging) and :func:`extract_geometric_window_binned` (zero
+    fabrication, real gaps shown honestly).
+
+    ``interp_method`` : ``"linear"`` (default), ``"cubic"``, or
+    ``"nearest"`` -- passed straight through to ``scipy.interpolate.
+    griddata``'s own ``method``. ``"linear"``/``"cubic"`` leave NaN
+    outside the real data's convex hull (no point to triangulate
+    against there); those cells are automatically filled with a second,
+    ``method="nearest"`` pass so this function never returns a gap
+    regardless of ``interp_method`` -- ``"nearest"`` itself is already
+    gap-free after the first pass.
+
+    Raises
+    ------
+    ValueError
+        If no finite ``across_track_m``/backscatter samples exist in
+        ``channel_ds`` at all (e.g. entirely water column).
+    """
+    along = along_track_distance_m(channel_ds)  # (ping,)
+    if channel_idx is None:
+        across = channel_ds["across_track_m"].values  # (ping, channel, sample)
+        values = channel_ds[backscatter_var].values
+        along_grid = np.broadcast_to(along[:, None, None], across.shape)
+    else:
+        across = channel_ds["across_track_m"].isel(channel=channel_idx).values  # (ping, sample)
+        values = channel_ds[backscatter_var].isel(channel=channel_idx).values
+        along_grid = np.broadcast_to(along[:, None], across.shape)
+
+    finite = np.isfinite(across) & np.isfinite(values)
+    if not finite.any():
+        raise ValueError("no finite across_track_m/backscatter samples in this window")
+
+    along_valid = along_grid[finite]
+    across_valid = across[finite]
+    values_valid = values[finite]
+
+    along_resolution_m = along_resolution_m if along_resolution_m is not None else resolution_m
+    across_resolution_m = across_resolution_m if across_resolution_m is not None else resolution_m
+    along_size_px = along_size_px if along_size_px is not None else size_px
+    across_size_px = across_size_px if across_size_px is not None else size_px
+
+    along_half_extent = along_size_px * along_resolution_m / 2.0
+    across_half_extent = across_size_px * across_resolution_m / 2.0
+    if avoid_edge_gaps:
+        center_along_m = _clamp_center(center_along_m, along_half_extent, along_valid.min(), along_valid.max())
+        center_across_m = _clamp_center(center_across_m, across_half_extent, across_valid.min(), across_valid.max())
+    along_min = center_along_m - along_half_extent
+    across_min = center_across_m - across_half_extent
+
+    along_cell_centers = along_min + (np.arange(along_size_px) + 0.5) * along_resolution_m
+    across_cell_centers = across_min + (np.arange(across_size_px) + 0.5) * across_resolution_m
+    gg_along, gg_across = np.meshgrid(along_cell_centers, across_cell_centers, indexing="ij")
+    query_points = np.column_stack([gg_along.ravel(), gg_across.ravel()])
+
+    points = np.column_stack([along_valid, across_valid])
+    grid_values = griddata(points, values_valid, query_points, method=interp_method)
+    nan_mask = np.isnan(grid_values)
+    if nan_mask.any():
+        # linear/cubic leave NaN outside the real data's convex hull --
+        # fill with nearest-neighbor extrapolation so this function is
+        # gap-free regardless of interp_method (its whole point, per the
+        # real user request this exists to satisfy).
+        grid_values[nan_mask] = griddata(points, values_valid, query_points[nan_mask], method="nearest")
+
+    grid = grid_values.reshape(along_size_px, across_size_px)
+    meta = {
+        "center_row": (center_along_m - along_min) / along_resolution_m,
+        "center_col": (center_across_m - across_min) / across_resolution_m,
+        "along_min": along_min,
+        "across_min": across_min,
+        "resolution_m": along_resolution_m,  # legacy key -- see extract_geometric_window's docstring
+        "along_resolution_m": along_resolution_m,
+        "across_resolution_m": across_resolution_m,
+    }
+    return grid, meta
 
 
 def locate_point(along_m: float, across_m: float, meta: dict) -> tuple[float, float]:

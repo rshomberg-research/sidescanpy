@@ -1034,11 +1034,14 @@ class TestRunChip:
         assert combined_array.shape[1] == 2 * 30  # n_samples from _swath_friendly_survey's default
 
     def test_geometric_render_level_calls_geometric_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
-        # extract_geometric_window_binned (scipy), not extract_geometric_window
-        # (KDTree) -- 2026-09-29, real user direction to make the scipy
-        # implementation the production standard for geometric render-level
-        # windows (see cli/export.py's own comment at the call site).
-        spy = mocker.spy(export, "extract_geometric_window_binned")
+        # extract_geometric_window_griddata (scipy, the DEFAULT
+        # resample_method) -- 2026-09-29, real user direction after
+        # reviewing a real-data comparison of kdtree/binned/griddata:
+        # griddata chosen as the default, all three kept selectable via
+        # --resample-method (see cli/export.py's own comment at the call
+        # site and TestRunChipResampleMethod below for the dispatch
+        # coverage across all three options).
+        spy = mocker.spy(export, "extract_geometric_window_griddata")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -1059,7 +1062,7 @@ class TestRunChip:
         for a target sitting in a locally slow/dense-ping region. --resolution-m
         lets the operator set a known-good value directly, bypassing that
         auto-calculation entirely for every style."""
-        spy = mocker.spy(export, "extract_geometric_window_binned")
+        spy = mocker.spy(export, "extract_geometric_window_griddata")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -1072,6 +1075,7 @@ class TestRunChip:
         assert spy.call_count == 3
         for call in spy.call_args_list:
             assert call.kwargs["resolution_m"] == 0.25
+
 
     def test_resolution_m_override_reaches_georef_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
         spy = mocker.spy(export, "extract_georef_window")
@@ -1324,6 +1328,83 @@ class TestRunChip:
 
         args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="geometric", styles=["chip"])
         assert export.run_chip(args) == 1  # gracefully -- not a crash
+
+
+class TestRunChipResampleMethod:
+    """2026-09-29: --resample-method selects which of the three
+    extract_geometric_window* functions the 'geometric' render level
+    uses, default 'griddata' -- real user direction after reviewing a
+    real-data comparison of all three."""
+
+    def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
+        defaults = dict(
+            targets_json=targets_json, ss_h5_dir=ss_h5_dir, max_match_dist_m=25.0,
+            output=tmp_path / "out", styles=["chip"], render_level="geometric",
+            size_px=64, swath_size_px=64, box_size=40.0, with_context=False,
+            jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
+            normalization_scope="image", min_confidence="verified", seed=0,
+            resolution_m=None,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _target(self, n_pings=300):
+        lat = float(np.linspace(40.0000, 40.0010, n_pings)[150])
+        lon = float(np.linspace(-70.0000, -70.0010, n_pings)[150])
+        return Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=lat, longitude=lon, channel=1, sample=15,
+            position_confidence="verified",
+        )
+
+    @pytest.mark.parametrize(
+        "resample_method,spied_fn",
+        [
+            ("kdtree", "extract_geometric_window"),
+            ("binned", "extract_geometric_window_binned"),
+            ("griddata", "extract_geometric_window_griddata"),
+        ],
+    )
+    def test_each_option_calls_its_own_function(self, tmp_path, swath_ss_h5_dir, mocker, resample_method, spied_fn):
+        spy = mocker.spy(export, spied_fn)
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, resample_method=resample_method)
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 1
+
+    def test_omitting_resample_method_defaults_to_griddata(self, tmp_path, swath_ss_h5_dir, mocker):
+        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        # No resample_method key at all -- matches an argparse.Namespace
+        # built before this flag existed, or a caller that never sets it.
+        defaults = dict(
+            targets_json=targets_json, ss_h5_dir=swath_ss_h5_dir, max_match_dist_m=25.0,
+            output=tmp_path / "out", styles=["chip"], render_level="geometric",
+            size_px=64, swath_size_px=64, box_size=40.0, with_context=False,
+            jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
+            normalization_scope="image", min_confidence="verified", seed=0,
+            resolution_m=None,
+        )
+        args = argparse.Namespace(**defaults)
+        assert export.run_chip(args) == 0
+        assert spy.call_count == 1
+
+    def test_all_three_options_produce_square_output(self, tmp_path, swath_ss_h5_dir):
+        # Real, user-confirmed requirement: no resample_method should
+        # ever produce non-square "geometric" render-level output.
+        for resample_method in ("kdtree", "binned", "griddata"):
+            targets_json = tmp_path / f"targets_{resample_method}.json"
+            write_targets_json([self._target()], targets_json)
+            args = self._args(
+                tmp_path, swath_ss_h5_dir, targets_json, resample_method=resample_method,
+                output=tmp_path / f"out_{resample_method}",
+            )
+            assert export.run_chip(args) == 0
+            from PIL import Image
+            img = Image.open(tmp_path / f"out_{resample_method}" / "chip" / "target_7.png")
+            assert img.size == (64, 64)
 
 
 class TestPingChunksAlignment:

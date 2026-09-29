@@ -103,6 +103,7 @@ from sidescanpy.export import (
     extract_full_channel,
     extract_geometric_window,
     extract_geometric_window_binned,
+    extract_geometric_window_griddata,
     extract_georef_window,
     locate_point_geometric,
     locate_point_georef,
@@ -900,6 +901,7 @@ def _extract_geo_style_window(
     rng: np.random.Generator, mps: float, items_by_channel: dict, lo: int,
     resolution_m_override: float | None = None,
     backscatter_var: str = "backscatter_intensity",
+    resample_method: str = "griddata",
 ) -> tuple[np.ndarray, list] | None:
     """``geometric``/``georef`` (real-meters) window + the primary target's
     own position within it.
@@ -949,6 +951,14 @@ def _extract_geo_style_window(
     ``extract_geometric_window``/``extract_georef_window``, which
     already supported this at the library level; only the CLI wiring
     was missing.
+
+    ``resample_method``, added 2026-09-29 -- selects which of the three
+    ``extract_geometric_window*`` functions the ``"geometric"`` render
+    level uses: ``"kdtree"``, ``"binned"``, or ``"griddata"`` (default).
+    Only affects ``level="geometric"`` -- ``"georef"`` always uses
+    ``extract_georef_window``'s own isotropic KDTree radius search,
+    unaffected by this parameter. See that branch's own inline comment
+    for what each option actually trades off.
     """
     if t.sample is None or not (0 <= t.sample < masked.sizes["sample"]):
         return None
@@ -982,67 +992,73 @@ def _extract_geo_style_window(
     geo_search_radius_m = max(1.5 * resolution_m, gap_p95_m)
 
     if level == "geometric":
-        # scipy binned_statistic_2d (2026-09-29, real user direction:
-        # "use this as the standard for geometric correction").
-        # extract_geometric_window_binned() has no search-radius/gap-
-        # bridging concept at all, unlike extract_geometric_window()'s
-        # prior KDTree call here -- a bin with no exact sample inside it
-        # is just NaN. A first version of this swap kept resolution_m/
-        # size_px square and accepted that (real check on real vendor-format-
-        # stand-in data: 16.25% of rows entirely NaN on one real target,
-        # a visible venetian-blind striping pattern -- too severe).
-        # **Current, user-confirmed choice: widen the along-track pixel
-        # itself to match real ping spacing (along_resolution_new_m,
-        # same value the old KDTree call used as along_search_radius_m)
-        # -- same treatment generate_processing_slides.py's "Anisotropic
-        # pixels"/"Anisotropic pixels (scipy binned)" panels already use.
-        # This makes chip/single-swath/dual-swath's "geometric" render-
-        # level output genuinely non-square (along_size_px_new rows x
-        # size_px cols) instead of size_px x size_px.**
+        # Selectable resampling method (2026-09-29, real user direction
+        # after reviewing a real-data comparison of all three): square
+        # size_px x size_px output for every method, one fixed
+        # resolution_m on both axes -- no anisotropic-pixel-resolution
+        # widening (tried in an earlier version of this function, walked
+        # back: it made output non-square, which the user confirmed is
+        # unusable for training regardless of the gap tradeoff it was
+        # solving for).
         #
-        # KNOWN ISSUE, accepted deliberately, not yet resolved: this
-        # shape change hasn't been checked against every downstream
-        # consumer of these chips (e.g. training code that may assume
-        # square input images) -- flagged in CHANGELOG.md/consumer
-        # CLAUDE.md docs for follow-up, not silently shipped as if fully
-        # verified end-to-end.
+        # - "kdtree" (extract_geometric_window): real physical average
+        #   of nearby measurements within along_search_radius_m/
+        #   across_search_radius_m. Zero fabricated values, some
+        #   directional blur at fine resolution (the "ellipse footprint"
+        #   this family's earlier sessions investigated).
+        # - "binned" (extract_geometric_window_binned): real measured
+        #   means only, strict rectangle membership. Zero fabricated
+        #   values, but a bin with no real sample inside it is NaN --
+        #   real, honest gaps, not filled. Can be the majority of the
+        #   grid at a resolution much finer than real along-track ping
+        #   spacing (confirmed on real data: up to ~66% NaN at 0.03m).
+        # - "griddata" (extract_geometric_window_griddata, DEFAULT):
+        #   scipy.interpolate.griddata full interpolation, never NaN.
+        #   Real user choice after reviewing the real-data comparison
+        #   directly -- accepted tradeoff: at a resolution finer than
+        #   real along-track spacing, most pixels are interpolated
+        #   (constructed from nearby real points), not measured.
+        #
+        # See sidescanpy's CHANGELOG.md "resample_method" entry for the
+        # real-data comparison that motivated offering all three rather
+        # than picking one silently.
         geom_channel_idx = None if combine else channel_idx
         center_along_m = target_along_m + _jitter_offset_m(jitter_px, resolution_m, rng)
-        along_resolution_new_m = geo_search_radius_m
-        along_size_px_new = max(1, round(size_px * resolution_m / along_resolution_new_m))
+        across_search_radius_m = max(1.5 * resolution_m, 1.5 * mps)
         try:
-            grid, meta = extract_geometric_window_binned(
-                masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
-                center_across_m=center_across_m, channel_idx=geom_channel_idx,
-                along_resolution_m=along_resolution_new_m, across_resolution_m=resolution_m,
-                along_size_px=along_size_px_new, across_size_px=size_px,
-                avoid_edge_gaps=True, backscatter_var=backscatter_var,
-            )
+            if resample_method == "kdtree":
+                grid, meta = extract_geometric_window(
+                    masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
+                    center_across_m=center_across_m, channel_idx=geom_channel_idx,
+                    along_search_radius_m=geo_search_radius_m, across_search_radius_m=across_search_radius_m,
+                    avoid_edge_gaps=True, backscatter_var=backscatter_var,
+                )
+            elif resample_method == "binned":
+                grid, meta = extract_geometric_window_binned(
+                    masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
+                    center_across_m=center_across_m, channel_idx=geom_channel_idx,
+                    avoid_edge_gaps=True, backscatter_var=backscatter_var,
+                )
+            else:
+                grid, meta = extract_geometric_window_griddata(
+                    masked, size_px, resolution_m=resolution_m, center_along_m=center_along_m,
+                    center_across_m=center_across_m, channel_idx=geom_channel_idx,
+                    avoid_edge_gaps=True, backscatter_var=backscatter_var,
+                )
         except ValueError:
             return None
-        along_size_px_actual = grid.shape[0]
         row, col = locate_point_geometric(target_along_m, target_across_m, meta)
         primary_local = replace(t, sample=col, extra_attributes={**t.extra_attributes, "window_row": row})
         all_items = [item for items in items_by_channel.values() for item in items] if combine else items_by_channel.get(channel_idx, [])
         candidates = [item for item in all_items if item[0].target_id != t.target_id]
-        co_targets = _geo_targets_within_window(
-            candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric, along_size_px=along_size_px_actual,
-        )
-        grid, targets_out = _orient_geo_window(
-            grid, [primary_local] + co_targets, size_px, combine=combine, channel_idx=channel_idx, along_size_px=along_size_px_actual,
-        )
+        co_targets = _geo_targets_within_window(candidates, masked, lo, along_dist, size_px, meta, locate_point_geometric)
+        grid, targets_out = _orient_geo_window(grid, [primary_local] + co_targets, size_px, combine=combine, channel_idx=channel_idx)
         # bbox_size_px scale: t.bbox's (w, h) is in source sample(x)/
         # ping(y) pixel counts -- convert to real meters via mps/
-        # ping_spacing_m, then to this window's own output pixels.
-        # scale_y uses along_resolution_new_m (this axis's REAL output
-        # resolution now that it's anisotropic), not resolution_m --
-        # real bug caught while making this change: using resolution_m
-        # here would silently under/overstate every target's bbox
-        # height once the along axis stopped being resolution_m too.
-        targets_out = [
-            _with_bbox_size_px(ct, scale_x=mps / resolution_m, scale_y=ping_spacing_m / along_resolution_new_m)
-            for ct in targets_out
-        ]
+        # ping_spacing_m, then to this window's own output pixels via
+        # resolution_m (meters per output pixel) -- same on both axes
+        # again now that every resample_method produces square output.
+        targets_out = [_with_bbox_size_px(ct, scale_x=mps / resolution_m, scale_y=ping_spacing_m / resolution_m) for ct in targets_out]
         return grid, targets_out
     else:  # georef
         try:
@@ -1090,6 +1106,7 @@ def run_chip(args: argparse.Namespace) -> int:
             "(native pixel crop, no resolution_m concept) -- ignoring it",
         )
         resolution_m_override = None
+    resample_method = getattr(args, "resample_method", "griddata")
 
     # --render-level raw/radiometric already fully determines pixel-style
     # values (see _extract_pixel_style_window); --value-var only matters
@@ -1227,6 +1244,7 @@ def run_chip(args: argparse.Namespace) -> int:
                             masked, t, channel_idx, local_ping, "dual-swath", args.render_level,
                             args.swath_size_px, 0, rng, mps, items_by_channel, lo,
                             resolution_m_override=resolution_m_override, backscatter_var=backscatter_var,
+                            resample_method=resample_method,
                         )
                         if context_result is None:
                             logger.warning(f"target {t.target_id}: context/{args.render_level} window unavailable, skipping context")
@@ -1247,6 +1265,7 @@ def run_chip(args: argparse.Namespace) -> int:
                         result = _extract_geo_style_window(
                             masked, t, channel_idx, local_ping, style, args.render_level, size_px, args.jitter_px, rng, mps,
                             items_by_channel, lo, resolution_m_override=resolution_m_override, backscatter_var=backscatter_var,
+                            resample_method=resample_method,
                         )
                     if result is None:
                         logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")
@@ -1504,6 +1523,7 @@ def run_progression(args: argparse.Namespace) -> None:
     ``project-a/scripts/14_export_dataset.py``'s (superseded) copy of
     this function for the full design rationale — unchanged here.
     """
+    resample_method = getattr(args, "resample_method", "griddata")
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
     if args.min_confidence != "unknown":
@@ -1639,27 +1659,30 @@ def run_progression(args: argparse.Namespace) -> None:
 
         # geo_search_radius_m: kept for the georef branch below, which
         # still uses extract_georef_window's own isotropic KDTree radius
-        # search -- see _extract_geo_style_window's own comment for why
-        # the geometric branch here no longer uses a search radius at
-        # all (scipy binned_statistic_2d, real user direction 2026-09-29).
-        # Reused here as along_resolution_new_m too (same value, same
-        # reasoning as _extract_geo_style_window) -- this stage's own
-        # image is saved standalone (see _PROGRESSION_STAGES loop below,
-        # no montage/stacking assumes a fixed shape), so a genuinely
-        # non-square geometric.png (fewer along-track rows than columns)
-        # is safe here with no further orientation/bbox-scaling fixes
-        # needed, unlike _extract_geo_style_window's chip/dataset path.
+        # search -- see _extract_geo_style_window's own comment for the
+        # same three-way resample_method dispatch used here. Square
+        # geo_size_px x geo_size_px output for every method, matching
+        # _extract_geo_style_window's own (real user direction: no
+        # non-square output, regardless of resample_method).
         geo_search_radius_m = max(1.5 * geo_resolution_m, gap_p95_m)
-        along_resolution_new_m = geo_search_radius_m
-        along_size_px_new = max(1, round(geo_size_px * geo_resolution_m / along_resolution_new_m))
 
         try:
-            geom_grid, geom_meta = extract_geometric_window_binned(
-                masked, geo_size_px, resolution_m=geo_resolution_m,
-                center_along_m=geom_center_along_m, center_across_m=geom_center_across_m, channel_idx=geo_channel_idx,
-                along_resolution_m=along_resolution_new_m, across_resolution_m=geo_resolution_m,
-                along_size_px=along_size_px_new, across_size_px=geo_size_px,
-            )
+            if resample_method == "kdtree":
+                geom_grid, geom_meta = extract_geometric_window(
+                    masked, geo_size_px, resolution_m=geo_resolution_m,
+                    center_along_m=geom_center_along_m, center_across_m=geom_center_across_m, channel_idx=geo_channel_idx,
+                    search_radius_m=geo_search_radius_m,
+                )
+            elif resample_method == "binned":
+                geom_grid, geom_meta = extract_geometric_window_binned(
+                    masked, geo_size_px, resolution_m=geo_resolution_m,
+                    center_along_m=geom_center_along_m, center_across_m=geom_center_across_m, channel_idx=geo_channel_idx,
+                )
+            else:
+                geom_grid, geom_meta = extract_geometric_window_griddata(
+                    masked, geo_size_px, resolution_m=geo_resolution_m,
+                    center_along_m=geom_center_along_m, center_across_m=geom_center_across_m, channel_idx=geo_channel_idx,
+                )
             geom_img, _ = to_uint8(geom_grid, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high)
             geom_pos = locate_point_geometric(target_along_m, target_across_m, geom_meta)
         except ValueError:
@@ -1838,6 +1861,21 @@ def main() -> int:
              "logged not an error). Added 2026-09-28 so coordinate system and value processing are "
              "independently selectable, instead of --render-level conflating both.",
     )
+    p_chip.add_argument(
+        "--resample-method", choices=["kdtree", "binned", "griddata"], default="griddata",
+        help="Which resampling function fills the 'geometric' render level's square, fixed-resolution_m "
+             "grid (no effect on 'georef', which always uses extract_georef_window's own isotropic KDTree "
+             "radius search, or on 'raw'/'radiometric', which have no resolution_m concept). "
+             "'kdtree' (extract_geometric_window): real physical average of nearby measurements, zero "
+             "fabricated values, some directional blur at fine resolution. 'binned' "
+             "(extract_geometric_window_binned): real measured means only, zero fabricated values, but a "
+             "cell with no real sample inside it is left as NaN -- can be the majority of the grid at a "
+             "tight resolution_m on real vendor-format-class data. 'griddata' (extract_geometric_window_griddata, "
+             "DEFAULT): scipy.interpolate.griddata full interpolation, never NaN -- real, chosen tradeoff: "
+             "at a resolution finer than real along-track ping spacing, most pixels are interpolated from "
+             "nearby real points, not individually measured. Real-data comparison of all three (2026-09-29) "
+             "is in sidescanpy's CHANGELOG.md.",
+    )
     p_chip.add_argument("--box-size", type=float, default=40.0, help="COCO/YOLO annotation box size AND (with --with-context) the drawn box size, in pixels")
     p_chip.add_argument(
         "--with-context", action="store_true",
@@ -1901,6 +1939,12 @@ def main() -> int:
     p_prog.add_argument("--channel", choices=["port", "starboard", "both"], default="both")
     p_prog.add_argument("--mask-bright-rows", action="store_true")
     p_prog.add_argument("--mask-bright-rows-k", type=float, default=3.5)
+    p_prog.add_argument(
+        "--resample-method", choices=["kdtree", "binned", "griddata"], default="griddata",
+        help="Which resampling function fills the geometric stage's square, fixed-resolution grid -- "
+             "same three options/tradeoffs as sidescan-export chip's own --resample-method (see that "
+             "flag's help text). No effect on the georef stage.",
+    )
     p_prog.add_argument("--seed", type=int, default=None)
     p_prog.set_defaults(func=run_progression)
 

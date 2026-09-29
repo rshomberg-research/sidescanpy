@@ -9,6 +9,7 @@ from sidescanpy.export.geometric_window import (
     _clamp_center,
     extract_geometric_window,
     extract_geometric_window_binned,
+    extract_geometric_window_griddata,
     locate_point,
 )
 from sidescanpy.viz.waterfall import along_track_distance_m
@@ -388,6 +389,101 @@ class TestExtractGeometricWindowBinned:
         assert meta_kdtree["across_min"] == pytest.approx(meta_binned["across_min"])
         assert np.isfinite(grid_kdtree).sum() > 0
         assert np.isfinite(grid_binned).sum() > 0
+
+
+class TestExtractGeometricWindowGriddata:
+    """2026-09-29: scipy.interpolate.griddata version of
+    extract_geometric_window -- full interpolation, gap-free by
+    construction (linear/cubic's own convex-hull NaN edge is filled by
+    a nearest-neighbor second pass)."""
+
+    def test_output_shape_matches_request(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across
+        )
+        assert grid.shape == (16, 16)
+
+    def test_never_produces_nan(self, geometric_channel):
+        # The whole point of this function vs. the binned version: no
+        # gaps, ever, regardless of how sparse the real data is at this
+        # resolution.
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=0.05, center_along_m=center_along, center_across_m=center_across
+        )
+        assert np.isfinite(grid).all()
+
+    def test_center_is_reported_at_the_true_middle(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across
+        )
+        assert meta["center_row"] == pytest.approx(8.0, abs=0.5)
+        assert meta["center_col"] == pytest.approx(8.0, abs=0.5)
+
+    def test_all_water_column_raises(self, geometric_channel_factory):
+        ds = geometric_channel_factory(n_pings=5, n_samples=10, altitude_m=1_000_000.0)
+        with pytest.raises(ValueError):
+            extract_geometric_window_griddata(ds, 8, resolution_m=1.0, center_along_m=0.0, center_across_m=0.0)
+
+    def test_independent_resolution_produces_non_square_array(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=10, across_size_px=40,
+        )
+        assert grid.shape == (10, 40)
+
+    def test_meta_matches_extract_geometric_window_meta_shape(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid_kdtree, meta_kdtree = extract_geometric_window(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        _grid_gd, meta_gd = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        assert set(meta_gd.keys()) == set(meta_kdtree.keys())
+        for key in meta_kdtree:
+            assert meta_gd[key] == pytest.approx(meta_kdtree[key])
+
+    def test_locate_point_uses_per_axis_resolution(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        _grid, meta = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            along_resolution_m=2.0, across_resolution_m=0.5, along_size_px=8, across_size_px=32,
+        )
+        row, col = locate_point(center_along, center_across, meta)
+        assert row == pytest.approx(meta["center_row"])
+        assert col == pytest.approx(meta["center_col"])
+
+    def test_avoid_edge_gaps_shifts_center_inward(self, geometric_channel):
+        across = geometric_channel["across_track_m"].isel(channel=1).values  # starboard, positive
+        along = along_track_distance_m(geometric_channel)
+        finite = np.isfinite(across)
+        masked_across = np.where(finite, across, -np.inf)
+        ping_idx, sample_idx = np.unravel_index(np.argmax(masked_across), masked_across.shape)
+        center_along = float(along[ping_idx])
+        center_across = float(across[ping_idx, sample_idx])
+
+        _grid_avoid, meta_avoid = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across,
+            channel_idx=1, avoid_edge_gaps=True,
+        )
+        _grid_default, meta_default = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=1.0, center_along_m=center_along, center_across_m=center_across, channel_idx=1,
+        )
+        assert meta_avoid["across_min"] != meta_default["across_min"]
+
+    def test_nearest_method_also_gap_free(self, geometric_channel):
+        center_along, center_across = _real_center(geometric_channel)
+        grid, _meta = extract_geometric_window_griddata(
+            geometric_channel, 16, resolution_m=0.05, center_along_m=center_along, center_across_m=center_across,
+            interp_method="nearest",
+        )
+        assert np.isfinite(grid).all()
 
 
 class TestClampCenter:
