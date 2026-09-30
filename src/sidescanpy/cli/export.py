@@ -694,7 +694,7 @@ _SWATH_LOAD_VARS = (
 
 def _neighborhood_ping_spacing_m(ds_full: xr.Dataset, lo: int, hi: int) -> float:
     lat_lon = ds_full[["latitude", "longitude"]].isel(ping=slice(lo, hi)).load()
-    along = along_track_distance_m(lat_lon)
+    along = along_track_distance_m(lat_lon, fill_nav_stalls=True)
     return abs(float(along[-1] - along[0])) / max(along.size - 1, 1) if along.size > 1 else 0.0
 
 
@@ -1118,7 +1118,7 @@ def _extract_geo_style_window(
     if t.sample is None or not (0 <= t.sample < masked.sizes["sample"]):
         return None
     try:
-        along_dist = along_track_distance_m(masked)
+        along_dist = along_track_distance_m(masked, fill_nav_stalls=True)
         target_along_m = float(along_dist[local_ping])
         target_across_m = float(masked["across_track_m"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
     except KeyError:
@@ -1835,7 +1835,7 @@ def run_progression(args: argparse.Namespace) -> None:
             stage_images[stage] = img
             stage_positions[stage] = pos
 
-        along_dist = along_track_distance_m(masked)
+        along_dist = along_track_distance_m(masked, fill_nav_stalls=True)
         target_along_m = float(along_dist[local_ping])
         target_across_m = float(masked["across_track_m"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
 

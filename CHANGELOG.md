@@ -9,6 +9,26 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+#### Geometric resampling fills short navigation stalls (2026-09-29)
+
+Navigation can stall: several consecutive pings keep (nearly) the same
+position while the vessel keeps moving, and it resumes without catching
+up. `along_track_distance_m()` is flat across them, and every geometric
+window stacked those pings at one along-track point, collapsing their
+seafloor into a line. On survey-a ~7 pings at each checked
+target (42ms apart, distinct data) advanced only ~0.07m in total instead
+of ~0.5m: at fine resolution a hard seam cut through the target itself.
+New `along_track_distance_m(..., fill_nav_stalls=True)` replaces each
+stalled step (below half the local median step) with the local median
+step, for runs of at most 20 pings with movement on both sides; longer
+runs are treated as a real stop. All three `extract_geometric_window*`
+functions and `sidescan-export`'s geometric target placement use it.
+Default stays `False`, so waterfall axes and gap/stationarity detection
+still see raw navigation. Georef windows use per-sample lat/lon and are
+not changed. (A first version interpolated between the surrounding fixes
+instead; that can't restore spacing when the fixes themselves never
+catch up, and left the seam.)
+
 #### QA images draw each target's real box, not the --box-size placeholder (2026-09-29)
 
 For catalogs that record a real target extent (a `bbox` on the target),

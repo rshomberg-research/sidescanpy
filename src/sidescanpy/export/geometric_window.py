@@ -236,7 +236,7 @@ def extract_geometric_window(
         If no finite ``across_track_m``/backscatter samples exist in
         ``channel_ds`` at all (e.g. entirely water column).
     """
-    along = along_track_distance_m(channel_ds)  # (ping,)
+    along = along_track_distance_m(channel_ds, fill_nav_stalls=True)  # (ping,)
     if channel_idx is None:
         across = channel_ds["across_track_m"].values  # (ping, channel, sample)
         values = channel_ds[backscatter_var].values
@@ -376,7 +376,7 @@ def extract_geometric_window_binned(
         If no finite ``across_track_m``/backscatter samples exist in
         ``channel_ds`` at all (e.g. entirely water column).
     """
-    along = along_track_distance_m(channel_ds)  # (ping,)
+    along = along_track_distance_m(channel_ds, fill_nav_stalls=True)  # (ping,)
     if channel_idx is None:
         across = channel_ds["across_track_m"].values  # (ping, channel, sample)
         values = channel_ds[backscatter_var].values
@@ -513,7 +513,7 @@ def extract_geometric_window_griddata(
         If no finite ``across_track_m``/backscatter samples exist in
         ``channel_ds`` at all (e.g. entirely water column).
     """
-    along = along_track_distance_m(channel_ds)  # (ping,)
+    along = along_track_distance_m(channel_ds, fill_nav_stalls=True)  # (ping,)
     if channel_idx is None:
         across = channel_ds["across_track_m"].values  # (ping, channel, sample)
         values = channel_ds[backscatter_var].values
