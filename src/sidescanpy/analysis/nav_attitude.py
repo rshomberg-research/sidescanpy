@@ -19,6 +19,9 @@ a real maneuver, which isn't itself an error).
 import numpy as np
 import xarray as xr
 
+# TODO: impplement logging
+
+# FIXME: trying to get rid of the Stages.
 from sidescanpy.analysis.investigation import StageResult
 
 NAV_ATTITUDE_VARS: tuple[str, ...] = (

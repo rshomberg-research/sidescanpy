@@ -1,5 +1,7 @@
 """Geographic plotting of sonar survey tracks"""
 
+# FIXME: does this get used?
+
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional

@@ -1,6 +1,7 @@
 # NOTE: this is used directly by several of the scripts currently.
 
-# TODO: refactor and rename
+# TODO: refactor and rename. This may not be used at all anymore. If it is still
+# used, it try to replace the functions with more established version.
 
 import re
 

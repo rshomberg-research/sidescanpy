@@ -13,6 +13,9 @@ reimplemented per project.
 2026 rshomberg@uri.edu
 """
 
+# FIXME: this is not in the right spot. This a a script and should not really be
+# part of the module. Also, I want to get rid of the stages as those do not really make sense.
+
 import json
 import logging
 from dataclasses import dataclass, field

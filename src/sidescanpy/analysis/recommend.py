@@ -47,6 +47,8 @@ key nothing reads.
 2026 rshomberg@uri.edu
 """
 
+# FIXME: this makes more sense as a script or as a cli
+
 from __future__ import annotations
 
 import numpy as np

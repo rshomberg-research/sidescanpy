@@ -1,6 +1,7 @@
 """Simple data comparison plots"""
 
 # TODO: implement logging
+# FIXME: does this get used?
 
 import numpy as np
 import matplotlib.pyplot as plt

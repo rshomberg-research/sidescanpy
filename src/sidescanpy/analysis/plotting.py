@@ -9,6 +9,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# FIXME: is this used? It should probably get moved to the vis module
+
 
 class SonarPlotter:
     """Generate various sonar data visualizations"""
@@ -54,7 +56,8 @@ class SonarPlotter:
         
         fig, ax = plt.subplots(figsize=(12, 6))
         im = ax.imshow(waterfall.T, aspect='auto', origin='upper', cmap='gray')
-        
+
+# FIXME: everything below here looks broken?
 from typing import ClassVar, Type, Dict
         ax.set_xlabel('Ping Number')
         ax.set_ylabel('Slant Range Sample')

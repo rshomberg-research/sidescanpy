@@ -19,18 +19,25 @@ split already established by `tvg_diagnostics.py`/`viz/tvg_diagnostics.py`.
 2026 rshomberg@uri.edu
 """
 
-import warnings
+# FIXME: implement logging.  
+# FIXME: get rid of the stages. I do not want to keep them numbered, but they
+# could be inluded in the documentation and examples.  
+# TODO: implement logging
+
+import warnings # ???: not sure what warnings does vs logging
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import xarray as xr
 
+# FIXME: try to limit cross-dependencies like this. In general, this module
+# seems like it should it be a either distributed or part of the CLI. This whole
+# module has grown way out of control and certainly is not working very well
 from sidescanpy.analysis.tvg_diagnostics import fit_hardware_tvg_curve, mean_backscatter_vs_range
 from sidescanpy.processing.radiometric import absorption_for_frequency
 
-_MIN_LINEAR = 1e-6
-
+_MIN_LINEAR = 1e-6  # ???: what is this refering to?
 
 @dataclass
 class StageResult:
