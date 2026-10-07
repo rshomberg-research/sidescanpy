@@ -36,13 +36,13 @@ Every dataset is validated by an xarray accessor on construction or
 assignment. A dataset that doesn't conform raises `ValueError` with a
 message naming the missing piece.
 
-| Accessor | Used on | Required vars |
-|---|---|---|
-| `ds.sidescan` | Single-frequency channel | `backscatter_raw`, `backscatter_intensity`, `latitude`, `longitude`, `heading_deg`, `depth_m`, `roll_deg`, `pitch_deg`, `heave_m`, `altitude_m`, `sound_vel_ms` |
-| `ds.navigation_record` | Navigation aux | `latitude`, `longitude` |
-| `ds.attitude_record` | Attitude aux | `roll_deg`, `pitch_deg`, `heave_m` |
-| `ds.dvl_record` | DVL aux | `altitude_m` |
-| `ds.sensor_record` | Generic sensor aux | (none — sensor-dependent) |
+| Accessor               | Used on                  | Required vars                                                                                                                                                   |
+| ---------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ds.sidescan`          | Single-frequency channel | `backscatter_raw`, `backscatter_intensity`, `latitude`, `longitude`, `heading_deg`, `depth_m`, `roll_deg`, `pitch_deg`, `heave_m`, `altitude_m`, `sound_vel_ms` |
+| `ds.navigation_record` | Navigation aux           | `latitude`, `longitude`                                                                                                                                         |
+| `ds.attitude_record`   | Attitude aux             | `roll_deg`, `pitch_deg`, `heave_m`                                                                                                                              |
+| `ds.dvl_record`        | DVL aux                  | `altitude_m`                                                                                                                                                    |
+| `ds.sensor_record`     | Generic sensor aux       | (none — sensor-dependent)                                                                                                                                       |
 
 Required dims, coords, and attrs are listed in `schema.py`. The
 sidescan schema enforces `channel` size 2 (port + starboard) and a

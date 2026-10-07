@@ -11,6 +11,8 @@ pub
 ref
 .vscode
 .DS_Store
+.claude
+.vscode/
 
 # Claude Code
 .claude/settings.local.json
