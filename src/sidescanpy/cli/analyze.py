@@ -98,8 +98,6 @@ from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommen
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import (
     add_logging_args,
-    available_frequencies,
-    load_channel_dataset,
     resolve_freq_keys,
     setup_logging_from_args,
 )
@@ -108,7 +106,7 @@ from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
-from sidescanpy.io.hdf5 import read_survey
+from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.pipeline import reconstruct_raw
 from sidescanpy.processing.slicing import slice_by_pings
@@ -152,7 +150,7 @@ def _resolve_and_load(input_path: Path, requested_frequency: str | None, chunks:
     """``freq_key`` + its dataset from ``input_path``, which may be a
     single ``.ss.h5`` file (original behavior, byte-identical) or a
     directory of them (lazily dask-concatenated in acquisition/filename
-    order, added 2026-09-27 -- see ``cli._common.load_channel_dataset``'s
+    order, added 2026-09-27 -- see ``io.hdf5.load_channel_dataset``'s
     own docstring for why: a real mission too large to convert into one
     file at once on a memory-constrained container can be analyzed as
     several files without losing this pipeline's cross-file gap/
@@ -373,7 +371,7 @@ def run_segment(args: argparse.Namespace) -> int:
     # `start != 0`. Works identically whether args.input is a single file
     # (source_files/source_format/survey_name taken from it directly) or
     # a directory (every *.ss.h5 in it, "ss_h5" as a reasonable
-    # source_format label -- see cli._common.load_channel_dataset).
+    # source_format label -- see io.hdf5.load_channel_dataset).
     if args.input.is_dir():
         source_files = sorted(args.input.glob("*.ss.h5"))
         source_format, survey_name = "ss_h5", args.input.name

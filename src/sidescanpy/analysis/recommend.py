@@ -57,7 +57,7 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.analysis.investigation import StageResult
-from sidescanpy.viz.waterfall import along_track_distance_m
+from sidescanpy.processing.navigation import along_track_distance_m
 
 logger = logging.getLogger(__name__)
 

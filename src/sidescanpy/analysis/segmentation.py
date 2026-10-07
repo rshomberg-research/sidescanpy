@@ -60,8 +60,8 @@ import xarray as xr
 
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import write_survey
+from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.slicing import slice_by_pings
-from sidescanpy.viz.waterfall import along_track_distance_m
 
 logger = logging.getLogger(__name__)
 

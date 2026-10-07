@@ -468,7 +468,7 @@ class TestDirectoryInput:
     """``--input``/``--ss-h5`` accepting a directory of ``.ss.h5`` files
     (lazily dask-concatenated in filename order, same convention
     ``sidescan-export``'s own ``--ss-h5-dir`` already uses), added
-    2026-09-27 -- see ``cli._common.load_channel_dataset``'s own
+    2026-09-27 -- see ``io.hdf5.load_channel_dataset``'s own
     docstring for the real motivation: a mission too large to
     concatenate into one file at conversion time on a memory-constrained
     container can now still be analyzed as one logical survey, without

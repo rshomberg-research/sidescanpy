@@ -42,7 +42,6 @@ from sidescanpy.io.jsf.messages import (
 )
 from sidescanpy.io.jsf.reader import read_jsf, read_jsf_iter
 from sidescanpy.io.jsf.targets import (
-    decode_and_correct_window,
     decode_target_window,
     read_discover_targets,
 )
@@ -53,7 +52,6 @@ __all__ = [
     "convert",
     "read_discover_targets",
     "decode_target_window",
-    "decode_and_correct_window",
     "JSFMessage",
     "JSFMessageHeader",
     "SonarDataMessage",

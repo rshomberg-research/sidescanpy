@@ -51,7 +51,6 @@ from sidescanpy.io.sdf.reader import (
 from sidescanpy.io.sdf.targets import (
     decode_target_window,
     read_klein_targets,
-    resolve_target_position,
 )
 
 __all__ = [

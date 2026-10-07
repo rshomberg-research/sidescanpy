@@ -461,7 +461,7 @@ def _geo_channel_ds():
 class TestGeoTargetsWithinWindow:
     def test_finds_a_co_located_target_and_places_it_locally(self):
         from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
-        from sidescanpy.viz.waterfall import along_track_distance_m
+        from sidescanpy.processing.navigation import along_track_distance_m
 
         ds = _geo_channel_ds()
         along = along_track_distance_m(ds)
@@ -483,7 +483,7 @@ class TestGeoTargetsWithinWindow:
 
     def test_target_outside_window_is_excluded(self):
         from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
-        from sidescanpy.viz.waterfall import along_track_distance_m
+        from sidescanpy.processing.navigation import along_track_distance_m
 
         ds = _geo_channel_ds()
         along = along_track_distance_m(ds)
@@ -502,7 +502,7 @@ class TestGeoTargetsWithinWindow:
 
     def test_out_of_range_ping_idx_skipped_not_crashed(self):
         from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
-        from sidescanpy.viz.waterfall import along_track_distance_m
+        from sidescanpy.processing.navigation import along_track_distance_m
 
         ds = _geo_channel_ds()
         along = along_track_distance_m(ds)
@@ -525,7 +525,7 @@ class TestGeoTargetsWithinWindow:
         # smaller real along_size_px must now be excluded. A stub
         # locate_fn pins the row deterministically (row=8), avoiding any
         # dependence on this fixture's own real geometry.
-        from sidescanpy.viz.waterfall import along_track_distance_m
+        from sidescanpy.processing.navigation import along_track_distance_m
 
         ds = _geo_channel_ds()
         along = along_track_distance_m(ds)
@@ -638,7 +638,7 @@ class TestOrientGeoWindow:
         near-range convention (starboard's smallest/nearest-zero value
         is ascending-order-first already, so it needs no flip)."""
         from sidescanpy.export.geometric_window import extract_geometric_window
-        from sidescanpy.viz.waterfall import along_track_distance_m
+        from sidescanpy.processing.navigation import along_track_distance_m
 
         ds = _geo_channel_ds()
         along = along_track_distance_m(ds)

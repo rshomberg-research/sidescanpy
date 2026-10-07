@@ -18,7 +18,8 @@ Public functions
 - :func:`plot_gridded_multiple_methods` — side-by-side comparison of
   resampling methods.
 - :func:`export_gridded_png` — save gridded raster to PNG.
-- :func:`along_track_distance_m` — cumulative along-track distance
+- ``along_track_distance_m`` (deprecated; moved to
+  ``sidescanpy.processing.navigation``) — cumulative along-track distance
   (meters) from per-ping lat/lon; the primitive behind
   ``y_axis="along_track"``, exposed for non-plotting callers (e.g.
   distance-based segmentation).
@@ -54,7 +55,6 @@ from sidescanpy.viz.track import (
     plot_track_and_scanlines,
 )
 from sidescanpy.viz.waterfall import (
-    along_track_distance_m,
     plot_survey_overview,
     plot_waterfall,
     resolve_waterfall_axes,
@@ -63,7 +63,6 @@ from sidescanpy.viz.waterfall import (
 __all__ = [
     "plot_waterfall",
     "plot_survey_overview",
-    "along_track_distance_m",
     "resolve_waterfall_axes",
     "plot_gridded_raster",
     "plot_gridded_with_coverage",
@@ -77,3 +76,20 @@ __all__ = [
     "plot_track_with_targets",
     "export_track_with_targets_png",
 ]
+
+
+def __getattr__(name: str):
+    # Deprecated shim, kept for one release.
+    if name == "along_track_distance_m":
+        import warnings
+
+        from sidescanpy.processing.navigation import along_track_distance_m
+
+        warnings.warn(
+            "sidescanpy.viz.along_track_distance_m has moved to "
+            "sidescanpy.processing.navigation",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return along_track_distance_m
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

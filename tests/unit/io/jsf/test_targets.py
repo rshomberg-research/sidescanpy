@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 
 from sidescanpy.io.jsf.targets import (
-    decode_and_correct_window,
     decode_target_window,
     read_discover_targets,
 )
@@ -173,6 +172,7 @@ def test_target_ping_missing_from_own_window_is_unknown_confidence(tmp_path):
 def test_decode_and_correct_window_matches_manual_chain(tmp_path):
     from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
     from sidescanpy.targets.core import orient_for_display
+    from sidescanpy.targets.window import decode_and_correct_window
 
     _make_target_file(
         tmp_path / "Target-0001.target",

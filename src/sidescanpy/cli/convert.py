@@ -45,13 +45,13 @@ from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path,
 from sidescanpy.io import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.io.jsf.targets import read_discover_targets
-from sidescanpy.io.sdf.targets import (
+from sidescanpy.io.sdf.targets import read_klein_targets
+from sidescanpy.processing import crop_far_range_noise
+from sidescanpy.targets.correlate import (
     calibrate_clock_offset,
-    read_klein_targets,
     resolve_targets_nearest_ping,
     resolve_targets_offset_corrected,
 )
-from sidescanpy.processing import crop_far_range_noise
 from sidescanpy.targets.io import write_targets_csv, write_targets_json
 from sidescanpy.viz.targets import export_target_position_scatter_png
 
@@ -203,7 +203,9 @@ def run_targets(args: argparse.Namespace) -> int:
             offset_s = args.time_offset_s
             if args.calibrate_offset:
                 logger.info("Calibrating clock offset from .ss.h5 filenames vs. first ping...")
-                offset_s = calibrate_clock_offset(args.ss_h5_dir, args.local_utc_offset_hours)
+                offset_s = calibrate_clock_offset(
+                    args.ss_h5_dir, local_utc_offset_hours=args.local_utc_offset_hours,
+                )
 
             if offset_s is not None:
                 targets = resolve_targets_offset_corrected(
@@ -266,8 +268,9 @@ def main() -> int:
              "first ping. Requires --ss-h5-dir.",
     )
     p_targets.add_argument(
-        "--local-utc-offset-hours", type=float, default=4.0,
-        help="Klein only: local-time-to-UTC offset used only by --calibrate-offset (default 4.0 = EDT)",
+        "--local-utc-offset-hours", type=float, default=None,
+        help="Klein only: local-time-to-UTC offset in hours (hours to add to the filename's local time "
+             "to get UTC). Required with --calibrate-offset; no default.",
     )
     p_targets.set_defaults(func=run_targets)
 
@@ -294,6 +297,8 @@ def main() -> int:
         apply_config_to_subparsers((p_survey, p_targets), config, argv)
 
     args = parser.parse_args(argv)
+    if getattr(args, "func", None) is run_targets and args.calibrate_offset and args.local_utc_offset_hours is None:
+        p_targets.error("--calibrate-offset requires --local-utc-offset-hours (no default)")
 
     setup_logging_from_args(args)
 

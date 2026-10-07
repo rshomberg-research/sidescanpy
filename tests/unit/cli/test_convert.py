@@ -107,6 +107,19 @@ class TestRunSurvey:
         assert convert.run_survey(self._args(tmp_path)) == 1
 
 
+class TestCalibrateOffsetRequiresUtcOffset:
+    def test_missing_local_utc_offset_is_an_argparse_error(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-convert", "targets", str(tmp_path), "-o", str(tmp_path / "o"),
+             "--ss-h5-dir", str(tmp_path), "--calibrate-offset"],
+        )
+        with pytest.raises(SystemExit) as exc:
+            convert.main()
+        assert exc.value.code == 2
+        assert "--local-utc-offset-hours" in capsys.readouterr().err
+
+
 class TestRunTargets:
     def _args(self, tmp_path, **overrides):
         defaults = dict(
@@ -157,7 +170,7 @@ class TestRunTargets:
 
         calls = {}
         monkeypatch.setattr(convert, "read_klein_targets", lambda source: raw_targets)
-        monkeypatch.setattr(convert, "calibrate_clock_offset", lambda d, h: calls.setdefault("offset", 500.0) or 500.0)
+        monkeypatch.setattr(convert, "calibrate_clock_offset", lambda d, local_utc_offset_hours: calls.setdefault("offset", 500.0) or 500.0)
 
         def _fake_resolve(targets, d, offset_s, max_time_delta_s):
             calls["offset_s_used"] = offset_s

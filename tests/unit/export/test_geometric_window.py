@@ -12,7 +12,7 @@ from sidescanpy.export.geometric_window import (
     extract_geometric_window_griddata,
     locate_point,
 )
-from sidescanpy.viz.waterfall import along_track_distance_m
+from sidescanpy.processing.navigation import along_track_distance_m
 
 
 def _real_center(ds, channel_idx=0):

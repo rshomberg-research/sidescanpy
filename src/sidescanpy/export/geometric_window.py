@@ -7,7 +7,7 @@ size_px)``, centered on a given real-world point — a survey-local frame
 per-sample ``across_track_m`` that
 ``processing/geometric.py::compute_geometric_ranges`` already attaches,
 and the per-ping cumulative along-track distance from
-``viz.waterfall.along_track_distance_m``.
+``processing.navigation.along_track_distance_m``.
 
 2026 rshomberg@uri.edu
 """
@@ -22,7 +22,7 @@ from scipy.interpolate import griddata
 from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_2d
 
-from sidescanpy.viz.waterfall import along_track_distance_m
+from sidescanpy.processing.navigation import along_track_distance_m
 
 logger = logging.getLogger(__name__)
 

@@ -36,6 +36,8 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+from sidescanpy.processing.profiles import mean_backscatter_vs_range
+
 logger = logging.getLogger(__name__)
 
 STEP_NAME = "empirical_range_correction"
@@ -202,7 +204,7 @@ def fit_range_correction(
         `ground_range_m` variable — i.e. already run through
         `{"tvg", "geometric"}` (see `processing.pipeline`).
     bin_width_m : float, default 5.0
-        Passed through to `analysis.tvg_diagnostics.mean_backscatter_vs_range`.
+        Passed through to `processing.profiles.mean_backscatter_vs_range`.
     exclude_below_db : float, optional, default -110.0
         Passed through as `exclude_below_db` to exclude the
         floor-clipped samples (~-120 dB exact-zero-amplitude floor) from
@@ -225,14 +227,6 @@ def fit_range_correction(
         If `ds` isn't TVG+geometric corrected, or no samples survive
         filtering.
     """
-    # Lazy import: analysis.tvg_diagnostics imports processing.pipeline,
-    # which imports this module for apply_empirical_range_correction —
-    # a top-level import here would be circular. apply_empirical_range_correction
-    # (the function pipeline.py actually needs) doesn't need tvg_diagnostics
-    # at all, so only fit_range_correction (not on pipeline.py's import
-    # path) needs this dependency, deferred to call time.
-    from sidescanpy.analysis.tvg_diagnostics import mean_backscatter_vs_range
-
     if ds.attrs.get("processing_level") != "radiometric":
         raise ValueError(
             "fit_range_correction expects processing_level 'radiometric', "

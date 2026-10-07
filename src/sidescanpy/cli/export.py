@@ -87,7 +87,6 @@ from PIL import Image
 from sidescanpy.analysis.investigation import mask_nadir_gap
 from sidescanpy.cli._common import (
     add_logging_args,
-    concat_survey_frequency,
     resolve_freq_keys,
     setup_logging_from_args,
 )
@@ -119,7 +118,8 @@ from sidescanpy.grids import (
     utm_grid_from_wgs84_bbox,
 )
 from sidescanpy.grids.definition import utm_crs_for_lonlat
-from sidescanpy.io.hdf5 import read_survey
+from sidescanpy.io.hdf5 import concat_survey_frequency, read_survey
+from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
 from sidescanpy.targets.core import project_target_to_frequency
 from sidescanpy.targets.interchange import CocoImageEntry, write_coco, write_yolo
@@ -129,7 +129,6 @@ from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 from sidescanpy.viz.gridded import export_gridded_png
 from sidescanpy.viz.targets import export_track_with_targets_png
 from sidescanpy.viz.track import build_survey_track, export_track_and_scanlines_png
-from sidescanpy.viz.waterfall import along_track_distance_m
 
 logger = logging.getLogger(__name__)
 

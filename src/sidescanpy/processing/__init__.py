@@ -14,6 +14,8 @@ Public entry points
 - :func:`interpolate_onto_channel` — lower-level: interpolate any
   ``xr.Dataset`` (e.g. an external GPS log) onto one channel's ping
   times.
+- :func:`along_track_distance_m`, :func:`fill_nav_stalls` — cumulative
+  along-track distance from ping lat/lon, and nav-stall repair.
 - :func:`apply_tvg` — apply time-varying gain (spreading + absorption)
   to backscatter. Converts raw linear amplitude to dB.
 - :func:`apply_tvg_to_amplitude` — same TVG correction as
@@ -59,6 +61,10 @@ from sidescanpy.processing.interpolate import (
     interpolate_aux_onto_pings,
     interpolate_onto_channel,
 )
+from sidescanpy.processing.navigation import (
+    along_track_distance_m,
+    fill_nav_stalls,
+)
 from sidescanpy.processing.pipeline import (
     VALID_PROCESS_LEVELS,
     VALID_STEPS,
@@ -82,6 +88,8 @@ from sidescanpy.processing.slicing import (
 )
 
 __all__ = [
+    "along_track_distance_m",
+    "fill_nav_stalls",
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
     "apply_tvg",
