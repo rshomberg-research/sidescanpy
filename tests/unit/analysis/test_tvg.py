@@ -1,15 +1,9 @@
 """
-Unit tests for sidescanpy.analysis.tvg_diagnostics.
+Unit tests for sidescanpy.analysis.tvg: range/sample profiles,
+before/after comparison, altitude binning and candidate TVG-curve
+fitting (fit_range_decay has its own file, test_tvg_range_decay.py).
 
-Stage 1 of docs/planning/v0.8.0-tvg-diagnostics.md: diagnostic tooling
-for investigating the range-dependent TVG residual (CLAUDE.md Known
-Issue #4) and floor-clipped samples (Known Issue #5), built on top of
-apply_tvg()'s existing public API without changing it.
-
-Uses small synthetic fixtures with hand-computed expected values, not
-real survey data, per the project's TDD convention.
-
-2026 rshomberg@uri.edu
+Small synthetic fixtures with hand-computed expected values.
 """
 
 import numpy as np
@@ -17,12 +11,12 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from sidescanpy.analysis.tvg_diagnostics import (
-    before_after_backscatter,
-    bin_pings_by_altitude,
-    fit_hardware_tvg_curve,
-    mean_backscatter_vs_range,
-    mean_backscatter_vs_sample_index,
+from sidescanpy.analysis.tvg import (
+    backscatter_vs_range,
+    backscatter_vs_sample,
+    bin_by_altitude,
+    compare_before_after,
+    fit_tvg_curve,
 )
 from sidescanpy.core.units import linear_to_db as _linear_to_db
 from sidescanpy.processing import correct
@@ -121,13 +115,13 @@ class TestLinearToDb:
 
 
 # ============================================================
-# before_after_backscatter
+# compare_before_after
 # ============================================================
 
-class TestBeforeAfterBackscatter:
+class TestCompareBeforeAfter:
     def test_ground_range_matches_geometric_only_pass(self):
         ds_raw = _make_test_dataset()
-        out = before_after_backscatter(ds_raw)
+        out = compare_before_after(ds_raw)
         ds_geom_only = correct(ds_raw, ["geometric"])
         np.testing.assert_allclose(
             out["ground_range_m"].values,
@@ -149,13 +143,13 @@ class TestBeforeAfterBackscatter:
 
     def test_backscatter_db_raw_matches_linear_to_db(self):
         ds_raw = _make_test_dataset(backscatter_val=2.0)
-        out = before_after_backscatter(ds_raw)
+        out = compare_before_after(ds_raw)
         expected = _linear_to_db(ds_raw["backscatter_intensity"].values)
         np.testing.assert_allclose(out["backscatter_db_raw"].values, expected, rtol=1e-5)
 
     def test_tvg_gain_equals_corrected_minus_raw(self):
         ds_raw = _make_test_dataset(backscatter_val=2.0)
-        out = before_after_backscatter(ds_raw)
+        out = compare_before_after(ds_raw)
         np.testing.assert_allclose(
             out["tvg_gain_db"].values,
             (out["backscatter_db_corrected"] - out["backscatter_db_raw"]).values,
@@ -165,15 +159,15 @@ class TestBeforeAfterBackscatter:
     def test_tvg_gain_matches_corrected_db_at_unity_backscatter(self):
         # backscatter_val=1.0 -> raw dB is exactly 0, so gain == corrected value
         ds_raw = _make_test_dataset(backscatter_val=1.0)
-        out = before_after_backscatter(ds_raw)
+        out = compare_before_after(ds_raw)
         np.testing.assert_allclose(
             out["tvg_gain_db"].values, out["backscatter_db_corrected"].values, rtol=1e-5
         )
 
     def test_custom_tvg_params_changes_gain(self):
         ds_raw = _make_test_dataset(backscatter_val=1.0, n_samples=200, sample_rate_hz=1000.0)
-        default_out = before_after_backscatter(ds_raw)
-        custom_out = before_after_backscatter(
+        default_out = compare_before_after(ds_raw)
+        custom_out = compare_before_after(
             ds_raw, TVGParams(absorption_db_per_m=2.0, spreading_loss_db=20.0)
         )
         # Higher absorption coefficient -> strictly larger gain at far range.
@@ -184,17 +178,17 @@ class TestBeforeAfterBackscatter:
 
     def test_does_not_mutate_input(self):
         ds_raw = _make_test_dataset()
-        before_after_backscatter(ds_raw)
+        compare_before_after(ds_raw)
         assert ds_raw.attrs["processing_level"] == "raw"
         assert "ground_range_m" not in ds_raw.data_vars
         assert "tvg_gain_db" not in ds_raw.data_vars
 
 
 # ============================================================
-# mean_backscatter_vs_range
+# backscatter_vs_range
 # ============================================================
 
-class TestMeanBackscatterVsRange:
+class TestBackscatterVsRange:
     def test_known_bins_mean_and_count(self):
         ds = xr.Dataset(
             {
@@ -202,7 +196,7 @@ class TestMeanBackscatterVsRange:
                 "ground_range_m": (["obs"], np.array([1.0, 4.0, 6.0, 9.0])),
             }
         )
-        result = mean_backscatter_vs_range(ds, "value", bin_width_m=5.0)
+        result = backscatter_vs_range(ds, "value", bin_width_m=5.0)
         assert len(result) == 2
         assert result.iloc[0]["count"] == 2
         assert np.isclose(result.iloc[0]["mean"], 2.0)
@@ -216,10 +210,10 @@ class TestMeanBackscatterVsRange:
                 "ground_range_m": (["obs"], np.array([1.0, 2.0, 3.0, 4.0])),
             }
         )
-        result_all = mean_backscatter_vs_range(ds, "value", bin_width_m=5.0)
+        result_all = backscatter_vs_range(ds, "value", bin_width_m=5.0)
         assert result_all.iloc[0]["count"] == 4
 
-        result_filtered = mean_backscatter_vs_range(
+        result_filtered = backscatter_vs_range(
             ds, "value", bin_width_m=5.0, exclude_below_db=-110.0
         )
         assert result_filtered.iloc[0]["count"] == 2
@@ -234,7 +228,7 @@ class TestMeanBackscatterVsRange:
                 "ground_range_m": (["obs"], np.array([1.0, 2.0])),
             }
         )
-        result = mean_backscatter_vs_range(ds, "value", bin_width_m=5.0)
+        result = backscatter_vs_range(ds, "value", bin_width_m=5.0)
         assert result.iloc[0]["count"] == 2
 
     def test_nan_values_excluded(self):
@@ -244,7 +238,7 @@ class TestMeanBackscatterVsRange:
                 "ground_range_m": (["obs"], np.array([1.0, 2.0, np.nan])),
             }
         )
-        result = mean_backscatter_vs_range(ds, "value", bin_width_m=5.0)
+        result = backscatter_vs_range(ds, "value", bin_width_m=5.0)
         assert result.iloc[0]["count"] == 1
         assert np.isclose(result.iloc[0]["mean"], 1.0)
 
@@ -255,7 +249,7 @@ class TestMeanBackscatterVsRange:
                 "ground_range_m": (["obs"], np.array([1.0])),
             }
         )
-        result = mean_backscatter_vs_range(ds, "value", exclude_below_db=-110.0)
+        result = backscatter_vs_range(ds, "value", exclude_below_db=-110.0)
         assert len(result) == 0
 
     def test_includes_percentile_columns(self):
@@ -265,22 +259,22 @@ class TestMeanBackscatterVsRange:
                 "ground_range_m": (["obs"], np.full(10, 2.0)),
             }
         )
-        result = mean_backscatter_vs_range(ds, "value", bin_width_m=5.0)
+        result = backscatter_vs_range(ds, "value", bin_width_m=5.0)
         for col in ("mean", "median", "std", "p10", "p90", "count"):
             assert col in result.columns
 
 
 # ============================================================
-# mean_backscatter_vs_sample_index
+# backscatter_vs_sample
 # ============================================================
 
-class TestMeanBackscatterVsSampleIndex:
+class TestBackscatterVsSample:
     def test_known_bins(self):
         ds = xr.Dataset(
             {"value": (["ping", "sample"], np.array([[1.0, 2.0, 3.0, 4.0]]))},
             coords={"sample": np.arange(4)},
         )
-        result = mean_backscatter_vs_sample_index(ds, "value", bin_width=2)
+        result = backscatter_vs_sample(ds, "value", bin_width=2)
         assert len(result) == 2
         assert np.isclose(result.iloc[0]["mean"], 1.5)
         assert np.isclose(result.iloc[1]["mean"], 3.5)
@@ -295,7 +289,7 @@ class TestMeanBackscatterVsSampleIndex:
             {"value": (["ping", "sample"], values)},
             coords={"sample": np.arange(n_samples)},
         )
-        result = mean_backscatter_vs_sample_index(ds, "value", bin_width=5)
+        result = backscatter_vs_sample(ds, "value", bin_width=5)
         assert np.isclose(result.iloc[0]["mean"], -125.0)
         assert result.iloc[1]["mean"] > -125.0
 
@@ -304,16 +298,16 @@ class TestMeanBackscatterVsSampleIndex:
             {"value": (["ping", "sample"], np.array([[-125.0, -125.0, 5.0, 6.0]]))},
             coords={"sample": np.arange(4)},
         )
-        result = mean_backscatter_vs_sample_index(ds, "value", bin_width=4, exclude_below_db=-110.0)
+        result = backscatter_vs_sample(ds, "value", bin_width=4, exclude_below_db=-110.0)
         assert result.iloc[0]["count"] == 2
         assert np.isclose(result.iloc[0]["mean"], 5.5)
 
 
 # ============================================================
-# bin_pings_by_altitude
+# bin_by_altitude
 # ============================================================
 
-class TestBinPingsByAltitude:
+class TestBinByAltitude:
     def test_default_three_bins_preserve_total_ping_count(self):
         n = 9
         ds = xr.Dataset(
@@ -322,7 +316,7 @@ class TestBinPingsByAltitude:
                 "value": (["ping"], np.arange(n, dtype=np.float32)),
             }
         )
-        bins = bin_pings_by_altitude(ds, n_bins=3)
+        bins = bin_by_altitude(ds, n_bins=3)
         assert len(bins) == 3
         total = sum(b.sizes["ping"] for b in bins.values())
         assert total == n
@@ -335,7 +329,7 @@ class TestBinPingsByAltitude:
                 "value": (["ping"], np.arange(n, dtype=np.float32)),
             }
         )
-        bins = bin_pings_by_altitude(ds, n_bins=3)
+        bins = bin_by_altitude(ds, n_bins=3)
         bin_datasets = list(bins.values())
         maxes = [float(b["altitude_m"].max()) for b in bin_datasets]
         mins = [float(b["altitude_m"].min()) for b in bin_datasets]
@@ -350,7 +344,7 @@ class TestBinPingsByAltitude:
                 "value": (["ping"], np.arange(n, dtype=np.float32)),
             }
         )
-        bins = bin_pings_by_altitude(ds, n_bins=4)
+        bins = bin_by_altitude(ds, n_bins=4)
         assert len(bins) == 4
 
     def test_nan_altitude_pings_excluded(self):
@@ -361,13 +355,13 @@ class TestBinPingsByAltitude:
                 "value": (["ping"], np.arange(6, dtype=np.float32)),
             }
         )
-        bins = bin_pings_by_altitude(ds, n_bins=2)
+        bins = bin_by_altitude(ds, n_bins=2)
         total = sum(b.sizes["ping"] for b in bins.values())
         assert total == 5
 
 
 # ============================================================
-# fit_hardware_tvg_curve
+# fit_tvg_curve
 # ============================================================
 
 def _make_binned_curve(
@@ -379,7 +373,7 @@ def _make_binned_curve(
     source_level_db: float = 50.0,
     count: int = 1000,
 ) -> pd.DataFrame:
-    """A mean_backscatter_vs_range()-shaped DataFrame built from an EXACT
+    """A backscatter_vs_range()-shaped DataFrame built from an EXACT
     known TVGParams -- reuses tvg_gain_db() (the function under test's
     own dependency) so the fixture is guaranteed self-consistent, rather
     than a hand-derived formula that could drift from it."""
@@ -400,23 +394,23 @@ def _make_binned_curve(
 _ABSORPTION = 0.15  # arbitrary, distinct from any absorption_for_frequency() default
 
 
-class TestFitHardwareTvgCurve:
+class TestFitTvgCurve:
     def test_flat_curve_picks_flat(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "flat"
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-9)
 
     def test_spreading_only_curve_picks_spreading_only(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "spreading_only"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
 
     def test_absorption_only_curve_picks_absorption_only(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "absorption_only"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
@@ -429,8 +423,8 @@ class TestFitHardwareTvgCurve:
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
         binned["mean"] = binned["mean"].iloc[0]  # corrupt to flat
 
-        result_mean = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
-        result_median = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, value_col="median")
+        result_mean = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result_median = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, value_col="median")
 
         assert result_mean.best.name == "flat"
         assert result_median.best.name == "absorption_only"
@@ -438,14 +432,14 @@ class TestFitHardwareTvgCurve:
 
     def test_full_physics_curve_picks_full_physics(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=_ABSORPTION))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "full_physics"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
 
     def test_all_four_candidates_present_in_fixed_order(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert [c.name for c in result.candidates] == [
             "flat", "spreading_only", "absorption_only", "full_physics",
         ]
@@ -454,7 +448,7 @@ class TestFitHardwareTvgCurve:
         """flat has no scale to begin with (model is identically zero) --
         pinning a nonexistent scale to 1.0 must be a no-op."""
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         flat = next(c for c in result.candidates if c.name == "flat")
         assert flat.fixed_scale_rmse_db == pytest.approx(flat.rmse_db)
 
@@ -464,7 +458,7 @@ class TestFitHardwareTvgCurve:
         -- same as the free-fit rmse_db here, since the true scale
         already is 1.0."""
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         absorption_only = next(c for c in result.candidates if c.name == "absorption_only")
         assert absorption_only.fixed_scale_rmse_db == pytest.approx(0.0, abs=1e-6)
 
@@ -480,7 +474,7 @@ class TestFitHardwareTvgCurve:
         binned = _make_binned_curve(
             TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION * true_scale)
         )
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         absorption_only = next(c for c in result.candidates if c.name == "absorption_only")
         assert absorption_only.scale == pytest.approx(true_scale, abs=1e-6)
         assert absorption_only.rmse_db == pytest.approx(0.0, abs=1e-6)
@@ -521,7 +515,7 @@ class TestFitHardwareTvgCurve:
             "p10": mean, "p90": mean, "count": np.full_like(r, 1000, dtype=int),
         })
 
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, r_ref_m=2.5, r_fit_max_m=38.0)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, r_ref_m=2.5, r_fit_max_m=38.0)
 
         free_fit_winner = min(result.candidates, key=lambda c: c.rmse_db).name
         assert free_fit_winner == "full_physics"
@@ -535,7 +529,7 @@ class TestFitHardwareTvgCurve:
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
         # First bin (r~1) has too few samples; second (r~2) is fine.
         binned.loc[0, "count"] = 5
-        result = fit_hardware_tvg_curve(
+        result = fit_tvg_curve(
             binned, absorption_db_per_m=_ABSORPTION, min_count_for_r_ref=30,
         )
         assert result.best.r_ref_m == pytest.approx(binned["range_min_m"].iloc[1] + 0.5)
@@ -550,14 +544,14 @@ class TestFitHardwareTvgCurve:
         # Klein survey.
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0), r_max=80.0)
         binned.loc[binned.index[-1], "mean"] += 0.05
-        result = fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         max_range = (binned["range_min_m"].iloc[-1] + binned["range_max_m"].iloc[-1]) / 2.0
         assert result.best.r_ref_m < max_range
         assert result.best.n_bins_used > 1
 
     def test_r_fit_max_auto_selection_matches_documented_formula(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION), r_max=80.0)
-        result = fit_hardware_tvg_curve(
+        result = fit_tvg_curve(
             binned, absorption_db_per_m=_ABSORPTION, fit_fraction=0.6,
         )
         r_ref = result.best.r_ref_m
@@ -567,7 +561,7 @@ class TestFitHardwareTvgCurve:
 
     def test_explicit_r_ref_and_r_fit_max_override_auto_selection(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
-        result = fit_hardware_tvg_curve(
+        result = fit_tvg_curve(
             binned, absorption_db_per_m=_ABSORPTION, r_ref_m=10.0, r_fit_max_m=40.0,
         )
         assert result.best.r_ref_m == 10.0
@@ -575,7 +569,7 @@ class TestFitHardwareTvgCurve:
 
     def test_r_fit_min_m_defaults_to_r_ref_m_prior_one_sided_behavior(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
-        result = fit_hardware_tvg_curve(
+        result = fit_tvg_curve(
             binned, absorption_db_per_m=_ABSORPTION, r_ref_m=40.0, r_fit_max_m=60.0,
         )
         assert result.best.r_fit_min_m == 40.0
@@ -588,10 +582,10 @@ class TestFitHardwareTvgCurve:
         caller fit both sides, keeping r_ref_m purely as the loss
         reference."""
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=_ABSORPTION))
-        one_sided = fit_hardware_tvg_curve(
+        one_sided = fit_tvg_curve(
             binned, absorption_db_per_m=_ABSORPTION, r_ref_m=40.0, r_fit_max_m=60.0,
         )
-        both_sides = fit_hardware_tvg_curve(
+        both_sides = fit_tvg_curve(
             binned, absorption_db_per_m=_ABSORPTION, r_ref_m=40.0, r_fit_min_m=1.0, r_fit_max_m=60.0,
         )
         assert both_sides.best.r_ref_m == 40.0  # loss reference unchanged
@@ -604,7 +598,7 @@ class TestFitHardwareTvgCurve:
         field) reports it as None, not a fabricated value -- callers
         (e.g. plot_candidate_fit) must fall back to r_ref_m themselves,
         not assume it's already resolved."""
-        from sidescanpy.analysis.tvg_diagnostics import TVGCandidateFit
+        from sidescanpy.analysis.tvg import TVGCandidateFit
         from sidescanpy.processing.radiometric import TVGParams as _TVGParams
 
         fit = TVGCandidateFit(
@@ -616,9 +610,9 @@ class TestFitHardwareTvgCurve:
     def test_empty_binned_raises(self):
         empty = pd.DataFrame(columns=["range_min_m", "range_max_m", "mean", "count"])
         with pytest.raises(ValueError, match="no rows"):
-            fit_hardware_tvg_curve(empty, absorption_db_per_m=_ABSORPTION)
+            fit_tvg_curve(empty, absorption_db_per_m=_ABSORPTION)
 
     def test_no_bin_meets_min_count_raises(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0), count=1)
         with pytest.raises(ValueError, match="min_count_for_r_ref"):
-            fit_hardware_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, min_count_for_r_ref=30)
+            fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, min_count_for_r_ref=30)

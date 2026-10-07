@@ -6,7 +6,8 @@ Enforce the package dependency direction: imports only point leftward in
 Parses every module under ``src/sidescanpy`` with ``ast`` (including
 function-level lazy imports). Root modules ``log``, ``_version`` and
 ``__init__`` count as core-level; the legacy root ``investigation`` module
-is excluded.
+is excluded. ``analysis`` and ``processing`` must also never import
+matplotlib (plotting lives in ``viz``).
 
 2026 rshomberg@uri.edu
 """
@@ -95,3 +96,28 @@ def test_imports_only_point_leftward():
 def test_known_violations_are_still_violations():
     stale = sorted(_KNOWN_VIOLATIONS - _find_violations())
     assert not stale, f"remove fixed entries from _KNOWN_VIOLATIONS: {stale}"
+
+
+_NO_MATPLOTLIB_LAYERS = ("analysis", "processing")
+
+
+def _imports_matplotlib(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name.split(".")[0] == "matplotlib" for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            if node.module.split(".")[0] == "matplotlib":
+                return True
+    return False
+
+
+def test_analysis_and_processing_do_not_import_matplotlib():
+    root = Path(sidescanpy.__file__).parent
+    offenders = [
+        str(path.relative_to(root))
+        for layer in _NO_MATPLOTLIB_LAYERS
+        for path in sorted((root / layer).rglob("*.py"))
+        if _imports_matplotlib(ast.parse(path.read_text()))
+    ]
+    assert not offenders, f"matplotlib imported in compute layers: {offenders}"

@@ -1,9 +1,9 @@
 """Tests for `sidescanpy.investigation.run_investigation()`'s top-level
 orchestration -- previously untested directly (only the individual stage
-functions in `analysis/investigation.py` and the plot functions in
+functions in `sidescanpy.analysis` and the plot functions in
 `viz/investigation.py` had coverage). Added 2026-09-02 alongside the new
 `channel` parameter -- a real gap found from a live report: Stage 3/4's
-own binning (`mean_backscatter_vs_range`) pools every dimension via
+own binning (`backscatter_vs_range`) pools every dimension via
 `.ravel()`, including the physical (port/starboard) `channel` dim, so
 every `run_investigation()` call before this parameter existed silently
 blended both transducers into one fitted curve with nothing in the
@@ -95,8 +95,8 @@ class TestRunInvestigationChannel:
         explicit_none = run_investigation(path, channel=None)
         omitted = run_investigation(path)
 
-        assert explicit_none.stages["stage4"].metrics["best_candidate"] == omitted.stages["stage4"].metrics["best_candidate"]
-        assert explicit_none.stages["stage4"].metrics["best_rmse_db"] == pytest.approx(omitted.stages["stage4"].metrics["best_rmse_db"])
+        assert explicit_none.stages["stage4"].best_candidate == omitted.stages["stage4"].best_candidate
+        assert explicit_none.stages["stage4"].best_rmse_db == pytest.approx(omitted.stages["stage4"].best_rmse_db)
         assert explicit_none.params["channel"] is None
 
     def test_channel_int_selects_one_physical_channel(self, tmp_path):
@@ -108,9 +108,9 @@ class TestRunInvestigationChannel:
         port = run_investigation(path, channel=0)
         starboard = run_investigation(path, channel=1)
 
-        assert port.stages["stage4"].metrics["best_candidate"] == "full_physics"
-        assert port.stages["stage4"].classification == "none"  # nothing compensated yet
-        assert starboard.stages["stage4"].classification == "full"  # already flat
+        assert port.stages["stage4"].best_candidate == "full_physics"
+        assert port.stages["stage4"].tvg_status == "none"  # nothing compensated yet
+        assert starboard.stages["stage4"].tvg_status == "full"  # already flat
         assert port.params["channel"] == 0
         assert starboard.params["channel"] == 1
 
@@ -120,7 +120,7 @@ class TestRunInvestigationChannel:
         by_string = run_investigation(path, channel="starboard")
         by_int = run_investigation(path, channel=1)
 
-        assert by_string.stages["stage4"].metrics["best_candidate"] == by_int.stages["stage4"].metrics["best_candidate"]
+        assert by_string.stages["stage4"].best_candidate == by_int.stages["stage4"].best_candidate
         assert by_string.params["channel"] == "starboard"
 
     def test_channel_pooled_differs_from_either_single_channel(self, tmp_path):
@@ -133,9 +133,9 @@ class TestRunInvestigationChannel:
         port = run_investigation(path, channel=0)
         starboard = run_investigation(path, channel=1)
 
-        pooled_rmse = pooled.stages["stage4"].metrics["best_rmse_db"]
-        port_rmse = port.stages["stage4"].metrics["best_rmse_db"]
-        starboard_rmse = starboard.stages["stage4"].metrics["best_rmse_db"]
+        pooled_rmse = pooled.stages["stage4"].best_rmse_db
+        port_rmse = port.stages["stage4"].best_rmse_db
+        starboard_rmse = starboard.stages["stage4"].best_rmse_db
         assert pooled_rmse != pytest.approx(port_rmse)
         assert pooled_rmse != pytest.approx(starboard_rmse)
 

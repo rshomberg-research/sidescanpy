@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from sidescanpy.analysis.nav_attitude import nav_attitude_summary
+from sidescanpy.analysis.navigation import summarize_navigation
 from sidescanpy.viz.nav_attitude import plot_nav_attitude
 
 
@@ -45,7 +45,7 @@ class TestPlotNavAttitude:
 
     def test_out_of_range_heading_gets_marked(self):
         ds = _make_ds(n_pings=3, heading_deg=(["ping"], np.array([-400.0, -300.0, -250.0])))
-        result = nav_attitude_summary(ds)
+        result = summarize_navigation(ds)
         fig, (ax_heading, _, _, _) = plot_nav_attitude(ds, result=result)
         # a scatter collection was added for the out-of-range points
         assert len(ax_heading.collections) >= 1
@@ -53,7 +53,7 @@ class TestPlotNavAttitude:
 
     def test_no_out_of_range_marker_when_heading_in_range(self):
         ds = _make_ds(n_pings=5, heading_deg=(["ping"], np.array([0.0, 90.0, 180.0, 270.0, 359.9])))
-        result = nav_attitude_summary(ds)
+        result = summarize_navigation(ds)
         fig, (ax_heading, _, _, _) = plot_nav_attitude(ds, result=result)
         assert len(ax_heading.collections) == 0
         plt.close(fig)

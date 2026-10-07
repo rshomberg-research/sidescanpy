@@ -36,7 +36,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_RANGE_CORRECTION, STEP_TVG, append_history, has_step
-from sidescanpy.processing.profiles import mean_backscatter_vs_range
+from sidescanpy.processing.profiles import backscatter_vs_range
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +190,7 @@ def fit_range_correction(
         Must be TVG-corrected and have a `ground_range_m` variable — i.e.
         already run through the `"tvg"` and `"geometric"` steps.
     bin_width_m : float, default 5.0
-        Passed through to `processing.profiles.mean_backscatter_vs_range`.
+        Passed through to `processing.profiles.backscatter_vs_range`.
     exclude_below_db : float, optional, default -110.0
         Passed through as `exclude_below_db` to exclude the
         floor-clipped samples (~-120 dB exact-zero-amplitude floor) from
@@ -221,7 +221,7 @@ def fit_range_correction(
             "(run compute_geometric_ranges() first)."
         )
 
-    df = mean_backscatter_vs_range(
+    df = backscatter_vs_range(
         ds,
         value_var="backscatter_intensity",
         range_var="ground_range_m",

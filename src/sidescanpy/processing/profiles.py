@@ -1,10 +1,12 @@
 """
-Range-binned backscatter profiles.
+Range- and sample-binned backscatter profiles.
 
-Binning primitive used both by the TVG range-correction fit in
-:mod:`sidescanpy.processing.range_correction` and by the diagnostics in
-:mod:`sidescanpy.analysis.tvg_diagnostics` (which re-exports
-:func:`mean_backscatter_vs_range`). Pure computation, no plotting.
+Binning primitives used by the TVG range-correction fit in
+:mod:`sidescanpy.processing.range_correction` and by the TVG analysis in
+:mod:`sidescanpy.analysis.tvg` (which re-exports both functions).
+
+- :func:`backscatter_vs_range` — per-range-bin statistics.
+- :func:`backscatter_vs_sample` — per-sample-index-bin statistics.
 
 2026 rshomberg@uri.edu
 """
@@ -15,11 +17,13 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from sidescanpy.processing.sample_axis import sample_index
+
 logger = logging.getLogger(__name__)
 
 
 def _bin_stats(values: np.ndarray, ranges: np.ndarray, edges: np.ndarray) -> list[dict]:
-    """Shared binning/aggregation core for the two mean-vs-X functions."""
+    """Shared binning/aggregation core for the two profile functions."""
     bin_idx = np.digitize(ranges, edges) - 1
 
     rows = []
@@ -44,7 +48,7 @@ def _bin_stats(values: np.ndarray, ranges: np.ndarray, edges: np.ndarray) -> lis
     return rows
 
 
-def mean_backscatter_vs_range(
+def backscatter_vs_range(
     ds: xr.Dataset,
     value_var: str,
     range_var: str = "ground_range_m",
@@ -100,3 +104,57 @@ def mean_backscatter_vs_range(
     rows = _bin_stats(values, ranges, edges)
     df = pd.DataFrame(rows)
     return df.rename(columns={"min": "range_min_m", "max": "range_max_m"})[columns]
+
+
+def backscatter_vs_sample(
+    ds: xr.Dataset,
+    value_var: str,
+    bin_width: int = 50,
+    exclude_below_db: float | None = None,
+) -> pd.DataFrame:
+    """
+    Bin samples by absolute sample index (not range) and return per-bin stats.
+
+    Works before geometric ranges exist, and for artifacts fixed in
+    sample position rather than range (e.g. a leading blanking run).
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Must have a ``sample`` dimension and ``value_var`` defined over
+        it (other dims are flattened).
+    value_var : str
+    bin_width : int, default 50
+        Bin width in sample-index units.
+    exclude_below_db : float, optional
+        See :func:`backscatter_vs_range`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: sample_min, sample_max, mean, median, std, p10, p90,
+        count.
+    """
+    values_da = ds[value_var]
+    abs_idx = sample_index(ds)
+    sample_idx_da = xr.DataArray(abs_idx, dims=["sample"])
+    idx_b, values_b = xr.broadcast(sample_idx_da, values_da)
+
+    idx_flat = idx_b.values.ravel().astype(np.float64)
+    values_flat = values_b.values.ravel().astype(np.float64)
+
+    valid = np.isfinite(values_flat) & np.isfinite(idx_flat)
+    if exclude_below_db is not None:
+        valid &= values_flat >= exclude_below_db
+
+    values_flat = values_flat[valid]
+    idx_flat = idx_flat[valid]
+
+    columns = ["sample_min", "sample_max", "mean", "median", "std", "p10", "p90", "count"]
+    if values_flat.size == 0:
+        return pd.DataFrame(columns=columns)
+
+    edges = np.arange(0.0, (abs_idx.max() if abs_idx.size else 0.0) + 1 + bin_width, bin_width)
+    rows = _bin_stats(values_flat, idx_flat, edges)
+    df = pd.DataFrame(rows)
+    return df.rename(columns={"min": "sample_min", "max": "sample_max"})[columns]

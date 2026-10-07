@@ -100,12 +100,12 @@ class TestFitRangeCorrection:
         table.add_curve(1_495_000, range_m, correction_db, meta)
         corrected = apply_empirical_range_correction(ds, table=table)
 
-        from sidescanpy.analysis.tvg_diagnostics import mean_backscatter_vs_range
+        from sidescanpy.processing.profiles import backscatter_vs_range
 
-        before = mean_backscatter_vs_range(
+        before = backscatter_vs_range(
             ds, "backscatter_intensity", bin_width_m=2.0, exclude_below_db=None
         )
-        after = mean_backscatter_vs_range(
+        after = backscatter_vs_range(
             corrected, "backscatter_intensity", bin_width_m=2.0, exclude_below_db=None
         )
 

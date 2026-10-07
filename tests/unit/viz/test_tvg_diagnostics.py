@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from sidescanpy.analysis.tvg_diagnostics import fit_hardware_tvg_curve
+from sidescanpy.analysis.tvg import fit_tvg_curve
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 from sidescanpy.viz.tvg_diagnostics import (
     _params_label,
@@ -236,7 +236,7 @@ def sample_fit_result():
         "range_min_m": r - 0.5, "range_max_m": r + 0.5,
         "mean": mean, "count": np.full_like(r, 1000, dtype=int),
     })
-    return fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15)
+    return fit_tvg_curve(binned, absorption_db_per_m=0.15)
 
 
 class TestPlotCandidateFit:
@@ -292,7 +292,7 @@ class TestPlotCandidateFit:
     def test_use_fixed_scale_default_draws_literal_unscaled_model(self):
         """Default (use_fixed_scale=True) must draw the model at
         scale=1.0, not the free-fit scale -- matches what
-        stage4_decay's classification is now actually based on
+        fit_range_decay's classification is now actually based on
         (2026-08-24 change). Uses a deliberately scaled curve (true
         scale 2.4) so the two lines are visibly, checkably different,
         unlike an exact-match fixture where they'd coincide."""
@@ -304,7 +304,7 @@ class TestPlotCandidateFit:
             "range_min_m": r - 0.5, "range_max_m": r + 0.5,
             "mean": mean, "count": np.full_like(r, 1000, dtype=int),
         })
-        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=1.5, r_fit_max_m=39.5)
+        fit_result = fit_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=1.5, r_fit_max_m=39.5)
         absorption_only = next(c for c in fit_result.candidates if c.name == "absorption_only")
         assert absorption_only.scale == pytest.approx(true_scale, abs=1e-3)  # sanity: fixture behaves as intended
 
@@ -332,7 +332,7 @@ class TestPlotCandidateFit:
             "range_min_m": r - 0.5, "range_max_m": r + 0.5,
             "mean": mean, "count": np.full_like(r, 1000, dtype=int),
         })
-        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=1.5, r_fit_max_m=39.5)
+        fit_result = fit_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=1.5, r_fit_max_m=39.5)
         absorption_only = next(c for c in fit_result.candidates if c.name == "absorption_only")
 
         fig, ax = plot_candidate_fit(
@@ -360,7 +360,7 @@ class TestPlotCandidateFit:
             "range_min_m": r - 0.5, "range_max_m": r + 0.5,
             "mean": mean, "count": np.full_like(r, 1000, dtype=int),
         })
-        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15)
+        fit_result = fit_tvg_curve(binned, absorption_db_per_m=0.15)
         flat = next(c for c in fit_result.candidates if c.name == "flat")
 
         fig, ax = plot_candidate_fit(flat, fit_result.observed_range_m, fit_result.observed_loss_db)
@@ -379,7 +379,7 @@ class TestPlotCandidateFit:
             "range_min_m": r - 0.5, "range_max_m": r + 0.5,
             "mean": mean, "count": np.full_like(r, 1000, dtype=int),
         })
-        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15)
+        fit_result = fit_tvg_curve(binned, absorption_db_per_m=0.15)
 
         fig, ax = plot_candidate_fit(fit_result.best, fit_result.observed_range_m, fit_result.observed_loss_db)
         model_line = next(l for l in ax.get_lines() if l.get_label().startswith(fit_result.best.name))
@@ -402,7 +402,7 @@ class TestPlotCandidateFit:
             "range_min_m": r - 0.5, "range_max_m": r + 0.5,
             "mean": mean, "count": np.full_like(r, 1000, dtype=int),
         })
-        fit_result = fit_hardware_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=40.0)
+        fit_result = fit_tvg_curve(binned, absorption_db_per_m=0.15, r_ref_m=40.0)
 
         # model_n_points=2000 over a 0-79m domain -- fine enough that the
         # nearest sampled point to r_ref_m=40.0 is well within 1e-6 of it,

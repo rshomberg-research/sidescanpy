@@ -1,10 +1,9 @@
 """
-Plotting functions for the investigation pipeline
-(`sidescanpy.analysis.investigation`).
+Plotting functions for the investigation pipeline (the result
+dataclasses in `sidescanpy.analysis`).
 
-One function per stage's qualitative output. Consumes each stage's
-`StageResult` (metrics + the `data` scratch dict stage 3/4 populate)
-rather than recomputing anything — follows `viz/tvg_diagnostics.py`'s
+One function per stage's qualitative output. Consumes each analysis
+result rather than recomputing anything — follows `viz/tvg_diagnostics.py`'s
 "pure presentation over pre-computed analysis output" split, and reuses
 `viz/waterfall.py: plot_waterfall` / `viz/tvg_diagnostics.py:
 plot_candidate_fit` directly for the two stages whose plots already
@@ -21,7 +20,11 @@ import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from sidescanpy.analysis.investigation import StageResult
+from sidescanpy.analysis.beam import BeamGeometryResult
+from sidescanpy.analysis.nadir import NadirResult
+from sidescanpy.analysis.outliers import OutlierComparisonResult
+from sidescanpy.analysis.tvg import RangeDecayResult
+from sidescanpy.analysis.usable_range import UsableRangeResult
 from sidescanpy.processing.radiometric import tvg_gain_db
 from sidescanpy.viz.waterfall import plot_waterfall
 
@@ -92,7 +95,7 @@ def plot_stage1_sample_ping(
 
 def plot_stage1_5_before_after(
     ds: xr.Dataset,
-    stage1_5: StageResult,
+    stage1_5: OutlierComparisonResult,
     value_var: str = "backscatter_intensity",
     *,
     bins: int = 100,
@@ -116,7 +119,7 @@ def plot_stage1_5_before_after(
     are still counted (not dropped from the data), just off-screen;
     the plot title reports how many.
     """
-    filtered_arr = stage1_5.data.get("filtered_array")
+    filtered_arr = stage1_5.filtered_values
 
     original = np.asarray(ds[value_var].values, dtype=np.float64).ravel()
     original_finite = original[np.isfinite(original)]
@@ -169,8 +172,8 @@ def plot_stage1_5_before_after(
     ax_log.set_title("Log scale")
     ax_log.legend(fontsize=8)
 
-    n_rejected = stage1_5.metrics.get("outlier_n_rejected")
-    pct_rejected = stage1_5.metrics.get("outlier_pct_rejected")
+    n_rejected = stage1_5.n_rejected
+    pct_rejected = stage1_5.pct_rejected
     suffix = f" — {n_rejected} rejected ({pct_rejected:.2f}%)" if n_rejected is not None else ""
     fig.suptitle(f"Distribution before/after outlier rejection ({value_var}){suffix}")
     fig.tight_layout()
@@ -214,7 +217,7 @@ def plot_stage2_nadir_zoom(
     ds: xr.Dataset,
     value_var: str = "backscatter_intensity",
     *,
-    stage2: StageResult | None = None,
+    stage2: NadirResult | None = None,
     nadir_n_samples: int = 50,
     ping_idx: int | None = None,
     zoom_factor: int = 2,
@@ -224,7 +227,7 @@ def plot_stage2_nadir_zoom(
     full nadir gap through to the real bottom return, not just the
     narrow acquisition blanking window.
 
-    Without `stage2` (a `stage2_nadir()` result), this only has
+    Without `stage2` (a `analyze_nadir()` result), this only has
     `nadir_n_samples` to go on and zooms to `nadir_n_samples *
     zoom_factor` — usually far too narrow to reach the real bottom
     return. Pass `stage2` so the window widens to actually include the
@@ -232,7 +235,7 @@ def plot_stage2_nadir_zoom(
     thin — the vehicle's own altitude re-expressed in sample units, not
     a real boundary) and the **first bottom return** (solid, bold —
     where backscatter actually rises to a real echo; real-data check
-    found these can differ by 2x+, see `stage2_nadir`'s docstring).
+    found these can differ by 2x+, see `analyze_nadir`'s docstring).
 
     Everything from nadir (x=0) out to the first bottom return — the
     acquisition-blanking burst *and* the beam-geometry null zone beyond
@@ -254,8 +257,8 @@ def plot_stage2_nadir_zoom(
     altitude_p90 = None
     bottom_p90 = None
     if stage2 is not None:
-        altitude_p90 = stage2.metrics.get("altitude_sample_p90")
-        bottom_p90 = stage2.metrics.get("first_bottom_return_sample_p90")
+        altitude_p90 = stage2.altitude_sample_p90
+        bottom_p90 = stage2.first_bottom_return_sample_p90
         widen_to = bottom_p90 if bottom_p90 is not None else altitude_p90
         if widen_to is not None:
             window = max(window, int(widen_to * 1.3))
@@ -267,8 +270,8 @@ def plot_stage2_nadir_zoom(
     altitude_b = None
     bottom_b = None
     if altitude_p90 is not None or bottom_p90 is not None:
-        altitude_arr = stage2.data.get("altitude_sample")
-        bottom_arr = stage2.data.get("first_bottom_return_sample")
+        altitude_arr = stage2.altitude_sample
+        bottom_arr = stage2.first_bottom_return_sample
         altitude_this = altitude_arr[ping_idx, 0] if altitude_arr is not None and ping_idx < altitude_arr.shape[0] else np.nan
         bottom_this = bottom_arr[ping_idx, 0] if bottom_arr is not None and ping_idx < bottom_arr.shape[0] else np.nan
         altitude_b = altitude_this if np.isfinite(altitude_this) else altitude_p90
@@ -299,7 +302,7 @@ def plot_stage2_waterfall(
     ds: xr.Dataset,
     value_var: str = "backscatter_intensity",
     *,
-    stage2: StageResult | None = None,
+    stage2: NadirResult | None = None,
     ax: Axes | None = None,
     ping_offset: int = 0,
     **waterfall_kwargs,
@@ -311,13 +314,13 @@ def plot_stage2_waterfall(
     `backscatter_intensity` variable name (schema convention), so
     `value_var` is aliased onto that name on a shallow copy first.
 
-    Pass `stage2` (a `stage2_nadir()` result) to overlay both detected
+    Pass `stage2` (a `analyze_nadir()` result) to overlay both detected
     boundaries as traced lines on both sides — the most direct way to
     see whether either tracks the real signal structure across the
     whole survey, not just one ping. The **first bottom return** (solid)
     is the one that matters for excluding the nadir gap from curve
     fitting; **altitude** (dotted) is shown too since real data can show
-    a large, informative gap between the two (see `stage2_nadir`'s
+    a large, informative gap between the two (see `analyze_nadir`'s
     docstring).
 
     ping_offset : int, default 0
@@ -341,8 +344,8 @@ def plot_stage2_waterfall(
     )
 
     if stage2 is not None:
-        altitude_arr = stage2.data.get("altitude_sample")
-        bottom_arr = stage2.data.get("first_bottom_return_sample")
+        altitude_arr = stage2.altitude_sample
+        bottom_arr = stage2.first_bottom_return_sample
 
         def _trace(boundary, color, style, label, lw):
             n_pings = boundary.shape[0]
@@ -368,7 +371,7 @@ def plot_stage2_waterfall(
 
 def plot_stage2_5_beam_geometry(
     ds: xr.Dataset,
-    stage2_5: StageResult,
+    stage2_5: BeamGeometryResult,
     value_var: str = "backscatter_intensity",
     range_var: str = "across_track_m",
 ) -> tuple[Figure, tuple[Axes, Axes]]:
@@ -387,12 +390,12 @@ def plot_stage2_5_beam_geometry(
     as vertical lines, so the geometry can be checked directly against
     where the real signal starts and ends.
     """
-    ping_idx = stage2_5.metrics.get("ping_idx", 0)
-    altitude = stage2_5.metrics.get("altitude_m")
-    near_ray = stage2_5.metrics.get("near_ray", {})
-    far_ray = stage2_5.metrics.get("far_ray", {})
-    beam_center = stage2_5.metrics.get("beam_center_angle_deg")
-    beam_width = stage2_5.metrics.get("beam_width_deg")
+    ping_idx = stage2_5.ping_idx if stage2_5.ping_idx is not None else 0
+    altitude = stage2_5.altitude_m
+    near_ray = stage2_5.near_ray
+    far_ray = stage2_5.far_ray
+    beam_center = stage2_5.beam_center_angle_deg
+    beam_width = stage2_5.beam_width_deg
 
     fig, (ax_geo, ax_ping) = plt.subplots(
         2, 1, figsize=(10, 8), sharex=True, gridspec_kw={"height_ratios": [1, 1.3]}
@@ -490,10 +493,10 @@ def plot_stage2_5_beam_geometry(
 # ============================================================
 
 
-def plot_stage3_usable_range(stage3: StageResult) -> tuple[Figure, tuple[Axes, Axes]]:
+def plot_stage3_usable_range(stage3: UsableRangeResult) -> tuple[Figure, tuple[Axes, Axes]]:
     """Median and std-dev vs. range, with the detected usable-range
     boundary marked on both panels."""
-    binned = stage3.data.get("binned")
+    binned = stage3.binned
     fig, (ax_med, ax_std) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
 
     if binned is None or binned.empty:
@@ -510,13 +513,13 @@ def plot_stage3_usable_range(stage3: StageResult) -> tuple[Figure, tuple[Axes, A
     ax_std.set_ylabel("Std dev")
     ax_std.set_xlabel("Range (m)")
 
-    usable_range_m = stage3.metrics.get("usable_range_m")
+    usable_range_m = stage3.usable_range_m
     if usable_range_m is not None:
         for a in (ax_med, ax_std):
             a.axvline(usable_range_m, color="red", linestyle="--", linewidth=1, label=f"usable range = {usable_range_m:.1f}m")
             a.legend(fontsize=8)
 
-    noise_floor = stage3.metrics.get("noise_floor")
+    noise_floor = stage3.noise_floor
     if noise_floor is not None:
         ax_med.axhline(noise_floor, color="gray", linestyle=":", linewidth=1)
 
@@ -529,7 +532,7 @@ def plot_stage3_usable_range(stage3: StageResult) -> tuple[Figure, tuple[Axes, A
 # ============================================================
 
 
-def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
+def plot_stage4_decay_fit(stage4: RangeDecayResult) -> tuple[Figure, Axes]:
     """Observed loss-vs-range curve with all four candidate models overlaid.
 
     Thin wrapper around `viz.tvg_diagnostics.plot_candidate_fit`, called
@@ -538,7 +541,7 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
     """
     from sidescanpy.viz.tvg_diagnostics import plot_candidate_fit
 
-    fit_result = stage4.data.get("fit_result")
+    fit_result = stage4.fit
     fig, ax = plt.subplots(figsize=(9, 6))
     if fit_result is None:
         ax.set_title("No fit available")
@@ -553,13 +556,13 @@ def plot_stage4_decay_fit(stage4: StageResult) -> tuple[Figure, Axes]:
             ax=ax,
             color=colors.get(candidate.name),
             show_observed=(i == 0),
-            title=f"Decay model fit (best: {stage4.metrics.get('best_candidate')})",
+            title=f"Decay model fit (best: {stage4.best_candidate})",
         )
     return fig, ax
 
 
 def apply_stage4_fit_window_limits(
-    ax: Axes, stage4: StageResult, *, x_pad_fraction: float = 0.12,
+    ax: Axes, stage4: RangeDecayResult, *, x_pad_fraction: float = 0.12,
     y_pad_fraction: float = 0.25, y_pad_min_db: float = 1.0, x_pad_min_m: float = 1.0,
 ) -> None:
     """Sets robust y-limits on `ax` (a `plot_candidate_fit`/
@@ -568,7 +571,7 @@ def apply_stage4_fit_window_limits(
     padded) rather than matplotlib's default full-*data* autoscale.
 
     **y-limits** are computed from the fit window's own observed values
-    only (`stage4.metrics["r_fit_min_m"]` to `["r_fit_max_m"]`), not the
+    only (`stage4.r_fit_min_m` to `stage4.r_fit_max_m`), not the
     full unfiltered curve, so a near-boundary outlier bin (the
     first-bottom-return artifact the fit window exists to route around)
     can't stretch the axis and compress the actual fit curves into an
@@ -577,7 +580,7 @@ def apply_stage4_fit_window_limits(
     **x-limits deliberately do NOT crop to the fit window.** An earlier
     version of this function did (matching that script's own tight
     zoom), which — combined with the
-    `r_ref_m=None` auto-pick behavior (see `stage4_decay`'s
+    `r_ref_m=None` auto-pick behavior (see `fit_range_decay`'s
     `r_ref_m` docstring) — turned a misconfigured reference into "not
     showing the full plot, just the region around the fit" instead of
     a visible, debuggable "the reference is outside the highlighted
@@ -594,11 +597,11 @@ def apply_stage4_fit_window_limits(
     fit result, no recorded fit window, or no observed points fall
     inside it.
     """
-    fit_result = stage4.data.get("fit_result")
+    fit_result = stage4.fit
     if fit_result is None:
         return
-    r_fit_min_m = stage4.metrics.get("r_fit_min_m")
-    r_fit_max_m = stage4.metrics.get("r_fit_max_m")
+    r_fit_min_m = stage4.r_fit_min_m
+    r_fit_max_m = stage4.r_fit_max_m
     if r_fit_min_m is None or r_fit_max_m is None:
         return
 
@@ -624,7 +627,7 @@ def apply_stage4_fit_window_limits(
 
 
 def plot_stage4_residuals(
-    stage4: StageResult, *, use_fixed_scale: bool = True, ax: Axes | None = None, relative_x: bool = True,
+    stage4: RangeDecayResult, *, use_fixed_scale: bool = True, ax: Axes | None = None, relative_x: bool = True,
 ) -> tuple[Figure, Axes]:
     """Residual (model - observed) vs. range for each candidate's fit
     window, using the same model-curve construction as
@@ -633,7 +636,7 @@ def plot_stage4_residuals(
 
     `use_fixed_scale=True` (default, 2026-08-25 fix): draws the fixed-
     scale (1.0) residual and labels it with `fixed_scale_rmse_db` — the
-    exact numbers `fit_hardware_tvg_curve()`/`stage4_decay` actually rank
+    exact numbers `fit_tvg_curve()`/`fit_range_decay` actually rank
     candidates by. **This function had silently kept using the old
     free-fit-scaled residual/RMSE after `plot_candidate_fit` (the
     decay_fit.png chart) was fixed to fixed-scale ranking on 2026-08-24
@@ -648,7 +651,7 @@ def plot_stage4_residuals(
     evaluation at `r_ref_m`, which `plot_candidate_fit`'s own *model
     line* uses for a different reason — a denser display domain) is
     deliberately kept here: it's not a discretization shortcut, it's the
-    literal computation `fit_hardware_tvg_curve()` itself uses to
+    literal computation `fit_tvg_curve()` itself uses to
     produce `fixed_scale_rmse_db` — this plot's whole purpose is to show
     the actual per-bin residuals that produced that number, so it must
     match that function's math exactly, not a more "precise" variant of
@@ -667,7 +670,7 @@ def plot_stage4_residuals(
     stacking this under `plot_candidate_fit` on a shared x-axis, or the
     two panels' x=0 won't mean the same thing.
     """
-    fit_result = stage4.data.get("fit_result")
+    fit_result = stage4.fit
     fig, ax = _new_fig_ax(ax, figsize=(9, 5))
     if fit_result is None:
         ax.set_title("No fit available")
@@ -727,7 +730,7 @@ def plot_stage5_distribution(
 def plot_segments_overview(ds: xr.Dataset, segments) -> tuple[Figure, tuple[Axes, Axes]]:
     """Altitude + pitch vs. ping index, with each segment's boundary
     marked and excluded spans shaded -- the "bare minimum visual aid"
-    for reviewing `analysis.segmentation.find_segments()`'s output
+    for reviewing `processing.segments.find_segments()`'s output
     before trusting it (not a full diagnostic report; this deliberately
     stays two panels).
     """

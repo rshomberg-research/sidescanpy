@@ -2,7 +2,7 @@
 Investigation pipeline orchestration: `run_investigation()`.
 
 Given a path to a sidescan dataset (`.ss.h5`, `.jsf`, or `.sdf`), runs
-the five investigation stages (`sidescanpy.analysis.investigation`) in
+the five investigation stages (`sidescanpy.analysis`) in
 order, saves each stage's standardized plots
 (`sidescanpy.viz.investigation`) and a JSON metrics export, and returns
 a single `InvestigationResult` object. Meant to be reused directly by
@@ -23,20 +23,15 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 
-from sidescanpy.analysis.investigation import (
-    StageResult,
-    blank_nadir_noise,
-    stage1_5_outlier_comparison,
-    stage1_characterize,
-    stage2_5_beam_geometry,
-    stage2_nadir,
-    stage3_usable_range,
-    stage4_decay,
-    stage5_units,
-    uniform_exclusion_boundary,
-)
+from sidescanpy.analysis.beam import estimate_beam_geometry
+from sidescanpy.analysis.characterize import characterize_values, infer_units
+from sidescanpy.analysis.nadir import analyze_nadir
+from sidescanpy.analysis.outliers import compare_outlier_rejection
+from sidescanpy.analysis.tvg import fit_range_decay
+from sidescanpy.analysis.usable_range import estimate_usable_range
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
+from sidescanpy.processing.bottom import blank_nadir_noise, uniform_exclusion_boundary
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.inversion import LEGACY_RAW_VAR, UNCORRECTED_VAR, invert
 from sidescanpy.viz.investigation import (
@@ -69,7 +64,7 @@ class InvestigationResult:
     n_pings: int
     value_var: str
     params: dict[str, Any]
-    stages: dict[str, StageResult] = field(default_factory=dict)
+    stages: dict[str, Any] = field(default_factory=dict)
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
@@ -79,7 +74,7 @@ class InvestigationResult:
             "n_pings": self.n_pings,
             "value_var": self.value_var,
             "params": self.params,
-            "stages": {k: v.to_json_dict() for k, v in self.stages.items()},
+            "stages": {k: v.to_dict() for k, v in self.stages.items()},
         }
 
     def save_json(self, path: Path | str) -> None:
@@ -93,15 +88,15 @@ class InvestigationResult:
         return {
             "source": self.source_path,
             "freq_key": self.freq_key,
-            "dtype": s1.metrics.get("dtype") if s1 else None,
-            "nadir": s2.classification if s2 else None,
-            "beam_geometry": s2_5.classification if s2_5 else None,
-            "near_angle_deg": s2_5.metrics.get("near_angle_deg_median") if s2_5 else None,
-            "beam_width_deg": s2_5.metrics.get("beam_width_deg") if s2_5 else None,
-            "usable_range_m": s3.metrics.get("usable_range_m") if s3 else None,
-            "best_fit_model": s4.metrics.get("best_candidate") if s4 else None,
-            "tvg_status": s4.classification if s4 else None,
-            "units": s5.classification if s5 else None,
+            "dtype": s1.dtype if s1 else None,
+            "nadir": s2.nadir_type if s2 else None,
+            "beam_geometry": s2_5.confidence if s2_5 else None,
+            "near_angle_deg": s2_5.near_angle_deg_median if s2_5 else None,
+            "beam_width_deg": s2_5.beam_width_deg if s2_5 else None,
+            "usable_range_m": s3.usable_range_m if s3 else None,
+            "best_fit_model": s4.best_candidate if s4 else None,
+            "tvg_status": s4.tvg_status if s4 else None,
+            "units": s5.units if s5 else None,
         }
 
 
@@ -180,13 +175,13 @@ def run_investigation(
         an oversight: the sidescan schema hard-requires the `channel`
         dim be exactly size 2 everywhere in this pipeline
         (`SideScanAccessor.validate()`, called by e.g.
-        `compute_geometric_ranges`), and `stage2_5_beam_geometry`
+        `compute_geometric_ranges`), and `estimate_beam_geometry`
         specifically hardcodes a `(0, "port"), (1, "starboard")`
         iteration regardless of `validate()` — those stages already
         report both channels' own geometry independently in their own
-        metrics (see `stage2_5_beam_geometry`'s `near_ray`/`far_ray`),
+        metrics (see `estimate_beam_geometry`'s `near_ray`/`far_ray`),
         so narrowing `ds` itself for them would break real invariants
-        for no benefit. Only Stage 3/4's `mean_backscatter_vs_range`-
+        for no benefit. Only Stage 3/4's `backscatter_vs_range`-
         based binning actually pools across `channel` via a flat
         `.ravel()`, which is the specific thing this parameter exists to
         fix. Call `run_investigation()` once per side (typically both)
@@ -212,16 +207,16 @@ def run_investigation(
         automatically when a short ``usable_range_m`` would otherwise
         leave too few bins in the decay-fit window to reliably
         distinguish the 4 candidate models (see
-        `analysis.investigation.stage4_decay`'s own ``min_bins``
+        `analysis.tvg.fit_range_decay`'s own ``min_bins``
         docstring for the real-data case — a survey flown very close to
         the bottom, ~15m usable range, collapsing to 2-3 bins).
         ``stage4_db_reference_percentile`` sets the self-referenced dB
         scale Stage 4 converts linear amplitude to (see
-        `analysis.investigation.stage4_decay`'s docstring) — provably
+        `analysis.tvg.fit_range_decay`'s docstring) — provably
         does not affect Stage 4's classification, only what an
         intermediate absolute dB number would mean if reported
         directly.
-    Before any stage runs, `analysis.investigation.blank_nadir_noise()`
+    Before any stage runs, `processing.bottom.blank_nadir_noise()`
     always applies to `backscatter_intensity` (a
     real, no-toggle preprocessing step, like `invert`/
     `compute_geometric_ranges` above — not a debatable option). Zeros
@@ -252,21 +247,21 @@ def run_investigation(
         is known to always carry at least N samples of nadir junk
         regardless of per-ping detection.
     strong_return_min_sample_buffer, strong_return_peak_percentile
-        Passed to `analysis.investigation.stage2_nadir` (which passes
+        Passed to `analysis.nadir.analyze_nadir` (which passes
         them to `detect_first_bottom_return` as `min_sample_buffer`/
         `peak_percentile`) — see those functions' docstrings. Both
         default to no-ops (0.0 / 100.0); like `nadir_margin_samples`
         above, only found necessary so far on one real survey, not
         on any JSF/SDF survey checked.
     min_first_bottom_return_sample : float, optional
-        Passed to `analysis.investigation.stage2_nadir` — an explicit
+        Passed to `analysis.nadir.analyze_nadir` — an explicit
         floor on `first_bottom_return_sample`, independent of the
         altitude-derived one, combined via element-wise max. `None`
         (default) preserves exact prior behavior. See that function's
         docstring for when the altitude floor alone isn't enough.
     exclude_nadir_gap : bool, default True
         Stage 2's `first_bottom_return_sample` (an amplitude-based
-        detector — see `analysis.investigation.stage2_nadir`'s
+        detector — see `analysis.nadir.analyze_nadir`'s
         docstring) is used as an early masking step before Stage 3/4's
         binning, at **two different granularities for two different
         reasons** (real-data checking drove both
@@ -282,7 +277,7 @@ def run_investigation(
           max-search across bins, so per-ping precision here has no
           downside.
         - **Stage 4** gets a single conservative value from
-          `analysis.investigation.uniform_exclusion_boundary` instead.
+          `processing.bottom.uniform_exclusion_boundary` instead.
           Its reference-range auto-selection *does* do a max-mean
           search across bins, which per-ping masking exposed to a real
           altitude-correlated bias (shallower-altitude pings'
@@ -302,7 +297,7 @@ def run_investigation(
         only, both stages).
     reject_outliers : bool, default False
         If True, Stage 3's noise-floor estimate and Stage 4's decay fit
-        both run `analysis.investigation.reject_range_outliers` first —
+        both run `processing.outliers.reject_range_outliers` first —
         aggressive, per-range-bin MAD-based rejection meant to strip
         point-target returns (boulders, debris, wrecks) and complex
         terrain so the noise floor / decay fit reflect a flat,
@@ -315,13 +310,13 @@ def run_investigation(
         Passed through to `reject_range_outliers` when
         `reject_outliers=True`; ignored otherwise.
     stage4_fit_value_col : {"mean", "median"}, default "mean"
-        Passed through to `analysis.investigation.stage4_decay` — pass
+        Passed through to `analysis.tvg.fit_range_decay` — pass
         `"median"` alongside `reject_outliers=True`, see that function's
         docstring for why (real-data check found the `"mean"` pairing
         makes the fit measurably worse, not better).
     stage4_r_ref_m, stage4_r_fit_min_m, stage4_r_fit_min_auto_margin_m,
     stage4_r_ref_search_fraction, stage4_r_ref_window_fraction
-        Passed straight through to `analysis.investigation.stage4_decay`
+        Passed straight through to `analysis.tvg.fit_range_decay`
         as `r_ref_m`/`r_fit_min_m`/`r_fit_min_auto_margin_m`/
         `r_ref_search_fraction`/`r_ref_window_fraction` — **that
         function's own docstrings for both `r_ref_m` and `r_fit_min_m`
@@ -345,7 +340,7 @@ def run_investigation(
         them — safe to use as blanket defaults across missions/sections
         that won't all have a determinable `usable_range_m`.
     stage4_exclude_first_n_bins : int, default 0
-        Passed straight through to `stage4_decay` — drops this many
+        Passed straight through to `fit_range_decay` — drops this many
         *bins* (not samples) from the near end of the range-binned decay
         curve before `r_ref_m` auto-selection or fitting see them, for a
         bright leading-edge-specular artifact right at the first-bottom-
@@ -380,9 +375,9 @@ def run_investigation(
     # schema hard-requires the channel dim be exactly size 2 everywhere
     # in this pipeline (SideScanAccessor.validate(), a real, deliberate
     # invariant: sidescan sonar always has port+starboard), and several
-    # stage functions (e.g. stage2_5_beam_geometry) hardcode a 2-channel
+    # stage functions (e.g. estimate_beam_geometry) hardcode a 2-channel
     # iteration regardless of validate(). `ds` keeps its full shape
-    # through every stage; only stage3_usable_range/stage4_decay (the
+    # through every stage; only estimate_usable_range/fit_range_decay (the
     # two whose own binning pools samples via `.ravel()`, the actual
     # thing `channel` exists to restrict) receive it directly below and
     # mask internally instead of slicing.
@@ -414,12 +409,12 @@ def run_investigation(
         "stage4_exclude_first_n_bins": stage4_exclude_first_n_bins,
     }
 
-    stage1 = stage1_characterize(ds, value_var=value_var)
-    stage1_5 = stage1_5_outlier_comparison(
+    stage1 = characterize_values(ds, value_var=value_var)
+    stage1_5 = compare_outlier_rejection(
         ds, value_var=value_var, bin_width_m=stage3_bin_width_m,
         outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
     )
-    stage2 = stage2_nadir(
+    stage2 = analyze_nadir(
         ds, value_var=value_var, nadir_n_samples=nadir_n_samples,
         strong_return_min_sample_buffer=strong_return_min_sample_buffer,
         strong_return_peak_percentile=strong_return_peak_percentile,
@@ -428,7 +423,7 @@ def run_investigation(
     exclude_before_sample_stage3 = None
     exclude_before_sample_stage4 = None
     if exclude_nadir_gap:
-        per_ping_boundary = stage2.data.get("first_bottom_return_sample")
+        per_ping_boundary = stage2.first_bottom_return_sample
         if per_ping_boundary is not None:
             # Deliberately different granularity per stage -- see
             # run_investigation's docstring and
@@ -453,7 +448,7 @@ def run_investigation(
             # to) -- see uniform_exclusion_boundary()'s docstring.
             exclude_before_sample_stage3 = per_ping_boundary
             exclude_before_sample_stage4 = uniform_exclusion_boundary(per_ping_boundary)
-    stage3 = stage3_usable_range(
+    stage3 = estimate_usable_range(
         ds, value_var=value_var, bin_width_m=stage3_bin_width_m, snr_threshold=snr_threshold,
         exclude_before_sample=exclude_before_sample_stage3,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
@@ -462,11 +457,11 @@ def run_investigation(
     # Stage 2.5 runs after Stage 3, not before -- its far edge is
     # triangulated from stage3's usable_range_m, so it needs that
     # result already computed.
-    stage2_5 = stage2_5_beam_geometry(ds, stage2, stage3, value_var=value_var)
-    stage4 = stage4_decay(
+    stage2_5 = estimate_beam_geometry(ds, stage2.first_bottom_return_sample, stage3.usable_range_m)
+    stage4 = fit_range_decay(
         ds, value_var=value_var, bin_width_m=stage4_bin_width_m, min_bins=stage4_min_bins,
         db_reference_percentile=stage4_db_reference_percentile,
-        usable_range_m=stage3.metrics.get("usable_range_m"),
+        usable_range_m=stage3.usable_range_m,
         exclude_before_sample=exclude_before_sample_stage4,
         reject_outliers=reject_outliers, outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
         fit_value_col=stage4_fit_value_col,
@@ -477,7 +472,7 @@ def run_investigation(
         exclude_first_n_bins=stage4_exclude_first_n_bins,
         channel=channel,
     )
-    stage5 = stage5_units(stage1, stage4)
+    stage5 = infer_units(stage1, stage4)
 
     result = InvestigationResult(
         source_path=str(dataset_path),
@@ -522,7 +517,7 @@ def _save_report_artifacts(ds, result: InvestigationResult, output_dir: Path) ->
     s2_dir = output_dir / "stage2"
     s2_dir.mkdir(exist_ok=True)
     stage2_result = result.stages["stage2"]
-    nadir_n = stage2_result.metrics["nadir_n_samples"]
+    nadir_n = stage2_result.nadir_n_samples
     fig, _ = plot_stage2_cross_track_profile(ds, value_var)
     _save_fig(fig, s2_dir / "cross_track_profile.png")
     fig, _ = plot_stage2_nadir_zoom(ds, value_var, stage2=stage2_result, nadir_n_samples=nadir_n)

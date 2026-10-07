@@ -1,9 +1,9 @@
 """
-Plotting for `sidescanpy.analysis.nav_attitude` -- one figure covering
+Plotting for `sidescanpy.analysis.navigation` -- one figure covering
 heading, pitch/roll, vertical geometry (altitude/depth/heave), and the
 ping-colored position track for a ping range. Consumes
-`nav_attitude.nav_attitude_summary`'s `StageResult` for the heading
-classification/out-of-range marking, same "pure presentation over
+`navigation.summarize_navigation`'s `NavigationSummary` for the heading
+convention/out-of-range marking, same "pure presentation over
 pre-computed analysis output" split as `viz/investigation.py`.
 
 2026 rshomberg@uri.edu
@@ -17,7 +17,7 @@ import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from sidescanpy.analysis.investigation import StageResult
+from sidescanpy.analysis.navigation import NavigationSummary
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def plot_nav_attitude(
     ds: xr.Dataset,
     *,
     ping_offset: int = 0,
-    result: StageResult | None = None,
+    result: NavigationSummary | None = None,
 ) -> tuple[Figure, tuple[Axes, Axes, Axes, Axes]]:
     """Heading (with the [0,360)/[-180,180) convention bands and any
     out-of-both-range points marked), pitch+roll, altitude+depth+heave,
@@ -56,7 +56,7 @@ def plot_nav_attitude(
         for y in (0, 360, -180, 180):
             ax_heading.axhline(y, color="0.75", lw=0.6, ls=":")
         ax_heading.plot(ping_axis, heading, color="0.2", lw=0.8)
-        if result is not None and result.metrics.get("heading_frac_out_of_range", 0.0) > 0.0:
+        if result is not None and (result.heading_frac_out_of_range or 0.0) > 0.0:
             out_mask = ~(((heading >= 0.0) & (heading < 360.0)) | ((heading >= -180.0) & (heading < 180.0)))
             ax_heading.scatter(
                 ping_axis[out_mask], heading[out_mask], color="tab:red", s=10, zorder=5,
@@ -64,8 +64,8 @@ def plot_nav_attitude(
             )
             ax_heading.legend(loc="upper right", fontsize=8)
         title = "heading_deg"
-        if result is not None and result.classification:
-            title += f"  (classification: {result.classification})"
+        if result is not None and result.heading_convention:
+            title += f"  (classification: {result.heading_convention})"
         ax_heading.set_title(title)
         ax_heading.set_ylabel("degrees")
 

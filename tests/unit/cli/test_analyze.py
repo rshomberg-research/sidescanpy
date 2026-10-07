@@ -290,8 +290,7 @@ class TestRunNadir:
         pngs = list((tmp_path / "out").glob("*_nadir_zoom.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage2_nadir"
-        assert metrics["classification"] is not None
+        assert metrics["nadir_type"] is not None
 
     def test_verbose_diagnostics_also_writes_waterfall(self, tmp_path):
         path = tmp_path / "a.ss.h5"
@@ -331,7 +330,7 @@ class TestRunBeamGeometry:
         pngs = list((tmp_path / "out").glob("*_beam_geometry.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage2_5_beam_geometry"
+        assert "near_angle_deg_median" in metrics
 
 
 class TestRunUsableRange:
@@ -355,8 +354,7 @@ class TestRunUsableRange:
         pngs = list((tmp_path / "out").glob("*_usable_range.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage3_usable_range"
-        assert "usable_range_m" in metrics["metrics"]
+        assert "usable_range_m" in metrics
 
 
 class TestRunUnits:
@@ -378,8 +376,7 @@ class TestRunUnits:
         pngs = list((tmp_path / "out").glob("*_units.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage5_units"
-        assert metrics["classification"] is not None
+        assert metrics["units"] is not None
 
 
 class TestRunRecommendConfig:
@@ -490,8 +487,8 @@ class TestDirectoryInput:
 
         single_metrics = json.loads((tmp_path / "out_single" / "metrics.json").read_text())
         dir_metrics = json.loads((tmp_path / "out_dir" / "metrics.json").read_text())
-        assert single_metrics["classification"] == dir_metrics["classification"]
-        assert single_metrics["metrics"]["nadir_mean"] == pytest.approx(dir_metrics["metrics"]["nadir_mean"])
+        assert single_metrics["nadir_type"] == dir_metrics["nadir_type"]
+        assert single_metrics["nadir_mean"] == pytest.approx(dir_metrics["nadir_mean"])
 
     def test_tvg_fit_directory_input_succeeds(self, tmp_path):
         survey = _decay_survey(n_pings=10, n_samples=800)

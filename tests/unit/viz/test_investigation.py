@@ -6,8 +6,6 @@ sign bug (both port and starboard rays should draw, not just one
 duplicated) and the nadir-zoom water-column shading merge. Not
 exhaustive smoke coverage of every plot function -- this module had no
 test file at all before this pass.
-
-2026 rshomberg@uri.edu
 """
 
 import matplotlib.pyplot as plt
@@ -16,12 +14,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from sidescanpy.analysis.investigation import (
-    StageResult,
-    stage2_5_beam_geometry,
-    stage2_nadir,
-    stage4_decay,
-)
+from sidescanpy.analysis.beam import estimate_beam_geometry
+from sidescanpy.analysis.nadir import analyze_nadir
+from sidescanpy.analysis.tvg import RangeDecayResult, fit_range_decay
+from sidescanpy.analysis.usable_range import UsableRangeResult
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 from sidescanpy.viz.investigation import (
@@ -35,7 +31,7 @@ from sidescanpy.viz.investigation import (
 
 def _make_raw_dataset(*, n_pings: int = 20, n_samples: int = 200, sample_rate_hz: float = 1000.0) -> xr.Dataset:
     """Minimal valid raw sidescan dataset -- mirrors
-    test_investigation.py's (analysis) own helper of the same name."""
+    tests.unit.synthetic.make_raw_dataset."""
     backscatter = np.ones((n_pings, 2, n_samples), dtype=np.float32)
     coords = {
         "ping": np.arange(n_pings),
@@ -79,9 +75,9 @@ class TestPlotStage2_5BeamGeometry:
         negative x (port) and a positive x (starboard)."""
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
-        stage3 = StageResult(stage="stage3_usable_range", metrics={"usable_range_m": 25.0})
-        stage2_5 = stage2_5_beam_geometry(ds, stage2, stage3)
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
+        stage3 = UsableRangeResult(usable_range_m=25.0)
+        stage2_5 = estimate_beam_geometry(ds, stage2.first_bottom_return_sample, stage3.usable_range_m)
 
         fig, (ax_geo, ax_ping) = plot_stage2_5_beam_geometry(ds, stage2_5)
         try:
@@ -97,9 +93,9 @@ class TestPlotStage2_5BeamGeometry:
         both wedges on the same side or invert one entirely."""
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
-        stage3 = StageResult(stage="stage3_usable_range", metrics={"usable_range_m": 25.0})
-        stage2_5 = stage2_5_beam_geometry(ds, stage2, stage3)
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
+        stage3 = UsableRangeResult(usable_range_m=25.0)
+        stage2_5 = estimate_beam_geometry(ds, stage2.first_bottom_return_sample, stage3.usable_range_m)
 
         fig, (ax_geo, ax_ping) = plot_stage2_5_beam_geometry(ds, stage2_5)
         try:
@@ -114,9 +110,9 @@ class TestPlotStage2_5BeamGeometry:
     def test_no_stage_number_in_title(self):
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
-        stage3 = StageResult(stage="stage3_usable_range", metrics={"usable_range_m": 25.0})
-        stage2_5 = stage2_5_beam_geometry(ds, stage2, stage3)
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
+        stage3 = UsableRangeResult(usable_range_m=25.0)
+        stage2_5 = estimate_beam_geometry(ds, stage2.first_bottom_return_sample, stage3.usable_range_m)
 
         fig, (ax_geo, ax_ping) = plot_stage2_5_beam_geometry(ds, stage2_5)
         try:
@@ -135,7 +131,7 @@ class TestPlotStage2Waterfall:
     def test_default_ping_offset_is_zero_based_unchanged(self):
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
 
         fig, ax = plot_stage2_waterfall(ds, stage2=stage2)
         try:
@@ -147,7 +143,7 @@ class TestPlotStage2Waterfall:
     def test_ping_offset_shifts_both_image_and_traced_boundary(self):
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
 
         fig, ax = plot_stage2_waterfall(ds, stage2=stage2, ping_offset=1000)
         try:
@@ -167,8 +163,8 @@ class TestPlotStage2NadirZoom:
     def test_water_column_span_covers_both_sides_to_first_bottom_return(self):
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
-        boundary = stage2.data.get("first_bottom_return_sample")
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
+        boundary = stage2.first_bottom_return_sample
         assert boundary is not None
 
         fig, ax = plot_stage2_nadir_zoom(ds, stage2=stage2, nadir_n_samples=5)
@@ -186,7 +182,7 @@ class TestPlotStage2NadirZoom:
     def test_altitude_and_bottom_return_lines_still_drawn(self):
         ds = _make_raw_dataset(n_pings=5, n_samples=100)
         ds = compute_geometric_ranges(ds)
-        stage2 = stage2_nadir(ds, nadir_n_samples=5)
+        stage2 = analyze_nadir(ds, nadir_n_samples=5)
 
         fig, ax = plot_stage2_nadir_zoom(ds, stage2=stage2, nadir_n_samples=5)
         try:
@@ -251,7 +247,7 @@ class TestPlotStage4Residuals:
     is presumably how the drift went unnoticed."""
 
     def test_no_fit_result_shows_placeholder_title_not_crash(self):
-        stage4 = StageResult(stage="stage4_decay", metrics={}, data={})
+        stage4 = RangeDecayResult()
         fig, ax = plot_stage4_residuals(stage4)
         try:
             assert ax.get_title() == "No fit available"
@@ -266,8 +262,8 @@ class TestPlotStage4Residuals:
         by this fixture's own construction, so this isn't a coincidental
         pass."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
-        spreading = next(c for c in stage4.data["fit_result"].candidates if c.name == "spreading_only")
+        stage4 = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
+        spreading = next(c for c in stage4.fit.candidates if c.name == "spreading_only")
         assert abs(spreading.scale - 1.6) < 0.3  # sanity: free fit actually found the injected scale
         assert spreading.fixed_scale_rmse_db > spreading.rmse_db + 1.0  # and the two RMSEs meaningfully differ
 
@@ -285,7 +281,7 @@ class TestPlotStage4Residuals:
         too, confirming `model_loss` is really computed at scale=1.0 by
         default rather than `candidate.scale`."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
+        stage4 = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
 
         fig_fixed, ax_fixed = plot_stage4_residuals(stage4, use_fixed_scale=True)
         fig_free, ax_free = plot_stage4_residuals(stage4, use_fixed_scale=False)
@@ -310,8 +306,8 @@ class TestPlotStage4Residuals:
         plot_candidate_fit's current convention -- needed for a genuinely
         aligned shared x-axis when the two are stacked in one figure."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
-        spreading = next(c for c in stage4.data["fit_result"].candidates if c.name == "spreading_only")
+        stage4 = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
+        spreading = next(c for c in stage4.fit.candidates if c.name == "spreading_only")
 
         fig_rel, ax_rel = plot_stage4_residuals(stage4, relative_x=True)
         fig_abs, ax_abs = plot_stage4_residuals(stage4, relative_x=False)
@@ -337,7 +333,7 @@ class TestApplyStage4FitWindowLimits:
     observations" rather than the real problem."""
 
     def test_no_fit_result_leaves_limits_untouched(self):
-        stage4 = StageResult(stage="stage4_decay", metrics={}, data={})
+        stage4 = RangeDecayResult()
         fig, ax = plt.subplots()
         ax.plot([0, 1], [0, 1])
         original_xlim, original_ylim = ax.get_xlim(), ax.get_ylim()
@@ -355,11 +351,11 @@ class TestApplyStage4FitWindowLimits:
         rather than a visibly wrong reference. See this function's own
         docstring for the real report that changed this."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(
+        stage4 = fit_range_decay(
             ds, range_var="ground_range_m", bin_width_m=2.0, usable_range_m=40.0,
             r_ref_m="mid_swath", r_fit_min_m="auto",
         )
-        r_fit_max_m = stage4.metrics["r_fit_max_m"]
+        r_fit_max_m = stage4.r_fit_max_m
         fig, ax = plt.subplots()
         try:
             apply_stage4_fit_window_limits(ax, stage4)
@@ -375,12 +371,11 @@ class TestApplyStage4FitWindowLimits:
         by ~0 and hand matplotlib set_xlim(x, x) -- accepted, but with a
         UserWarning ('identical low and high xlims'). x_pad_min_m must
         keep the zoom well-defined instead of relying on that fallback."""
-        stage4 = StageResult(
-            stage="stage4_decay",
-            metrics={"r_fit_min_m": 20.0, "r_fit_max_m": 20.0},
-            data={"fit_result": type("_F", (), {
+        stage4 = RangeDecayResult(
+            r_fit_min_m=20.0, r_fit_max_m=20.0,
+            fit=type("_F", (), {
                 "observed_range_m": np.array([20.0]), "observed_loss_db": np.array([1.0]),
-            })()},
+            })(),
         )
         fig, ax = plt.subplots()
         try:
@@ -396,11 +391,11 @@ class TestApplyStage4FitWindowLimits:
         fit window (the first-bottom-return artifact) must not stretch
         the y-axis and compress the real fit curves."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(
+        stage4 = fit_range_decay(
             ds, range_var="ground_range_m", bin_width_m=2.0, usable_range_m=40.0,
             r_ref_m="mid_swath", r_fit_min_m="auto",
         )
-        fit_result = stage4.data["fit_result"]
+        fit_result = stage4.fit
         # Inject an extreme out-of-window observed value directly into
         # the already-computed fit result -- isolates this function's
         # own windowing logic from stage4_decay's, which is tested
@@ -418,7 +413,7 @@ class TestApplyStage4FitWindowLimits:
         """For combining with plot_candidate_fit in one stacked figure
         (fit on top, residuals below, sharing an x-axis)."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        stage4 = stage4_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
+        stage4 = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
 
         fig, (ax_top, ax_bottom) = plt.subplots(2, 1)
         try:

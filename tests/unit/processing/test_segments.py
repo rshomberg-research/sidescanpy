@@ -1,16 +1,14 @@
 """
-Unit tests for sidescanpy.analysis.segmentation.
+Unit tests for sidescanpy.processing.segments.
 
 Synthetic fixtures with deliberately injected gaps/setting-changes/
-garbage-runs/instability, per this project's TDD convention -- not real
-survey data.
-
-2026 rshomberg@uri.edu
+garbage-runs/instability.
 """
 
 import numpy as np
 
-from sidescanpy.analysis.segmentation import (
+from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.processing.segments import (
     Segment,
     detect_gaps,
     detect_garbage_runs,
@@ -18,11 +16,8 @@ from sidescanpy.analysis.segmentation import (
     detect_unstable_spans,
     find_segments,
     score_stability,
-    write_segments,
-    write_segments_report,
+    split_by_segments,
 )
-from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.hdf5 import read_survey
 from tests.conftest import make_minimal_sidescan_dataset
 
 
@@ -233,52 +228,33 @@ class TestFindSegments:
         assert any(s.start >= 1100 and s.stop >= 1900 for s in clean)
 
 
-class TestWriteSegments:
+class TestSplitBySegments:
     def _survey(self, n_pings=200):
         survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="survey_a")
         survey.add_frequency("hz_1495000", _uniform_track_dataset(n_pings=n_pings))
+        survey.add_frequency("hz_547500", _uniform_track_dataset(n_pings=n_pings))
         return survey
 
-    def test_writes_only_clean_segments(self, tmp_path):
-        survey = self._survey()
+    def test_only_clean_segments_returned(self):
         segments = [
             Segment(label="section1", start=0, stop=80, status="clean", reasons=["clean"]),
             Segment(label="section2", start=80, stop=120, status="excluded", reasons=["garbage_run"]),
             Segment(label="section3", start=120, stop=200, status="clean", reasons=["clean"]),
         ]
-        written = write_segments(survey, segments, tmp_path / "sections")
-        names = {p.name for p in written}
-        assert names == {"section1.ss.h5", "section3.ss.h5"}
-        assert not (tmp_path / "sections" / "section2.ss.h5").exists()
+        parts = split_by_segments(self._survey(), segments)
+        assert list(parts) == ["section1", "section3"]
+        assert parts["section1"].survey_name == "survey_a_section1"
 
-    def test_written_segment_has_correct_ping_range(self, tmp_path):
-        survey = self._survey()
+    def test_every_frequency_sliced_to_segment(self):
         segments = [Segment(label="section1", start=50, stop=150, status="clean", reasons=["clean"])]
-        [out_path] = write_segments(survey, segments, tmp_path / "sections")
-        reread = read_survey(out_path)
-        assert reread.get_frequency("hz_1495000").dataset.sizes["ping"] == 100
+        sub = split_by_segments(self._survey(), segments)["section1"]
+        for freq_key in ("hz_1495000", "hz_547500"):
+            assert sub.get_frequency(freq_key).dataset.sizes["ping"] == 100
 
-    def test_every_frequency_channel_sliced(self, tmp_path):
-        survey = self._survey()
-        survey.add_frequency("hz_547500", _uniform_track_dataset(n_pings=200))
-        segments = [Segment(label="section1", start=0, stop=40, status="clean", reasons=["clean"])]
-        [out_path] = write_segments(survey, segments, tmp_path / "sections")
-        reread = read_survey(out_path)
-        assert reread.get_frequency("hz_1495000").dataset.sizes["ping"] == 40
-        assert reread.get_frequency("hz_547500").dataset.sizes["ping"] == 40
-
-
-class TestWriteSegmentsReport:
-    def test_report_round_trips(self, tmp_path):
+    def test_to_dict_is_json_serializable(self):
         import json
 
-        segments = [
-            Segment(label="section1", start=0, stop=100, status="clean", reasons=["clean"]),
-            Segment(label="section2", start=100, stop=150, status="excluded", reasons=["gap", "garbage_run"]),
-        ]
-        path = tmp_path / "segments.json"
-        write_segments_report(segments, path)
-        data = json.loads(path.read_text())
-        assert len(data["segments"]) == 2
-        assert data["segments"][1]["status"] == "excluded"
-        assert data["segments"][1]["reasons"] == ["gap", "garbage_run"]
+        seg = Segment(label="section1", start=0, stop=10, status="clean", reasons=["clean"])
+        assert json.loads(json.dumps(seg.to_dict())) == {
+            "label": "section1", "start": 0, "stop": 10, "status": "clean", "reasons": ["clean"],
+        }

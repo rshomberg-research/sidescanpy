@@ -1,7 +1,7 @@
 """
 Plotting functions for TVG diagnostics.
 
-Consumes `sidescanpy.analysis.tvg_diagnostics`'s outputs. Follows
+Consumes `sidescanpy.analysis.tvg`'s outputs. Follows
 `viz/gridded.py`'s `(fig, ax)`-return convention and the project-wide
 1.0/99.0 percentile-band defaults.
 
@@ -17,7 +17,7 @@ import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from sidescanpy.analysis.tvg_diagnostics import TVGCandidateFit
+from sidescanpy.analysis.tvg import TVGCandidateFit
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,8 @@ def plot_mean_vs_range(
     Parameters
     ----------
     binned : pd.DataFrame
-        Output of `mean_backscatter_vs_range` (or
-        `mean_backscatter_vs_sample_index` — any DataFrame with a
+        Output of `backscatter_vs_range` (or
+        `backscatter_vs_sample` — any DataFrame with a
         "mean" column and matching min/max range columns).
     show_band : bool, default True
         Shade the region between `band`'s two percentile columns.
@@ -105,7 +105,7 @@ def plot_tvg_gain_curve(
     title: str | None = "TVG gain vs. range",
 ) -> tuple[Figure, Axes]:
     """
-    Plot `tvg_gain_db` vs. range from `before_after_backscatter`'s output.
+    Plot `tvg_gain_db` vs. range from `compare_before_after`'s output.
 
     Shows how much gain TVG actually added at each range — useful
     alongside `plot_mean_vs_range` to compare against the observed
@@ -196,7 +196,7 @@ def plot_multi_frequency_comparison(
     title: str | None = "Mean backscatter vs. range, by frequency",
 ) -> tuple[Figure, Axes]:
     """
-    Overlay `mean_backscatter_vs_range` curves for multiple frequencies,
+    Overlay `backscatter_vs_range` curves for multiple frequencies,
     color-coded by frequency.
 
     If multiple frequencies (different `absorption_for_frequency()`
@@ -219,8 +219,8 @@ def plot_altitude_bin_comparison(
     title: str | None = "Mean backscatter vs. range, by altitude bin",
 ) -> tuple[Figure, Axes]:
     """
-    Overlay `mean_backscatter_vs_range` curves for multiple altitude
-    bins (from `bin_pings_by_altitude`), color-coded by bin.
+    Overlay `backscatter_vs_range` curves for multiple altitude
+    bins (from `bin_by_altitude`), color-coded by bin.
 
     If the residual's shape changes with altitude (different near-nadir
     geometry), that's evidence for a missing angular correction
@@ -261,7 +261,7 @@ def plot_candidate_fit(
     model_n_points: int = 200,
 ) -> tuple[Figure, Axes]:
     """
-    Overlay one `analysis.tvg_diagnostics.fit_hardware_tvg_curve()`
+    Overlay one `analysis.tvg.fit_tvg_curve()`
     candidate's fitted model against the observed raw-loss curve it was
     fit against.
 
@@ -279,14 +279,14 @@ def plot_candidate_fit(
     observed_range_m, observed_loss_db : np.ndarray
         `TVGCandidateFitResult.observed_range_m`/`.observed_loss_db` —
         the same arrays for every candidate fit from one
-        `fit_hardware_tvg_curve()` call, so passing a different
+        `fit_tvg_curve()` call, so passing a different
         candidate on repeated calls only changes the overlaid line.
     show_observed : bool, default True
         Plot the observed curve itself. Set `False` on repeat calls
         against the same `ax` to avoid redrawing it once per candidate.
     use_fixed_scale : bool, default True
         Draw the literal, uncalibrated model (scale pinned to 1.0) --
-        matches what `stage4_decay` actually ranks candidates by
+        matches what `fit_range_decay` actually ranks candidates by
         (2026-08-24 change; see `TVGCandidateFit`'s docstring). `False`
         draws the old free-fit-scaled line instead, for diagnostic
         comparison against the fixed-scale one -- e.g. to see by how

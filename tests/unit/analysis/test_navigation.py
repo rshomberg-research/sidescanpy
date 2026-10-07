@@ -1,13 +1,11 @@
 """
-Unit tests for sidescanpy.analysis.nav_attitude.
-
-2026 rshomberg@uri.edu
+Unit tests for sidescanpy.analysis.navigation.
 """
 
 import numpy as np
 import xarray as xr
 
-from sidescanpy.analysis.nav_attitude import nav_attitude_summary
+from sidescanpy.analysis.navigation import summarize_navigation
 
 
 def _make_ds(*, n_pings: int = 10, **overrides) -> xr.Dataset:
@@ -25,33 +23,33 @@ def _make_ds(*, n_pings: int = 10, **overrides) -> xr.Dataset:
     return xr.Dataset(data_vars)
 
 
-class TestNavAttitudeSummary:
+class TestSummarizeNavigation:
     def test_reports_min_max_mean_per_var(self):
         ds = _make_ds()
-        result = nav_attitude_summary(ds)
-        assert result.metrics["altitude_m_min"] == 5.0
-        assert result.metrics["altitude_m_max"] == 5.0
-        assert result.metrics["depth_m_mean"] == 20.0
-        assert result.metrics["altitude_m_n_nan"] == 0
+        result = summarize_navigation(ds)
+        assert result.field_stats["altitude_m"].minimum == 5.0
+        assert result.field_stats["altitude_m"].maximum == 5.0
+        assert result.field_stats["depth_m"].mean == 20.0
+        assert result.field_stats["altitude_m"].n_nan == 0
 
     def test_compass_bearing_classification(self):
         ds = _make_ds(n_pings=5, heading_deg=(["ping"], np.array([0.0, 90.0, 180.0, 270.0, 359.9])))
-        result = nav_attitude_summary(ds)
-        assert result.classification == "compass_bearing"
-        assert result.metrics["heading_frac_compass_range"] == 1.0
-        assert result.metrics["heading_frac_out_of_range"] == 0.0
+        result = summarize_navigation(ds)
+        assert result.heading_convention == "compass_bearing"
+        assert result.heading_frac_compass_range == 1.0
+        assert result.heading_frac_out_of_range == 0.0
 
     def test_signed_classification(self):
         ds = _make_ds(n_pings=5, heading_deg=(["ping"], np.array([-170.0, -10.0, 0.0, 10.0, 170.0])))
-        result = nav_attitude_summary(ds)
-        assert result.classification == "signed"
-        assert result.metrics["heading_frac_signed_range"] == 1.0
+        result = summarize_navigation(ds)
+        assert result.heading_convention == "signed"
+        assert result.heading_frac_signed_range == 1.0
 
     def test_ambiguous_classification_and_note(self):
         ds = _make_ds(n_pings=3, heading_deg=(["ping"], np.array([-400.0, -300.0, -250.0])))
-        result = nav_attitude_summary(ds)
-        assert result.classification == "ambiguous"
-        assert result.metrics["heading_frac_out_of_range"] == 1.0
+        result = summarize_navigation(ds)
+        assert result.heading_convention == "ambiguous"
+        assert result.heading_frac_out_of_range == 1.0
         assert any("outside both" in note for note in result.notes)
 
     def test_mixed_range_is_ambiguous_not_a_silent_convention_pick(self):
@@ -60,36 +58,35 @@ class TestNavAttitudeSummary:
         # neither bucket holds for every value, so this must not silently
         # report either "compass_bearing" or "signed".
         ds = _make_ds(n_pings=4, heading_deg=(["ping"], np.array([-90.0, 45.0, 270.0, -45.0])))
-        result = nav_attitude_summary(ds)
-        assert result.classification == "ambiguous"
+        result = summarize_navigation(ds)
+        assert result.heading_convention == "ambiguous"
 
     def test_nan_values_counted_and_noted(self):
         ds = _make_ds(n_pings=3, heading_deg=(["ping"], np.array([10.0, np.nan, 30.0])))
-        result = nav_attitude_summary(ds)
-        assert result.metrics["heading_deg_n_nan"] == 1
+        result = summarize_navigation(ds)
+        assert result.field_stats["heading_deg"].n_nan == 1
         assert any("NaN" in note for note in result.notes)
 
     def test_missing_var_skipped_not_raised(self):
         ds = _make_ds().drop_vars("heave_m")
-        result = nav_attitude_summary(ds)
-        assert "heave_m_min" not in result.metrics
-        assert "heave_m_n_nan" not in result.metrics
+        result = summarize_navigation(ds)
+        assert "heave_m" not in result.field_stats
 
     def test_missing_heading_var_gives_none_classification(self):
         ds = _make_ds().drop_vars("heading_deg")
-        result = nav_attitude_summary(ds)
-        assert result.classification is None
-        assert "heading_frac_out_of_range" not in result.metrics
+        result = summarize_navigation(ds)
+        assert result.heading_convention is None
+        assert result.heading_frac_out_of_range is None
 
     def test_all_nan_heading_gives_none_classification(self):
         ds = _make_ds(n_pings=3, heading_deg=(["ping"], np.full(3, np.nan)))
-        result = nav_attitude_summary(ds)
-        assert result.classification is None
+        result = summarize_navigation(ds)
+        assert result.heading_convention is None
 
     def test_custom_heading_var(self):
         ds = _make_ds()
         ds["yaw_deg"] = (["ping"], np.full(ds.sizes["ping"], -500.0))
-        result = nav_attitude_summary(ds, heading_var="yaw_deg")
-        assert result.classification == "ambiguous"
+        result = summarize_navigation(ds, heading_var="yaw_deg")
+        assert result.heading_convention == "ambiguous"
         # the default heading_deg field (in-range here) must not be what drove the result
         assert "yaw_deg" in "".join(result.notes)

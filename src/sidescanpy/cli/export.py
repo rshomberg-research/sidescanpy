@@ -84,7 +84,6 @@ import xarray as xr
 from matplotlib.patches import Rectangle
 from PIL import Image
 
-from sidescanpy.analysis.investigation import mask_nadir_gap
 from sidescanpy.cli._common import (
     add_logging_args,
     resolve_freq_keys,
@@ -120,6 +119,7 @@ from sidescanpy.grids import (
 )
 from sidescanpy.grids.definition import utm_crs_for_lonlat
 from sidescanpy.io.hdf5 import concat_survey_frequency, read_survey
+from sidescanpy.processing.bottom import mask_nadir_gap
 from sidescanpy.processing.inversion import UNCORRECTED_VAR, uncorrected_backscatter
 from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude

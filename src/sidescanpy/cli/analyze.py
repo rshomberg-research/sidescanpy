@@ -3,7 +3,7 @@
 
 - ``segment`` — cut gaps/hardware-setting-changes/garbage-dropout-runs/
   attitude-instability out of a mission *before* analyzing it, via
-  ``sidescanpy.analysis.segmentation``. Every other subcommand here is
+  ``sidescanpy.processing.segments``. Every other subcommand here is
   only as trustworthy as the data it's pointed at; run this first on an
   unfamiliar or long mission, then point every subcommand below at one
   of its clean ``sectionN.ss.h5`` outputs rather than the raw file.
@@ -22,7 +22,7 @@
 
 - ``nav-attitude`` — plots heading/pitch/roll/altitude/depth/heave and
   the lon/lat position track for one ping range
-  (``sidescanpy.analysis.nav_attitude``), independent of backscatter
+  (``sidescanpy.analysis.navigation``), independent of backscatter
   entirely. Flags a heading/yaw value that falls outside both the
   [0,360) compass-bearing and [-180,180) signed conventions (this
   library's own convention is compass bearing, CW from N) so it can be
@@ -34,7 +34,7 @@
   ping-geometry measurement (``resolution_m``) against a clean section,
   plus ``nadir``/``beam-geometry``/``usable-range``/``units`` for
   evidence, and writes one heavily-commented recommended config YAML
-  (``sidescanpy.analysis.recommend``) -- only the two stages with a
+  (``sidescanpy.cli._recommend``) -- only the two stages with a
   real downstream config consumer today emit a settable key; every
   other finding is reported as a comment, not invented as a key nothing
   reads. Meant to run against a clean ``sectionN.ss.h5`` from
@@ -51,7 +51,7 @@
   backscatter by slant range (matching what ``apply_tvg()`` itself
   actually uses internally, not ``ground_range_m``), auto-place the fit
   window past the near-field peak and the reference range inside it
-  (``stage4_decay(..., r_ref_m="auto", r_fit_min_m="auto")``), and
+  (``fit_range_decay(..., r_ref_m="auto", r_fit_min_m="auto")``), and
   render the decay-fit + residuals figure with
   ``apply_stage4_fit_window_limits`` (robust y-limits from the fit
   window's own values; the full observed x-range always shown, so a
@@ -85,17 +85,13 @@ import xarray as xr
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from sidescanpy.analysis.investigation import (
-    stage1_characterize,
-    stage2_5_beam_geometry,
-    stage2_nadir,
-    stage3_usable_range,
-    stage4_decay,
-    stage5_units,
-)
-from sidescanpy.analysis.nav_attitude import nav_attitude_summary
-from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
-from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
+from sidescanpy.analysis.beam import estimate_beam_geometry
+from sidescanpy.analysis.characterize import characterize_values, infer_units
+from sidescanpy.analysis.geometry import measure_ping_geometry
+from sidescanpy.analysis.nadir import analyze_nadir
+from sidescanpy.analysis.navigation import summarize_navigation
+from sidescanpy.analysis.tvg import fit_range_decay
+from sidescanpy.analysis.usable_range import estimate_usable_range
 from sidescanpy.cli._common import (
     add_logging_args,
     resolve_freq_keys,
@@ -103,6 +99,8 @@ from sidescanpy.cli._common import (
     uncorrected_alias,
 )
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
+from sidescanpy.cli._recommend import render_recommended_config
+from sidescanpy.cli._segments import write_segments, write_segments_report
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.history import STEP_TVG, has_step
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
@@ -111,6 +109,7 @@ from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.inversion import UNCORRECTED_VAR, invert, uncorrected_backscatter
+from sidescanpy.processing.segments import find_segments
 from sidescanpy.processing.slicing import slice_by_pings
 from sidescanpy.viz.investigation import (
     apply_stage4_fit_window_limits,
@@ -175,7 +174,7 @@ def _ensure_value_vars(ds: xr.Dataset, args: argparse.Namespace) -> xr.Dataset:
 
 def _parse_numeric_or_literal(value: str | None) -> float | str | None:
     """--r-ref-m/--r-fit-min-m accept a literal string ('auto'/'mid_swath',
-    passed through to stage4_decay's own resolution logic) or a plain
+    passed through to fit_range_decay's own resolution logic) or a plain
     number."""
     if value is None:
         return None
@@ -280,8 +279,8 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
         usable_range_m = args.usable_range_m
         logger.info(f"Using manually-supplied usable_range_m={usable_range_m:.2f} (Stage 3 auto-detection skipped)")
     else:
-        stage3 = stage3_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
-        usable_range_m = stage3.metrics.get("usable_range_m")
+        stage3 = estimate_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
+        usable_range_m = stage3.usable_range_m
         if usable_range_m is None:
             logger.error(
                 "Stage 3 could not determine usable_range_m for this survey/ping range -- "
@@ -290,36 +289,35 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
             )
             return 1
 
-    stage4 = stage4_decay(
+    stage4 = fit_range_decay(
         ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m,
         usable_range_m=usable_range_m, r_ref_m=args.r_ref_m, r_fit_min_m=args.r_fit_min_m,
     )
-    m = stage4.metrics
 
     logger.info(
-        f"{args.ss_h5.name} {freq_key}: tvg-fit classification={stage4.classification} "
-        f"best_candidate={m['best_candidate']} rmse={m['best_rmse_db']:.2f}dB",
+        f"{args.ss_h5.name} {freq_key}: tvg-fit classification={stage4.tvg_status} "
+        f"best_candidate={stage4.best_candidate} rmse={stage4.best_rmse_db:.2f}dB",
     )
     logger.debug("=" * 70)
     logger.debug(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
     logger.debug(f"  range_var:        {args.range_var}")
     logger.debug(f"  usable_range_m:   {usable_range_m:.2f}")
-    logger.debug(f"  r_ref_m:          {m['r_ref_m']:.2f}")
-    logger.debug(f"  fit window:       [{m['r_fit_min_m']:.2f}, {m['r_fit_max_m']:.2f}]")
-    logger.debug(f"  classification:   {stage4.classification}")
-    logger.debug(f"  best_candidate:   {m['best_candidate']}")
-    logger.debug(f"  best_rmse_db:     {m['best_rmse_db']:.3f}  (fixed-scale)")
-    logger.debug(f"  n_bins_used:      {m['n_bins_used']}")
+    logger.debug(f"  r_ref_m:          {stage4.r_ref_m:.2f}")
+    logger.debug(f"  fit window:       [{stage4.r_fit_min_m:.2f}, {stage4.r_fit_max_m:.2f}]")
+    logger.debug(f"  classification:   {stage4.tvg_status}")
+    logger.debug(f"  best_candidate:   {stage4.best_candidate}")
+    logger.debug(f"  best_rmse_db:     {stage4.best_rmse_db:.3f}  (fixed-scale)")
+    logger.debug(f"  n_bins_used:      {stage4.n_bins_used}")
     for note in stage4.notes:
         logger.debug(f"  note: {note}")
     logger.debug("=" * 70)
 
-    fit_result = stage4.data["fit_result"]
+    fit_result = stage4.fit
 
     fig, (ax_fit, ax_res) = plt.subplots(2, 1, figsize=(9, 10), sharex=True, gridspec_kw={"height_ratios": [1.3, 1]})
     for i, c in enumerate(fit_result.candidates):
         plot_candidate_fit(c, fit_result.observed_range_m, fit_result.observed_loss_db, ax=ax_fit, show_observed=(i == 0))
-    ax_fit.set_title(f"Decay fit — best: {m['best_candidate']}, RMSE={m['best_rmse_db']:.2f}dB")
+    ax_fit.set_title(f"Decay fit — best: {stage4.best_candidate}, RMSE={stage4.best_rmse_db:.2f}dB")
     ax_fit.set_xlabel("")
 
     plot_stage4_residuals(stage4, ax=ax_res, relative_x=False)
@@ -432,7 +430,7 @@ def run_nadir(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    stage2 = stage2_nadir(
+    stage2 = analyze_nadir(
         ds_geo, value_var=args.value_var,
         nadir_n_samples=args.nadir_n_samples,
         strong_return_min_sample_buffer=args.strong_return_min_sample_buffer,
@@ -441,15 +439,15 @@ def run_nadir(args: argparse.Namespace) -> int:
         boundary_smoothing_window=args.boundary_smoothing_window,
     )
 
-    logger.info(f"{args.input.name} / {freq_key}: nadir = {stage2.classification}")
+    logger.info(f"{args.input.name} / {freq_key}: nadir = {stage2.nadir_type}")
     for key in ("altitude_sample_median", "first_bottom_return_sample_median", "altitude_to_bottom_gap_sample_median"):
-        if key in stage2.metrics:
-            logger.debug(f"  {key}: {stage2.metrics[key]:.2f}")
+        if getattr(stage2, key) is not None:
+            logger.debug(f"  {key}: {getattr(stage2, key):.2f}")
     for note in stage2.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage2.to_json_dict(), f, indent=2, default=str)
+        json.dump(stage2.to_dict(), f, indent=2, default=str)
 
     fig, _ = plot_stage2_nadir_zoom(ds_geo, args.value_var, stage2=stage2, nadir_n_samples=args.nadir_n_samples)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_zoom.png"
@@ -485,24 +483,24 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    stage2 = stage2_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
-    stage3 = stage3_usable_range(
+    stage2 = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    stage3 = estimate_usable_range(
         ds_geo, value_var=args.value_var, bin_width_m=args.stage3_bin_width_m, snr_threshold=args.snr_threshold,
     )
-    stage2_5 = stage2_5_beam_geometry(
-        ds_geo, stage2, stage3, value_var=args.value_var,
+    stage2_5 = estimate_beam_geometry(
+        ds_geo, stage2.first_bottom_return_sample, stage3.usable_range_m,
         near_angle_max_std_deg=args.near_angle_max_std_deg, min_valid_fraction=args.min_valid_fraction,
     )
 
-    logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {stage2_5.classification}")
+    logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {stage2_5.confidence}")
     for key in ("near_angle_deg_median", "far_angle_deg", "beam_center_angle_deg", "beam_width_deg"):
-        if stage2_5.metrics.get(key) is not None:
-            logger.debug(f"  {key}: {stage2_5.metrics[key]:.2f}")
+        if getattr(stage2_5, key) is not None:
+            logger.debug(f"  {key}: {getattr(stage2_5, key):.2f}")
     for note in stage2_5.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage2_5.to_json_dict(), f, indent=2, default=str)
+        json.dump(stage2_5.to_dict(), f, indent=2, default=str)
 
     fig, _ = plot_stage2_5_beam_geometry(ds_geo, stage2_5, value_var=args.value_var)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_beam_geometry.png"
@@ -528,18 +526,18 @@ def run_usable_range(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
 
-    stage3 = stage3_usable_range(
+    stage3 = estimate_usable_range(
         ds_geo, value_var=args.value_var, range_var=args.range_var, bin_width_m=args.bin_width_m,
         snr_threshold=args.snr_threshold, reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
     )
 
-    usable_range_m = stage3.metrics.get("usable_range_m")
+    usable_range_m = stage3.usable_range_m
     logger.info(f"{args.input.name} / {freq_key}: usable_range_m = {usable_range_m}")
     for note in stage3.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage3.to_json_dict(), f, indent=2, default=str)
+        json.dump(stage3.to_dict(), f, indent=2, default=str)
 
     fig, _ = plot_stage3_usable_range(stage3)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_usable_range.png"
@@ -567,15 +565,15 @@ def run_units(args: argparse.Namespace) -> int:
     start, stop = args.pings
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
-    stage1 = stage1_characterize(ds, value_var=args.value_var)
-    stage5 = stage5_units(stage1)
+    stage1 = characterize_values(ds, value_var=args.value_var)
+    stage5 = infer_units(stage1)
 
-    logger.info(f"{args.input.name} / {freq_key}: units = {stage5.classification}")
+    logger.info(f"{args.input.name} / {freq_key}: units = {stage5.units}")
     for note in stage5.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage5.to_json_dict(), f, indent=2, default=str)
+        json.dump(stage5.to_dict(), f, indent=2, default=str)
 
     fig, _ = plot_stage1_histograms(ds, args.value_var)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_units.png"
@@ -603,14 +601,14 @@ def run_nav_attitude(args: argparse.Namespace) -> int:
     start, stop = args.pings
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
-    result = nav_attitude_summary(ds, heading_var=args.heading_var)
+    result = summarize_navigation(ds, heading_var=args.heading_var)
 
-    logger.info(f"{args.input.name} / {freq_key}: {args.heading_var} classification = {result.classification}")
+    logger.info(f"{args.input.name} / {freq_key}: {args.heading_var} classification = {result.heading_convention}")
     for note in result.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(result.to_json_dict(), f, indent=2, default=str)
+        json.dump(result.to_dict(), f, indent=2, default=str)
 
     fig, _ = plot_nav_attitude(ds, ping_offset=start, result=result)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nav_attitude.png"
@@ -631,7 +629,7 @@ def run_recommend_config(args: argparse.Namespace) -> int:
     behind ``resolution_m``) against one clean section, plus the
     informational-only stages (nadir/beam-geometry/usable-range/units)
     for evidence -- and write one heavily-commented recommended config
-    YAML (``analysis.recommend.render_recommended_config``). Meant to
+    YAML (``cli._recommend.render_recommended_config``). Meant to
     run against an already-segmented, clean ``sectionN.ss.h5`` (see
     ``segment``) -- running it against a raw, unsegmented mission mixes
     whatever heterogeneity that file has into every number below.
@@ -646,23 +644,23 @@ def run_recommend_config(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    stage1 = stage1_characterize(ds_geo, value_var=args.value_var)
-    stage5 = stage5_units(stage1)
-    stage2 = stage2_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
-    stage3 = stage3_usable_range(
+    stage1 = characterize_values(ds_geo, value_var=args.value_var)
+    stage5 = infer_units(stage1)
+    stage2 = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    stage3 = estimate_usable_range(
         ds_geo, value_var=args.value_var, range_var="slant_range_m",
         bin_width_m=args.bin_width_m, snr_threshold=args.snr_threshold,
     )
     try:
-        stage2_5 = stage2_5_beam_geometry(ds_geo, stage2, stage3, value_var=args.value_var)
+        stage2_5 = estimate_beam_geometry(ds_geo, stage2.first_bottom_return_sample, stage3.usable_range_m)
     except (ValueError, KeyError) as exc:
         logger.warning(f"beam-geometry could not be computed ({exc}) -- omitting from the recommendation")
         stage2_5 = None
 
-    usable_range_m = stage3.metrics.get("usable_range_m")
+    usable_range_m = stage3.usable_range_m
     stage4 = None
     if usable_range_m is not None:
-        stage4 = stage4_decay(
+        stage4 = fit_range_decay(
             ds_geo, range_var="slant_range_m", bin_width_m=args.bin_width_m,
             usable_range_m=usable_range_m, r_ref_m="auto", r_fit_min_m="auto",
         )
@@ -671,15 +669,15 @@ def run_recommend_config(args: argparse.Namespace) -> int:
 
     text = render_recommended_config(
         source_name=args.input.name, freq_key=freq_key, ping_range=(start, stop), value_var=args.value_var,
-        stage1=stage1, stage2=stage2, stage2_5=stage2_5, stage3=stage3, stage4=stage4, stage5=stage5,
+        values=stage1, nadir=stage2, beam=stage2_5, usable_range=stage3, decay=stage4, units=stage5,
         geometry=geometry,
     )
     args.output.write_text(text)
 
     logger.info(
         f"{args.input.name} / {freq_key}: tvg_status="
-        f"{stage4.classification if stage4 else None}  nadir={stage2.classification}  "
-        f"usable_range_m={usable_range_m}  ping_spacing_m={geometry.get('ping_spacing_m_median')}"
+        f"{stage4.tvg_status if stage4 else None}  nadir={stage2.nadir_type}  "
+        f"usable_range_m={usable_range_m}  ping_spacing_m={geometry.ping_spacing_m_median}"
     )
     logger.info(f"wrote {args.output}")
 
