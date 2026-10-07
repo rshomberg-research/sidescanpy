@@ -19,7 +19,7 @@ cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' ex
 
 from sidescanpy.viz import basemap  # noqa: E402
 
-# A real coastline area (Rhode Island Sound, near project-a's own
+# A real coastline area (Rhode Island Sound, near a real
 # survey) -- deliberately not open ocean, so land is actually expected
 # to render, not just "no crash."
 _LON, _LAT = -71.41, 41.57

@@ -40,28 +40,18 @@
   reads. Meant to run against a clean ``sectionN.ss.h5`` from
   ``segment``, and to be reviewed/edited before use, not trusted as-is.
 
-- ``investigate`` — promotes ``project-a/scripts/investigate_dataset.py``
-  essentially unchanged: a thin driver over
+- ``investigate`` — a thin driver over
   ``sidescanpy.investigation.run_investigation()`` (the
   ``sidescan-data-investigation`` skill's pipeline), running every stage
   in one pass and writing the full diagnostic set per stage -- the
   occasional full-report use case; not the default day-to-day way to
   iterate on one specific value (see the four subcommands above for
   that).
-- ``tvg-fit`` — the TVG decay-curve fit recipe adopted after an extended
-  real-data investigation (see ``sidescanpy``'s own ``CLAUDE.md``,
-  "v0.14.0 follow-up 1" through "11" for the full history): bin raw
+- ``tvg-fit`` — the TVG decay-curve fit recipe: bin raw
   backscatter by slant range (matching what ``apply_tvg()`` itself
   actually uses internally, not ``ground_range_m``), auto-place the fit
   window past the near-field peak and the reference range inside it
-  (``stage4_decay(..., r_ref_m="auto", r_fit_min_m="auto")`` — the
-  library-native successor to the manual recipe
-  ``project-a/scripts/debug/plot_official_tvg_fit.py`` prototyped;
-  that script's exploratory predecessors
-  (``compare_tvg_fit_recipes.py``/``validate_tvg_fit_flatness.py``/
-  ``tvg_range_residual_diagnostic.py``) are kept in that project as
-  historical record of how this recipe was found, not promoted here —
-  they were one-time comparison tools, not an ongoing capability), and
+  (``stage4_decay(..., r_ref_m="auto", r_fit_min_m="auto")``), and
   render the decay-fit + residuals figure with
   ``apply_stage4_fit_window_limits`` (robust y-limits from the fit
   window's own values; the full observed x-range always shown, so a
@@ -180,7 +170,7 @@ def _parse_numeric_or_literal(value: str | None) -> float | str | None:
 
 
 # ============================================================
-# investigate (promoted from project-a/scripts/investigate_dataset.py)
+# investigate
 # ============================================================
 
 def _list_frequencies(input_path: Path) -> list[str]:

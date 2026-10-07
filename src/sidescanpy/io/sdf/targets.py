@@ -2,19 +2,13 @@
 Klein/SonarWiz native target catalog reader (``Target_<unix_ts>.tgt`` /
 ``.tgd`` pairs).
 
-**Reverse-engineered from real data 2026-08-07, not vendor-documented.**
-No independent reference exists to check against (unlike
-``io/jsf/targets.py``, which was checked directly against EdgeTech
-Discover's own ``Target-NNNN.jpg`` renders) — validation here means
-rendering the raw window and checking a candidate field lands on a real
-visible sonar contact, by eye, not a byte-for-byte spec match. An
-initial version of this module shipped with a ``window_row`` bug (used
-the raw trailer field directly instead of halving it) that placed every
-box on empty seafloor — caught by a user's visual inspection of the
-output, not anything in this module's own confidence claims at the
-time. Every ``Target`` produced here still gets
-``position_confidence="unknown"`` unconditionally regardless of which
-fields below are now confirmed — that flag is about absolute geographic
+**Reverse-engineered from real files; not vendor-documented.**
+No independent reference exists to check field meanings against —
+validation consisted of rendering the raw window and checking that a
+candidate field lands on a visible sonar contact, not a byte-for-byte
+spec match. Every ``Target`` produced here gets
+``position_confidence="unknown"`` unconditionally, regardless of which
+fields below are confirmed — that flag is about absolute geographic
 position (never found in this format at all, see below), not about
 whether the on-image box placement is trustworthy.
 
@@ -40,27 +34,16 @@ What's confirmed (byte-exact, cross-checked across multiple real files):
   JSF data) and by-eye inspection of the decoded window showing genuine
   seafloor texture.
 
-What's confirmed by visual cross-check (2026-08-07, after an initial
-version of this reader shipped with boxes that didn't land on real
-targets — a user caught this by inspecting the large-format crops, not
-this module's own earlier confidence claims, which were wrong):
+What's confirmed by visual cross-check:
 
 - ``window_row``: the raw trailer int32 (``ints[5]``) is **2x the true
-  row** — this module now halves it before returning. Confirmed against
+  row** — this module halves it before returning. Confirmed against
   six real targets by rendering each one's full decoded window with no
-  box, locating the actual visible sonar contact by eye, and checking
-  which candidate row landed on it. The disambiguating case was
-  ``Target_1536923559`` (raw field 142): row 71 (field/2) lands on a
-  small bright streak; neither row 142 (the raw field, unhalved) nor a
-  fixed window-center guess (128) does — ruling out both "use the field
-  as-is" and "the window is always centered on the pick," and leaving
-  "field/2" as the only hypothesis consistent with every target
-  checked. Five of six checks landed cleanly on a visible feature; one
-  (``Target_1536927303``) landed in a relatively low-contrast area even
-  after the fix — noted as a residual open question, not a
-  contradiction (the column could be off for that one target, or it's
-  genuinely a weak contact). *Why* the field is 2x is unknown — no
-  vendor documentation exists to check against.
+  box, locating the visible sonar contact by eye, and checking
+  which candidate row landed on it. Five of six checks landed cleanly on
+  a visible feature; one landed in a relatively low-contrast area (the
+  column could be off for that target, or it is a weak contact).
+  *Why* the field is 2x is unknown.
 - ``slant_range_m`` and a constant ``max_window_range_m`` (varies by
   survey file, e.g. 40.0 or 60.0 seen so far): a float32 slot that
   varies per target in a plausible tens-of-meters range, paired with a
@@ -69,7 +52,7 @@ this module's own earlier confidence claims, which were wrong):
   constant, used to convert ``slant_range_m`` into a window column
   index. Not contradicted by any of the six row-validation checks above
   (the column landed in the right vicinity in every case), but never
-  independently verified the way ``window_row`` now has been.
+  independently verified the way ``window_row`` has been.
 
 What's inferred, not confirmed (best-effort field mapping in the binary
 trailer that follows the string fields, found by comparing several real
@@ -90,7 +73,7 @@ constant):
   passed through as-is rather than guessed at.
 
 No absolute latitude/longitude was found anywhere in ``.tgt`` (searched
-exhaustively for plausible float32/float64 pairs in site-b's
+exhaustively for plausible float32/float64 pairs in the survey area's
 lat/lon range — none found). Position must be resolved externally, e.g.
 by matching ``pick_timestamp`` against a converted survey's own per-ping
 timestamps (see ``resolve_target_position``) — this is a *nearest-ping*
@@ -164,7 +147,7 @@ def _read_one_target(tgt_path: Path) -> Target:
 
     channel = ints[_IDX_CHANNEL]
     # The raw trailer value is 2x the true row -- confirmed empirically
-    # 2026-08-07 (see module docstring), cause unknown.
+    # (see module docstring), cause unknown.
     window_row = ints[_IDX_ROW] // 2
     range_m = floats[_IDX_RANGE_M]
     max_range_m = floats[_IDX_MAX_RANGE_M]
@@ -292,19 +275,17 @@ def resolve_target_position(
 # Clock-offset calibration
 # ============================================================
 #
-# A real, survey-specific data-quality issue found 2026-08-07: converted
-# .ss.h5 ping timestamps can read a wildly wrong date (e.g. a corrupted
-# 2026-05-13 when every raw filename and every target's own catalog
-# timestamp agree on 2018-09-14) -- present in the source .sdf/.tgt files
+# A survey-specific data-quality issue: converted
+# .ss.h5 ping timestamps can read a wildly wrong date (e.g. years off
+# when every raw filename and every target's own catalog
+# timestamp agree on another date) -- present in the source .sdf/.tgt files
 # themselves, not a sidescanpy bug. Plain resolve_target_position()
 # nearest-ping matching finds no match at all under this condition and
 # silently resolves zero positions. The offset turns out to be a
 # *constant* per survey, not a drifting clock -- derived here from each
 # .ss.h5 file's own filename-embedded true start time vs. its corrupted
-# first-ping timestamp. Promoted from a real project-b project script
-# (11_read_targets.py) rather than left there -- nothing about this is
-# tied to any one consumer project, it's a Klein-acquisition-chain
-# characteristic that could recur on any Klein SDF survey.
+# first-ping timestamp. This is a Klein-acquisition-chain characteristic
+# that could recur on any Klein SDF survey.
 
 _FILENAME_TS_RE = re.compile(r"(\d{6})(\d{6})")
 _GEOD = Geod(ellps="WGS84")

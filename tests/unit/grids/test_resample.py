@@ -450,7 +450,7 @@ class TestResampleChannelToGridUTM:
         """A physically-invalid latitude (>90, e.g. a corrupted
         georeferencing result or sensor glitch -- not something a
         healthy WGS84 fix ever produces, but not NaN either) can project
-        to a non-finite UTM coordinate. Found via a synthetic vendor-format
+        to a non-finite UTM coordinate. Found via a synthetic
         mission whose fabricated vessel position wandered close enough
         to a pole that its per-sample georeferencing math produced a few
         out-of-range (>90 deg) latitudes. Previously crashed inside

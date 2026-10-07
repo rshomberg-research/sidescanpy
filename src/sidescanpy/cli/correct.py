@@ -2,11 +2,7 @@
 ``sidescan-correct``: apply far-range crop / TVG / geometric / georef
 correction to a directory of ``.ss.h5`` files, in place.
 
-Replaces the old per-project ``02_crop_farrange.py``, ``04_radiometric.py``,
-``06_geometric.py``, ``08_georef.py`` pipeline scripts — confirmed
-byte-identical between `project-b` and `project-a`'s own copies
-except docstring path/stage-number text, each one a thin wrapper adding
-its own single correction step to the same in-place-edit loop. Each step
+Each correction step is a thin wrapper around the same in-place-edit loop. Each step
 is independently toggleable and independently idempotent (already-applied
 steps are skipped, not re-applied) — requesting several steps in one
 invocation reads and writes each file once, not once per stage.

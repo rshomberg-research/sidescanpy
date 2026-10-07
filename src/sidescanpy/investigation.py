@@ -6,9 +6,8 @@ the five investigation stages (`sidescanpy.analysis.investigation`) in
 order, saves each stage's standardized plots
 (`sidescanpy.viz.investigation`) and a JSON metrics export, and returns
 a single `InvestigationResult` object. Meant to be reused directly by
-any consumer project's thin CLI wrapper (see `project-a/scripts/
-investigate_dataset.py` for the reference one) rather than
-reimplemented per project.
+any downstream project's thin CLI wrapper rather than reimplemented
+per project.
 
 2026 rshomberg@uri.edu
 """
@@ -238,7 +237,7 @@ def run_investigation(
         0). Set nonzero when `first_bottom_return_sample` visibly
         alternates between the altitude floor and a plausible real
         value across pings on a new data source — found necessary on
-        real vendor-format data (2026-08-24): a handful of bright points
+        one real survey: a handful of bright points
         right at the blanked boundary's edge weren't fully zeroed and
         were sustained/bright enough to fool Stage 2 into locking onto
         them. See `strong_return_min_sample_buffer`/
@@ -257,8 +256,8 @@ def run_investigation(
         them to `detect_first_bottom_return` as `min_sample_buffer`/
         `peak_percentile`) — see those functions' docstrings. Both
         default to no-ops (0.0 / 100.0); like `nadir_margin_samples`
-        above, only found necessary so far on real vendor-format data, not
-        on any JSF/SDF survey checked this session.
+        above, only found necessary so far on one real survey, not
+        on any JSF/SDF survey checked.
     min_first_bottom_return_sample : float, optional
         Passed to `analysis.investigation.stage2_nadir` — an explicit
         floor on `first_bottom_return_sample`, independent of the
@@ -270,7 +269,7 @@ def run_investigation(
         detector — see `analysis.investigation.stage2_nadir`'s
         docstring) is used as an early masking step before Stage 3/4's
         binning, at **two different granularities for two different
-        reasons** (real-data checking on `survey-a` drove both
+        reasons** (real-data checking drove both
         choices, not just the first):
         - **Stage 3** gets the exact **per-ping** boundary directly —
           "remove every sample that's nadir gap, run the analysis only
@@ -295,7 +294,7 @@ def run_investigation(
         On by default — unlike `reject_outliers` below, this isn't a
         debatable aggressiveness tradeoff, it's excluding samples that
         real-data checking confirmed are not yet flat-bottom-like
-        (`survey-a`: altitude sample ~140, real first bottom
+        (one real survey: altitude sample ~140, real first bottom
         return doesn't start until ~300-330 — the beam's near edge is
         never at 0 deg from vertical, so this span is never
         illuminated at all, not weak-but-real backscatter). Set False

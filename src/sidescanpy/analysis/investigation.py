@@ -122,7 +122,7 @@ def reject_range_outliers(
         threshold — a defensible, literature-backed default, not
         arbitrary. **Was 2.5 originally** ("fairly aggressive, even
         removing targets" per the request that added this function);
-        real-data check on `survey-a` found 2.5 rejected
+        real-data check found 2.5 rejected
         ~5-6% of all samples per channel — visibly more than a thin
         tail-trim, reaching into the ordinary speckle population, not
         just rare point-target spikes (see the investigation report's
@@ -200,7 +200,7 @@ def detect_first_bottom_return(
     zone. An earlier version of this stage conflated the altitude
     crossing with "the boundary," which a direct real-data check (a
     human visually reading the raw waterfall) caught as substantially
-    wrong. Real-data check (`survey-a`, HF, ping 4000): the
+    wrong. Real-data check (HF channel, ping 4000): the
     altitude crossing lands at sample 141, but amplitude stays at
     genuine noise-floor level (0.05-0.4 out of a ~22 peak) all the way
     out to sample ~300 — not illuminated, not weak signal. Direct
@@ -243,14 +243,14 @@ def detect_first_bottom_return(
         has: **the real first bottom return can never land before the
         vehicle's own altitude** (`stage2_nadir`'s `altitude_sample`).
         Real-data check that found this was necessary, not optional:
-        on a real `project-b` Klein survey, without this floor the
+        on a real Klein survey, without this floor the
         detector returned sample ~36 — *less than* the nadir-noise
         burst's own detected extent (~43) and far short of
         `altitude_sample` (~451) — a physically impossible chain
         (bottom before noise-burst-end before altitude). Residual
         noise past the blanked burst (not every source of per-ping
         noise is caught by `blank_nadir_noise`) or a thin, non-bottom
-        noise line (a real `project-b`-specific positioning artifact,
+        noise line (a survey-specific positioning artifact,
         unrelated to nadir noise) can otherwise pull the "peak"
         reference down and let a short, unsustained bump satisfy the
         relative threshold well before real bottom.
@@ -260,8 +260,7 @@ def detect_first_bottom_return(
         (i.e. the effective floor is `min_sample + min_sample_buffer`,
         not just `min_sample` itself) — a second, independent line of
         defense against residual near-nadir noise that survives
-        `blank_nadir_noise`, found necessary on real vendor-format data
-        (2026-08-24): even with the `min_sample` floor at
+        `blank_nadir_noise`, found necessary on one real survey: even with the `min_sample` floor at
         `altitude_sample` already in place, a handful of bright points
         `blank_nadir_noise` didn't fully zero (right at its own
         boundary) still occasionally satisfied the sustained-rise
@@ -349,7 +348,7 @@ def smooth_boundary_across_pings(boundary: np.ndarray, *, window: int = 15) -> n
     `detect_first_bottom_return` runs independently per ping — real
     per-ping threshold noise (not every ping's own detection is
     equally clean) produces occasional large, physically implausible
-    jumps between adjacent pings, confirmed on real `project-b` data:
+    jumps between adjacent pings, confirmed on real data:
     a smooth ~1000-sample decline over dozens of pings punctuated by
     single-ping spikes of 100-3000+ samples that don't correspond to
     any real terrain change (adjacent pings are meters apart, not tens
@@ -413,7 +412,7 @@ def detect_nadir_noise_extent(
     EdgeTech (JSF) hardware already zeros this burst out before a file
     ever reaches `sidescanpy` -- it's why JSF's nadir reads as an exact
     `gap` (Stage 2). Klein (SDF) hardware leaves it in unprocessed.
-    Confirmed on real `project-b` data: this burst is both bright and
+    Confirmed on real Klein data: this burst is both bright and
     sustained enough to fool `detect_first_bottom_return` into
     reporting sample 0 as the first bottom return -- it's the noise
     burst, not bottom. `blank_nadir_noise` (this module) uses this
@@ -443,8 +442,7 @@ def detect_nadir_noise_extent(
     margin_samples : int, default 0
         Added to the detected extent before returning (only where a
         boundary was actually found -- a NaN row stays NaN, not
-        `NaN + margin`). Found necessary on real vendor-format data
-        (2026-08-24): the detected boundary itself is accurate on
+        `NaN + margin`). Found necessary on one real survey: the detected boundary itself is accurate on
         average, but the samples right at its edge aren't always
         cleanly below the noise floor -- a handful of residual bright
         points there survived blanking and were bright/sustained
@@ -629,7 +627,7 @@ def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float 
     per-ping, near-range bins end up populated *only* by the subset of
     pings whose strong return happened to start earliest (typically
     the shallowest-altitude pings) — a systematically biased, thinned
-    sample, not a representative one. On `survey-a` (HF) this
+    sample, not a representative one. On one real HF survey this
     produced a spuriously strong near-field bin (mean 6.3 vs. 2.9 in
     the next bin out) that `fit_hardware_tvg_curve`'s max-mean
     `r_ref_m` auto-selection picked up, moving the reference from a
@@ -701,8 +699,7 @@ def mask_nadir_gap(
 
     Exists because the earlier fix (Stage 3/4 no longer *fit* against
     this span) left it still visible in the final waterfall
-    exports/plots -- a real gap the user caught directly on the
-    `survey-a` progression figure: the recommended
+    exports/plots -- a gap visible on a real progression figure: the recommended
     absorption-only + geometric panel still showed the water-column
     return, even though nothing downstream was fit to it anymore.
 
@@ -928,8 +925,7 @@ def stage2_nadir(
       that matters for excluding the un-illuminated span from curve
       fitting**, and its implied angle (Stage 2.5) is the beam's own
       near-edge angle from vertical — a real hardware property, not a
-      "grazing incidence" story. Real-data check (`survey-a`,
-      HF): the altitude sample landed at ~141, but backscatter stayed
+      "grazing incidence" story. Real-data check (HF channel): the altitude sample landed at ~141, but backscatter stayed
       at noise-floor level (0.05-0.4 out of a ~22 peak) all the way to
       sample ~300 — not illuminated, not weak signal. The actual step
       to the real first bottom return in that ping was independently
@@ -1510,8 +1506,7 @@ def stage3_usable_range(
         whatever `range_var` already excludes geometrically. Meant to
         be `stage2_nadir()`'s `data["first_bottom_return_sample"]`: the
         geometric water-column mask alone only excludes the earliest,
-        weakest part of the near-grazing zone — real data
-        (`survey-a`) shows genuine backscatter stays weak
+        weakest part of the near-grazing zone — real data shows genuine backscatter stays weak
         (near-grazing incidence, not yet a real flat-bottom echo) well
         past that boundary, sometimes 2x+ further out (see
         `stage2_nadir`'s docstring). `None` (default) applies no
@@ -1677,11 +1672,9 @@ _TVG_CANDIDATE_TO_STATUS = {
     "full_physics": "none",
 }
 
-# Empirical safety buffer, not a physically derived value -- ported
-# 2026-09-02 from project-a's plot_official_tvg_fit.py after real
-# vendor-format data showed a fixed near-edge number doesn't transfer between
-# missions the way the *method* does (see that script's own module
-# docstring for the two-round history: a fixed bin count wasn't enough,
+# Empirical safety buffer, not a physically derived value -- chosen after real
+# data showed a fixed near-edge number doesn't transfer between
+# missions the way the *method* does (a fixed bin count wasn't enough,
 # and even the raw peak alone wasn't enough margin, because the
 # *corrected* curve's transition zone runs further than the raw peak).
 _AUTO_NEAR_EDGE_MARGIN_M = 5.0
@@ -1853,7 +1846,7 @@ def stage4_decay(
         which biases near-range bins on its own (see
         `analysis.investigation.uniform_exclusion_boundary`'s
         docstring for the mechanism). **After fixing that, re-running
-        the same comparison (`survey-a`, both channels)
+        the same comparison (both channels)
         found `reject_outliers=True` actually *improves* RMSE (HF
         0.70->0.36-0.39dB, LF 0.37->0.30-0.38dB depending on
         `fit_value_col`), and classification stayed `spreading_only`
@@ -1943,9 +1936,9 @@ def stage4_decay(
         AFTER `r_fit_min_m` when it's `"auto"`/`"mid_swath"`, see that
         parameter's docstring, so a pending string there falls through
         to the `r_ref_search_fraction` bound instead), and uses that
-        bin's far edge plus `r_fit_min_auto_margin_m`. **Real motivation
-        (2026-09-02):** a fixed near-edge number picked by eye on one
-        vendor-format mission did not generalize across a dataset whose
+        bin's far edge plus `r_fit_min_auto_margin_m`. **Motivation:**
+        a fixed near-edge number picked by eye on one
+        survey did not generalize across a dataset whose
         near-field ramp varies mission-to-mission — the *method*
         (peak-plus-margin) is what carries over, not any specific
         distance. Falls back gracefully (with a note, not a raise) to

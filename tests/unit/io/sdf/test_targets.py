@@ -197,8 +197,7 @@ class TestResolveTargetPosition:
 
 
 # ============================================================
-# Clock-offset calibration -- promoted from a real project-b project
-# script (11_read_targets.py); real-world offsets are on the order of
+# Clock-offset calibration -- real-world offsets are on the order of
 # ~2798 days, but the math only cares about the relative shift, so a
 # small synthetic offset exercises the same code path.
 # ============================================================

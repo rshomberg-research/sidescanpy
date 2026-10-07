@@ -569,15 +569,12 @@ def apply_stage4_fit_window_limits(
     full unfiltered curve, so a near-boundary outlier bin (the
     first-bottom-return artifact the fit window exists to route around)
     can't stretch the axis and compress the actual fit curves into an
-    unreadable sliver — this is the one piece of the "official" recipe's
-    own axis-limit choice (`project-a/scripts/debug/
-    plot_official_tvg_fit.py`) worth keeping unconditionally.
+    unreadable sliver — this is always applied.
 
     **x-limits deliberately do NOT crop to the fit window.** An earlier
     version of this function did (matching that script's own tight
-    zoom), which — ported into a downstream consumer
-    (`downstream-project`'s `apply_config_pipeline.py`) still shipping the
-    independent `r_ref_m=None` auto-pick bug (see `stage4_decay`'s
+    zoom), which — combined with the
+    `r_ref_m=None` auto-pick behavior (see `stage4_decay`'s
     `r_ref_m` docstring) — turned a misconfigured reference into "not
     showing the full plot, just the region around the fit" instead of
     a visible, debuggable "the reference is outside the highlighted

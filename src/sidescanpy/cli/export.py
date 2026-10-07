@@ -4,15 +4,8 @@ configurable annotated-dataset exports (chips / full-channel windows /
 processing-stage progression grids) from already-corrected ``.ss.h5``
 files.
 
-Replaces the old per-project ``03_track_maps.py``, ``05_waterfalls.py``,
-``07_ground_waterfalls.py``, ``09_grid.py``, ``12_track_with_targets.py``
-(confirmed byte-identical between `project-b` and `project-a`'s own
-copies except docstring text) and promotes
-``project-a/scripts/14_export_dataset.py``'s ``chip``/``survey-window``/
-``progression`` subcommands essentially unchanged — that script was
-already format-agnostic and cross-project proven (run directly against
-`project-b` data via CLI args, no copy, no code change) before this
-promotion.
+Export subcommands for track maps, waterfalls, grids, and target-centered
+chips (``chip``/``survey-window``/``progression``).
 
 Subcommands:
 
@@ -414,7 +407,7 @@ def run_grid(args: argparse.Namespace) -> int:
         # chunks= keeps this lazy (dask-backed) -- without it, the whole
         # file loads eagerly before any segmenting happens below,
         # defeating --segment-size's own purpose on a large real survey
-        # (found via a real field OOM report; every other exporter in
+        # (avoids OOM; every other exporter in
         # this file -- waterfall/track/chip -- already reads this way,
         # this one didn't). `.load()` on each segment slice below then
         # only ever materializes that one segment's data.
@@ -513,7 +506,6 @@ def run_track(args: argparse.Namespace) -> int:
 
 # ============================================================
 # chip / survey-window / progression
-# (promoted from project-a/scripts/14_export_dataset.py, unchanged)
 # ============================================================
 
 def _save_grayscale(img_8bit: np.ndarray, path: Path) -> None:
@@ -597,14 +589,10 @@ def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
     ``ping`` (see below) when GPS matching isn't available or fails.
     Returns ``None`` if neither resolves it.
 
-    **Real bug this fallback exists to fix, found from a real field
-    report**: some source catalogs give a target's position directly as
-    a pixel location (e.g. vendor-format's targets.csv "Snippet"
-    columns, read by ``vendor_hdf5.targets.read_mission_targets`` into
-    ``Target.ping``/``.sample``, already correctly projected onto the
-    survey's own global ping index by
-    ``vendor_hdf5.targets.project_to_survey_pings`` before this ever
-    runs) with no GPS lat/lon at all, or a lat/lon recorded by a less
+    **Why this fallback exists**: some source catalogs give a target's
+    position directly as a pixel location (e.g. a vendor HDF5 format with
+    pixel-based target catalogs, read into ``Target.ping``/``.sample``
+    and already projected onto the survey's own global ping index) with no GPS lat/lon at all, or a lat/lon recorded by a less
     precise/independent system than the sonar's own nav log. Requiring a
     GPS match for *every* target silently dropped any target lacking a
     close-enough (or any) recorded lat/lon, even though its real,
@@ -645,8 +633,7 @@ def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
             # not a bare 0..n_pings-1 check, which silently assumed every
             # file's own ping axis starts at 0 (true for a lone file, not
             # true for a directory of several globally-renumbered files
-            # -- a real bug this fixes, found from a real field
-            # report: every target on a multi-part-converted mission
+            # -- every target on a multi-part-converted mission
             # failed to correlate at all).
             local_idx = int(target.ping) - c["ping_start"]
             if 0 <= local_idx < c["n_pings"]:
@@ -806,7 +793,7 @@ def _load_swath_neighborhood(
     ``_SWATH_LOAD_VARS``, masking each piece at native resolution
     before averaging -- a full-swath neighborhood is ~2x n_samples
     pings, and loading every per-sample array in a corrected file at
-    once was ~3GB per target on survey-a, with the resample's
+    once was ~3GB per target on a real survey, with the resample's
     own working set on top (44GB RSS observed). ``sample_rate_hz`` is
     divided by ``fs`` so ``_sample_interval_m`` reports the averaged
     cell size.
@@ -1102,12 +1089,10 @@ def _with_bbox_size_px(t, scale_x: float, scale_y: float):
     meters-per-ping for the geo styles) into this specific window's
     actual output pixel size -- into ``extra_attributes["bbox_size_px"]``.
 
-    Real bug this exists to fix: ``sidescan-export chip`` always wrote
+    Previously ``sidescan-export chip`` always wrote
     every target's COCO/YOLO box at the shared ``--box-size`` (a fixed
-    placeholder), discarding a real, measured extent like vendor-format's
-    targets.csv 4-corner columns give every target -- "all the
-    bounding boxes are the same size" on real production output, found
-    from a real report, not a theoretical gap.
+    placeholder), discarding a real, measured extent such as a
+    catalog's 4-corner columns give every target.
 
     No-op (returns ``t`` unchanged) when ``t.bbox`` is ``None`` -- a
     center-only pick (e.g. JSF/EdgeTech Discover's own catalog, which
@@ -1649,7 +1634,7 @@ def run_chip(args: argparse.Namespace) -> int:
                         # context reuses that window (rendered after the
                         # style loop below) instead of a second, identical
                         # griddata pass (~11s per target on
-                        # survey-a) -- jittered, but the box
+                        # a real survey) -- jittered, but the box
                         # still sits at the target's true position.
                         if "dual-swath" not in styles:
                             context_result = geo_window("dual-swath", args.swath_size_px, 0)
@@ -1945,10 +1930,7 @@ def run_progression(args: argparse.Namespace) -> None:
     """Build a 7(-ish)-target x 5-stage progression grid (raw / dB-converted
     / TVG-applied / geometric-corrected / georef-corrected) at either
     full-channel or chip scale, so the same real target is directly
-    comparable across every processing stage. See old
-    ``project-a/scripts/14_export_dataset.py``'s (superseded) copy of
-    this function for the full design rationale — unchanged here.
-    """
+    comparable across every processing stage.     """
     resample_method = getattr(args, "resample_method", "griddata")
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
@@ -2296,7 +2278,7 @@ def main() -> int:
              "fabricated values, some directional blur at fine resolution. 'binned' "
              "(extract_geometric_window_binned): real measured means only, zero fabricated values, but a "
              "cell with no real sample inside it is left as NaN -- can be the majority of the grid at a "
-             "tight resolution_m on real vendor-format-class data. 'griddata' (extract_geometric_window_griddata, "
+             "tight resolution_m on real data. 'griddata' (extract_geometric_window_griddata, "
              "DEFAULT): scipy.interpolate.griddata full interpolation, no gaps inside the recorded swath (cells with no real sample nearby, e.g. past max range, stay no-data) -- real, chosen tradeoff: "
              "at a resolution finer than real along-track ping spacing, most pixels are interpolated from "
              "nearby real points, not individually measured. Real-data comparison of all three (2026-09-29) "

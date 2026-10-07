@@ -2,14 +2,7 @@
 ``sidescan-convert``: convert raw survey files and target catalogs to
 the format-agnostic standard model.
 
-Two subcommands, replacing the old per-project ``01_convert.py`` and
-``11_read_targets.py`` pipeline scripts (confirmed byte-identical
-between `project-b` and `project-a`'s own copies of ``01_convert.py``
-except docstring text; ``11_read_targets.py`` genuinely differs by
-format — 80 lines for JSF's Discover SQLite catalog, 310 for Klein's
-``.tgt``/``.tgd``, the latter's real clock-offset-calibration logic now
-promoted into ``sidescanpy.io.sdf.targets`` rather than living only in
-one consumer project's copy):
+Two subcommands:
 
 - ``survey`` — ``.jsf``/``.sdf`` -> ``.ss.h5``, one output file per input
   file, far-range noise detected/cropped in memory before the first
@@ -29,9 +22,9 @@ Usage:
 
     # Klein catalog, resolving position via a calibrated clock offset:
     sidescan-convert targets \\
-        --source "data/active/survey-b/TargetCatalog/" \\
-        --output "data/active/survey-b/TargetCatalog/" \\
-        --ss-h5-dir "data/active/survey-b/ss_h5/" \\
+        --source "data/active/my survey/TargetCatalog/" \\
+        --output "data/active/my survey/TargetCatalog/" \\
+        --ss-h5-dir "data/active/my survey/ss_h5/" \\
         --calibrate-offset
 
 2026 rshomberg@uri.edu

@@ -3,15 +3,11 @@ Empirical range correction for the residual TVG range-dependence.
 
 `processing/radiometric.py`'s `apply_tvg()` implements the physically-
 grounded spreading+absorption TVG model. Even after that model is applied
-(and after the 2026-07-16 sound-velocity-zero-bug fix), real data shows a
-remaining, altitude-invariant, non-monotonic range-dependent residual
-(CLAUDE.md Known Issue #4; see
-`docs/planning/handoff-tvg-residual-post-fix-findings.md` for the
-investigation and `docs/planning/v0.9.0-empirical-range-correction.md` for
-the design proposal this module implements). The investigation ruled out
-both original candidates (mistuned absorption coefficient; missing
-grazing-angle/beam-pattern correction) — this module does not attempt to
-model the physical cause. Instead it fits and removes whatever
+real data can show a
+remaining, altitude-invariant, non-monotonic range-dependent residual.
+This module does not attempt to model the physical cause (it is not a
+mistuned absorption coefficient or a missing grazing-angle/beam-pattern
+correction). Instead it fits and removes whatever
 range-dependent shape is actually observed in TVG-corrected data, per
 frequency.
 
@@ -19,8 +15,7 @@ frequency.
 calibration table (`load_default()`) is fit from one real survey and
 validated only against a held-out ping range of that *same* survey — not
 genuine cross-survey validation. Revisit once a second independent real
-survey is available. See `project-a/scripts/fit_range_correction.py`
-for the fitting/validation workflow that produced it.
+survey is available.
 
 This is a separate, optional pipeline step from `apply_tvg()` — it is
 *not* added to `pipeline.py`'s default correction ladder, so existing
@@ -209,7 +204,7 @@ def fit_range_correction(
     bin_width_m : float, default 5.0
         Passed through to `analysis.tvg_diagnostics.mean_backscatter_vs_range`.
     exclude_below_db : float, optional, default -110.0
-        Passed through as `exclude_below_db` to exclude Known Issue #5's
+        Passed through as `exclude_below_db` to exclude the
         floor-clipped samples (~-120 dB exact-zero-amplitude floor) from
         biasing the fit. `None` disables filtering.
 

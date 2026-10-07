@@ -249,9 +249,7 @@ def build_survey_track(
     georeferencing every ping — just the ones actually needed for a
     rung — while staying correct.
 
-    Promoted from a project-local helper in ``project-a/scripts/
-    visualization_demo.py`` — same name/signature, no behavior change.
-
+    
     Parameters
     ----------
     surveys : dict[Path, SideScanSurvey]

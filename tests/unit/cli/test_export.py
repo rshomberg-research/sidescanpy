@@ -1,12 +1,8 @@
 """
 Unit tests for the sidescan-export CLI's new/promoted subcommands.
 
-``waterfall``/``grid``/``track`` are new consolidations (of the old
-03/05/07/09/12 numbered scripts) tested here directly against small
-synthetic surveys. ``chip``/``survey-window``/``progression`` are
-promoted essentially unchanged from ``project-a/scripts/
-14_export_dataset.py``, which was already cross-project real-data
-verified — not re-tested from scratch here.
+``waterfall``/``grid``/``track``/``chip``/``survey-window``/``progression``
+are tested here directly against small synthetic surveys.
 
 2026 rshomberg@uri.edu
 """
@@ -359,7 +355,7 @@ class TestRunGrid:
         assert (out / "hz_1495000" / "survey_a.ss" / "segment_001.png").exists()
 
     def test_reads_lazily_chunked_by_segment_size(self, tmp_path, georef_ss_h5_dir, mocker):
-        """Real field OOM report: this used to call read_survey(path)
+        """Out-of-memory regression: this used to call read_survey(path)
         with no chunks= at all, loading the whole file eagerly before any
         segmenting happened -- defeating --segment-size's own purpose on
         a large real survey. Every other exporter (waterfall/track/chip)
@@ -673,13 +669,13 @@ class TestOrientGeoWindow:
 
 
 class TestCorrelateTarget:
-    """Real field report: lots of "no ss_h5 ping within 25.0m of its
+    """Regression: lots of "no ss_h5 ping within 25.0m of its
     recorded position" warnings, and some targets missing from chip
     output entirely -- traced to _correlate_target requiring a GPS
     lat/lon match for *every* target, silently dropping any target with
     no recorded GPS position (or one that doesn't match closely enough)
     even when its real, already-known ping position (e.g. from a pixel-
-    based source catalog like vendor-format's targets.csv) was sitting
+    based source catalog like a vendor HDF5 target catalog) was sitting
     right there on the object. These test the fallback directly against
     a hand-built index, rather than only indirectly through run_chip."""
 
@@ -970,7 +966,7 @@ class TestRunChip:
         assert len(coco["annotations"]) == 1
 
     def test_no_matched_targets_returns_1_not_silent_success(self, tmp_path, georef_ss_h5_dir):
-        """Real bug found running this against real project-b data: this
+        """Regression: this
         path logged an ERROR but returned None, which main()'s own
         `result if isinstance(result, int) else 0` fallback then turned
         into a *successful* exit code -- a script relying on this to
@@ -1258,9 +1254,9 @@ class TestRunChip:
         assert export.run_chip(args) == 1
 
     def test_pixel_style_uses_real_bbox_size(self, tmp_path, georef_ss_h5_dir):
-        """Real field report: chip/COCO output had every target's box
+        """Regression: chip/COCO output had every target's box
         at the same size, regardless of each target's own real, measured
-        extent (e.g. vendor-format's targets.csv 4-corner columns). "chip"
+        extent (e.g. a catalog's 4-corner columns). "chip"
         style's native window IS size_px already (extract_chip produces
         that size directly, no separate resize step) -- size_px=8 here,
         well inside georef_ss_h5_dir's 20 real pings, so no resize is
@@ -1356,9 +1352,7 @@ class TestRunChip:
 
     def test_geometric_style_different_targets_get_different_bbox_sizes(self, tmp_path, swath_ss_h5_dir):
         """Same real bug, geo-rendered path -- this is the render level
-        downstream-project's own batch script actually uses
-        (--render-level geometric), so this path mattered more than the
-        raw-pixel one for the report that found this. Exact pixel values
+        used for geometric export (--render-level geometric). Exact pixel values
         depend on real meters-per-sample/meters-per-ping/resolution_m
         conversion, so this checks the sizes differ and are neither the
         shared placeholder, not exact numbers."""
@@ -1528,7 +1522,7 @@ class TestSwathPreResampleDownsample:
     """Geometric/georef single-swath/dual-swath block-average the source
     neighborhood before resampling (_load_swath_neighborhood) -- the
     fix for ~3GB-per-target loads plus the resample's own working set
-    on real survey-a data."""
+    on real data."""
 
     def test_factors_keep_two_cells_per_output_pixel(self, georef_ss_h5_dir):
         ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset

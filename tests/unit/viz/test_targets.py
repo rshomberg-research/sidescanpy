@@ -106,8 +106,8 @@ class TestExportTrackWithTargetsPng:
         """Real user report: every saved track.png should be the same
         pixel dimensions regardless of the real survey's own aspect
         ratio -- this is the function sidescan-export track actually
-        calls whenever --targets-json is given (every real mission with
-        an targets.csv), so it needed the same fix as the plain
+        calls whenever --targets-json is given (every survey with
+        a target catalog), so it needed the same fix as the plain
         track export (see viz/track.py's own matching test)."""
         from PIL import Image
 

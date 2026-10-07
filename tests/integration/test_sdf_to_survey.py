@@ -4,7 +4,7 @@ Integration test for SDF reader + converter on real Klein survey data.
 Skipped if the fixture file is not present. To enable:
     Place a Klein SDF file at tests/data/sdf/sample.sdf
 
-The fixture used during development was a site-b sidescan
+The fixture used during development was a mid-latitude (~44°N) coastal sidescan
 survey (Klein 4900, dual-frequency 455/900 kHz).
 
 2026 rshomberg@uri.edu
@@ -99,7 +99,7 @@ class TestDualFrequency:
 @pytest.mark.integration
 class TestPerPingNavigation:
     def test_latitude_in_maine_range(self, real_survey):
-        """Sample fixture is from site-b (~44°N)."""
+        """Sample fixture is from ~44°N."""
         for fk in real_survey.frequencies:
             ch = real_survey.get_frequency(fk)
             lats = ch.dataset["latitude"].values
@@ -265,7 +265,7 @@ class TestPipeline:
         assert np.all(np.isfinite(slant))
 
     def test_georeferencing_produces_valid_coords(self, real_survey):
-        """Per-sample lat/lon should be in Maine range after pipeline."""
+        """Per-sample lat/lon should be in the fixture's expected range after pipeline."""
         survey = interpolate_aux_onto_pings(real_survey)
 
         for fk, channel in list(survey.freq_channels.items()):

@@ -9,9 +9,7 @@ Two entry points:
   through the pipeline" (e.g. a single ``--process`` CLI flag).
 - :func:`run_correction_steps` — a lower-level primitive taking an
   explicit *set* of steps, so callers can request combinations the
-  ladder can't express, such as geometric ranges without TVG (verified
-  as a supported combination in ``docs/planning/workflow-decisions.md``'s
-  "Verified combinations" table). Also accepts an optional
+  ladder can't express, such as geometric ranges without TVG. Also accepts an optional
   ``step_params`` dict for callers that need to override a step
   function's own defaults (e.g. custom ``TVGParams`` for the ``"tvg"``
   step) without bypassing this pipeline machinery.
@@ -276,12 +274,8 @@ def reconstruct_raw(ds: xr.Dataset) -> xr.Dataset:
     comment above) — copies it back into ``backscatter_intensity`` and
     drops the downstream-computed geometry variables so a later
     ``compute_geometric_ranges`` call recomputes them fresh rather than
-    silently reusing stale ones. Promoted here from a helper duplicated
-    across two `project-a` debug scripts
-    (``tvg_range_residual_diagnostic.py``, ``fit_tvg_hardware_curve.py``)
-    plus this library's own investigation tooling
-    (``sidescanpy.investigation``) — a third independent copy would have
-    been one duplicate too many.
+    silently reusing stale ones. Shared by this library's investigation tooling
+    (``sidescanpy.investigation``) and other callers.
 
     Parameters
     ----------

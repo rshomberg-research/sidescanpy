@@ -1,6 +1,5 @@
 """
-Unit tests for sidescan-analyze — investigate (promoted from
-project-a/scripts/investigate_dataset.py) and tvg-fit (the adopted
+Unit tests for sidescan-analyze — investigate and tvg-fit (the adopted
 auto-window TVG decay-fit recipe, using stage4_decay's own
 r_ref_m="auto"/r_fit_min_m="auto" support).
 
@@ -254,7 +253,7 @@ class TestRunTvgFit:
 
     def test_literal_freq_key_fallback_for_non_hz_naming(self, tmp_path):
         """Not every consumer uses JSF/SDF's "hz_<freq>" freq_key
-        convention (e.g. vendor-format's "sensor1_data1") -- --frequency must
+        convention (e.g. a vendor HDF5 format's "sensor1_data1") -- --frequency must
         resolve to a literal freq_key when "hz_<value>" doesn't exist,
         not assume every survey uses that naming."""
         survey = _decay_survey()

@@ -1010,11 +1010,9 @@ def real_jsf_file_path():
     """
     Path to the actual survey file used for these fixtures.
 
-    Originally sourced from a URI survey-a JSF survey file
-    (20251015170335.jsf, ping 69, first sonar data message); copied here
-    2026-07-07 as a fixed, sidescanpy-owned test fixture (renamed
-    `sample.jsf`) since the original survey data now lives in that
-    project's own separate repo, not this one.
+    Originally sourced from a real EdgeTech JSF survey file
+    (ping 69, first sonar data message), stored here as a fixed test
+    fixture (`sample.jsf`).
     """
     return Path(__file__).resolve().parents[3] / "data" / "jsf" / "sample.jsf"
 

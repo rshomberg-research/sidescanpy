@@ -6,8 +6,7 @@ Promoted out of the old ``02_crop_farrange.py``/``04_radiometric.py``/
 ``06_geometric.py``/``08_georef.py`` pipeline scripts, which each
 duplicated this exact loop (disk-space check, atomic temp-file+rename
 write, per-file skip/success/fail logging, summary) around one
-different one-line body — confirmed byte-identical apart from that body
-across both `project-b` and `project-a`'s own copies.
+different one-line body.
 
 :func:`process_files_in_place_chunked` is the ping-chunked counterpart,
 for callers needing memory bounded to roughly one chunk's worth of
@@ -39,8 +38,8 @@ def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list
     JSF/SDF's own convention is ``freq_key = f"hz_{freq_hz_start}"`` --
     tried first, so every existing caller passing a bare frequency
     number (e.g. ``--frequency 1495000``) keeps resolving exactly as
-    before. Not every consumer uses that convention (e.g. vendor-format's
-    ``"sensor<N>_data<M>"``), so ``requested`` itself is tried as a
+    before. Not every consumer uses that convention (e.g. a vendor HDF5
+    format using ``"sensor<N>_data<M>"``), so ``requested`` itself is tried as a
     literal freq_key when the ``"hz_"``-prefixed guess isn't a real key,
     rather than assuming every survey names its channels that way.
     """
@@ -113,10 +112,9 @@ def load_channel_dataset(input_path: Path, freq_key: str, chunks: dict) -> "xr.D
     already did directly) or a directory of them, lazily dask-concatenated
     in filename/acquisition order via :func:`concat_survey_frequency` --
     the same multi-file convention ``sidescan-export``'s own
-    ``--ss-h5-dir`` already uses. Added 2026-09-27 so a real mission that
-    was never concatenated into one file at conversion time (a genuine
-    memory-safety need on a constrained container -- see
-    ``downstream-project``'s own docs) can still be analyzed as one logical survey.
+    ``--ss-h5-dir`` already uses. This lets a survey that was never concatenated into one file at
+    conversion time (e.g. for memory safety) still be analyzed as one
+    logical survey.
 
     Raises ``FileNotFoundError``/``ValueError`` if ``freq_key`` isn't
     present anywhere at ``input_path`` -- never returns ``None``, unlike

@@ -206,8 +206,7 @@ def targets_within_window(targets: list[Target], extent: WindowExtent) -> list[T
     ``extent``, translated to window-local coordinates.
 
     Reuses the existing ``Target.sample`` (column) /
-    ``extra_attributes["window_row"]`` (row) convention already used by
-    ``project-a/scripts/13_export_chips.py``. Targets missing either
+    ``extra_attributes["window_row"]`` (row) convention used by the chip exporters. Targets missing either
     field are skipped (nothing to place). For multi-target images: every
     included target becomes its own annotation on the same exported
     image, not just the one a chip happened to be centered on.

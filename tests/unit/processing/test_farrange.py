@@ -62,7 +62,7 @@ def _ramp_then_decay_profile(
     """dB profile with a legitimate near-nadir ramp-up (weak returns very
     close to nadir, lower than the eventual real floor) before reaching
     peak, then a normal decay to floor_db with no rise -- the real shape
-    seen on survey-a's hz_1495000 that originally fooled a
+    seen on one real channel that originally fooled a
     global-minimum floor search."""
     profile = np.empty(n_samples)
     profile[:ramp_at] = np.linspace(ramp_start_db, peak_db, ramp_at)
@@ -114,8 +114,7 @@ class TestDetectFarRangeCutoffSample:
         assert cutoff_strict is None
 
     def test_near_nadir_ramp_up_not_mistaken_for_the_floor(self):
-        # Regression test for a real bug found 2026-08-06 on real data
-        # (survey-a, hz_1495000): a legitimate near-nadir
+        # Regression test for a real bug found on real data: a legitimate near-nadir
         # ramp-up (weak returns very close to nadir, ordinary geometry/
         # beam-pattern behavior, lower than the eventual real far-range
         # floor) was picked as "the floor" by a global-minimum search --

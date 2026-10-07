@@ -621,8 +621,7 @@ class SonarDataMessage(JSFMessage):
         # object (~28-36 bytes incl. list slot, vs. 2 bytes packed) -- on a
         # real 629MB JSF file (305M total samples across both channels) this
         # alone drove read_jsf() to ~20GB peak RSS, an ~8x overshoot versus
-        # the ~2.4GB of actual numpy data the file decodes to. Confirmed via
-        # instrumented profiling 2026-08-22; root cause of repeated OOM
+        # the ~2.4GB of actual numpy data the file decodes to. Profiling showed this was the root cause of OOM
         # kills when reading full multi-hundred-MB JSF files. .copy()
         # detaches from the message-body `data` buffer so the full 240+n
         # byte raw message isn't kept alive just to hold this slice.
@@ -1100,7 +1099,7 @@ class PitchRollDataMessage(JSFMessage):
         validity_flags = self.parse_validity_flags(self._data_flags)
 
         # BUG: validity flags are rejecting all data on at least one device tested
-        # (20251015170335.jsf / survey-a). The raw values appear sensible — sonar
+        # (one real EdgeTech JSF file). The raw values appear sensible — sonar
         # embedded heading/roll/pitch derived from attitude data update at the
         # expected 10 Hz rate, suggesting attitude is producing real data even when
         # the validity flags claim otherwise. Options:

@@ -253,7 +253,7 @@ def _build_frequency_channel(
         # NOTE: NOT first.sample_freq -- that's decoded straight from the
         # JSF header's _raw_sample_freq field, whose own doc comment reads
         # "sample freqency (Hz) usually (see Data Format)", already hedged.
-        # Confirmed wrong on real data: 2.2x-3.0x off from the true rate,
+        # Observed wrong on real data: 2.2x-3.0x off from the true rate,
         # survey-specific. sample_interval is decoded independently from
         # the header's sampling-interval bytes and is the real per-sample
         # time resolution; see messages.py's own long-standing TODO on

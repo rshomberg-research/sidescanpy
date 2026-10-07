@@ -35,10 +35,8 @@ boolean):
   detect_nadir_noise_extent`` looks within one ping's sample axis; this
   looks across the ping axis instead).
 - ``detect_unstable_spans`` -- a rolling attitude/altitude stability
-  check (``score_stability``, ported from
-  ``downstream-project/scripts/apply_config_pipeline.py:_section_stability_score``)
-  flags deployment/turn transients (e.g. the real site-c ping 0-500
-  case documented in this package's own ``CHANGELOG.md``).
+  check (``score_stability``, )
+  flags deployment/turn transients.
 
 ``find_segments`` combines all four into a list of ``Segment``s, each
 labeled ``"clean"`` or ``"excluded"`` with human-readable ``reasons``.
@@ -146,12 +144,11 @@ def detect_setting_changes(ds: xr.Dataset, *, sound_vel_rel_tol: float = 0.05) -
     **Known limitation, not silently assumed away**: a raw sample-count/
     range change that an upstream format-specific converter already
     padded/reconciled away before writing this file (true for any
-    format without its own ``valid_samples``-equivalent, e.g. JSF/
-    vendor-format as of this writing) is NOT detectable here -- that
+    format without its own ``valid_samples``-equivalent, e.g. JSF
+    and some vendor HDF5 formats) is NOT detectable here -- that
     information is already gone by the time this function ever sees
     the data. Fixing that needs preserving the boundary at conversion
-    time (format-specific, e.g. ``downstream-project``'s own
-    ``MissionChannel.break_ping_indices``), not detecting it after the
+    time (format-specific), not detecting it after the
     fact, which is this function's own job.
     """
     n_pings = ds.sizes["ping"]
@@ -212,8 +209,7 @@ def detect_garbage_runs(
 
 
 def score_stability(altitude: np.ndarray, pitch: np.ndarray, start: int, span: int) -> float:
-    """Lower = more stable = a better section candidate. Ported from
-    ``downstream-project/scripts/apply_config_pipeline.py:_section_stability_score``
+    """Lower = more stable = a better section candidate. 
     (altitude coefficient-of-variation + pitch std, weighted 1:1 by raw
     magnitude -- not first-principles-derived, just a combination where
     both terms land in a similar range for a genuinely calm stretch, and

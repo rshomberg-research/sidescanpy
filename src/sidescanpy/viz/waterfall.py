@@ -255,9 +255,7 @@ def resolve_waterfall_axes(steps: frozenset[str], cli_x_axis: str, cli_y_axis: s
     without "geometric" (raw, radiometric), where sample/ping/time are
     the only meaningful choices anyway.
 
-    Promoted from a project-local helper in ``project-a/scripts/
-    visualization_demo.py`` — same name/signature, no behavior change.
-    """
+        """
     if "geometric" in steps:
         return "across_track", "along_track"
     return cli_x_axis, cli_y_axis
@@ -484,7 +482,7 @@ def along_track_distance_m(ds: xr.Dataset, *, fill_nav_stalls: bool = False) -> 
     pings keep (nearly) the same position while the vessel keeps moving,
     and it resumes without catching up. The raw distance is then flat
     across those pings, and geometric resampling stacks their seafloor
-    into a single along-track line (found on survey-a: ~7 pings
+    into a single along-track line (seen on one real survey: ~7 pings
     at each checked target, 42ms apart with distinct data, advanced only
     ~0.07m in total instead of ~0.5m -- a hard seam through the target
     at fine resolution). With ``True``, each stalled step is replaced by

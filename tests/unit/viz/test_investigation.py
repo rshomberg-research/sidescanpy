@@ -330,8 +330,7 @@ class TestPlotStage4Residuals:
 
 
 class TestApplyStage4FitWindowLimits:
-    """2026-09-02: ported from project-a's plot_official_tvg_fit.py
-    after a downstream consumer (downstream-project) reused plot_candidate_fit/
+    """Callers that reuse plot_candidate_fit/
     plot_stage4_residuals directly but not this limit logic, leaving
     matplotlib's default full-data autoscale in place -- a near-boundary
     outlier bin could then compress the real fit curves into an

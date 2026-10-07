@@ -1,7 +1,6 @@
 """
 Target dataclass — the format-agnostic sonar contact model.
 
-Per ``docs/planning/v0.10.0-target-catalog-and-coco-export.md`` Phase 1.
 A target's position may be known in the native address space (ping/
 channel/sample, lat/lon), the pixel address space (image id + bbox), both,
 or neither, depending on what the source catalog actually gives up.
@@ -124,7 +123,7 @@ def project_target_to_frequency(target: Target, source_mps: float, target_mps: f
     a contact against the one frequency channel it was picked on — there
     is no "also visible on the other channel" field. But ``ping`` (both
     channels are pinged in lockstep — the same physical vessel position,
-    confirmed on real data: identical ping *count* per channel within one
+    identical ping *count* per channel within one
     file) and the physical slant range a sample represents
     (``sample * meters_per_sample``) are both real, channel-independent
     quantities. So the target's true position on the untagged channel is
@@ -165,14 +164,12 @@ def detrend_by_range(window: np.ndarray) -> np.ndarray:
     ping in the window, flattening any left-to-right brightness gradient
     for display.
 
-    Found necessary 2026-07-30: even after real TVG correction
+    Even after real TVG correction
     (``apply_tvg_to_amplitude``), rendered target windows still showed a
     strong range-dependent brightness gradient that EdgeTech Discover's
-    own images of the same targets don't show — consistent with
-    ``sidescanpy``'s already-documented, unresolved Known Issue #4 (a
-    real ~6-8dB range-dependent TVG residual, found on the main survey
-    pipeline; ``apply_tvg_to_amplitude`` uses the identical formula, so
-    it inherits the same residual). This does **not** fix or claim to
+    own images of the same targets don't show — consistent with a
+    real ~6-8dB range-dependent TVG residual (``apply_tvg_to_amplitude``
+    uses the same formula as the main pipeline, so it inherits it). This does **not** fix or claim to
     explain that underlying residual — it's a display-only, per-window
     correction (a flat-field-style correction: subtract the *typical*
     level at each range so only deviations from it — real targets, real
@@ -199,8 +196,7 @@ def detrend_by_range(window: np.ndarray) -> np.ndarray:
 def orient_for_display(window: np.ndarray, target: Target) -> tuple[np.ndarray, Target]:
     """Orient a decoded target window to match EdgeTech Discover's own
     display convention, both found empirically by comparing rendered
-    output for target 0001 directly against ``Target-0001.jpg``
-    (2026-07-30) — neither is derived from a documented Discover
+    output directly against Discover's own target images — neither is derived from a documented Discover
     convention, both from visual comparison:
 
     - **Horizontal (channel-dependent):** port channels (0) are mirrored

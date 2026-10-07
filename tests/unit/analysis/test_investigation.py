@@ -192,8 +192,8 @@ class TestStage2Nadir:
         assert np.all(np.isfinite(altitude_arr))
 
     def test_strong_return_min_sample_buffer_skips_residual_noise_past_altitude(self):
-        """Integration-level regression test for the real vendor-format
-        finding (2026-08-24): residual noise right past the altitude
+        """Integration-level regression test for the real
+        finding: residual noise right past the altitude
         floor won as first_bottom_return_sample instead of the real
         bottom return further out. strong_return_min_sample_buffer
         (wired through to detect_first_bottom_return's min_sample_buffer)
@@ -249,7 +249,7 @@ class TestStage2Nadir:
         assert with_floor.metrics["first_bottom_return_sample_median"] == pytest.approx(200, abs=15)
 
     def test_all_nan_ground_range_names_short_recorded_window_cause(self):
-        """Regression test for a real project-b finding: a channel
+        """Regression test for a real finding: a channel
         recorded with too short a range window for the vehicle's actual
         altitude never geometrically reaches bottom anywhere -- the
         resulting all-NaN ground_range_m note should name that specific,
@@ -312,7 +312,7 @@ class TestStage2Nadir:
         assert any("disagree by a median of" in n for n in result.notes)
 
     def test_pre_altitude_spike_does_not_win_as_first_bottom_return(self):
-        """Integration-level regression test for the real project-b
+        """Integration-level regression test for a real
         bug: stage2_nadir must pass its own altitude_sample through to
         detect_first_bottom_return as a floor, not just compute it and
         ignore it. altitude=10.0 (fixture default) -> altitude sample
@@ -334,7 +334,7 @@ class TestStage2Nadir:
     def test_smooths_isolated_per_ping_detection_outlier(self):
         """Real per-ping detection noise can make a single ping's raw
         boundary jump far from its neighbors, confirmed on real
-        project-b data. Default boundary_smoothing_window should pull
+        real data. Default boundary_smoothing_window should pull
         an isolated outlier ping back toward its neighbors;
         boundary_smoothing_window=1 disables that and leaves the raw
         detection as-is."""
@@ -675,7 +675,7 @@ class TestStage3UsableRange:
         assert cleaned.metrics["noise_std"] < with_spikes.metrics["noise_std"]
 
     def test_per_ping_boundary_avoids_thin_contaminated_near_bin_vs_uniform(self):
-        """Regression test for the real survey-a LF bug: a
+        """Regression test for a real LF-channel bug: a
         single survey-wide (`uniform_exclusion_boundary`) exclusion
         boundary under-masks whichever pings' true per-ping boundary
         exceeds it. Because ground range at a fixed sample index
@@ -1008,8 +1008,7 @@ class TestStage4Decay:
         assert both_sides.metrics["n_bins_used"] > one_sided.metrics["n_bins_used"]
 
     def test_r_fit_min_m_auto_resolves_to_numeric_value_and_records_which_mode_ran(self):
-        """2026-09-02: r_fit_min_m="auto" ported from project-a's
-        plot_official_tvg_fit.py -- a fixed near-edge number picked by
+        """r_fit_min_m="auto": a fixed near-edge number picked by
         eye on one mission didn't generalize across a dataset whose
         near-field ramp varies mission to mission. metrics["r_fit_min_m"]
         must carry the *resolved* number (what the fit actually used);
@@ -1025,8 +1024,8 @@ class TestStage4Decay:
         assert any("r_fit_min_m='auto' resolved to" in n for n in result.notes)
 
     def test_r_fit_min_m_auto_without_r_ref_m_or_usable_range_m_falls_back_gracefully(self):
-        """2026-09-02: changed from raising to a graceful fallback --
-        "auto" became downstream-project's own default (not just an opt-in
+        """Graceful fallback instead of raising --
+        "auto" is a default (not just an opt-in
         override), so a single difficult mission/section with no
         determinable usable_range_m must not take down the whole
         analyze run. Falls back to the prior one-sided fit window
@@ -1050,10 +1049,10 @@ class TestStage4Decay:
         assert isinstance(result.metrics["r_fit_min_m"], float)
 
     def test_r_fit_min_m_auto_clamps_to_r_ref_m_when_naive_value_would_exceed_it(self):
-        """2026-09-02, real bug reported from the field: the search
+        """Regression: the search
         restricts by *bin center* <= r_ref_m, but the returned value is
         that bin's far edge PLUS the margin -- on data whose true
-        near-field peak sits close to r_ref_m itself (real on vendor-format
+        near-field peak sits close to r_ref_m itself (seen on real
         data, whose near-field ramp varies enough that it isn't reliably
         confined to the near half of the swath), the naive auto value
         can still land past r_ref_m even though the search never looked
@@ -1142,8 +1141,8 @@ class TestStage4Decay:
         assert any("r_ref_m='mid_swath' resolved to" in n for n in result.notes)
 
     def test_r_ref_m_mid_swath_without_usable_range_m_falls_back_gracefully(self):
-        """2026-09-02: changed from raising to a graceful fallback --
-        "mid_swath" became downstream-project's own default (not just an opt-in
+        """Graceful fallback instead of raising --
+        "mid_swath" is a default (not just an opt-in
         override), so a single difficult mission/section with no
         determinable usable_range_m must not take down the whole
         analyze run. Falls back to the prior near-field auto-pick
@@ -1423,7 +1422,7 @@ class TestDetectFirstBottomReturn:
         assert max(results) - min(results) <= 15
 
     def test_min_sample_floor_skips_pre_altitude_spike(self):
-        """Regression test for a real project-b bug: a bright,
+        """Regression test for a real bug: a bright,
         sustained-enough spike before the vehicle's own altitude
         (residual nadir noise, or a thin non-bottom noise line) was
         winning as "first bottom return" -- physically impossible,
@@ -1466,7 +1465,7 @@ class TestDetectFirstBottomReturn:
         assert np.abs(result[0, 0] - 50) <= 15
 
     def test_min_sample_buffer_skips_residual_noise_right_past_the_floor(self):
-        """Regression test for a real vendor-format finding (2026-08-24): even
+        """Regression test for a real finding: even
         with min_sample=altitude in place, a handful of bright points
         blank_nadir_noise didn't fully zero right at its own boundary's
         edge survived just past the floor -- bright/sustained enough to
@@ -1524,7 +1523,7 @@ class TestDetectFirstBottomReturn:
 
 class TestSmoothBoundaryAcrossPings:
     def test_rejects_isolated_outlier_ping(self):
-        """Regression test for a real project-b finding: raw per-ping
+        """Regression test for a real finding: raw per-ping
         detection has occasional large, physically implausible jumps
         (one ping reads very differently from its neighbors) that a
         median filter should reject without disturbing the surrounding
@@ -1709,7 +1708,7 @@ class TestBlankNadirNoise:
         assert np.all(ds["backscatter_raw"].values[:, :, :10] == 20.0)
 
     def test_margin_samples_zeros_a_wider_region(self):
-        """Regression test for the real vendor-format finding motivating
+        """Regression test for the real finding motivating
         margin_samples: a few bright points right at the detected
         boundary's edge weren't fully zeroed by the base detection --
         a margin sweeps them in too."""
@@ -1800,8 +1799,7 @@ class TestMaskNadirGap:
         assert np.all(out["backscatter_raw"].values[:, :, 150:] == 15.0)
 
     def test_min_first_bottom_return_sample_widens_the_mask(self):
-        """Regression coverage for the downstream-project finding (2026-08-24):
-        the sweep/ping-profile charts there need mask_nadir_gap's
+        """Regression coverage for downstream sweep/ping-profile charts need mask_nadir_gap's
         boundary to respect the same explicit floor stage2_nadir/
         detect_first_bottom_return already support, so the two stay
         consistent when called with the same override."""
@@ -1987,8 +1985,7 @@ class TestReconstructRaw:
 
 class TestAutoNearEdgeM:
     """Direct tests of `_auto_near_edge_m`, the helper `stage4_decay`'s
-    `r_fit_min_m="auto"` delegates to -- ported 2026-09-02 from
-    project-a's plot_official_tvg_fit.py. Uses `mean_backscatter_vs_range`'s
+    `r_fit_min_m="auto"` delegates to -- uses `mean_backscatter_vs_range`'s
     own documented contract ("any dataset with value_var and range_var,
     same shape, arbitrary dims") to build a minimal synthetic ramp
     directly, rather than routing through the full raw-dataset/geometric

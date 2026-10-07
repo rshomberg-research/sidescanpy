@@ -260,7 +260,7 @@ class TestPosition:
         assert h._ship_latitude_rad == pytest.approx(0.770159, abs=1e-9)
 
     def test_ship_latitude_deg_property(self):
-        """0.770159 rad ≈ 44.13°N (site-b)."""
+        """0.770159 rad ≈ 44.13°N."""
         raw = make_sdf_header_bytes(ship_latitude_rad=0.770159)
         h = SDFPageHeader.from_bytes(raw)
         assert h.ship_latitude_deg == pytest.approx(44.1269, abs=0.001)

@@ -204,8 +204,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     - Maps to approximately -120 dB (well below noise floor)
     - Preserves zero values appropriately (water column)
 
-    **KNOWN ISSUE (unconfirmed root cause, under investigation as of
-    2026-07-02):** the "water column" assumption above for the clipped-
+    **Known issue (root cause unconfirmed):** the "water column" assumption above for the clipped-
     to-floor population is not yet confirmed. On real data, ~1% of
     samples hit this exact floor, clustered in a fixed leading run of
     ~50-60 samples at the *start* of every ping (not scattered through
@@ -215,11 +214,8 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     `processing/geometric.py`'s `compute_geometric_ranges` masking).
     Whatever these samples are, the existing water-column mask isn't
     catching them, so they pass `resample_channel_to_grid()`'s
-    finite-coordinate filter and get included in gridding — see
-    `docs/planning/handoff-tvg-range-residual.md` and `CLAUDE.md` Known
-    Issues #4-#5 for the full evidence and a related, separately
-    confirmed ~37 dB range-dependent TVG residual found in the same
-    investigation.
+    finite-coordinate filter and get included in gridding — a related range-dependent TVG residual can be handled
+    separately with the empirical range correction.
 
     Parameters
     ----------
@@ -323,12 +319,10 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     n_samples = ds.sizes["sample"]
     sound_velocity = ds["sound_vel_ms"].mean().item()  # scalar, m/s
     # FIXME: sound_velocity should change at each ping
-    # 2026-07-16: widened to also catch exactly-zero (not just NaN) —
-    # confirmed on real JSF data that sound_vel_ms is exactly 0.0 for 100%
-    # of pings in at least one survey, which silently pinned every
-    # sample's slant range at min_range_m (see
-    # docs/planning/handoff-tvg-sound-velocity-zero-bug.md). Matches
-    # geometric.py's already-correct `invalid_sv` check.
+    # Also catches exactly-zero (not just NaN): some JSF files have
+    # sound_vel_ms exactly 0.0 for every ping, which would pin every
+    # sample's slant range at min_range_m. Matches geometric.py's
+    # `invalid_sv` check.
     if np.isnan(sound_velocity) or sound_velocity <= 0:
         sound_velocity = 1500.0
 

@@ -332,8 +332,7 @@ class TestUtmCrsForLonlat:
     """Auto-UTM zone selection."""
 
     def test_maine_coast_is_zone_19n(self):
-        # site-b area (~ -68.8, 44.1) — matches the survey names
-        # already used throughout this project's docs/fixtures.
+        # Fixture survey area (~ -68.8, 44.1).
         crs = utm_crs_for_lonlat(-68.8, 44.1)
         assert crs.to_epsg() == 32619
 

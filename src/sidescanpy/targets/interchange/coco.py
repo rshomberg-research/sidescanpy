@@ -1,11 +1,9 @@
 """
 COCO-format export for sonar targets.
 
-Per ``docs/planning/v0.10.0-target-catalog-and-coco-export.md`` Phase 5,
-scoped to JSF for now: one canonical crop image + one bounding-box
-annotation per target, single category (no real class labels exist in
-any dataset seen so far — every ``Description``/``Tag`` checked was
-empty), defaulting to ``min_confidence="verified"`` so a dataset export
+Scoped to JSF for now: one canonical crop image + one bounding-box
+annotation per target, single category (no real class labels are assumed — ``Description``/``Tag`` are
+commonly empty), defaulting to ``min_confidence="verified"`` so a dataset export
 can't silently ship unlocalized or low-confidence boxes.
 
 The bbox itself is a fixed placeholder size (``box_size``), not a

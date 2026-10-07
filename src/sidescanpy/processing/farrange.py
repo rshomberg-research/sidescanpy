@@ -3,15 +3,13 @@ Far-range noise detection and cropping.
 
 Some surveys record a channel's sample window well past where real
 backscatter decays into noise — a per-survey acquisition setting, not
-fixed by frequency (found 2026-08-06, see ``sidescanpy/CLAUDE.md`` Known
-Issue #6 / ``docs/planning/handoff-hf-farrange-noise-amplification.md``).
-Past that point, raw amplitude doesn't stay flat — it climbs back up,
+fixed by frequency. Past that point, raw amplitude doesn't stay flat — it climbs back up,
 new evidence for a hardware TVG/AGC artifact baked into the raw signal —
 which ``apply_tvg()``'s uncapped, monotonically-increasing gain formula
 then massively over-amplifies (a ~57 dB overshoot measured on real data),
 saturating percentile-based color scales and burying the real near-nadir
 signal. This module detects that decay-then-rise pattern directly from
-raw data (candidate solution (a) in the handoff doc) and crops it out —
+raw data (and crops it out —
 intentionally conservative: a channel with no detected rise is left
 untouched, not cropped by a guessed constant, since the recorded window
 length varies per survey.
@@ -44,9 +42,9 @@ def _linear_to_db(x: np.ndarray, min_linear: float = _MIN_LINEAR) -> np.ndarray:
     return 20.0 * np.log10(np.clip(np.asarray(x, dtype=np.float64), min_linear, None))
 
 
-# Known Issue #5: a leading run of exact-zero raw amplitude (blanking/
+# A leading run of exact-zero raw amplitude (blanking/
 # ring-down) at the *start* of every ping converts to exactly this dB
-# floor via _linear_to_db's clip(x, 1e-6). Found 2026-08-06: left
+# floor via _linear_to_db's clip(x, 1e-6). Left
 # unmasked, this run's artificially low mean gets picked as "the floor"
 # by the bin-minimum search below, and the real (much stronger)
 # near-nadir signal in the very next bin then reads as a spurious "rise"
@@ -57,7 +55,7 @@ _FLOOR_CLIP_DB = -120.0
 
 
 def _mask_floor_clip(db: np.ndarray) -> np.ndarray:
-    """Replace Known Issue #5's floor-clip artifact (exact -120dB) with
+    """Replace the floor-clip artifact (exact -120dB) with
     NaN so it's excluded from bin statistics — it is not real low-
     amplitude signal, it's a blanking/ring-down artifact."""
     mask = db <= _FLOOR_CLIP_DB
@@ -146,8 +144,7 @@ def detect_far_range_cutoff_sample(
     reliable_idx = np.where(reliable)[0]
 
     # The floor must be searched for only *after* the peak, not globally.
-    # Real-data bug found 2026-08-06 (survey-a, hz_1495000): a
-    # legitimate near-nadir ramp-up (weak returns very close to nadir,
+    # A legitimate near-nadir ramp-up (weak returns very close to nadir,
     # before reaching the real peak a few bins in -- ordinary geometry/
     # beam-pattern behavior, not an artifact) can be *lower* than the
     # genuine far-range floor. A global-minimum search picks that

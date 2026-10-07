@@ -116,9 +116,7 @@ def resample_channel_to_grid(
     samples in the same cell, not excluded from the average. This
     dilution is exactly why a gridded raster's effective dynamic range
     (and therefore its percentile-based color scale) can differ sharply
-    from a per-sample waterfall's — see `docs/planning/
-    handoff-tvg-range-residual.md` for the full writeup connecting this
-    to a separately confirmed range-dependent TVG residual.
+    from a per-sample waterfall's.
 
     Returns
     -------

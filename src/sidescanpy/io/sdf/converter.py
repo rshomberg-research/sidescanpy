@@ -30,8 +30,8 @@ Klein-specific design decisions:
 - pulse_length_us is 0.0 (not provided by Klein).
 - freq_hz_start == freq_hz_end == center_freq_hz.
 - Pages with different num_samples are padded to max with NaN, logged as
-  a warning when it happens (was previously silent). Each ping's true
-  recorded sample count survives padding via the new
+  a warning when it happens. Each ping's true
+  recorded sample count survives padding via the
   `valid_samples` (ping, channel) variable, so downstream code (e.g.
   `processing/farrange.py`) can distinguish real short pings from
   padded filler rather than treating the padded array shape as if every

@@ -2,7 +2,7 @@
 Memory-bounded, ping-chunked application of correction steps to an
 existing ``.ss.h5`` file, in place.
 
-Motivated by a real field OOM (signal 9) report: applying tvg +
+Motivated by out-of-memory (OOM) kills: applying tvg +
 geometric + georef to a large real survey in one eager pass holds
 several full-``(ping, channel, sample)``-shaped float arrays in memory
 simultaneously — ``sidescanpy.cli.correct``'s own disk-multiplier
@@ -18,16 +18,12 @@ to the real output path via the existing
 :func:`sidescanpy.io.hdf5.write_survey`, whose underlying
 ``Dataset.to_netcdf()`` call streams a dask-backed dataset chunk-by-chunk.
 
-**Real, empirically-confirmed gotcha, not a guess:** dask's *default*
-threaded scheduler does not stream this write safely. Measured writing
-a dask-backed dataset chunked at 200 pings with the default scheduler:
-peak memory reached ~3x the *total* array size (9.3GB for a 3.2GB
-array) — almost certainly concurrent worker threads racing for the
-underlying HDF5 file's write lock, each holding its own already-computed
-chunk in memory while waiting. Forcing
-``dask.config.set(scheduler="single-threaded")`` around the write fixed
-this completely: measured peak memory then scales with *per-chunk*
-size (confirmed across 100/500/2000-ping chunks, consistently ~2-3x the
+**Caveat:** dask's *default* threaded scheduler does not stream this
+write safely: peak memory can reach ~3x the *total* array size — concurrent worker threads race for the underlying HDF5
+file's write lock, each holding its own already-computed chunk in
+memory while waiting. Forcing
+``dask.config.set(scheduler="single-threaded")`` around the write avoids
+this: peak memory then scales with *per-chunk* size (roughly 2-3x the
 raw chunk size, not the whole file). This module always uses that
 scheduler for its own write step.
 

@@ -64,7 +64,7 @@ class TestPlotTrackAndScanlines:
         try:
             assert "Easting" in ax.get_xlabel()
             assert "Northing" in ax.get_ylabel()
-            assert "32619" in ax.get_title()  # site-b-area lon/lat -> zone 19N
+            assert "32619" in ax.get_title()  # fixture lon/lat (~ -68.8°) -> zone 19N
         finally:
             plt.close(fig)
 

@@ -9,9 +9,6 @@ because it needs ``targets.core.Target`` — matches the existing
 ``viz/contact_sheet.py`` precedent of keeping that dependency isolated
 from the modules that don't need it.
 
-Promoted from a project-local script (``project-a/scripts/
-plot_track_with_targets.py``'s ``main()`` body) — same projection/scatter
-logic, no behavior change.
 
 2026 rshomberg@uri.edu
 """
@@ -172,8 +169,8 @@ def export_track_with_targets_png(
     bounding box, making saved dimensions vary with a survey's real
     aspect ratio despite the figure always being created at one fixed
     size. This is the function `sidescan-export track` actually calls
-    whenever `--targets-json` is given -- i.e. every real mission with
-    an `targets.csv` -- so it needed the identical fix.
+    whenever `--targets-json` is given -- i.e. every survey with a
+    target catalog.
     """
     fig, _ax = plot_track_with_targets(track, targets, crs=crs, show_land=show_land, show_locator=show_locator)
     fig.savefig(output_path, dpi=dpi)

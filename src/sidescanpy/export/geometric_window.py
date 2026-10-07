@@ -180,7 +180,7 @@ def extract_geometric_window(
         pixel density on both axes. On a survey whose along-track
         native resolution is much coarser than across-track (ping
         spacing an order of magnitude or more wider than sample
-        interval — real vendor-format data measured at ~16:1), the
+        interval — one real survey measured at ~16:1), the
         along-track search radius floor (tied to real ping-to-ping
         gaps, independent of ``resolution_m`` — see
         ``along_search_radius_m`` above) ends up wide relative to a
@@ -499,8 +499,8 @@ def extract_geometric_window_griddata(
     sample are NaN -- outside the recorded swath (past max range, the
     nadir gap, the excluded channel of a single-channel window), where
     either pass above would otherwise extend the nearest edge sample
-    into smeared wedges/streaks of invented seafloor (seen on real
-    survey-a chips wider than the swath, 2026-09-29).
+    into smeared wedges/streaks of invented seafloor (seen on
+    chips wider than the swath).
     ``None`` (default) derives it from the data: 1.5x the larger of
     the 95th-percentile along-track ping gap, the median across-track
     sample step, and the output resolution -- so gaps *between* real
@@ -566,7 +566,7 @@ def extract_geometric_window_griddata(
         # loaded neighborhood (the full swath across-track, plus along-
         # track slack) -- Delaunay cost scales with point count, and a
         # tight chip can be a few percent of what's loaded (real case:
-        # ~11s per dual-swath window on survey-a before this).
+        # ~11s per dual-swath window without this).
         # A margin of 2x max_fill_distance_m keeps every point that can
         # affect a cell: cells with no point within max_fill_distance_m
         # are NaN below anyway, and interpolation triangles near the

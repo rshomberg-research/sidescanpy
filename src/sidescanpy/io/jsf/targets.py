@@ -4,9 +4,7 @@ EdgeTech Discover SQLite ``.target`` catalog reader.
 Discover writes one SQLite database per target pick (``Target-NNNN.target``),
 holding a raw JSF ping-sample window plus position metadata. Schema
 (``Target``, ``PingChannel``, ``MutableTarget``, ``MutableTag`` tables) was
-reverse-engineered by hand in a prior one-off session and re-verified
-directly against real data (``~/data/sidescan/project-a/unknown/Targets/``)
-before porting here.
+reverse-engineered by hand and verified against real Discover target files.
 
 Known gotchas this reader accounts for:
 
@@ -33,8 +31,7 @@ Known gotchas this reader accounts for:
   this is normal (no classification was ever recorded), not a read failure;
   ``label`` stays ``None`` rather than a placeholder string.
 
-Position formula (validated visually against 6+ real targets in the prior
-session, re-confirmed numerically here): within the ping window sorted by
+Position formula (validated visually against 6+ real targets): within the ping window sorted by
 sequence number, the target's row is the index of its own
 ``PingSequenceNumber``; its column is
 ``round(SlantRangeDistanceMeters / PingMetersPerSample)`` using the
@@ -222,20 +219,12 @@ def decode_and_correct_window(target: Target, *, freq_hz: float) -> tuple[np.nda
     TVG -> orient-for-display chain used everywhere this project renders
     a target crop.
 
-    No longer applies ``targets.core.detrend_by_range`` (removed
-    2026-08-13): a diagnostic comparing this survey's actual +/-3m target
-    crops against control windows well away from any target found the
-    per-column median swing detrend subtracts (3-12 dB) is present
-    whether or not a target is there, and is far larger than what the
-    confirmed whole-swath range residual (Known Issue #4, sidescanpy/
-    CLAUDE.md) could produce over a window that narrow (<1.3 dB even at
-    the residual's steepest) — i.e. detrend was mostly flattening real
-    seafloor texture at crop scale, not correcting the residual it was
-    built for. See ``project-a/scripts/debug/
-    tvg_range_residual_diagnostic.py`` for that methodology, kept as a
-    reusable tool independent of this decision — ``detrend_by_range``
-    itself is untouched in ``targets.core`` for any caller that still
-    wants it.
+    Deliberately does not apply ``targets.core.detrend_by_range``: the
+    per-column median swing it subtracts (3-12 dB on real crops) is
+    present whether or not a target is there, so it mostly flattens real
+    seafloor texture at crop scale rather than correcting a range residual.
+    ``detrend_by_range`` remains available in
+    ``targets.core`` for any caller that wants it.
 
     Kept in this module (not ``targets.core``, despite operating on a
     ``Target``) because it composes ``decode_target_window``, which is

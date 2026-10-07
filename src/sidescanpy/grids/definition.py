@@ -104,11 +104,9 @@ class GridDefinition:
         Euclidean distance. Web Mercator's vertical scale is
         1/cos(latitude), so a Euclidean distance in its projected meters
         overstates true ground distance away from the equator (e.g.
-        ~39% too large at 44°N) — this silently made extent_m_ns/
+        ~39% too large at 44°N) — that would make extent_m_ns/
         extent_m_ew, and therefore num_cells_ns/num_cells_ew, wrong for
-        any WGS84 grid away from the equator. Fixed 2026-07-02; found
-        while investigating why gridded output looked noisier than
-        expected relative to the requested resolution_m.
+        any WGS84 grid away from the equator.
         """
         if self.crs.to_epsg() != 4326:
             raise RuntimeError(
@@ -421,10 +419,7 @@ def bbox_from_channel_dataset(
     per-sample lat/lon extent, with a small margin so edge cells aren't
     clipped.
 
-    Promoted from a project-local helper (``auto_grid_bbox`` in
-    ``project-a/scripts/visualization_demo.py``) — same logic, renamed
-    to fit this module's existing ``utm_crs_for_lonlat``/
-    ``utm_grid_from_wgs84_bbox`` naming. Typically the first step before
+    Typically the first step before
     ``utm_grid_from_wgs84_bbox`` when auto-fitting a grid to a segment.
 
     Parameters
@@ -449,8 +444,8 @@ def bbox_from_channel_dataset(
     lats = ds["latitude_per_sample"].values
     lons = ds["longitude_per_sample"].values
     # Finite alone isn't enough -- a physically-invalid-but-finite value
-    # (e.g. lat=103 deg, found via a synthetic-data exercise tracing to a
-    # corrupted compute_georeferencing() result) can blow up this bbox's
+    # (e.g. lat=103 deg from a corrupted
+    # compute_georeferencing() result) can blow up this bbox's
     # extent, which then blows up an auto-selected UTM grid's cell count
     # downstream (OverflowError converting an infinite cell count to
     # int). One bad sample in an otherwise-good survey shouldn't be able
