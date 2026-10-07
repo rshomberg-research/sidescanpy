@@ -184,14 +184,10 @@ class TestBackscatter:
             if finite.size > 0:
                 assert finite.min() >= 0
 
-    def test_backscatter_raw_equals_intensity(self, real_survey):
-        """Raw and intensity start identical (pre-radiometric)."""
+    def test_no_raw_copy(self, real_survey):
+        """Converters no longer write a backscatter_raw copy."""
         for fk in real_survey.frequencies:
-            ch = real_survey.get_frequency(fk)
-            np.testing.assert_array_equal(
-                ch.dataset["backscatter_raw"].values,
-                ch.dataset["backscatter_intensity"].values,
-            )
+            assert "backscatter_raw" not in real_survey.get_frequency(fk).dataset
 
     def test_backscatter_dtype_float32(self, real_survey):
         for fk in real_survey.frequencies:
@@ -340,7 +336,7 @@ def test_print_pipeline_summary(real_survey, capsys):
         print(f"\n--- {fk} ---")
         print(f"  Pings × Channels × Samples: {dict(ds.sizes)}")
         print(f"  Sample rate: {ds.attrs.get('sample_rate_hz', 'unknown')} Hz")
-        print(f"  Processing level: {ds.attrs.get('processing_level', 'unknown')}")
+        print(f"  Processing level: {ds.sidescan.processing_level}")
 
         bs = ds["backscatter_intensity"].values
         finite = bs[np.isfinite(bs)]

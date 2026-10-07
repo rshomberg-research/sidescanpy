@@ -42,17 +42,17 @@ class TestFrequencyChannelInit:
         "missing_var",
         ["latitude", "longitude", "heading_deg", "depth_m",
          "roll_deg", "pitch_deg", "heave_m", "altitude_m",
-         "sound_vel_ms", "backscatter_raw", "backscatter_intensity"],
+         "sound_vel_ms", "backscatter_intensity"],
     )
     def test_missing_required_variable_raises(self, sample_dataset, missing_var):
         bad = sample_dataset.drop_vars(missing_var)
-        with pytest.raises(ValueError, match="Missing variables"):
+        with pytest.raises(ValueError, match="Missing (variables|dimensions)"):
             SideScanFrequencyChannel(bad)
 
     @pytest.mark.parametrize(
         "missing_attr",
         ["freq_hz_start", "freq_hz_end", "pulse_length_us",
-         "sample_rate_hz", "processing_level", "processing_history"],
+         "sample_rate_hz"],
     )
     def test_missing_required_attr_raises(self, sample_dataset, missing_attr):
         bad = sample_dataset.copy()

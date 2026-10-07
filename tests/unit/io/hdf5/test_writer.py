@@ -187,7 +187,7 @@ class TestWriteCompression:
         with h5netcdf.File(str(p), "r") as f:
             for fk in sample_full_survey.frequencies:
                 grp = f[f"{HDF5_GROUP_FREQUENCIES}/{fk}"]
-                for var in ("backscatter_raw", "backscatter_intensity"):
+                for var in ("backscatter_intensity",):
                     assert grp[var].compression == "gzip", (
                         f"{fk}/{var} should be gzip-compressed"
                     )

@@ -429,12 +429,13 @@ class TestMetadataTracking:
         {"n_pings": 10, "n_samples": 50, "backscatter_val": 1.0}
     ], indirect=True)
     def test_processing_level_updated(self, sample_dataset):
-        """Processing level should change from raw to radiometric."""
+        """Derived processing level goes raw -> tvg; legacy attribute dropped."""
         ds = sample_dataset
-        assert ds.attrs["processing_level"] == "raw"
+        assert ds.sidescan.processing_level == "raw"
 
         result = apply_tvg(ds)
-        assert result.attrs["processing_level"] == "radiometric"
+        assert result.sidescan.processing_level == "tvg"
+        assert "processing_level" not in result.attrs
 
     @pytest.mark.parametrize("sample_dataset", [
         {"n_pings": 10, "n_samples": 50, "backscatter_val": 1.0}
@@ -446,7 +447,7 @@ class TestMetadataTracking:
 
         history = json.loads(result.attrs["processing_history"])
         assert len(history) == 1
-        assert history[0]["step"] == "tvg_correction"
+        assert history[0]["step"] == "tvg"
 
     @pytest.mark.parametrize("sample_dataset", [
         {"n_pings": 10, "n_samples": 50, "backscatter_val": 1.0}

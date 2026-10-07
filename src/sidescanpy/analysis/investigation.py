@@ -37,6 +37,7 @@ import xarray as xr
 # module has grown way out of control and certainly is not working very well
 from sidescanpy.analysis.tvg_diagnostics import fit_hardware_tvg_curve, mean_backscatter_vs_range
 from sidescanpy.core.units import MIN_LINEAR
+from sidescanpy.processing.inversion import uncorrected_backscatter
 from sidescanpy.processing.radiometric import absorption_for_frequency
 
 logger = logging.getLogger(__name__)
@@ -231,7 +232,7 @@ def detect_first_bottom_return(
     ----------
     value_arr : np.ndarray
         Shape (ping, channel, sample), linear amplitude (e.g.
-        `backscatter_raw`) — not dB. This looks for a multiplicative
+        the uncorrected `backscatter_intensity`) — not dB. This looks for a multiplicative
         step, which reads clearly in linear amplitude.
     smooth_window : int, default 10
     threshold_fraction : float, default 0.2
@@ -515,8 +516,8 @@ def detect_nadir_noise_extent(
 def blank_nadir_noise(
     ds: xr.Dataset,
     *,
-    value_vars: tuple[str, ...] = ("backscatter_raw", "backscatter_intensity"),
-    detector_value_var: str = "backscatter_raw",
+    value_vars: tuple[str, ...] = ("backscatter_intensity",),
+    detector_value_var: str = "backscatter_intensity",
     search_window: int = 100,
     smooth_window: int = 5,
     threshold_fraction: float = 0.2,
@@ -541,10 +542,10 @@ def blank_nadir_noise(
 
     Parameters
     ----------
-    value_vars : tuple of str, default ("backscatter_raw", "backscatter_intensity")
+    value_vars : tuple of str, default ("backscatter_intensity",)
         Every var present in `ds` gets zeroed identically. Vars not
         present are skipped rather than raising.
-    detector_value_var : str, default "backscatter_raw"
+    detector_value_var : str, default "backscatter_intensity"
         Which variable `detect_nadir_noise_extent` computes the
         boundary from.
     margin_samples : int, default 0
@@ -561,7 +562,7 @@ def blank_nadir_noise(
         Copy of `ds`; unmodified if none of `value_vars` are present.
     """
     boundary = detect_nadir_noise_extent(
-        np.asarray(ds[detector_value_var].values),
+        _detector_values(ds, detector_value_var),
         search_window=search_window,
         smooth_window=smooth_window,
         threshold_fraction=threshold_fraction,
@@ -576,6 +577,15 @@ def blank_nadir_noise(
             zeroed = _mask_before_sample(out[var].values, boundary, fill_value=0.0)
             out[var] = (out[var].dims, zeroed.astype(dtype))
     return out
+
+
+def _detector_values(ds: xr.Dataset, var: str) -> np.ndarray:
+    """Values a boundary detector runs on: for ``backscatter_intensity``, the
+    uncorrected signal (recorded radiometric steps inverted), so detection
+    is identical before and after TVG."""
+    if var == "backscatter_intensity":
+        return np.asarray(uncorrected_backscatter(ds).values)
+    return np.asarray(ds[var].values)
 
 
 def _resolve_channel_idx(ds: xr.Dataset, channel: int | str, *, caller: str) -> int:
@@ -669,8 +679,8 @@ def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float 
 def mask_nadir_gap(
     ds: xr.Dataset,
     *,
-    value_vars: tuple[str, ...] = ("backscatter_raw", "backscatter_intensity"),
-    detector_value_var: str = "backscatter_raw",
+    value_vars: tuple[str, ...] = ("backscatter_intensity",),
+    detector_value_var: str = "backscatter_intensity",
     range_var: str = "ground_range_m",
     smooth_window: int = 10,
     threshold_fraction: float = 0.2,
@@ -709,17 +719,17 @@ def mask_nadir_gap(
 
     Parameters
     ----------
-    value_vars : tuple of str, default ("backscatter_raw", "backscatter_intensity")
+    value_vars : tuple of str, default ("backscatter_intensity",)
         Every var present in `ds` gets masked identically (same
         boundary, both raw and TVG-corrected data occupy the same
         un-illuminated span). Vars not present in `ds` are skipped
         rather than raising, so this works whether or not TVG has been
         applied yet.
-    detector_value_var : str, default "backscatter_raw"
+    detector_value_var : str, default "backscatter_intensity"
         Which variable `detect_first_bottom_return` computes the
-        boundary from -- raw amplitude, deliberately, so masking is
-        identical regardless of which `value_vars` are present or what
-        TVG has already been applied to them.
+        boundary from. ``backscatter_intensity`` is detected on its
+        uncorrected (history-inverted) values, so masking is identical
+        whether or not TVG has been applied.
     range_var : str, default "ground_range_m"
         If present, used to compute the altitude sample and pass it as
         `detect_first_bottom_return`'s `min_sample` floor -- the real
@@ -757,13 +767,13 @@ def mask_nadir_gap(
     if min_first_bottom_return_sample is not None:
         if altitude_sample is None:
             effective_min_sample = np.full(
-                np.asarray(ds[detector_value_var].values).shape[:-1], float(min_first_bottom_return_sample),
+                _detector_values(ds, detector_value_var).shape[:-1], float(min_first_bottom_return_sample),
             )
         else:
             effective_min_sample = np.fmax(altitude_sample, min_first_bottom_return_sample)
 
     boundary = detect_first_bottom_return(
-        np.asarray(ds[detector_value_var].values),
+        _detector_values(ds, detector_value_var),
         smooth_window=smooth_window,
         threshold_fraction=threshold_fraction,
         min_run=min_run,
@@ -785,7 +795,7 @@ def mask_nadir_gap(
 # ============================================================
 
 
-def stage1_characterize(ds: xr.Dataset, value_var: str = "backscatter_raw") -> StageResult:
+def stage1_characterize(ds: xr.Dataset, value_var: str = "backscatter_intensity") -> StageResult:
     """Data type, range, and distribution of `value_var`, no interpretation."""
     arr = np.asarray(ds[value_var].values)
     finite = arr[np.isfinite(arr)]
@@ -820,7 +830,7 @@ def stage1_characterize(ds: xr.Dataset, value_var: str = "backscatter_raw") -> S
 
 def stage1_5_outlier_comparison(
     ds: xr.Dataset,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     range_var: str = "ground_range_m",
     *,
     bin_width_m: float = 5.0,
@@ -883,7 +893,7 @@ def stage1_5_outlier_comparison(
 
 def stage2_nadir(
     ds: xr.Dataset,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     range_var: str = "ground_range_m",
     *,
     nadir_n_samples: int = 50,
@@ -1181,7 +1191,7 @@ def stage2_5_beam_geometry(
     ds: xr.Dataset,
     stage2: StageResult,
     stage3: StageResult,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     range_var: str = "across_track_m",
     slant_range_var: str = "slant_range_m",
     *,
@@ -1253,7 +1263,7 @@ def stage2_5_beam_geometry(
     stage3 : StageResult
         A `stage3_usable_range()` result — supplies `usable_range_m`
         for the far edge.
-    value_var : str, default "backscatter_raw"
+    value_var : str, default "backscatter_intensity"
     range_var : str, default "across_track_m"
         Signed cross-track distance (port negative, starboard
         positive) — the natural shared x-axis between the geometry
@@ -1469,7 +1479,7 @@ def stage2_5_beam_geometry(
 
 def stage3_usable_range(
     ds: xr.Dataset,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     range_var: str = "slant_range_m",
     *,
     bin_width_m: float = 2.0,
@@ -1708,7 +1718,7 @@ def _auto_near_edge_m(
 
 def stage4_decay(
     ds: xr.Dataset,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     range_var: str = "slant_range_m",
     *,
     already_db: bool = False,

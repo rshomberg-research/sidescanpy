@@ -18,7 +18,7 @@ import pandas as pd
 import xarray as xr
 
 from sidescanpy.core.units import linear_to_db
-from sidescanpy.processing.pipeline import apply_correction_steps
+from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.profiles import (  # noqa: F401 (re-export)
     _bin_stats,
     mean_backscatter_vs_range,
@@ -38,15 +38,11 @@ def before_after_backscatter(
     Parameters
     ----------
     ds_raw : xr.Dataset
-        Valid frequency channel dataset with processing_level == "raw".
+        Uncorrected frequency channel dataset (no TVG applied; see
+        `sidescanpy.processing.invert`).
     params : TVGParams, optional
-        Custom TVG parameters (e.g. for an absorption-coefficient sweep).
-        Passed directly to `apply_tvg()` rather than through
-        `apply_correction_steps(ds_raw, {"tvg"}, step_params=...)` —
-        both now support custom `TVGParams` (`step_params` added
-        alongside this module's `fit_hardware_tvg_curve()`), this
-        function just has no reason to route through the extra
-        machinery for a single step it already calls directly.
+        Custom TVG parameters (e.g. for an absorption-coefficient sweep),
+        passed to `apply_tvg()`.
 
     Returns
     -------
@@ -57,7 +53,7 @@ def before_after_backscatter(
         `backscatter_db_corrected` (real `apply_tvg()` output), and
         `tvg_gain_db` (corrected - raw, the actual applied gain curve).
     """
-    ds_geom = apply_correction_steps(ds_raw, {"geometric"})
+    ds_geom = compute_geometric_ranges(ds_raw)
     ds_tvg = apply_tvg(ds_raw, params)
 
     backscatter_db_raw = linear_to_db(ds_raw["backscatter_intensity"])

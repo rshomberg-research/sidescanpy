@@ -265,7 +265,7 @@ class TestRoundTripAttrs:
             for key in (
                 "freq_hz_start", "freq_hz_end",
                 "pulse_length_us", "sample_rate_hz",
-                "processing_level", "processing_history",
+                "processing_history",
             ):
                 assert new[key] == orig[key]
 

@@ -19,6 +19,7 @@ from matplotlib.axes import Axes
 from matplotlib.colors import Colormap, PowerNorm
 from matplotlib.ticker import FuncFormatter
 
+from sidescanpy.core.history import processing_level
 from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.processing.navigation import along_track_distance_m as _along_track_distance_m
 from sidescanpy.processing.sample_axis import sample_index
@@ -76,8 +77,9 @@ def plot_waterfall(
         Validated sidescan dataset.
     value_var : str, default "backscatter_intensity"
         Which backscatter variable to plot -- the TVG-corrected default,
-        or ``"backscatter_raw"`` for an uncorrected view. Always present
-        regardless of what correction stages have run (raw is immutable).
+        or any other per-sample variable (e.g. one holding
+        ``sidescanpy.processing.uncorrected_backscatter(ds)`` for an
+        uncorrected view of a corrected dataset).
     start : int, default 0
         First ping index to include.
     stop : int, optional
@@ -234,7 +236,7 @@ def plot_waterfall(
 
     # Title
     if title is None:
-        proc_level = ds.attrs.get("processing_level", "raw")
+        proc_level = processing_level(ds)
         title_start = start + ping_offset
         title_stop = (stop if stop is not None else ds.sizes["ping"]) + ping_offset
         title = f"Waterfall  pings {title_start}–{title_stop}  ({proc_level})"
@@ -329,7 +331,7 @@ def plot_survey_overview(
     strided = ds.isel(ping=slice(0, None, ping_stride))
 
     if title is None:
-        proc_level = ds.attrs.get("processing_level", "raw")
+        proc_level = processing_level(ds)
         title = f"Survey overview  {n_pings} pings, 1:{ping_stride} compressed  ({proc_level})"
 
     ax = plot_waterfall(

@@ -254,7 +254,6 @@ def _build_channel_dataset(
         "freq_hz_end": int(freq_hz),
         "sample_rate_hz": float(sample_rate_hz),
         "pulse_length_us": 0.0,
-        "processing_level": "raw",
         "processing_history": json.dumps([]),
     }
 
@@ -268,8 +267,7 @@ def _build_channel_dataset(
     }
 
     data_vars = {
-        "backscatter_intensity": (["ping", "channel", "sample"], bs.copy()),
-        "backscatter_raw": (["ping", "channel", "sample"], bs.copy()),
+        "backscatter_intensity": (["ping", "channel", "sample"], bs),
         "valid_samples": (["ping", "channel"], valid_samples),
         "latitude": (["ping"], latitudes),
         "longitude": (["ping"], longitudes),

@@ -21,7 +21,9 @@ Conventions
 -----------
 - All time coordinates are ``datetime64[ns]``.
 - The ``channel`` dimension is always size 2 (port + starboard).
-- ``ds.attrs["processing_history"]`` is a JSON-encoded list of step records.
+- ``ds.attrs["processing_history"]`` is a JSON-encoded list of step records
+  (see :mod:`sidescanpy.core.history`); the processing level is derived from
+  it by :func:`processing_level`.
 - Empty-but-valid aux records (zero observations) are first-class — they
   validate cleanly and report ``is_empty() == True``.
 
@@ -30,6 +32,15 @@ See ``docs/core.md`` for full reference.
 2026 rshomberg@uri.edu
 """
 
+from sidescanpy.core.history import (
+    BUILTIN_STEPS,
+    PROCESSING_LEVELS,
+    RADIOMETRIC_STEPS,
+    applied_steps,
+    has_step,
+    processing_level,
+    read_history,
+)
 from sidescanpy.core.schema import (
     HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
@@ -65,6 +76,13 @@ from sidescanpy.core.survey import (
 )
 
 __all__ = [
+    "BUILTIN_STEPS",
+    "PROCESSING_LEVELS",
+    "RADIOMETRIC_STEPS",
+    "applied_steps",
+    "has_step",
+    "processing_level",
+    "read_history",
     "HDF5_CHUNK_PING",
     "HDF5_COMPRESSION",
     "HDF5_COMPRESSION_LEVEL",

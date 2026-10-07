@@ -119,6 +119,21 @@ class SideScanSurvey:
         self._dvl:        xr.Dataset | None = None
         self._sensors:    dict[str, xr.Dataset] = {}
 
+    def copy(self) -> "SideScanSurvey":
+        """Shallow copy: same channel/aux dataset objects, new containers,
+        so channels can be replaced without touching this survey."""
+        new = SideScanSurvey(
+            source_files=list(self.source_files),
+            source_format=self.source_format,
+            survey_name=self.survey_name,
+        )
+        new._freq_channels = dict(self._freq_channels)
+        new._navigation = self._navigation
+        new._attitude = self._attitude
+        new._dvl = self._dvl
+        new._sensors = dict(self._sensors)
+        return new
+
     # ----- frequency channels -----
 
     def add_frequency(self, freq_key: str, dataset: xr.Dataset) -> None:

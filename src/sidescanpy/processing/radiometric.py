@@ -14,22 +14,23 @@ TVG correction adds these losses back, so equal backscatter at different ranges
 produces equal corrected values. This is essential for radiometric calibration
 and mosaic generation.
 
-Raw backscatter from this sonar is in LINEAR AMPLITUDE (0-81 range, float32).
-This module converts to dB, applies TVG, and outputs in dB.
+Input backscatter is assumed to be linear amplitude; this module converts to
+dB, applies TVG, and outputs dB. The step is recorded in ``processing_history``
+with its resolved parameters so it can be inverted exactly.
 
 2026 rshomberg@uri.edu
 """
 
-import json
 import logging
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
 
 import numpy as np
 import xarray as xr
 
+from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_TVG, append_history, has_step
 from sidescanpy.core.units import linear_to_db
-from sidescanpy.processing.sample_axis import sample_index
+from sidescanpy.processing.sample_axis import DEFAULT_SOUND_VEL_MS, sample_index
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,15 @@ class TVGParams:
         Minimum range threshold (meters).
         Ranges below this are clipped to avoid log(0) singularity.
         Typical value 0.5 m accounts for transducer blanking.
+    sound_velocity_ms : float, optional
+        Sound velocity (m/s) used to turn sample index into slant range.
+        If None, the mean of the dataset's per-ping ``sound_vel_ms``.
     """
 
     spreading_loss_db: float = 20.0
-    absorption_db_per_m: float = None
+    absorption_db_per_m: float | None = None
     min_range_m: float = 0.5
+    sound_velocity_ms: float | None = None
 
 
 def absorption_for_frequency(freq_hz: float) -> float:
@@ -200,225 +205,119 @@ def apply_tvg_to_amplitude(
 
 def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     """
-    Apply time-varying gain (TVG) correction to raw backscatter_intensity.
+    Apply time-varying gain (TVG) correction to ``backscatter_intensity``.
 
     Compensates for geometric spreading and acoustic absorption losses.
-    Converts raw linear amplitude to dB, applies TVG gain, and returns
-    corrected dB values.
+    Converts linear amplitude to dB (``20*log10(clip(x, 1e-6))``, see
+    :mod:`sidescanpy.core.units`), adds the TVG gain for each sample's slant
+    range, and returns corrected dB values in place of the input.
 
-    **IMPORTANT**: Raw backscatter_intensity is assumed to be in LINEAR AMPLITUDE
-    (0-81 range, float32). This function converts to dB internally.
+    Input ``backscatter_intensity`` is assumed to be linear amplitude; the
+    library does not check this (what units the input data is in is the
+    caller's knowledge). Exact-zero amplitude maps to the -120 dB floor.
 
-    Conversion: 20 * log10(clip(linear_value, 1e-6))
-    - Values < 1e-6 are clipped to prevent log(0)
-    - Maps to approximately -120 dB (well below noise floor)
-    - Preserves zero values appropriately (water column)
-
-    **Known issue (root cause unconfirmed):** the "water column" assumption above for the clipped-
-    to-floor population is not yet confirmed. On real data, ~1% of
-    samples hit this exact floor, clustered in a fixed leading run of
-    ~50-60 samples at the *start* of every ping (not scattered through
-    the range, not correlated with `altitude_m`), and — critically —
-    `ground_range_m` at those samples does *not* collapse toward zero
-    the way genuine water-column returns should (see
-    `processing/geometric.py`'s `compute_geometric_ranges` masking).
-    Whatever these samples are, the existing water-column mask isn't
-    catching them, so they pass `resample_channel_to_grid()`'s
-    finite-coordinate filter and get included in gridding — a related range-dependent TVG residual can be handled
-    separately with the empirical range correction.
+    The step is recorded in ``processing_history`` as ``"tvg"`` with the
+    parameters actually used (defaults resolved), which is what
+    :func:`sidescanpy.processing.correct.invert` reads to undo it.
 
     Parameters
     ----------
     ds : xr.Dataset
-        Valid frequency channel dataset with processing_level == "raw".
-        Must have:
-        - backscatter_intensity (ping, channel, sample) in linear amplitude
-        - sound_vel_ms (ping) - sound velocity per ping
-        - altitude_m (ping) - altitude above bottom
-        Attributes must include:
-        - freq_hz_start, sample_rate_hz (from schema)
-        - processing_level == "raw"
-        - processing_history (JSON string)
-
+        Frequency channel dataset; needs ``backscatter_intensity``,
+        ``sound_vel_ms`` and the ``freq_hz_start``/``sample_rate_hz`` attrs.
     params : TVGParams, optional
-        TVG parameters. If None, uses frequency-appropriate defaults.
-        If params.absorption_db_per_m is None, derives from freq_hz_start.
+        If None, defaults with ``absorption_db_per_m`` derived from
+        ``freq_hz_start`` and ``sound_velocity_ms`` from the mean per-ping
+        ``sound_vel_ms``. The caller's object is never modified.
 
     Returns
     -------
     xr.Dataset
-        New dataset with:
-        - backscatter_intensity: TVG-corrected dB values
-        - backscatter_raw: original linear values (for reference)
-        - processing_level: "radiometric"
-        - processing_history: appended with TVG step
+        New dataset with TVG-corrected dB ``backscatter_intensity`` and the
+        ``"tvg"`` history record appended.
 
     Raises
     ------
     ValueError
-        If processing_level is not "raw" (prevents double-application).
-
-    Examples
-    --------
-    >>> import xarray as xr
-    >>> from sidescanpy.processing.radiometric import apply_tvg, TVGParams
-    >>>
-    >>> # Load raw data
-    >>> ds_raw = xr.open_dataset("survey.ss.h5", group="frequencies/hz_1495000",
-    ...                           engine="h5netcdf")
-    >>>
-    >>> # Apply TVG with defaults
-    >>> ds_tvg = apply_tvg(ds_raw)
-    >>>
-    >>> # Or specify custom absorption
-    >>> params = TVGParams(absorption_db_per_m=0.25)
-    >>> ds_tvg = apply_tvg(ds_raw, params)
-    >>>
-    >>> # Save corrected data
-    >>> ds_tvg.to_netcdf("survey.radiometric.nc")
+        If TVG has already been applied (prevents double application).
     """
-    # Validate input dataset
     ds.sidescan.validate()
+    if has_step(ds, STEP_TVG):
+        raise ValueError("TVG has already been applied to this dataset (found in processing_history).")
 
-    # Check processing level
-    if ds.attrs["processing_level"] != "raw":
-        raise ValueError(
-            f"TVG expects processing_level 'raw', got '{ds.attrs['processing_level']}'. "
-            "Has TVG already been applied?"
-        )
-
-    # Set default parameters if needed
-    if params is None:
-        freq_hz = ds.attrs["freq_hz_start"]
-        alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(absorption_db_per_m=alpha)
-    elif params.absorption_db_per_m is None:
-        params.absorption_db_per_m = absorption_for_frequency(
-            ds.attrs["freq_hz_start"]
-        )
-
+    params = resolve_tvg_params(ds, params)
     logger.debug(
-        "Applying TVG: freq=%s Hz, spreading=%.1f dB/dec, absorption=%.4f dB/m",
-        ds.attrs["freq_hz_start"],
-        params.spreading_loss_db,
-        params.absorption_db_per_m,
+        "Applying TVG: freq=%s Hz, spreading=%.1f dB/dec, absorption=%.4f dB/m, "
+        "min_range=%.2f m, sound_velocity=%.1f m/s",
+        ds.attrs["freq_hz_start"], params.spreading_loss_db, params.absorption_db_per_m,
+        params.min_range_m, params.sound_velocity_ms,
     )
 
-    # ========================================================================
-    # Step 1: Convert raw linear amplitude to dB
-    # ========================================================================
-    # Raw values are in range 0-81 (float32)
-    # Convert to dB: 20*log10(linear_value)
-    # Clip minimum value to avoid log(0): values < 1e-6 map to ~-120 dB
-    raw_linear = ds["backscatter_intensity"]
-    backscatter_db = linear_to_db(raw_linear)
-
-    logger.debug(
-        "Linear→dB conversion: min=%.2f dB, max=%.2f dB, mean=%.2f dB",
-        float(backscatter_db.min()),
-        float(backscatter_db.max()),
-        float(backscatter_db.mean()),
-    )
-
-    # ========================================================================
-    # Step 2: Compute slant range array for each sample
-    # ========================================================================
-    # Range for sample i: R[i] = i * (sound_velocity / (2 * sample_rate))
-    sample_rate = ds.attrs["sample_rate_hz"]
-    sample_idx = sample_index(ds)
-    sound_velocity = ds["sound_vel_ms"].mean().item()  # scalar, m/s
-    # FIXME: sound_velocity should change at each ping
-    # Also catches exactly-zero (not just NaN): some JSF files have
-    # sound_vel_ms exactly 0.0 for every ping, which would pin every
-    # sample's slant range at min_range_m. Matches geometric.py's
-    # `invalid_sv` check.
-    if np.isnan(sound_velocity) or sound_velocity <= 0:
-        sound_velocity = 1500.0
-
-    sample_interval_m = sound_velocity / (2.0 * sample_rate)
-    slant_range = (sample_idx * sample_interval_m).astype(np.float32)
-    slant_range = np.clip(slant_range, params.min_range_m, None)
-
-    logger.debug(
-        "Slant range: sample_interval=%.4f m, max_range=%.1f m",
-        sample_interval_m,
-        float(slant_range[-1]),
-    )
-
-    # ========================================================================
-    # Step 3: Compute TVG gain (dB) for each sample
-    # ========================================================================
-    # TVG = spreading_loss + absorption_loss — see tvg_gain_db() docstring
-    tvg_db = tvg_gain_db(slant_range, params)
-
-    logger.debug(
-        "TVG gains: min=%.2f dB, max=%.2f dB (at %.1f m)",
-        float(tvg_db[0]),
-        float(tvg_db[-1]),
-        float(slant_range[-1]),
-    )
-
-    # FIXME: I am not 100% sure that the backscatter values are in intensity.
-    # They could be in -db. The range is about 0-80, while db expectations would
-    # be -80 to 0
-
-    # ========================================================================
-    # Step 4: Apply TVG correction
-    # ========================================================================
-    # corrected = backscatter_db + tvg_db
-    # tvg_db has shape (n_samples,) and broadcasts over (ping, channel, sample)
+    backscatter_db = linear_to_db(ds["backscatter_intensity"])
     # Keep the input dtype (float32): never upcast the big array.
-    tvg_db = tvg_db.astype(backscatter_db.dtype)
+    tvg_db = tvg_gain_for_dataset(ds, params).astype(backscatter_db.dtype)
     corrected_db = backscatter_db + xr.DataArray(tvg_db, dims=["sample"])
-    # corrected_db = np.clip(corrected_db, 0, None)   # FIXME: fix the clipping
 
-    logger.debug(
-        "After TVG: min=%.2f dB, max=%.2f dB, mean=%.2f dB",
-        float(corrected_db.min()),
-        float(corrected_db.max()),
-        float(corrected_db.mean()),
+    ds_out = ds.copy(deep=False)
+    ds_out = ds_out.assign(backscatter_intensity=corrected_db)
+    return append_history(
+        ds_out, STEP_TVG, tvg_params_record(params),
+        function="sidescanpy.processing.radiometric.apply_tvg", version=__version__,
     )
 
-    # ========================================================================
-    # Step 5: Build output dataset
-    # ========================================================================
-    ds_out = ds.copy(deep=False)             # shallow — share refs
-    ds_out.attrs = dict(ds.attrs)             # shallow but with our own attrs dict
-    ds_out = ds_out.assign(
-        backscatter_intensity=corrected_db,    # replaces ref to old array
-    )
-    # ds_out["backscatter_intensity"] = corrected_db
-    # ds_out["backscatter_raw"] = backscatter_db  # Store dB version for reference
 
-    # ========================================================================
-    # Step 6: Update processing provenance
-    # ========================================================================
-    history = json.loads(ds.attrs["processing_history"])
-    history.append(
-        {
-            "step": "tvg_correction",
-            "timestamp_utc": datetime.now(UTC).isoformat(),
-            "params": {
-                "spreading_loss_db": params.spreading_loss_db,
-                "absorption_db_per_m": params.absorption_db_per_m,
-                "min_range_m": params.min_range_m,
-                "sound_velocity_source": "mean_of_per_ping_values",
-                "sound_velocity_used_ms": float(sound_velocity),
-            },
-            "unit_conversion": {
-                "raw_format": "linear_amplitude (0-81)",
-                "conversion": "20*log10(clip(value, 1e-6))",
-                "output_format": "dB",
-            },
-            "function": "sidescanpy.processing.radiometric.apply_tvg",
-        }
-    )
-    ds_out.attrs["processing_level"] = "radiometric"
-    ds_out.attrs["processing_history"] = json.dumps(history)
+def resolve_tvg_params(ds: xr.Dataset, params: TVGParams | None) -> TVGParams:
+    """Fill a TVGParams' unset fields from ``ds`` (new object; input untouched).
 
-    logger.debug(
-        "TVG applied successfully. Output: processing_level='radiometric', "
-        "processing_history appended with step 'tvg_correction'."
-    )
+    ``absorption_db_per_m=None`` -> :func:`absorption_for_frequency` of
+    ``freq_hz_start``; ``sound_velocity_ms=None`` -> mean of the per-ping
+    ``sound_vel_ms`` (NaN or non-positive mean falls back to 1500 m/s).
+    """
+    params = TVGParams() if params is None else replace(params)
+    if params.absorption_db_per_m is None:
+        params.absorption_db_per_m = absorption_for_frequency(ds.attrs["freq_hz_start"])
+        logger.debug("TVG absorption default for %s Hz: %.4f dB/m", ds.attrs["freq_hz_start"], params.absorption_db_per_m)
+    if params.sound_velocity_ms is None:
+        # TODO: per-ping sound velocity instead of one mean per channel.
+        sv = float(ds["sound_vel_ms"].mean().item())
+        if np.isnan(sv) or sv <= 0:
+            logger.debug("TVG: mean sound_vel_ms is %s; using %s m/s", sv, DEFAULT_SOUND_VEL_MS)
+            sv = DEFAULT_SOUND_VEL_MS
+        params.sound_velocity_ms = sv
+    return params
 
-    return ds_out
+
+def tvg_gain_for_dataset(ds: xr.Dataset, params: TVGParams) -> np.ndarray:
+    """Per-sample TVG gain (dB, float64, shape ``(n_samples,)``) for ``ds``.
+
+    Slant range of each sample is ``sample_index * c / (2 * fs)`` (absolute
+    sample index, so cropped datasets get the same gain per sample), clipped
+    to ``params.min_range_m``. ``params`` must be fully resolved
+    (see :func:`resolve_tvg_params`).
+    """
+    interval_m = params.sound_velocity_ms / (2.0 * float(ds.attrs["sample_rate_hz"]))
+    slant_range = np.clip(sample_index(ds) * interval_m, params.min_range_m, None)
+    return tvg_gain_db(slant_range, params)
+
+
+def tvg_params_record(params: TVGParams) -> dict:
+    """History-record params for a resolved TVGParams."""
+    return {
+        "spreading_loss_db": float(params.spreading_loss_db),
+        "absorption_db_per_m": float(params.absorption_db_per_m),
+        "min_range_m": float(params.min_range_m),
+        "sound_velocity_ms": float(params.sound_velocity_ms),
+    }
+
+
+def tvg_params_from_record(record_params: dict) -> TVGParams:
+    """TVGParams from a ``"tvg"`` history record (current or legacy key names)."""
+    sv = record_params.get("sound_velocity_ms", record_params.get("sound_velocity_used_ms"))
+    if sv is None:
+        raise ValueError(f"TVG history record has no sound velocity: {record_params}")
+    return TVGParams(
+        spreading_loss_db=float(record_params["spreading_loss_db"]),
+        absorption_db_per_m=float(record_params["absorption_db_per_m"]),
+        min_range_m=float(record_params.get("min_range_m", 0.5)),
+        sound_velocity_ms=float(sv),
+    )

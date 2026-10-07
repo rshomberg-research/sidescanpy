@@ -25,7 +25,7 @@ from sidescanpy.analysis.tvg_diagnostics import (
     mean_backscatter_vs_sample_index,
 )
 from sidescanpy.core.units import linear_to_db as _linear_to_db
-from sidescanpy.processing.pipeline import apply_correction_steps
+from sidescanpy.processing import correct
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
 # ============================================================
@@ -128,7 +128,7 @@ class TestBeforeAfterBackscatter:
     def test_ground_range_matches_geometric_only_pass(self):
         ds_raw = _make_test_dataset()
         out = before_after_backscatter(ds_raw)
-        ds_geom_only = apply_correction_steps(ds_raw, {"geometric"})
+        ds_geom_only = correct(ds_raw, ["geometric"])
         np.testing.assert_allclose(
             out["ground_range_m"].values,
             ds_geom_only["ground_range_m"].values,
@@ -139,8 +139,8 @@ class TestBeforeAfterBackscatter:
         """Regression guard: geometric ranges must not depend on whether
         TVG has been applied first."""
         ds_raw = _make_test_dataset()
-        ds_geom_only = apply_correction_steps(ds_raw, {"geometric"})
-        ds_tvg_geom = apply_correction_steps(ds_raw, {"tvg", "geometric"})
+        ds_geom_only = correct(ds_raw, ["geometric"])
+        ds_tvg_geom = correct(ds_raw, ["tvg", "geometric"])
         np.testing.assert_allclose(
             ds_geom_only["ground_range_m"].values,
             ds_tvg_geom["ground_range_m"].values,

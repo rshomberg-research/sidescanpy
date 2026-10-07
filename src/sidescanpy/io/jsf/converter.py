@@ -258,14 +258,12 @@ def _build_frequency_channel(
         # time resolution; see messages.py's own long-standing TODO on
         # sample_freq flagging exactly this.
         "sample_rate_hz":     1.0 / first.sample_interval,
-        "processing_level":   "raw",
         "processing_history": json.dumps([]),
     }
 
     ds = xr.Dataset(
         data_vars={
-            "backscatter_raw":       (["ping", "channel", "sample"], backscatter),
-            "backscatter_intensity": (["ping", "channel", "sample"], backscatter.copy()),
+            "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
             "latitude":     (["ping"], lat),
             "longitude":    (["ping"], lon),
             "heading_deg":  (["ping"], heading),

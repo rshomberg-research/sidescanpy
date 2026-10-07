@@ -47,15 +47,14 @@ def make_minimal_sidescan_dataset(
             (n_pings, n_channels, n_samples), backscatter_val, dtype=np.float32
         )
 
-    backscatter_raw = xr.DataArray(
+    backscatter = xr.DataArray(
         backscatter_data,
         dims=["ping", "channel", "sample"],
     )
 
     return xr.Dataset(
         {
-            "backscatter_raw": backscatter_raw,
-            "backscatter_intensity": backscatter_raw.copy(),
+            "backscatter_intensity": backscatter,
             "latitude":     (["ping"], np.linspace(40.0, 40.5, n_pings)),
             "longitude":    (["ping"], np.linspace(-70.0, -69.9, n_pings)),
             "heading_deg":  (["ping"], np.full(n_pings, 90.0, dtype=np.float32)),
@@ -77,7 +76,6 @@ def make_minimal_sidescan_dataset(
             "freq_hz_end":        freq_hz_end,
             "pulse_length_us":    0.5,
             "sample_rate_hz":     400_000,
-            "processing_level":   "raw",
             "processing_history": json.dumps([]),
         },
     )

@@ -103,12 +103,13 @@ from sidescanpy.cli._common import (
 )
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
+from sidescanpy.core.history import STEP_TVG, has_step
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.pipeline import reconstruct_raw
+from sidescanpy.processing.inversion import invert, uncorrected_backscatter
 from sidescanpy.processing.slicing import slice_by_pings
 from sidescanpy.viz.investigation import (
     apply_stage4_fit_window_limits,
@@ -159,6 +160,19 @@ def _resolve_and_load(input_path: Path, requested_frequency: str | None, chunks:
     available = available_frequencies(input_path, chunks)
     freq_key = resolve_freq_keys(available, requested_frequency)[0] if requested_frequency else sorted(available)[0]
     return freq_key, load_channel_dataset(input_path, freq_key, chunks)
+
+
+_UNCORRECTED_ALIAS = "backscatter_raw"
+
+
+def _ensure_value_vars(ds: xr.Dataset, args: argparse.Namespace) -> xr.Dataset:
+    """Provide ``backscatter_raw`` (the uncorrected signal, inverted from
+    ``processing_history``) when a ``--value-var`` asks for it and the file
+    has no such variable (files no longer store a raw copy)."""
+    wanted = {getattr(args, "value_var", None), getattr(args, "garbage_value_var", None)}
+    if _UNCORRECTED_ALIAS in wanted and _UNCORRECTED_ALIAS not in ds:
+        ds = ds.assign({_UNCORRECTED_ALIAS: uncorrected_backscatter(ds)})
+    return ds
 
 
 def _parse_numeric_or_literal(value: str | None) -> float | str | None:
@@ -241,15 +255,15 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
 
     freq_key, ds = _resolve_and_load(args.ss_h5, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
     if args.reconstruct_raw:
-        ds_raw = reconstruct_raw(ds)
+        ds_raw = invert(ds)
     else:
-        if ds.attrs.get("processing_level") != "raw":
+        if has_step(ds, STEP_TVG):
             logger.error(
-                f"{args.ss_h5} is processing_level={ds.attrs.get('processing_level')!r}, not 'raw' -- "
-                "pass --reconstruct-raw to rebuild a raw-equivalent dataset from backscatter_raw."
+                f"{args.ss_h5} is already TVG-corrected -- pass --reconstruct-raw to invert "
+                "the recorded corrections first."
             )
             return 1
         ds_raw = ds
@@ -348,7 +362,7 @@ def run_segment(args: argparse.Namespace) -> int:
     all_freq_keys = available_frequencies(args.input, _PING_CHUNKS)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
     segments = find_segments(
         ds,
@@ -417,7 +431,7 @@ def run_nadir(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
     stage2 = stage2_nadir(
@@ -470,7 +484,7 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
     stage2 = stage2_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
@@ -513,7 +527,7 @@ def run_usable_range(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
 
     stage3 = stage3_usable_range(
@@ -553,7 +567,7 @@ def run_units(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
     stage1 = stage1_characterize(ds, value_var=args.value_var)
     stage5 = stage5_units(stage1)
@@ -589,7 +603,7 @@ def run_nav_attitude(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
     result = nav_attitude_summary(ds, heading_var=args.heading_var)
 
@@ -631,7 +645,7 @@ def run_recommend_config(args: argparse.Namespace) -> int:
 
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
-    ds = ds.isel(ping=slice(start, stop)).load()
+    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
     stage1 = stage1_characterize(ds_geo, value_var=args.value_var)
@@ -683,7 +697,7 @@ def main() -> int:
     freq_group = p_inv.add_mutually_exclusive_group()
     freq_group.add_argument("--frequency", type=str, help="e.g. hz_1495000")
     freq_group.add_argument("--all-frequencies", action="store_true")
-    p_inv.add_argument("--value-var", default="backscatter_raw")
+    p_inv.add_argument("--value-var", default="backscatter_raw", help="Variable to analyze. backscatter_raw = the uncorrected signal (inverted from processing_history when the file stores no raw copy)")
     p_inv.add_argument("--pings", type=str, default="0:8000", help="Ping range 'start:stop' (stop empty = all)")
     p_inv.add_argument("--nadir-n-samples", type=int, default=50)
     p_inv.add_argument("--stage3-bin-width-m", type=float, default=2.0)
@@ -708,7 +722,7 @@ def main() -> int:
              "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
     )
     p_tvg.add_argument("--pings", type=_parse_ping_range, default=(0, 5000))
-    p_tvg.add_argument("--reconstruct-raw", action="store_true", help="Rebuild processing_level='raw' from backscatter_raw (needed for an already-pipelined .ss.h5)")
+    p_tvg.add_argument("--reconstruct-raw", action="store_true", help="Invert the recorded corrections first (needed for an already-corrected .ss.h5)")
     p_tvg.add_argument("--bin-width-m", type=float, default=1.0)
     p_tvg.add_argument("--r-ref-m", type=_parse_numeric_or_literal, default="auto", help="Number, 'auto' (default), or 'mid_swath'")
     p_tvg.add_argument("--r-fit-min-m", type=_parse_numeric_or_literal, default="auto", help="Number or 'auto' (default)")
@@ -766,7 +780,7 @@ def main() -> int:
                  "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
         )
         p.add_argument("--pings", type=_parse_ping_range, default=(0, 8000), help="'start:stop' (stop empty = all)")
-        p.add_argument("--value-var", default="backscatter_raw")
+        p.add_argument("--value-var", default="backscatter_raw", help="Variable to analyze. backscatter_raw = the uncorrected signal (inverted from processing_history when the file stores no raw copy)")
         p.add_argument("--output-dir", required=True, type=Path)
 
     p_nadir = subparsers.add_parser("nadir", help="Classify + locate nadir (Stage 2 on its own)")
@@ -844,7 +858,7 @@ def main() -> int:
              "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
     )
     p_rec.add_argument("--pings", type=_parse_ping_range, default=(0, None), help="'start:stop' (stop empty = all -- default: the whole section)")
-    p_rec.add_argument("--value-var", default="backscatter_raw")
+    p_rec.add_argument("--value-var", default="backscatter_raw", help="Variable to analyze. backscatter_raw = the uncorrected signal (inverted from processing_history when the file stores no raw copy)")
     p_rec.add_argument("--nadir-n-samples", type=int, default=50)
     p_rec.add_argument("--bin-width-m", type=float, default=1.0, help="Shared by usable-range and the adopted TVG-fit recipe, matching tvg-fit's own default")
     p_rec.add_argument("--snr-threshold", type=float, default=3.0)

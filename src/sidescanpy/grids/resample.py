@@ -14,6 +14,8 @@ import xarray as xr
 from pyproj import CRS, Transformer
 from scipy.spatial import cKDTree
 
+from sidescanpy.core.history import STEP_TVG, has_step
+from sidescanpy.core.history import processing_level as derived_processing_level
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 
@@ -76,7 +78,7 @@ def resample_channel_to_grid(
     method: ResamplingMethod = ResamplingMethod.MEAN,
     separate_sides: bool = False,
     max_search_radius_m: Optional[float] = None,
-    backscatter_var: str = "backscatter_raw",
+    backscatter_var: str = "backscatter_intensity",
 ) -> SideScanGriddedRaster:
     """
     Resample channel backscatter to a regular grid.
@@ -95,12 +97,13 @@ def resample_channel_to_grid(
         If False, merge port and starboard into single backscatter variable.
     max_search_radius_m : float, optional
         Maximum search radius in meters. If None, use 1.5x grid resolution.
-    backscatter_var : str, default "backscatter_raw"
-        Name of the backscatter variable in channel to resample. Radiometric
-        correction (processing/radiometric.py apply_tvg()) writes corrected
-        values to "backscatter_intensity", leaving "backscatter_raw" as an
-        untouched linear-amplitude reference — pass
-        backscatter_var="backscatter_intensity" to grid the corrected data.
+    backscatter_var : str, default "backscatter_intensity"
+        Name of the backscatter variable in channel to resample. Corrections
+        are applied in place to "backscatter_intensity" (dB once TVG has
+        run, linear amplitude before); for the uncorrected signal of a
+        corrected channel, assign
+        ``sidescanpy.processing.uncorrected_backscatter(channel)`` to a
+        variable and grid that.
 
     Notes
     -----
@@ -133,7 +136,7 @@ def resample_channel_to_grid(
 
     # Extract frequency and metadata
     frequency_hz = channel.attrs.get("frequency_hz", 0)
-    processing_level = channel.attrs.get("processing_level", "raw")
+    processing_level = derived_processing_level(channel)
 
     # Convert frequency to friendly name
     if frequency_hz > 0:
@@ -293,10 +296,9 @@ def resample_channel_to_grid(
         f"{backscatter_grid.size:,} cells filled"
     )
 
-    # Units: apply_tvg() (processing/radiometric.py) writes TVG-corrected
-    # values to backscatter_intensity in dB, leaving backscatter_raw as
-    # untouched linear amplitude. Other variable names default to linear.
-    units = "dB" if backscatter_var == "backscatter_intensity" else "linear"
+    # Units: TVG converts backscatter_intensity to dB in place. Other
+    # variable names default to linear.
+    units = "dB" if backscatter_var == "backscatter_intensity" and has_step(channel, STEP_TVG) else "linear"
 
     # Create raster
     raster = SideScanGriddedRaster(

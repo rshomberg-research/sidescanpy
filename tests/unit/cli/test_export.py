@@ -22,7 +22,7 @@ from sidescanpy.cli import export
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
-from sidescanpy.processing import run_correction_steps
+from sidescanpy.processing import correct_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.targets.core import Target
 from sidescanpy.targets.io import write_targets_json
@@ -68,7 +68,7 @@ def ss_h5_dir(tmp_path, sample_multi_frequency_survey):
 def georef_ss_h5_dir(tmp_path):
     d = tmp_path / "ss_h5"
     d.mkdir()
-    corrected = run_correction_steps(_geo_friendly_survey(), {"tvg", "geometric", "georef"})
+    corrected = correct_survey(_geo_friendly_survey())
     write_survey(corrected, d / "survey_a.ss.h5")
     return d
 
@@ -80,8 +80,8 @@ def two_file_ss_h5_dir(tmp_path):
     whole survey without restarting at each file boundary."""
     d = tmp_path / "ss_h5"
     d.mkdir()
-    write_survey(run_correction_steps(_geo_friendly_survey(), {"tvg", "geometric", "georef"}), d / "survey_a.ss.h5")
-    write_survey(run_correction_steps(_geo_friendly_survey(), {"tvg", "geometric", "georef"}), d / "survey_b.ss.h5")
+    write_survey(correct_survey(_geo_friendly_survey()), d / "survey_a.ss.h5")
+    write_survey(correct_survey(_geo_friendly_survey()), d / "survey_b.ss.h5")
     return d
 
 
@@ -111,7 +111,7 @@ def _swath_friendly_survey(n_pings=300, n_samples=30):
 def swath_ss_h5_dir(tmp_path):
     d = tmp_path / "ss_h5"
     d.mkdir()
-    corrected = run_correction_steps(_swath_friendly_survey(), {"tvg", "geometric", "georef"})
+    corrected = correct_survey(_swath_friendly_survey())
     write_survey(corrected, d / "survey_a.ss.h5")
     return d
 
@@ -1180,7 +1180,7 @@ class TestRunChip:
 
     def test_raw_and_radiometric_render_levels_produce_different_images(self, tmp_path, swath_ss_h5_dir):
         """backscatter_raw and backscatter_intensity are byte-identical in
-        this fixture only if TVG is a no-op there -- run_correction_steps
+        this fixture only if TVG is a no-op there -- correct_survey
         with 'tvg' genuinely modifies backscatter_intensity, so raw and
         radiometric renders of the same target must differ."""
         from PIL import Image

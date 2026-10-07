@@ -118,7 +118,7 @@ class TestRoundTripIdentity:
         for key in (
             "freq_hz_start", "freq_hz_end",
             "pulse_length_us", "sample_rate_hz",
-            "processing_level", "processing_history",
+            "processing_history",
         ):
             assert loaded.dataset.attrs[key] == sample_survey_channel.dataset.attrs[key]
 
@@ -183,7 +183,7 @@ class TestDtypePreservation:
         p = tmp_path / "channel.nc"
         write_frequency_channel(sample_survey_channel, p)
         loaded = read_frequency_channel(p)
-        assert loaded.dataset["backscatter_raw"].dtype       == np.float32
+        assert loaded.dataset["backscatter_intensity"].dtype       == np.float32
         assert loaded.dataset["backscatter_intensity"].dtype == np.float32
 
 
@@ -198,8 +198,8 @@ class TestValuePreservation:
         write_frequency_channel(sample_survey_channel, p)
         loaded = read_frequency_channel(p)
         np.testing.assert_array_equal(
-            loaded.dataset["backscatter_raw"].values,
-            sample_survey_channel.dataset["backscatter_raw"].values,
+            loaded.dataset["backscatter_intensity"].values,
+            sample_survey_channel.dataset["backscatter_intensity"].values,
         )
         np.testing.assert_array_equal(
             loaded.dataset["backscatter_intensity"].values,
@@ -253,7 +253,7 @@ class TestLazyLoading:
         write_frequency_channel(sample_survey_channel, p)
         loaded = read_frequency_channel(p)
         # Eager: backscatter is a numpy array (no dask wrapping)
-        backscatter = loaded.dataset["backscatter_raw"].variable.data
+        backscatter = loaded.dataset["backscatter_intensity"].variable.data
         assert isinstance(backscatter, np.ndarray)
 
     def test_chunks_param_returns_dask(self, sample_survey_channel, tmp_path):
@@ -262,7 +262,7 @@ class TestLazyLoading:
         loaded = read_frequency_channel(p, chunks={"ping": 5})
 
         import dask.array as da
-        backscatter = loaded.dataset["backscatter_raw"].variable.data
+        backscatter = loaded.dataset["backscatter_intensity"].variable.data
         assert isinstance(backscatter, da.Array)
 
     def test_chunks_match_request(self, sample_survey_channel, tmp_path):
@@ -270,7 +270,7 @@ class TestLazyLoading:
         write_frequency_channel(sample_survey_channel, p)
         loaded = read_frequency_channel(p, chunks={"ping": 5})
         # Default sample_dataset is 10 pings; chunks={"ping": 5} → 2 chunks of 5
-        chunks_along_ping = loaded.dataset["backscatter_raw"].variable.data.chunks[0]
+        chunks_along_ping = loaded.dataset["backscatter_intensity"].variable.data.chunks[0]
         assert chunks_along_ping == (5, 5)
 
     def test_lazy_load_data_equals_eager(self, sample_survey_channel, tmp_path):
@@ -279,8 +279,8 @@ class TestLazyLoading:
         eager = read_frequency_channel(p)
         lazy  = read_frequency_channel(p, chunks={"ping": 5})
         np.testing.assert_array_equal(
-            lazy.dataset["backscatter_raw"].values,   # forces compute
-            eager.dataset["backscatter_raw"].values,
+            lazy.dataset["backscatter_intensity"].values,   # forces compute
+            eager.dataset["backscatter_intensity"].values,
         )
 
     def test_aligned_chunks_no_warning(self, tmp_path):
@@ -297,7 +297,7 @@ class TestLazyLoading:
             warnings.simplefilter("error")  # any warning becomes a failure
             loaded = read_frequency_channel(p, chunks={"ping": 256})
             # Force evaluation
-            _ = loaded.dataset["backscatter_raw"].values
+            _ = loaded.dataset["backscatter_intensity"].values
 
 
 # ============================================================
@@ -307,14 +307,14 @@ class TestLazyLoading:
 @pytest.mark.unit
 class TestCompression:
     def test_backscatter_is_compressed(self, sample_survey_channel, tmp_path):
-        """backscatter_raw and backscatter_intensity should have gzip applied."""
+        """backscatter_intensity should have gzip applied."""
         p = tmp_path / "channel.nc"
         write_frequency_channel(sample_survey_channel, p)
 
         # Inspect the file with h5netcdf (read encoding off the file directly)
         import h5netcdf
         with h5netcdf.File(str(p), "r") as f:
-            for var_name in ("backscatter_raw", "backscatter_intensity"):
+            for var_name in ("backscatter_intensity",):
                 v = f[var_name]
                 # gzip compression is reported via filters / compression attribute
                 assert v.compression == "gzip", (

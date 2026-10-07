@@ -25,7 +25,7 @@ import xarray as xr
 from matplotlib.collections import LineCollection
 from pyproj import CRS, Transformer
 
-from sidescanpy.processing import apply_correction_steps, interpolate_aux_onto_pings
+from sidescanpy.processing import correct, interpolate_aux_onto_pings
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +285,7 @@ def build_survey_track(
 
         strided_idx = np.arange(0, ds.sizes["ping"], scanline_stride)
         edge_ds = ds.isel(ping=strided_idx).load()
-        edge_ds = apply_correction_steps(edge_ds, {"geometric", "georef"})
+        edge_ds = correct(edge_ds, ("geometric", "georef"))
         # Each file's sample axis may be a different length (e.g. one
         # file's channel was cropped further than another's by the
         # far-range noise crop stage), so "sample"'s own index label

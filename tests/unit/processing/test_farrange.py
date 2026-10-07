@@ -9,6 +9,7 @@ import json
 
 import numpy as np
 
+from sidescanpy.core.history import has_step
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing.farrange import (
     crop_far_range_noise,
@@ -22,7 +23,7 @@ def _db_to_linear(db: np.ndarray) -> np.ndarray:
 
 
 def _make_profile_dataset(db_profile: np.ndarray, n_pings: int = 50) -> "xr.Dataset":  # noqa: F821
-    """Build a dataset whose backscatter_raw follows db_profile (shape
+    """Build a dataset whose backscatter_intensity follows db_profile (shape
     (n_samples,)) identically across every ping/channel, plus small noise."""
     n_samples = len(db_profile)
     ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples)
@@ -30,7 +31,6 @@ def _make_profile_dataset(db_profile: np.ndarray, n_pings: int = 50) -> "xr.Data
     noise_db = rng.normal(0, 0.3, size=(n_pings, 2, n_samples))
     db = db_profile[None, None, :] + noise_db
     linear = _db_to_linear(db).astype(np.float32)
-    ds["backscatter_raw"].values[...] = linear
     ds["backscatter_intensity"].values[...] = linear
     return ds
 
@@ -142,7 +142,6 @@ class TestDetectFarRangeCutoffSample:
         # every ping/channel, matching the real leading-blanking-run shape.
         bin_size = n_samples // 40
         blank_len = bin_size // 2
-        ds["backscatter_raw"].values[:, :, :blank_len] = 0.0
         ds["backscatter_intensity"].values[:, :, :blank_len] = 0.0
 
         assert detect_far_range_cutoff_sample(ds) is None
@@ -207,7 +206,7 @@ class TestCropFarRangeNoise:
         survey, _cutoffs = crop_far_range_noise(survey)
 
         history = json.loads(survey.get_frequency("hz_1000000").dataset.attrs["processing_history"])
-        matching = [h for h in history if h["step"] == "crop_far_range_noise"]
+        matching = [h for h in history if h["step"] == "crop_farrange"]
         assert len(matching) == 1
         assert matching[0]["params"]["cropped"] is False
 
@@ -246,19 +245,29 @@ class TestCropFarRangeNoise:
 
         history = json.loads(survey.get_frequency("hz_1000000").dataset.attrs["processing_history"])
         steps = [h["step"] for h in history]
-        assert "crop_far_range_noise" in steps
+        assert "crop_farrange" in steps
 
-    def test_processing_level_unchanged(self):
+    def test_crop_recorded_but_level_stays_raw(self):
         n_samples = 2000
         profile = _decay_then_rise_profile(n_samples, floor_at=800)
         ds = _make_profile_dataset(profile)
         ds.attrs["freq_hz_start"] = 1_000_000
         ds.attrs["freq_hz_end"] = 1_000_000
-        assert ds.attrs["processing_level"] == "raw"
 
         survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
         survey.add_frequency("hz_1000000", ds)
 
         survey, _cutoffs = crop_far_range_noise(survey)
 
-        assert survey.get_frequency("hz_1000000").dataset.attrs["processing_level"] == "raw"
+        ds_out = survey.get_frequency("hz_1000000").dataset
+        assert ds_out.sidescan.processing_level == "raw"  # cropping is not a correction level
+        assert has_step(ds_out, "crop_farrange")
+
+    def test_detection_identical_after_tvg(self):
+        """Detection runs on the uncorrected signal (TVG inverted from history)."""
+        from sidescanpy.processing import apply_tvg
+
+        ds = _make_profile_dataset(_decay_then_rise_profile(2000, floor_at=800))
+        before = detect_far_range_cutoff_sample(ds)
+        assert before is not None
+        assert detect_far_range_cutoff_sample(apply_tvg(ds)) == before

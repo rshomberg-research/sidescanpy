@@ -42,7 +42,7 @@ def _new_fig_ax(ax: Axes | None, **subplots_kwargs) -> tuple[Figure, Axes]:
 
 
 def plot_stage1_histograms(
-    ds: xr.Dataset, value_var: str = "backscatter_raw", *, bins: int = 100
+    ds: xr.Dataset, value_var: str = "backscatter_intensity", *, bins: int = 100
 ) -> tuple[Figure, tuple[Axes, Axes]]:
     """Dual-panel histogram: linear scale (left) and log10(|x|) scale (right)."""
     arr = np.asarray(ds[value_var].values, dtype=np.float64).ravel()
@@ -67,7 +67,7 @@ def plot_stage1_histograms(
 
 
 def plot_stage1_sample_ping(
-    ds: xr.Dataset, value_var: str = "backscatter_raw", *, ping_idx: int | None = None
+    ds: xr.Dataset, value_var: str = "backscatter_intensity", *, ping_idx: int | None = None
 ) -> tuple[Figure, tuple[Axes, Axes]]:
     """One representative ping, port and starboard side by side."""
     n_pings = ds.sizes["ping"]
@@ -93,7 +93,7 @@ def plot_stage1_sample_ping(
 def plot_stage1_5_before_after(
     ds: xr.Dataset,
     stage1_5: StageResult,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     *,
     bins: int = 100,
     linear_xlim_percentile: float = 99.5,
@@ -195,7 +195,7 @@ def _cross_track_profile(ds: xr.Dataset, value_var: str, ping_idx: int) -> tuple
 
 
 def plot_stage2_cross_track_profile(
-    ds: xr.Dataset, value_var: str = "backscatter_raw", *, ping_idx: int | None = None, ax: Axes | None = None
+    ds: xr.Dataset, value_var: str = "backscatter_intensity", *, ping_idx: int | None = None, ax: Axes | None = None
 ) -> tuple[Figure, Axes]:
     n_pings = ds.sizes["ping"]
     ping_idx = ping_idx if ping_idx is not None else n_pings // 2
@@ -212,7 +212,7 @@ def plot_stage2_cross_track_profile(
 
 def plot_stage2_nadir_zoom(
     ds: xr.Dataset,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     *,
     stage2: StageResult | None = None,
     nadir_n_samples: int = 50,
@@ -297,7 +297,7 @@ def plot_stage2_nadir_zoom(
 
 def plot_stage2_waterfall(
     ds: xr.Dataset,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     *,
     stage2: StageResult | None = None,
     ax: Axes | None = None,
@@ -369,7 +369,7 @@ def plot_stage2_waterfall(
 def plot_stage2_5_beam_geometry(
     ds: xr.Dataset,
     stage2_5: StageResult,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     range_var: str = "across_track_m",
 ) -> tuple[Figure, tuple[Axes, Axes]]:
     """Axial (side-view) beam-geometry diagram directly above a
@@ -709,7 +709,7 @@ def plot_stage4_residuals(
 
 
 def plot_stage5_distribution(
-    ds: xr.Dataset, value_var: str = "backscatter_raw", *, bins: int = 100
+    ds: xr.Dataset, value_var: str = "backscatter_intensity", *, bins: int = 100
 ) -> tuple[Figure, tuple[Axes, Axes]]:
     """Same distribution-shape view as Stage 1 (linear + log histogram) —
     shared rather than duplicated, since Stage 5's unit call is read

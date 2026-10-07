@@ -52,7 +52,7 @@ def make_channel_3d(
 
     return xr.Dataset(
         {
-            "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+            "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
             "latitude_per_sample": (["ping", "channel", "sample"], lat3d),
             "longitude_per_sample": (["ping", "channel", "sample"], lon3d),
             "ping": (["ping"], pings),

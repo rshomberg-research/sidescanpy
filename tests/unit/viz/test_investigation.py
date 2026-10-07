@@ -46,8 +46,7 @@ def _make_raw_dataset(*, n_pings: int = 20, n_samples: int = 200, sample_rate_hz
         "channel_id": (["channel"], ["port", "starboard"]),
     }
     data_vars = {
-        "backscatter_intensity": (["ping", "channel", "sample"], backscatter.copy()),
-        "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+        "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
         "latitude": (["ping"], np.full(n_pings, 41.5, dtype=np.float32)),
         "longitude": (["ping"], np.full(n_pings, -71.5, dtype=np.float32)),
         "heading_deg": (["ping"], np.full(n_pings, 90.0, dtype=np.float32)),
@@ -239,7 +238,7 @@ def _make_scaled_spreading_dataset(*, scale: float, n_pings: int = 30, n_samples
     ref = np.nanmin(loss_db[np.isfinite(loss_db)])
     amplitude = 10.0 ** (-(loss_db - ref) / 20.0)
     amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
-    ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+    ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
     return ds
 
 

@@ -31,8 +31,8 @@ from sidescanpy.analysis.investigation import (
     stage5_units,
     uniform_exclusion_boundary,
 )
+from sidescanpy.processing import invert
 from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.pipeline import reconstruct_raw
 from sidescanpy.processing.radiometric import TVGParams, absorption_for_frequency, tvg_gain_db
 
 
@@ -62,7 +62,6 @@ def _make_raw_dataset(
 
     data_vars = {
         "backscatter_intensity": (["ping", "channel", "sample"], backscatter.astype(np.float32)),
-        "backscatter_raw": (["ping", "channel", "sample"], backscatter.astype(np.float32)),
         "latitude": (["ping"], np.full(n_pings, 41.5, dtype=np.float32)),
         "longitude": (["ping"], np.full(n_pings, -71.5, dtype=np.float32)),
         "heading_deg": (["ping"], np.full(n_pings, 90.0, dtype=np.float32)),
@@ -752,7 +751,7 @@ class TestStage4Decay:
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
         amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
 
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
 
         result = stage4_decay(ds, bin_width_m=2.0)
 
@@ -769,7 +768,7 @@ class TestStage4Decay:
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
         amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
         return ds
 
     def test_short_usable_range_auto_shrinks_bin_width_to_meet_min_bins(self):
@@ -901,7 +900,7 @@ class TestStage4Decay:
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
         amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
 
         low_ref = stage4_decay(ds, bin_width_m=2.0, db_reference_percentile=50.0)
         high_ref = stage4_decay(ds, bin_width_m=2.0, db_reference_percentile=99.9)
@@ -973,9 +972,9 @@ class TestStage4Decay:
         # sample -> water column ends ~sample 14 (slant_range > altitude,
         # ground_range ~3.2m there). Sample 14 alone lands cleanly in
         # the first 2m-wide bin -- inject a bright artifact there.
-        bs = ds["backscatter_raw"].values.copy()
+        bs = ds["backscatter_intensity"].values.copy()
         bs[:, :, 14:15] *= 80.0
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], bs)
         ds["backscatter_intensity"] = (["ping", "channel", "sample"], bs)
 
         without_exclusion = stage4_decay(ds, bin_width_m=2.0)
@@ -1066,7 +1065,7 @@ class TestStage4Decay:
         range_m = np.arange(60.0) + 0.5
         amplitude = np.where(range_m < 19.0, range_m, np.maximum(38.0 - range_m, 0.1)).astype(np.float32)
         ds = xr.Dataset({
-            "backscatter_raw": ("sample", amplitude),
+            "backscatter_intensity": ("sample", amplitude),
             "slant_range_m": ("sample", range_m),
         })
 
@@ -1092,7 +1091,7 @@ class TestStage4Decay:
         range_m = np.arange(60.0) + 0.5
         amplitude = np.where(range_m < 19.0, range_m, np.maximum(38.0 - range_m, 0.1)).astype(np.float32)
         ds = xr.Dataset({
-            "backscatter_raw": ("sample", amplitude),
+            "backscatter_intensity": ("sample", amplitude),
             "slant_range_m": ("sample", range_m),
         })
 
@@ -1197,10 +1196,10 @@ class TestStage4Decay:
         port_amplitude = np.nan_to_num(port_amplitude, nan=0.0).astype(np.float32)
         starboard_amplitude = np.where(np.isfinite(ground_range), 1.0, 0.0).astype(np.float32)
 
-        bs = ds["backscatter_raw"].values.copy()
+        bs = ds["backscatter_intensity"].values.copy()
         bs[:, 0, :] = port_amplitude[:, 0, :]
         bs[:, 1, :] = starboard_amplitude[:, 1, :]
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], bs)
         return ds
 
     def test_channel_none_metrics_report_no_channel_restriction(self):
@@ -1278,7 +1277,7 @@ class TestStage4Decay:
         flat_idx = rng.choice(amplitude.size, size=n_spikes, replace=False)
         amplitude.flat[flat_idx] *= 50.0  # simulated hard-target/complex-terrain returns
 
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
 
         # range_var pinned to ground_range_m: the injected curve above is
         # built as an exact function of ground_range specifically, so the
@@ -1310,7 +1309,7 @@ class TestStage4Decay:
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
         amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
 
         result = stage4_decay(ds, bin_width_m=2.0, reject_outliers=True, fit_value_col="median")
 
@@ -1334,7 +1333,7 @@ class TestStage4Decay:
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
         amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
 
         auto = stage4_decay(ds, bin_width_m=2.0)
         explicit_r_ref_m = auto.metrics["r_ref_m"] + 5.0
@@ -1372,7 +1371,7 @@ class TestStage4Decay:
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
         amplitude = np.nan_to_num(amplitude, nan=0.0).astype(np.float32)
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], amplitude)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], amplitude)
 
         narrow = stage4_decay(ds, bin_width_m=2.0, r_ref_search_fraction=0.1)
         wide = stage4_decay(ds, bin_width_m=2.0, r_ref_search_fraction=1.0)
@@ -1679,7 +1678,7 @@ class TestBlankNadirNoise:
 
         out = blank_nadir_noise(ds)
 
-        raw = out["backscatter_raw"].values
+        raw = out["backscatter_intensity"].values
         intensity = out["backscatter_intensity"].values
         assert np.all(raw[:, :, :35] == 0.0)
         assert np.all(intensity[:, :, :35] == 0.0)
@@ -1695,7 +1694,7 @@ class TestBlankNadirNoise:
 
         out = blank_nadir_noise(ds)
 
-        assert np.array_equal(out["backscatter_raw"].values, ds["backscatter_raw"].values)
+        assert np.array_equal(out["backscatter_intensity"].values, ds["backscatter_intensity"].values)
 
     def test_original_dataset_not_mutated(self):
         n_pings, n_samples = 3, 300
@@ -1705,7 +1704,7 @@ class TestBlankNadirNoise:
 
         blank_nadir_noise(ds)
 
-        assert np.all(ds["backscatter_raw"].values[:, :, :10] == 20.0)
+        assert np.all(ds["backscatter_intensity"].values[:, :, :10] == 20.0)
 
     def test_margin_samples_zeros_a_wider_region(self):
         """Regression test for the real finding motivating
@@ -1720,7 +1719,7 @@ class TestBlankNadirNoise:
 
         out = blank_nadir_noise(ds, margin_samples=10)
 
-        raw = out["backscatter_raw"].values
+        raw = out["backscatter_intensity"].values
         assert np.all(raw[:, :, :50] == 0.0)  # the residual band at 42:45 is now zeroed too
         assert np.all(raw[:, :, 55:] == pytest.approx(0.05))
 
@@ -1734,7 +1733,7 @@ class TestBlankNadirNoise:
             min_extent_samples=80.0,
         )
 
-        raw = out["backscatter_raw"].values
+        raw = out["backscatter_intensity"].values
         assert np.all(raw[:, :, :80] == 0.0)
         assert np.all(raw[:, :, 85:] == pytest.approx(0.05))
 
@@ -1748,7 +1747,7 @@ class TestMaskNadirGap:
 
         out = mask_nadir_gap(ds)
 
-        raw = out["backscatter_raw"].values
+        raw = out["backscatter_intensity"].values
         intensity = out["backscatter_intensity"].values
         # Well before the detected boundary: masked in both vars.
         assert np.all(np.isnan(raw[:, :, :50]))
@@ -1762,12 +1761,11 @@ class TestMaskNadirGap:
         arr = np.full((n_pings, 2, n_samples), 0.1, dtype=np.float32)
         arr[..., 300:] = 20.0
         ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
-        ds = ds.drop_vars("backscatter_intensity")
 
-        out = mask_nadir_gap(ds)  # default value_vars includes backscatter_intensity
+        out = mask_nadir_gap(ds, value_vars=("backscatter_intensity", "not_present"))
 
-        assert "backscatter_intensity" not in out.data_vars
-        assert np.any(np.isnan(out["backscatter_raw"].values[:, :, :50]))
+        assert "not_present" not in out.data_vars
+        assert np.any(np.isnan(out["backscatter_intensity"].values[:, :, :50]))
 
     def test_original_dataset_not_mutated(self):
         n_pings, n_samples = 3, 500
@@ -1777,7 +1775,7 @@ class TestMaskNadirGap:
 
         mask_nadir_gap(ds)
 
-        assert not np.any(np.isnan(ds["backscatter_raw"].values))
+        assert not np.any(np.isnan(ds["backscatter_intensity"].values))
 
     def test_pre_altitude_spike_does_not_win_the_boundary(self):
         """mask_nadir_gap computes its own boundary independently of
@@ -1795,8 +1793,8 @@ class TestMaskNadirGap:
 
         # The pre-altitude spike itself should be masked (NaN), not
         # left as the boundary the rest of the ping is measured from.
-        assert np.all(np.isnan(out["backscatter_raw"].values[:, :, 5:12]))
-        assert np.all(out["backscatter_raw"].values[:, :, 150:] == 15.0)
+        assert np.all(np.isnan(out["backscatter_intensity"].values[:, :, 5:12]))
+        assert np.all(out["backscatter_intensity"].values[:, :, 150:] == 15.0)
 
     def test_min_first_bottom_return_sample_widens_the_mask(self):
         """Regression coverage for downstream sweep/ping-profile charts need mask_nadir_gap's
@@ -1810,11 +1808,11 @@ class TestMaskNadirGap:
         ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
 
         without_floor = mask_nadir_gap(ds, smooth_window=5)
-        assert not np.all(np.isnan(without_floor["backscatter_raw"].values[:, :, 20:60]))  # confirms setup
+        assert not np.all(np.isnan(without_floor["backscatter_intensity"].values[:, :, 20:60]))  # confirms setup
 
         with_floor = mask_nadir_gap(ds, smooth_window=5, min_first_bottom_return_sample=150.0)
-        assert np.all(np.isnan(with_floor["backscatter_raw"].values[:, :, :150]))
-        assert np.all(with_floor["backscatter_raw"].values[:, :, 250:] == 15.0)
+        assert np.all(np.isnan(with_floor["backscatter_intensity"].values[:, :, :150]))
+        assert np.all(with_floor["backscatter_intensity"].values[:, :, 250:] == 15.0)
 
     def test_min_sample_buffer_and_peak_percentile_are_no_ops_by_default(self):
         """0.0 / 100.0 must reproduce this function's exact prior
@@ -1828,7 +1826,7 @@ class TestMaskNadirGap:
         default = mask_nadir_gap(ds)
         explicit = mask_nadir_gap(ds, min_sample_buffer=0.0, peak_percentile=100.0)
 
-        assert np.array_equal(default["backscatter_raw"].values, explicit["backscatter_raw"].values, equal_nan=True)
+        assert np.array_equal(default["backscatter_intensity"].values, explicit["backscatter_intensity"].values, equal_nan=True)
 
 
 class TestUniformExclusionBoundary:
@@ -1967,17 +1965,18 @@ class TestStage5Units:
         assert result.classification == "normalized"
 
 
-class TestReconstructRaw:
-    def test_restores_raw_backscatter_and_drops_geometry(self):
+class TestInvertForInvestigation:
+    def test_legacy_radiometric_file_restores_backscatter_raw_and_drops_geometry(self):
         ds = _make_raw_dataset()
+        ds["backscatter_raw"] = ds["backscatter_intensity"].copy()
         ds = compute_geometric_ranges(ds)
-        ds.attrs["processing_level"] = "radiometric"
-        ds["backscatter_intensity"] = ds["backscatter_intensity"] * 0.0 + 999.0  # simulate TVG having run
+        ds.attrs["processing_level"] = "radiometric"  # legacy: TVG known only from the attribute
+        ds["backscatter_intensity"] = ds["backscatter_intensity"] * 0.0 + 999.0
 
-        restored = reconstruct_raw(ds)
+        restored = invert(ds)
 
-        assert restored.attrs["processing_level"] == "raw"
-        assert restored.attrs["processing_history"] == "[]"
+        assert restored.sidescan.processing_level == "raw"
+        assert "processing_level" not in restored.attrs
         np.testing.assert_array_equal(
             restored["backscatter_intensity"].values, restored["backscatter_raw"].values
         )
@@ -2084,9 +2083,9 @@ class TestWaterColumnExclusionIndependentOfRangeVar:
         water_column_mask = ~np.isfinite(ds["ground_range_m"].values)
         assert water_column_mask.any(), "fixture must have a real water column for this test to mean anything"
 
-        bs = ds["backscatter_raw"].values.copy()
+        bs = ds["backscatter_intensity"].values.copy()
         bs[water_column_mask] = 1e6
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], bs)
 
         result = stage3_usable_range(ds, bin_width_m=2.0)  # default range_var=slant_range_m
         binned = result.data["binned"]
@@ -2101,9 +2100,9 @@ class TestWaterColumnExclusionIndependentOfRangeVar:
         water_column_mask = ~np.isfinite(ds["ground_range_m"].values)
         assert water_column_mask.any()
 
-        bs = ds["backscatter_raw"].values.copy()
+        bs = ds["backscatter_intensity"].values.copy()
         bs[water_column_mask] = 1e6
-        ds["backscatter_raw"] = (["ping", "channel", "sample"], bs)
+        ds["backscatter_intensity"] = (["ping", "channel", "sample"], bs)
 
         result = stage4_decay(ds, bin_width_m=2.0)  # default range_var=slant_range_m
         binned = result.data["binned"]

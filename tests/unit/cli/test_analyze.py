@@ -121,9 +121,9 @@ class TestRunSegment:
     def test_garbage_run_produces_excluded_segment_not_written(self, tmp_path):
         survey = self._clean_survey(n_pings=200)
         ds = survey.get_frequency("hz_1495000").dataset
-        arr = ds["backscatter_raw"].values.copy()
+        arr = ds["backscatter_intensity"].values.copy()
         arr[80:130] = 0.0
-        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        ds["backscatter_intensity"] = (("ping", "channel", "sample"), arr)
         path = tmp_path / "a.ss.h5"
         write_survey(survey, path)
 
@@ -193,9 +193,9 @@ class TestRunTvgFit:
         assert len(pngs) == 1
 
     def test_not_raw_without_reconstruct_flag_returns_1(self, tmp_path):
-        from sidescanpy.processing import run_correction_steps
+        from sidescanpy.processing import correct_survey
 
-        corrected = run_correction_steps(_decay_survey(), {"tvg"})
+        corrected = correct_survey(_decay_survey(), ["interpolate_aux", "tvg"])
         path = tmp_path / "a.ss.h5"
         write_survey(corrected, path)
 
@@ -203,9 +203,9 @@ class TestRunTvgFit:
         assert analyze.run_tvg_fit(args) == 1
 
     def test_reconstruct_raw_recovers_from_already_corrected_file(self, tmp_path):
-        from sidescanpy.processing import run_correction_steps
+        from sidescanpy.processing import correct_survey
 
-        corrected = run_correction_steps(_decay_survey(), {"tvg"})
+        corrected = correct_survey(_decay_survey(), ["interpolate_aux", "tvg"])
         path = tmp_path / "a.ss.h5"
         write_survey(corrected, path)
 

@@ -269,14 +269,11 @@ class TestBackscatterShape:
         # Synthetic page stbd_data is np.arange(num_samples) + 10000
         np.testing.assert_array_equal(stbd_intensities[:20], np.arange(20) + 10000)
 
-    def test_backscatter_raw_equals_intensity_initially(self):
+    def test_no_raw_copy_written(self):
         pages = [make_sdf_sonar_page(num_samples=20)]
         survey = convert(pages, source_files=[Path("test.sdf")])
         ch = survey.get_frequency("hz_455000")
-        np.testing.assert_array_equal(
-            ch.dataset["backscatter_raw"].values,
-            ch.dataset["backscatter_intensity"].values,
-        )
+        assert "backscatter_raw" not in ch.dataset
 
     def test_pad_to_max_with_nan(self):
         """Pages with fewer samples should be padded to max with NaN."""
@@ -511,7 +508,7 @@ class TestSchemaValidation:
         pages = [make_sdf_sonar_page()]
         survey = convert(pages, source_files=[Path("test.sdf")])
         ch = survey.get_frequency("hz_455000")
-        assert ch.dataset.attrs["processing_level"] == "raw"
+        assert ch.dataset.sidescan.processing_level == "raw"
 
     def test_processing_history_is_empty_list(self):
         pages = [make_sdf_sonar_page()]
@@ -583,7 +580,7 @@ class TestProcessingMetadata:
         ch = survey.get_frequency("hz_455000")
         required = {
             "freq_hz_start", "freq_hz_end", "sample_rate_hz",
-            "pulse_length_us", "processing_level", "processing_history",
+            "pulse_length_us", "processing_history",
         }
         attrs_keys = set(ch.dataset.attrs.keys())
         missing = required - attrs_keys

@@ -59,10 +59,10 @@ def _inject_range_dependent_residual(ds, shape_fn):
 
 
 class TestFitRangeCorrection:
-    def test_requires_radiometric_level(self):
+    def test_requires_tvg(self):
         ds = make_minimal_sidescan_dataset()  # still "raw"
         ds = compute_geometric_ranges(ds)
-        with pytest.raises(ValueError, match="radiometric"):
+        with pytest.raises(ValueError, match="TVG-corrected"):
             fit_range_correction(ds)
 
     def test_requires_ground_range_m(self):
@@ -178,9 +178,9 @@ class TestApplyEmpiricalRangeCorrection:
         table.add_curve(freq_hz, [0.0, 100.0], [3.0, 3.0])  # flat +3dB shift
         return table
 
-    def test_requires_radiometric_level(self):
+    def test_requires_tvg(self):
         ds = compute_geometric_ranges(make_minimal_sidescan_dataset())  # still "raw"
-        with pytest.raises(ValueError, match="radiometric"):
+        with pytest.raises(ValueError, match="TVG-corrected"):
             apply_empirical_range_correction(ds, table=self._table_for_freq())
 
     def test_requires_ground_range_m(self):

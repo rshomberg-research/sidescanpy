@@ -32,20 +32,18 @@ work: when DVL altitude is available it's pre-corrected; when only
 fathometer_reading_m is available, attitude correction is applied to
 derive altitude_m.
 
-The function does not modify processing_level. processing_history is
-appended with a record of the computation.
+processing_history is appended with a ``"geometric"`` record.
 
 2026 rshomberg@uri.edu
 """
 
-import json
 import logging
-from datetime import UTC, datetime
 
 import numpy as np
 import xarray as xr
 
 from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_GEOMETRIC, append_history
 from sidescanpy.processing.sample_axis import (
     DEFAULT_SOUND_VEL_MS,
     sample_index,
@@ -81,8 +79,7 @@ def compute_geometric_ranges(
     -------
     xr.Dataset
         New dataset (input not modified) with six added per-sample data
-        variables. processing_level is unchanged. processing_history is
-        appended.
+        variables and a ``"geometric"`` processing_history record.
 
     Notes
     -----
@@ -224,35 +221,21 @@ def compute_geometric_ranges(
     }
 
     # ----- update processing history -----
-    history_str = out.attrs.get("processing_history", "[]")
-    try:
-        history = json.loads(history_str)
-        if not isinstance(history, list):
-            history = []
-    except (TypeError, ValueError):
-        history = []
-
-    history.append(
+    out = append_history(
+        out,
+        STEP_GEOMETRIC,
         {
-            "step": "compute_geometric_ranges",
-            "timestamp_utc": datetime.now(UTC).isoformat(),
-            "params": {
-                "altitude_source": "altitude_m",
-                "sound_velocity_source": "sound_vel_ms",
-                "default_sound_vel_ms": _DEFAULT_SOUND_VEL_MS,
-                "expose_unmasked_z": expose_unmasked_z,
-                "n_pings_with_invalid_sv": n_invalid_sv,
-            },
-            "function": "sidescanpy.processing.geometric.compute_geometric_ranges",
-            "version": __version__,
-        }
+            "expose_unmasked_z": expose_unmasked_z,
+            "default_sound_vel_ms": _DEFAULT_SOUND_VEL_MS,
+        },
+        function="sidescanpy.processing.geometric.compute_geometric_ranges",
+        version=__version__,
     )
-    out.attrs["processing_history"] = json.dumps(history)
 
     logger.debug(
         "compute_geometric_ranges: added 6 per-sample variables for %d "
-        "pings × %d channels × %d samples",
-        n_pings, n_channels, n_samples,
+        "pings × %d channels × %d samples (%d pings with invalid sound velocity)",
+        n_pings, n_channels, n_samples, n_invalid_sv,
     )
 
     return out

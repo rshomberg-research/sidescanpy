@@ -119,6 +119,7 @@ from sidescanpy.grids import (
 )
 from sidescanpy.grids.definition import utm_crs_for_lonlat
 from sidescanpy.io.hdf5 import concat_survey_frequency, read_survey
+from sidescanpy.processing.inversion import uncorrected_backscatter
 from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
 from sidescanpy.targets.core import project_target_to_frequency
@@ -325,6 +326,8 @@ def run_waterfall(args: argparse.Namespace) -> int:
             logger.warning(f"{freq_key}: no file has this frequency, skipping")
             continue
         n_pings_total = ds_all.sizes["ping"]
+        if value_var == _RAW_VAR:
+            ds_all = _with_raw_var(ds_all)
 
         boxes_by_ping: dict[int, list] = defaultdict(list)
         for t, path, native_freq_key, local_ping, _dist_m in matched:
@@ -658,20 +661,38 @@ _RENDER_LEVELS = ("raw", "db", "radiometric", "geometric", "georef")
 # Native sample/ping pixel-space levels (no resolution_m concept) -- the
 # rest resample onto a real-world grid.
 _PIXEL_LEVELS = ("raw", "db", "radiometric")
-# Level/--value-var name -> backscatter variable. "backscatter_db" isn't
-# stored on disk: it's 20*log10(backscatter_raw) with no TVG gain, added
+# Level/--value-var name -> backscatter variable. Neither "backscatter_raw"
+# nor "backscatter_db" is stored on disk: "backscatter_raw" is the
+# uncorrected signal, inverted from processing_history by _with_raw_var /
+# _mask_nadir_gap; "backscatter_db" is 20*log10 of it with no TVG gain, added
 # per loaded neighborhood by _with_db_var (the same raw->dB step
 # apply_tvg_to_amplitude does before adding gain -- the progression grid's
 # own "db" stage).
 _LEVEL_VARS = {"raw": "backscatter_raw", "db": "backscatter_db", "radiometric": "backscatter_intensity"}
 
 
-def _with_db_var(ds: xr.Dataset) -> xr.Dataset:
-    """Add ``backscatter_db`` (``20*log10(backscatter_raw)``, no TVG) to ``ds`` if it has raw backscatter."""
-    if "backscatter_raw" not in ds or "backscatter_db" in ds:
+_RAW_VAR = "backscatter_raw"
+
+
+def _with_raw_var(ds: xr.Dataset) -> xr.Dataset:
+    """Add ``backscatter_raw`` (the uncorrected signal, inverted from
+    ``processing_history``; lazy on dask data) unless ``ds`` already has it."""
+    if _RAW_VAR in ds:
         return ds
-    raw = ds["backscatter_raw"]
-    return ds.assign(backscatter_db=linear_to_db(raw))
+    return ds.assign({_RAW_VAR: uncorrected_backscatter(ds)})
+
+
+def _mask_nadir_gap(ds: xr.Dataset) -> xr.Dataset:
+    """``mask_nadir_gap`` plus ``backscatter_raw``, masked identically (derived
+    from the masked intensity when the file stores no raw copy)."""
+    return _with_raw_var(mask_nadir_gap(ds, value_vars=("backscatter_intensity", _RAW_VAR)))
+
+
+def _with_db_var(ds: xr.Dataset) -> xr.Dataset:
+    """Add ``backscatter_db`` (``20*log10`` of the uncorrected signal, no TVG) to ``ds``."""
+    if "backscatter_db" in ds:
+        return ds
+    return ds.assign(backscatter_db=linear_to_db(_with_raw_var(ds)[_RAW_VAR]))
 
 
 # Geometric/georef single-swath/dual-swath: source cells kept per output
@@ -811,7 +832,7 @@ def _load_swath_neighborhood(
     step = fp * max(1, _SWATH_LOAD_BLOCK_PINGS // fp)
     blocks = []
     for b0 in range(lo, hi, step):
-        blk = mask_nadir_gap(ds_full[keep].isel(ping=slice(b0, min(hi, b0 + step))).load())
+        blk = _mask_nadir_gap(ds_full[keep].isel(ping=slice(b0, min(hi, b0 + step))).load())
         if with_db:
             blk = _with_db_var(blk)
         if fp > 1 or fs > 1:
@@ -1563,7 +1584,7 @@ def run_chip(args: argparse.Namespace) -> int:
                 if not geo:
                     lo = max(0, ping_idx - half_span)
                     hi = min(n_pings, ping_idx + half_span)
-                    masked = mask_nadir_gap(ds_full.isel(ping=slice(lo, hi)).load())
+                    masked = _mask_nadir_gap(ds_full.isel(ping=slice(lo, hi)).load())
                     if need_db:
                         masked = _with_db_var(masked)
                     local_ping = ping_idx - lo
@@ -1774,7 +1795,7 @@ def run_survey_window(args: argparse.Namespace) -> int:
             half_span = n_samples // 2 + args.jitter_px + 50
             lo = max(0, int(center_ping) - half_span)
             hi = min(n_pings, int(center_ping) + half_span)
-            masked = mask_nadir_gap(ds.isel(ping=slice(lo, hi)).load())
+            masked = _mask_nadir_gap(ds.isel(ping=slice(lo, hi)).load())
             array_2d = masked["backscatter_intensity"].isel(channel=args.channel_idx).values
             local_ping = center_ping - lo
             try:
@@ -1788,7 +1809,7 @@ def run_survey_window(args: argparse.Namespace) -> int:
                 )
                 continue
         elif args.mode == "geometric":
-            sliced = mask_nadir_gap(ds.isel(ping=slice(max(0, int(center_ping) - 100), int(center_ping) + 100)).load())
+            sliced = _mask_nadir_gap(ds.isel(ping=slice(max(0, int(center_ping) - 100), int(center_ping) + 100)).load())
             try:
                 window = extract_geometric_window(sliced, args.output_size_px, channel_idx=args.channel_idx)
             except ValueError:
@@ -1799,7 +1820,7 @@ def run_survey_window(args: argparse.Namespace) -> int:
             # by design pools port+starboard as independent observations
             # into one grid (no per-channel selection) — unlike the other
             # two modes here, --channel-idx doesn't apply.
-            sliced = mask_nadir_gap(ds.isel(ping=slice(max(0, int(center_ping) - 100), int(center_ping) + 100)).load())
+            sliced = _mask_nadir_gap(ds.isel(ping=slice(max(0, int(center_ping) - 100), int(center_ping) + 100)).load())
             try:
                 raster = extract_georef_window(sliced, args.output_size_px)
                 window = raster.dataset["backscatter"].values
@@ -1995,7 +2016,7 @@ def run_progression(args: argparse.Namespace) -> None:
 
         lo = max(0, ping_idx - half_span)
         hi = min(n_pings, ping_idx + half_span)
-        masked = mask_nadir_gap(ds_full.isel(ping=slice(lo, hi)).load())
+        masked = _mask_nadir_gap(ds_full.isel(ping=slice(lo, hi)).load())
         local_ping = ping_idx - lo
         mps = _sample_interval_m(masked)
 
@@ -2186,7 +2207,7 @@ def main() -> int:
     )
     p_wf.add_argument(
         "--value-var", choices=["raw", "radiometric"], default="radiometric",
-        help="raw = backscatter_raw (no TVG); radiometric = backscatter_intensity (TVG-corrected, "
+        help="raw = uncorrected signal, inverted from processing_history (no TVG); radiometric = backscatter_intensity (TVG-corrected, "
              "the old default). Combine with --range-mode ground for a geometrically-axed view.",
     )
     p_wf.add_argument("--range-mode", choices=["slant", "ground"], default="slant", help="ground requires geometric ranges already computed (see sidescan-correct --geometric)")
@@ -2251,7 +2272,7 @@ def main() -> int:
     p_chip.add_argument(
         "--render-level", choices=list(_RENDER_LEVELS), default="radiometric",
         help="Processing level every style renders from this run (applies to both COCO and YOLO): "
-             "'raw' (backscatter_raw, linear, no TVG), 'db' (20*log10 of backscatter_raw, no TVG), "
+             "'raw' (uncorrected signal, linear, no TVG), 'db' (20*log10 of it, no TVG), "
              "'radiometric' (TVG-corrected, the old default), 'geometric' (across/along-track meters -- requires --geometric already run via "
              "sidescan-correct), 'georef' (lat/lon-projected meters -- requires --georef already run). "
              "Under geometric/georef every style's image is a real size_px*resolution_m meters square, "
@@ -2274,7 +2295,7 @@ def main() -> int:
     )
     p_chip.add_argument(
         "--value-var", choices=["raw", "db", "radiometric"], default="radiometric",
-        help="backscatter_raw vs. dB (20*log10 raw, no TVG) vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
+        help="uncorrected signal vs. dB (20*log10 raw, no TVG) vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
              "styles AND --with-context, in either coordinate mode) -- independent of --render-level, "
              "which already fully determines this for 'raw'/'radiometric' render levels (no effect there, "
              "logged not an error). Added 2026-09-28 so coordinate system and value processing are "

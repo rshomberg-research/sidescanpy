@@ -24,15 +24,14 @@ Two layers:
 2026 rshomberg@uri.edu
 """
 
-import json
 import logging
-from datetime import UTC, datetime
 from typing import Literal
 
 import numpy as np
 import xarray as xr
 
 from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_INTERPOLATE_AUX, append_history
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 
 logger = logging.getLogger(__name__)
@@ -137,21 +136,73 @@ def interpolate_aux_onto_pings(
                 f"Valid names: {sorted(_VALID_AUX_NAMES)}"
             )
 
-    target = survey if in_place else _shallow_copy_survey(survey)
+    target = survey if in_place else survey.copy()
 
     for freq_key, channel in list(target.freq_channels.items()):
-        new_channel = _interpolate_channel_from_survey(
-            channel,
-            survey=target,
-            field_map=field_map,
+        new_ds = interpolate_aux_onto_dataset(
+            channel.dataset,
+            target,
+            fields=field_map,
             method=method,
             extrapolation=extrapolation,
             drop_invalid=drop_invalid,
             force=force,
         )
-        target._freq_channels[freq_key] = new_channel
+        target._freq_channels[freq_key] = SideScanFrequencyChannel(new_ds, freq_key=freq_key)
 
     return target
+
+
+def interpolate_aux_onto_dataset(
+    ds: xr.Dataset,
+    aux: SideScanSurvey,
+    *,
+    fields: dict[str, tuple[str, str]] | None = None,
+    method: str = "linear",
+    extrapolation: Literal["clamp", "linear", "nan"] = "clamp",
+    drop_invalid: bool = True,
+    force: bool = False,
+) -> xr.Dataset:
+    """One frequency channel dataset's per-ping fields, interpolated from
+    ``aux``'s auxiliary records (the ``"interpolate_aux"`` step).
+
+    Same parameters as :func:`interpolate_aux_onto_pings`, but for a single
+    dataset (or a ping slice of one) with the survey supplying the aux
+    records. Always appends an ``"interpolate_aux"`` history record (with
+    the fields actually updated, possibly none) so the step is not re-run.
+    """
+    if extrapolation not in _VALID_EXTRAPOLATION:
+        raise ValueError(
+            f"extrapolation must be one of {_VALID_EXTRAPOLATION}, got {extrapolation!r}"
+        )
+    field_map = fields if fields is not None else dict(DEFAULT_FIELD_SOURCES)
+    for ping_field, (aux_name, _aux_var) in field_map.items():
+        if aux_name not in _VALID_AUX_NAMES:
+            raise ValueError(
+                f"Unknown aux record '{aux_name}' for field '{ping_field}'. "
+                f"Valid names: {sorted(_VALID_AUX_NAMES)}"
+            )
+    new_ds, touched = _interpolate_dataset_from_survey(
+        ds,
+        survey=aux,
+        field_map=field_map,
+        method=method,
+        extrapolation=extrapolation,
+        drop_invalid=drop_invalid,
+        force=force,
+    )
+    return append_history(
+        new_ds,
+        STEP_INTERPOLATE_AUX,
+        {
+            "fields": sorted(touched),
+            "method": method,
+            "extrapolation": extrapolation,
+            "drop_invalid": drop_invalid,
+        },
+        function="sidescanpy.processing.interpolate.interpolate_aux_onto_dataset",
+        version=__version__,
+    )
 
 
 # ============================================================
@@ -242,8 +293,8 @@ def interpolate_onto_channel(
 # INTERNALS
 # ============================================================
 
-def _interpolate_channel_from_survey(
-    channel: SideScanFrequencyChannel,
+def _interpolate_dataset_from_survey(
+    ds: xr.Dataset,
     *,
     survey: SideScanSurvey,
     field_map: dict[str, tuple[str, str]],
@@ -251,13 +302,13 @@ def _interpolate_channel_from_survey(
     extrapolation: str,
     drop_invalid: bool,
     force: bool,
-) -> SideScanFrequencyChannel:
-    """Interpolate one channel against a survey's aux records.
+) -> tuple[xr.Dataset, list[str]]:
+    """Interpolate one channel dataset against a survey's aux records.
 
     Skips fields whose aux record is empty/absent unless force=True.
     """
-    ping_times = channel.dataset["time"].values
-    new_ds = channel.dataset
+    ping_times = ds["time"].values
+    new_ds = ds
     fields_touched: list[str] = []
 
     # Group field_map by aux_name so we apply interpolation per aux record.
@@ -280,7 +331,7 @@ def _interpolate_channel_from_survey(
         if is_empty and force:
             # Force NaN-fill since no source data exists
             for ping_field in sub_map.keys():
-                nan_arr = np.full(channel.n_pings, np.nan, dtype=np.float64)
+                nan_arr = np.full(ds.sizes["ping"], np.nan, dtype=np.float64)
                 new_ds = new_ds.assign({ping_field: ("ping", nan_arr)})
                 fields_touched.append(ping_field)
             continue
@@ -315,16 +366,7 @@ def _interpolate_channel_from_survey(
             new_ds = new_ds.assign({ping_field: ("ping", interpolated)})
             fields_touched.append(ping_field)
 
-    if fields_touched:
-        new_ds = _append_history_entry(
-            new_ds,
-            fields=sorted(fields_touched),
-            method=method,
-            extrapolation=extrapolation,
-            drop_invalid=drop_invalid,
-        )
-
-    return SideScanFrequencyChannel(new_ds, freq_key=channel.freq_key)
+    return new_ds, fields_touched
 
 
 def _get_aux_record(survey: SideScanSurvey, aux_name: str) -> xr.Dataset | None:
@@ -427,53 +469,16 @@ def _append_history_entry(
     extrapolation: str,
     drop_invalid: bool,
 ) -> xr.Dataset:
-    """Append a processing_history entry recording the interpolation step.
-
-    Returns a new dataset (xarray attrs are mutable; we copy to avoid
-    side effects on the caller's dataset).
-    """
-    new_ds = ds.copy(deep=False)
-    new_ds.attrs = dict(ds.attrs)
-
-    history_str = new_ds.attrs.get("processing_history", "[]")
-    try:
-        history = json.loads(history_str)
-        if not isinstance(history, list):
-            history = []
-    except (TypeError, ValueError):
-        history = []
-
-    entry = {
-        "step":         "interpolate_aux_onto_pings",
-        "timestamp_utc": datetime.now(UTC).isoformat(),
-        "params": {
-            "fields":        fields,
-            "method":        method,
+    """Append an ``"interpolate_onto_channel"`` processing_history record."""
+    return append_history(
+        ds,
+        "interpolate_onto_channel",
+        {
+            "fields": fields,
+            "method": method,
             "extrapolation": extrapolation,
-            "drop_invalid":  drop_invalid,
+            "drop_invalid": drop_invalid,
         },
-        "function": "sidescanpy.processing.interpolate.interpolate_aux_onto_pings",
-        "version":  __version__,
-    }
-    history.append(entry)
-    new_ds.attrs["processing_history"] = json.dumps(history)
-    return new_ds
-
-
-def _shallow_copy_survey(survey: SideScanSurvey) -> SideScanSurvey:
-    """Make a shallow copy of a SideScanSurvey: same aux/sensor refs (they
-    aren't modified), but a new dict for _freq_channels so we can replace
-    individual channels without touching the input.
-    """
-    new = SideScanSurvey(
-        source_files=list(survey.source_files),
-        source_format=survey.source_format,
-        survey_name=survey.survey_name,
+        function="sidescanpy.processing.interpolate.interpolate_onto_channel",
+        version=__version__,
     )
-    # Copy refs — channels will be replaced one at a time below
-    new._freq_channels = dict(survey._freq_channels)
-    new._navigation = survey._navigation
-    new._attitude   = survey._attitude
-    new._dvl        = survey._dvl
-    new._sensors    = dict(survey._sensors)
-    return new

@@ -1,126 +1,78 @@
 """
-``sidescan-correct``: apply far-range crop / TVG / geometric / georef
-correction to a directory of ``.ss.h5`` files, in place.
+``sidescan-correct``: apply far-range crop / TVG / geometric / range
+correction / georef to a directory of ``.ss.h5`` files, in place.
 
-Each correction step is a thin wrapper around the same in-place-edit loop. Each step
-is independently toggleable and independently idempotent (already-applied
-steps are skipped, not re-applied) — requesting several steps in one
-invocation reads and writes each file once, not once per stage.
-
-``backscatter_raw`` stays untouched (immutable) through every step;
-``backscatter_intensity``/the geometry variables are what change. Writes
-are atomic (temp file + rename) so a write that fails partway (e.g. disk
-full) never corrupts or removes the original.
+A thin loop over :func:`sidescanpy.processing.correct_file`: each file is
+read once, every requested step not already recorded in its
+``processing_history`` is applied (in canonical order: crop_farrange,
+interpolate_aux, tvg, geometric, range_correction, georef), and the file is
+rewritten atomically. Aux interpolation runs whenever tvg/geometric/
+range_correction/georef is requested. Already-applied steps are skipped,
+so re-running is a no-op. No raw copy is kept (a legacy ``backscatter_raw``
+is dropped on rewrite); recorded radiometric steps can be inverted with
+``sidescanpy.processing.invert``.
 
 Usage:
-    sidescan-correct --ss-h5-dir data/active/unknown/ss_h5/ \\
+    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ \\
         --crop-farrange --tvg --geometric --georef
 
     # Hardware already compensated spreading loss -- absorption only:
-    sidescan-correct --ss-h5-dir data/active/unknown/ss_h5/ \\
-        --tvg --no-spreading
+    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --tvg --no-spreading
 
-    # Run one stage standalone, same as the old numbered scripts:
-    sidescan-correct --ss-h5-dir data/active/unknown/ss_h5/ --georef
+    # Bound memory on large files:
+    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --tvg --geometric --georef \\
+        --ping-chunk-size 1000
 
-    # Add the bundled empirical range correction on top of an
-    # already-tvg+geometric-corrected directory -- fits/removes a
-    # residual, altitude-invariant range-dependent shape plain
-    # physics-based TVG doesn't capture (see processing/range_correction.py's
-    # module docstring). Only hz_1495000/hz_547500 are calibrated by the
-    # bundled default table.
-    sidescan-correct --ss-h5-dir data/active/unknown/ss_h5/ --range-correction
+    # Empirical range correction on top of tvg+geometric (bundled table is
+    # calibrated for two frequencies only; others are skipped with a warning):
+    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --range-correction
 
 2026 rshomberg@uri.edu
 """
 
 import argparse
-import json
 import logging
 import sys
+import time
 from pathlib import Path
 
-from sidescanpy.cli._common import (
-    add_logging_args,
-    process_files_in_place,
-    process_files_in_place_chunked,
-    setup_logging_from_args,
-)
+from sidescanpy.cli._common import add_logging_args, setup_logging_from_args
 from sidescanpy.cli._config import (
     apply_config_defaults,
     find_config_path,
     has_strict_flag,
     load_config,
 )
-from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.processing import crop_far_range_noise, run_correction_steps
-from sidescanpy.processing.pipeline import step_already_done
-from sidescanpy.processing.radiometric import TVGParams
+from sidescanpy.processing import (
+    STEP_CROP_FARRANGE,
+    STEP_GEOMETRIC,
+    STEP_GEOREF,
+    STEP_INTERPOLATE_AUX,
+    STEP_RANGE_CORRECTION,
+    STEP_TVG,
+    correct_file,
+)
 
 logger = logging.getLogger(__name__)
 
-# Each multiplier is that step's own conservative "how much bigger could
-# this make the file, relative to its pre-step size" estimate, carried
-# over unchanged from the old standalone scripts. Summing the requested
-# steps' (multiplier - 1.0) terms against the file's *original* size is a
-# deliberate overestimate when several steps are combined in one pass
-# (each step's true growth is relative to a smaller preceding size, not
-# the original) -- the safe direction for a disk-space guard.
-_DISK_MULTIPLIERS = {
-    "crop_farrange": 1.5,
-    "tvg": 3.0,
-    "geometric": 4.0,
-    "range_correction": 1.0,  # shifts backscatter_intensity in place, adds no new arrays
-    "georef": 2.0,
-}
-_CORRECTION_STEPS = ("tvg", "geometric", "range_correction", "georef")
+_FLAG_STEPS = (
+    ("crop_farrange", STEP_CROP_FARRANGE),
+    ("tvg", STEP_TVG),
+    ("geometric", STEP_GEOMETRIC),
+    ("range_correction", STEP_RANGE_CORRECTION),
+    ("georef", STEP_GEOREF),
+)
+_NEEDS_AUX = {STEP_TVG, STEP_GEOMETRIC, STEP_RANGE_CORRECTION, STEP_GEOREF}
+_CANONICAL_ORDER = (
+    STEP_CROP_FARRANGE, STEP_INTERPOLATE_AUX, STEP_TVG, STEP_GEOMETRIC, STEP_RANGE_CORRECTION, STEP_GEOREF,
+)
 
 
-def _crop_already_done(survey: SideScanSurvey) -> bool:
-    for channel in survey.freq_channels.values():
-        history = json.loads(channel.dataset.attrs.get("processing_history", "[]"))
-        if not any(h.get("step") == "crop_far_range_noise" for h in history):
-            return False
-    return True
-
-
-# The other 4 checks are per-dataset predicates shared with
-# sidescanpy.processing.chunked (see step_already_done's own docstring)
-# -- this dict adapts them to the per-survey (all channels) shape this
-# CLI's own _make_already_done()/_make_step_fn() expect. crop_farrange
-# stays its own thing here (not one of pipeline.py's VALID_STEPS, and
-# not chunkable -- see chunked.py's module docstring for why).
-_ALREADY_DONE = {
-    "crop_farrange": _crop_already_done,
-    "tvg": lambda survey: all(step_already_done(c.dataset, "tvg") for c in survey.freq_channels.values()),
-    "geometric": lambda survey: all(step_already_done(c.dataset, "geometric") for c in survey.freq_channels.values()),
-    "range_correction": lambda survey: all(step_already_done(c.dataset, "range_correction") for c in survey.freq_channels.values()),
-    "georef": lambda survey: all(step_already_done(c.dataset, "georef") for c in survey.freq_channels.values()),
-}
-
-
-def _make_already_done(requested: set[str]):
-    def already_done(survey: SideScanSurvey) -> bool:
-        return all(_ALREADY_DONE[step](survey) for step in requested)
-
-    return already_done
-
-
-def _make_step_fn(requested: set[str], tvg_params: TVGParams | None):
-    def step_fn(survey: SideScanSurvey) -> SideScanSurvey:
-        if "crop_farrange" in requested and not _crop_already_done(survey):
-            survey, _cutoffs = crop_far_range_noise(survey)
-
-        pending = {
-            s for s in _CORRECTION_STEPS
-            if s in requested and not _ALREADY_DONE[s](survey)
-        }
-        if pending:
-            step_params = {"tvg": {"params": tvg_params}} if tvg_params is not None else None
-            survey = run_correction_steps(survey, pending, step_params=step_params)
-        return survey
-
-    return step_fn
+def _steps_from_args(args: argparse.Namespace) -> list[str]:
+    requested = {step for flag, step in _FLAG_STEPS if getattr(args, flag)}
+    if requested & _NEEDS_AUX:
+        requested.add(STEP_INTERPOLATE_AUX)
+    return [s for s in _CANONICAL_ORDER if s in requested]
 
 
 def main() -> int:
@@ -169,11 +121,8 @@ def main() -> int:
         help=(
             "Process each file in chunks of this many pings instead of all at once -- "
             "bounds peak memory to roughly one chunk's worth of derived arrays regardless "
-            "of file size (see processing/chunked.py's module docstring for the real memory "
-            "numbers behind this). Default: unset, process the whole file eagerly (unchanged "
-            "prior behavior). Not compatible with --crop-farrange, which needs to see a "
-            "channel's entire ping range to pick one good far-range cutoff -- run that step "
-            "separately (unchunked) first if you need both."
+            "of file size. Results are identical to the unchunked path. Default: unset, "
+            "process the whole file at once."
         ),
     )
 
@@ -184,15 +133,7 @@ def main() -> int:
 
     args = parser.parse_args(argv)
 
-    requested = {
-        step for step, flag in (
-            ("crop_farrange", args.crop_farrange),
-            ("tvg", args.tvg),
-            ("geometric", args.geometric),
-            ("range_correction", args.range_correction),
-            ("georef", args.georef),
-        ) if flag
-    }
+    requested = set(_steps_from_args(args))
     if not requested:
         parser.error("at least one of --crop-farrange/--tvg/--geometric/--range-correction/--georef is required")
 
@@ -207,57 +148,53 @@ def main() -> int:
     if tvg_override_requested and "tvg" not in requested:
         parser.error("TVG term overrides require --tvg")
 
-    if args.ping_chunk_size is not None:
-        if args.ping_chunk_size <= 0:
-            parser.error("--ping-chunk-size must be a positive integer")
-        if "crop_farrange" in requested:
-            parser.error(
-                "--ping-chunk-size is not compatible with --crop-farrange -- that step needs "
-                "to see a channel's entire ping range. Run --crop-farrange separately (unchunked) first."
-            )
+    if args.ping_chunk_size is not None and args.ping_chunk_size <= 0:
+        parser.error("--ping-chunk-size must be a positive integer")
 
     setup_logging_from_args(args)
 
-    tvg_kwargs = {}
+    tvg_params = {}
     if args.no_spreading:
-        tvg_kwargs["spreading_loss_db"] = 0.0
+        tvg_params["spreading_loss_db"] = 0.0
     elif args.spreading_loss_db is not None:
-        tvg_kwargs["spreading_loss_db"] = args.spreading_loss_db
+        tvg_params["spreading_loss_db"] = args.spreading_loss_db
     if args.no_absorption:
-        tvg_kwargs["absorption_db_per_m"] = 0.0
+        tvg_params["absorption_db_per_m"] = 0.0
     elif args.absorption_db_per_m is not None:
-        tvg_kwargs["absorption_db_per_m"] = args.absorption_db_per_m
-    tvg_params = TVGParams(**tvg_kwargs) if tvg_kwargs else None
-    if tvg_params is not None:
-        logger.info(
-            f"TVG override: spreading_loss_db={tvg_params.spreading_loss_db}, "
-            f"absorption_db_per_m={tvg_params.absorption_db_per_m}"
-        )
+        tvg_params["absorption_db_per_m"] = args.absorption_db_per_m
+    if tvg_params:
+        logger.info(f"TVG override: {tvg_params}")
+    params = {STEP_TVG: tvg_params} if tvg_params else None
+    steps = _steps_from_args(args)
 
-    disk_multiplier = 1.0 + sum(_DISK_MULTIPLIERS[s] - 1.0 for s in requested)
     files = sorted(args.ss_h5_dir.glob("*.ss.h5"))
     if not files:
         logger.error(f"No .ss.h5 files found in {args.ss_h5_dir}")
         return 1
 
-    stage_label = f"correct ({'+'.join(sorted(requested))})"
-    if args.ping_chunk_size is not None:
-        step_params = {"tvg": {"params": tvg_params}} if tvg_params is not None else None
-        return process_files_in_place_chunked(
-            files,
-            steps=requested,
-            step_params=step_params,
-            ping_chunk_size=args.ping_chunk_size,
-            disk_multiplier=disk_multiplier,
-            stage_label=stage_label,
-        )
-    return process_files_in_place(
-        files,
-        step_fn=_make_step_fn(requested, tvg_params),
-        already_done_fn=_make_already_done(requested),
-        disk_multiplier=disk_multiplier,
-        stage_label=stage_label,
+    label = "+".join(s for s in steps if s != STEP_INTERPOLATE_AUX)
+    failures = []
+    start_all = time.perf_counter()
+    for i, path in enumerate(files, 1):
+        start = time.perf_counter()
+        before = path.stat().st_mtime_ns
+        try:
+            correct_file(path, steps, params, chunk_pings=args.ping_chunk_size, progress=logger.debug)
+        except Exception as e:  # one bad file must not stop the batch
+            failures.append(path.name)
+            logger.error(f"[{i}/{len(files)}] {path.name}: FAILED {type(e).__name__}: {e}")
+            continue
+        state = "corrected" if path.stat().st_mtime_ns != before else "already corrected, unchanged"
+        logger.info(f"[{i}/{len(files)}] {path.name}: {state} ({label}) in {time.perf_counter() - start:.1f}s")
+
+    logger.info(
+        f"correct ({label}): {len(files) - len(failures)}/{len(files)} ok in "
+        f"{time.perf_counter() - start_all:.0f}s"
     )
+    if failures:
+        logger.warning(f"Failed: {failures}")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

@@ -111,16 +111,16 @@ class TestDetectGarbageRuns:
 
     def test_detects_sustained_zero_run(self):
         ds = _uniform_track_dataset(n_pings=100)
-        arr = ds["backscatter_raw"].values.copy()
+        arr = ds["backscatter_intensity"].values.copy()
         arr[10:35] = 0.0
-        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        ds["backscatter_intensity"] = (("ping", "channel", "sample"), arr)
         assert detect_garbage_runs(ds, min_run_pings=20) == [(10, 35)]
 
     def test_short_run_not_flagged(self):
         ds = _uniform_track_dataset(n_pings=100)
-        arr = ds["backscatter_raw"].values.copy()
+        arr = ds["backscatter_intensity"].values.copy()
         arr[10:15] = 0.0  # 5 pings, under the 20-ping default
-        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        ds["backscatter_intensity"] = (("ping", "channel", "sample"), arr)
         assert detect_garbage_runs(ds, min_run_pings=20) == []
 
 
@@ -177,9 +177,9 @@ class TestFindSegments:
 
     def test_excludes_garbage_run_and_splits_around_it(self):
         ds = _uniform_track_dataset(n_pings=300)
-        arr = ds["backscatter_raw"].values.copy()
+        arr = ds["backscatter_intensity"].values.copy()
         arr[100:150] = 0.0
-        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        ds["backscatter_intensity"] = (("ping", "channel", "sample"), arr)
 
         segments = find_segments(ds, garbage_min_run_pings=20, min_segment_pings=50)
         statuses = [(s.start, s.stop, s.status) for s in segments]
@@ -218,9 +218,9 @@ class TestFindSegments:
         real shape: a short garbage run sitting inside a long clean
         stretch."""
         ds = _uniform_track_dataset(n_pings=2000)
-        arr = ds["backscatter_raw"].values.copy()
+        arr = ds["backscatter_intensity"].values.copy()
         arr[1000:1100] = 0.0  # 100-ping garbage run, shorter than min_segment_pings
-        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        ds["backscatter_intensity"] = (("ping", "channel", "sample"), arr)
 
         segments = find_segments(ds, garbage_min_run_pings=20, min_segment_pings=200)
 

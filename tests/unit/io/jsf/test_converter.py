@@ -413,16 +413,16 @@ class TestBuildFrequencyChannel:
             ds2["backscatter_intensity"].values,
         )
 
-    def test_backscatter_raw_equals_intensity_at_raw_level(self, paired_sonar_msgs):
+    def test_no_raw_copy_written(self, paired_sonar_msgs):
         ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
-        np.testing.assert_array_equal(
-            ds["backscatter_raw"].values,
-            ds["backscatter_intensity"].values,
-        )
+        assert "backscatter_raw" not in ds
+        assert "backscatter_intensity" in ds
 
     def test_processing_level_is_raw(self, paired_sonar_msgs):
+        from sidescanpy.core.history import processing_level
         ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
-        assert ds.attrs["processing_level"] == "raw"
+        assert "processing_level" not in ds.attrs
+        assert processing_level(ds) == "raw"
 
     def test_processing_history_is_empty_json_list(self, paired_sonar_msgs):
         import json

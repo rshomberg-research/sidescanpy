@@ -38,7 +38,7 @@ from sidescanpy.analysis.investigation import (
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.pipeline import reconstruct_raw
+from sidescanpy.processing.inversion import invert
 from sidescanpy.viz.investigation import (
     plot_stage1_5_before_after,
     plot_stage1_histograms,
@@ -123,7 +123,7 @@ def run_investigation(
     *,
     freq_key: str | None = None,
     channel: int | str | None = None,
-    value_var: str = "backscatter_raw",
+    value_var: str = "backscatter_intensity",
     ping_range: tuple[int, int | None] = (0, None),
     output_dir: str | Path | None = None,
     nadir_n_samples: int = 50,
@@ -192,11 +192,11 @@ def run_investigation(
         fix. Call `run_investigation()` once per side (typically both)
         for a genuine per-channel Stage 3/4 comparison — this function
         itself still only ever returns one `InvestigationResult`.
-    value_var : str, default "backscatter_raw"
-        Variable to investigate. The default treats the data source as
-        genuinely unknown; pass ``"backscatter_intensity"`` to run the
-        same pipeline against already-corrected data for a before/after
-        comparison.
+    value_var : str, default "backscatter_intensity"
+        Variable to investigate. Every recorded correction is inverted
+        first (``sidescanpy.processing.invert``), so the default is the
+        uncorrected signal. The legacy name ``"backscatter_raw"`` maps to it
+        when the dataset has no such variable.
     ping_range : (int, int | None), default (0, None)
         Ping slice — investigating a full multi-thousand-ping survey is
         rarely necessary and slower than a representative subset.
@@ -222,8 +222,8 @@ def run_investigation(
         intermediate absolute dB number would mean if reported
         directly.
     Before any stage runs, `analysis.investigation.blank_nadir_noise()`
-    always applies to `backscatter_raw`/`backscatter_intensity` (a
-    real, no-toggle preprocessing step, like `reconstruct_raw`/
+    always applies to `backscatter_intensity` (a
+    real, no-toggle preprocessing step, like `invert`/
     `compute_geometric_ranges` above — not a debatable option). Zeros
     each ping's leading electronic-noise burst right at nadir — a
     no-op on hardware that already does this itself (EdgeTech/JSF,
@@ -360,16 +360,18 @@ def run_investigation(
     dataset_path = Path(dataset_path)
     ds, freq_key = _load_channel_dataset(dataset_path, freq_key)
 
+    if value_var == "backscatter_raw" and value_var not in ds:
+        logger.debug("value_var 'backscatter_raw' not present; using the inverted backscatter_intensity")
+        value_var = "backscatter_intensity"
+
     start, stop = ping_range
     ds = ds.isel(ping=slice(start, stop))
     if getattr(ds[value_var].data, "chunks", None) is not None:
         ds = ds.load()
 
-    if ds.attrs.get("processing_level") != "raw":
-        logger.debug("Dataset is processing_level=%r; reconstructing raw for investigation", ds.attrs.get("processing_level"))
-        ds = reconstruct_raw(ds)
+    ds = invert(ds)  # investigate the uncorrected signal; no-op on uncorrected data
 
-    ds = blank_nadir_noise(ds, margin_samples=nadir_margin_samples, min_extent_samples=nadir_min_extent_samples)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
+    ds = blank_nadir_noise(ds, margin_samples=nadir_margin_samples, min_extent_samples=nadir_min_extent_samples)
 
     if "ground_range_m" not in ds:
         ds = compute_geometric_ranges(ds)

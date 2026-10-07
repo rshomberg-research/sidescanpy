@@ -80,7 +80,7 @@ def _make_realistic_channel(
 
     ds = xr.Dataset(
         {
-            "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+            "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
             "latitude_per_sample": (["ping", "channel", "sample"], lat_per_sample),
             "longitude_per_sample": (["ping", "channel", "sample"], lon_per_sample),
             "ping": (["ping"], pings),
@@ -271,9 +271,9 @@ class TestGriddingPipelineQuality:
 
     def test_gridded_data_preserves_range(self, channel, grid):
         """Gridded values within input data range."""
-        backscatter_raw = channel["backscatter_raw"].values
-        min_raw = np.nanmin(backscatter_raw)
-        max_raw = np.nanmax(backscatter_raw)
+        backscatter_intensity = channel["backscatter_intensity"].values
+        min_raw = np.nanmin(backscatter_intensity)
+        max_raw = np.nanmax(backscatter_intensity)
 
         raster = resample_channel_to_grid(
             channel,

@@ -173,7 +173,7 @@ def detect_setting_changes(ds: xr.Dataset, *, sound_vel_rel_tol: float = 0.05) -
 
 
 def detect_garbage_runs(
-    ds: xr.Dataset, value_var: str = "backscatter_raw", *,
+    ds: xr.Dataset, value_var: str = "backscatter_intensity", *,
     min_run_pings: int = 20, degenerate_frac: float = 0.999,
 ) -> list[tuple[int, int]]:
     """``[(start, stop), ...]`` -- sustained (>= ``min_run_pings``) runs
@@ -288,7 +288,7 @@ def find_segments(
     gap_factor: float = 8.0,
     time_gap_factor: float = 8.0,
     sound_vel_rel_tol: float = 0.05,
-    garbage_value_var: str = "backscatter_raw",
+    garbage_value_var: str = "backscatter_intensity",
     garbage_min_run_pings: int = 20,
     garbage_degenerate_frac: float = 0.999,
     stability_window_pings: int = 100,

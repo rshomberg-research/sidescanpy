@@ -16,21 +16,19 @@ NaN propagation:
       for that ping are NaN.
     - Any NaN per-sample across_track or along_track → that sample is NaN.
 
-This function does not modify processing_level. processing_history is
-appended.
+processing_history is appended with a ``"georef"`` record.
 
 2026 rshomberg@uri.edu
 """
 
-import json
 import logging
-from datetime import UTC, datetime
 
 import numpy as np
 import pyproj
 import xarray as xr
 
 from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_GEOREF, append_history
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +62,7 @@ def compute_georeferencing(
         - `latitude_per_sample` (float64, degrees_north)
         - `longitude_per_sample` (float64, degrees_east)
 
-        `processing_level` is unchanged. `processing_history` is appended.
+        A ``"georef"`` processing_history record is appended.
 
     Raises
     ------
@@ -157,26 +155,13 @@ def compute_georeferencing(
     }
 
     # ----- update processing history -----
-    history_str = out.attrs.get("processing_history", "[]")
-    try:
-        history = json.loads(history_str)
-        if not isinstance(history, list):
-            history = []
-    except (TypeError, ValueError):
-        history = []
-
-    history.append(
-        {
-            "step": "compute_georeferencing",
-            "timestamp_utc": datetime.now(UTC).isoformat(),
-            "params": {
-                "ellipsoid": ellipsoid,
-            },
-            "function": "sidescanpy.processing.georeferencing.compute_georeferencing",
-            "version": __version__,
-        }
+    out = append_history(
+        out,
+        STEP_GEOREF,
+        {"ellipsoid": ellipsoid},
+        function="sidescanpy.processing.georeferencing.compute_georeferencing",
+        version=__version__,
     )
-    out.attrs["processing_history"] = json.dumps(history)
 
     logger.debug(
         "compute_georeferencing: added latitude_per_sample and "

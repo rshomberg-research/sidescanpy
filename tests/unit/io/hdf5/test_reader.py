@@ -87,7 +87,7 @@ class TestReadLazyLoading:
         loaded = read_survey(p)
 
         fk = loaded.frequencies[0]
-        backscatter = loaded.get_frequency(fk).dataset["backscatter_raw"].variable.data
+        backscatter = loaded.get_frequency(fk).dataset["backscatter_intensity"].variable.data
         assert isinstance(backscatter, np.ndarray)
 
     def test_chunks_param_returns_dask(self, sample_full_survey, tmp_path):
@@ -97,7 +97,7 @@ class TestReadLazyLoading:
 
         import dask.array as da
         for fk in loaded.frequencies:
-            backscatter = loaded.get_frequency(fk).dataset["backscatter_raw"].variable.data
+            backscatter = loaded.get_frequency(fk).dataset["backscatter_intensity"].variable.data
             assert isinstance(backscatter, da.Array), (
                 f"Frequency {fk} backscatter should be dask-backed under chunks"
             )
@@ -109,8 +109,8 @@ class TestReadLazyLoading:
         lazy  = read_survey(p, chunks={"ping": 5})
         for fk in eager.frequencies:
             np.testing.assert_array_equal(
-                lazy.get_frequency(fk).dataset["backscatter_raw"].values,
-                eager.get_frequency(fk).dataset["backscatter_raw"].values,
+                lazy.get_frequency(fk).dataset["backscatter_intensity"].values,
+                eager.get_frequency(fk).dataset["backscatter_intensity"].values,
             )
 
     def test_aux_records_loaded_eagerly_even_with_chunks(

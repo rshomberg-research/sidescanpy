@@ -24,31 +24,46 @@ Public entry points
   (e.g. a target catalog's own decoded crop window).
 - :func:`absorption_for_frequency` — frequency-dependent absorption
   defaults for typical coastal seawater.
-- :func:`run_pipeline` — run the processing pipeline through a target
-  ladder level (``none/radiometric/geometric/georef``).
-- :func:`run_correction_steps` — run an explicit set of correction
-  steps on every channel of a survey, for combinations the ladder
-  can't express (e.g. geometric ranges without TVG).
-- :func:`apply_correction_steps` — same step-set semantics as
-  ``run_correction_steps`` but for a single already-aux-interpolated
-  channel dataset, skipping the survey-level aux interpolation.
+- :func:`correct`, :func:`correct_survey`, :func:`correct_file` — the one
+  correction API: an ordered list of built-in or caller-supplied steps,
+  each skippable, idempotent and recorded in ``processing_history``
+  (see :mod:`sidescanpy.processing.correct`).
+- :func:`invert`, :func:`uncorrected_backscatter` — undo recorded steps
+  from their history records.
+- :func:`processing_level` — derived from ``processing_history``.
 
 Conventions
 -----------
-- Each function asserts the expected input ``processing_level`` and
-  raises ``ValueError`` if it doesn't match. Prevents accidental
-  double-application.
-- ``processing_history`` is appended on every transform via
-  ``ds.sidescan.append_to_history(...)``.
-- ``backscatter_raw`` is treated as immutable across the pipeline. Only
-  ``backscatter_intensity`` is updated by transforms.
+- Corrections are applied in place to ``backscatter_intensity``; no raw
+  copy is kept (a legacy ``backscatter_raw`` is dropped on rewrite).
+- Every correction step appends one ``processing_history`` record with
+  the parameters it used; a step already recorded is not re-applied.
 
 See ``docs/processing.md`` for full reference.
 
 2026 rshomberg@uri.edu
 """
 
+from sidescanpy.core.history import (
+    BUILTIN_STEPS,
+    STEP_CROP_FARRANGE,
+    STEP_GEOMETRIC,
+    STEP_GEOREF,
+    STEP_INTERPOLATE_AUX,
+    STEP_RANGE_CORRECTION,
+    STEP_TVG,
+    processing_level,
+)
+from sidescanpy.processing.correct import (
+    DEFAULT_STEPS,
+    Step,
+    correct,
+    correct_file,
+    correct_survey,
+    estimate_correct_disk_bytes,
+)
 from sidescanpy.processing.farrange import (
+    crop_far_range,
     crop_far_range_noise,
     detect_far_range_cutoff_sample,
 )
@@ -58,19 +73,18 @@ from sidescanpy.processing.geometric import (
 from sidescanpy.processing.georeferencing import compute_georeferencing
 from sidescanpy.processing.interpolate import (
     DEFAULT_FIELD_SOURCES,
+    interpolate_aux_onto_dataset,
     interpolate_aux_onto_pings,
     interpolate_onto_channel,
+)
+from sidescanpy.processing.inversion import (
+    INVERTIBLE_STEPS,
+    invert,
+    uncorrected_backscatter,
 )
 from sidescanpy.processing.navigation import (
     along_track_distance_m,
     fill_nav_stalls,
-)
-from sidescanpy.processing.pipeline import (
-    VALID_PROCESS_LEVELS,
-    VALID_STEPS,
-    apply_correction_steps,
-    run_correction_steps,
-    run_pipeline,
 )
 from sidescanpy.processing.radiometric import (
     TVGParams,
@@ -111,9 +125,23 @@ __all__ = [
     "slice_by_time",
     "slice_by_bbox",
     "slice_by_ground_range",
-    "run_pipeline",
-    "run_correction_steps",
-    "apply_correction_steps",
-    "VALID_PROCESS_LEVELS",
-    "VALID_STEPS",
+    "correct",
+    "correct_survey",
+    "correct_file",
+    "estimate_correct_disk_bytes",
+    "Step",
+    "DEFAULT_STEPS",
+    "BUILTIN_STEPS",
+    "STEP_CROP_FARRANGE",
+    "STEP_INTERPOLATE_AUX",
+    "STEP_TVG",
+    "STEP_GEOMETRIC",
+    "STEP_RANGE_CORRECTION",
+    "STEP_GEOREF",
+    "invert",
+    "uncorrected_backscatter",
+    "INVERTIBLE_STEPS",
+    "processing_level",
+    "crop_far_range",
+    "interpolate_aux_onto_dataset",
 ]

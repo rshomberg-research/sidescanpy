@@ -497,18 +497,19 @@ class TestOutputVariables:
 
 @pytest.mark.unit
 class TestProcessingMetadata:
-    def test_processing_level_unchanged(self):
+    def test_processing_level_derived(self):
         ds = _make_test_dataset()
-        assert ds.attrs["processing_level"] == "raw"
+        assert ds.sidescan.processing_level == "raw"
         result = compute_geometric_ranges(ds)
-        assert result.attrs["processing_level"] == "raw"
+        assert result.sidescan.processing_level == "geometric"
+        assert "processing_level" not in result.attrs
 
     def test_history_entry_added(self):
         ds = _make_test_dataset()
         result = compute_geometric_ranges(ds)
         history = json.loads(result.attrs["processing_history"])
         assert len(history) == 1
-        assert history[0]["step"] == "compute_geometric_ranges"
+        assert history[0]["step"] == "geometric"
 
     def test_history_records_function_path(self):
         ds = _make_test_dataset()
@@ -524,9 +525,9 @@ class TestProcessingMetadata:
 
     def test_works_on_radiometric_input(self):
         ds = _make_test_dataset()
-        ds.attrs["processing_level"] = "radiometric"
+        ds.attrs["processing_level"] = "radiometric"  # legacy attribute
         result = compute_geometric_ranges(ds)
-        assert result.attrs["processing_level"] == "radiometric"
+        assert result.sidescan.processing_level == "geometric"
         assert "slant_range_m" in result.data_vars
 
 

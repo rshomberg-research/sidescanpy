@@ -57,7 +57,7 @@ class TestConstants:
 
     def test_required_vars_correct(self):
         assert isinstance(REQUIRED_VARS, set)
-        assert "backscatter_raw" in REQUIRED_VARS
+        assert "backscatter_raw" not in REQUIRED_VARS  # legacy, no longer written
         assert "backscatter_intensity" in REQUIRED_VARS
         assert "latitude" in REQUIRED_VARS
         assert "longitude" in REQUIRED_VARS
@@ -75,12 +75,14 @@ class TestConstants:
         assert "freq_hz_end" in REQUIRED_ATTRS
         assert "pulse_length_us" in REQUIRED_ATTRS
         assert "sample_rate_hz" in REQUIRED_ATTRS
-        assert "processing_level" in REQUIRED_ATTRS
-        assert "processing_history" in REQUIRED_ATTRS
+        # Level is derived from history; a missing history is an empty one.
+        assert "processing_level" not in REQUIRED_ATTRS
+        assert "processing_history" not in REQUIRED_ATTRS
 
     def test_known_processing_levels_correct(self):
-        assert isinstance(KNOWN_PROCESSING_LEVELS, set)
-        assert KNOWN_PROCESSING_LEVELS == {"raw", "radiometric"}
+        assert KNOWN_PROCESSING_LEVELS == (
+            "raw", "tvg", "geometric", "range_correction", "georef",
+        )
 
     def test_hdf5_constants_correct(self):
         assert isinstance(HDF5_GROUP_AUX_STREAMS, str)
@@ -184,7 +186,7 @@ class TestValidationMissingVars:
     @pytest.mark.parametrize("var_name", REQUIRED_VARS)
     def test_missing_variable_raises(self, sample_dataset, var_name):
         bad_ds = sample_dataset.drop_vars(var_name)
-        with pytest.raises(ValueError, match="Missing variables"):
+        with pytest.raises(ValueError, match="Missing (variables|dimensions)"):
             bad_ds.sidescan.validate()
 
     @pytest.mark.parametrize("var_name", REQUIRED_VARS)
@@ -213,18 +215,23 @@ class TestValidationMissingAttrs:
 
 @pytest.mark.unit
 class TestValidationProcessingLevel:
-    """Test that processing_level must be known."""
+    """The legacy processing_level attribute is optional; if present it must hold a legacy value."""
 
-    @pytest.mark.parametrize("level", KNOWN_PROCESSING_LEVELS)
-    def test_valid_processing_level_passes(self, sample_dataset, level):
+    @pytest.mark.parametrize("level", ["raw", "radiometric"])
+    def test_legacy_processing_level_passes(self, sample_dataset, level):
         ds = sample_dataset.copy()
         ds.attrs["processing_level"] = level
+        ds.sidescan.validate()
+
+    def test_missing_processing_level_passes(self, sample_dataset):
+        ds = sample_dataset.copy()
+        ds.attrs.pop("processing_level", None)
         ds.sidescan.validate()
 
     def test_invalid_processing_level_raises(self, sample_dataset):
         bad_ds = sample_dataset.copy()
         bad_ds.attrs["processing_level"] = "unknown_level"
-        with pytest.raises(ValueError, match="'processing_level' must be one of"):
+        with pytest.raises(ValueError, match="'processing_level' attribute must be one of"):
             bad_ds.sidescan.validate()
 
     def test_invalid_processing_level_invalid(self, sample_dataset):
@@ -241,9 +248,9 @@ class TestPropertyProcessingLevel:
         sample_dataset.attrs["processing_level"] = "raw"
         assert sample_dataset.sidescan.processing_level == "raw"
 
-    def test_processing_level_returns_unknown_if_missing(self):
+    def test_processing_level_is_raw_without_history(self):
         ds = xr.Dataset()
-        assert ds.sidescan.processing_level == "unknown"
+        assert ds.sidescan.processing_level == "raw"
 
 
 @pytest.mark.unit
