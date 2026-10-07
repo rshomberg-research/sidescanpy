@@ -584,16 +584,6 @@ class TestResampleChannelToGridPerSide:
         """Create a test channel with a real port/starboard channel dimension."""
         return _make_test_channel(num_pings=50, samples_per_ping=128)
 
-    def test_resample_with_port_starboard_separation(self, channel):
-        """Resample can optionally separate port and starboard."""
-        grid = GridDefinition(
-            bbox=(39.0, -71.0, 40.0, -70.0),
-            resolution_m=5000.0,
-        )
-
-        # Per-side separation not yet implemented
-        pytest.skip("Per-side separation deferred to v0.7.0")
-
     def test_resample_default_merges_sides(self, channel):
         """Default resample merges port and starboard."""
         grid = GridDefinition(

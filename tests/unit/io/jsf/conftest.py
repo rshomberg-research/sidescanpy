@@ -1016,7 +1016,7 @@ def real_jsf_file_path():
     `sample.jsf`) since the original survey data now lives in that
     project's own separate repo, not this one.
     """
-    return Path("tests/data/jsf/sample.jsf")
+    return Path(__file__).resolve().parents[3] / "data" / "jsf" / "sample.jsf"
 
 # Reference epoch for synthesizing timestamps
 _EPOCH_2026_NS = int(np.datetime64("2026-01-01T00:00:00", "ns").astype("int64"))

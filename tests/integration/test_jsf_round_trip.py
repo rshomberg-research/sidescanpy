@@ -22,7 +22,7 @@ from sidescanpy.io.jsf.converter import convert
 from sidescanpy.io.hdf5 import read_survey, write_survey
 
 
-SAMPLE_JSF = Path("tests/data/jsf/sample.jsf")
+SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 
 
 # ============================================================

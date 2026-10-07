@@ -1,4 +1,4 @@
-.PHONY: test test-v test-cov
+.PHONY: test test-v test-cov lint
 
 # ROS2 injects PYTHONPATH system-wide; clear it so uv run sees only the venv.
 # Long-term fix: conda env for ROS, uv for this project.
@@ -12,3 +12,6 @@ test-v:
 
 test-cov:
 	uv run pytest tests/unit/ --cov=sidescanpy --cov-report=term-missing
+
+lint:
+	uv run ruff check src tests

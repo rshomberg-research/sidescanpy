@@ -20,7 +20,7 @@ from sidescanpy.io.jsf.converter import convert
 from sidescanpy.core.survey import SideScanSurvey
 
 
-SAMPLE_JSF = Path("tests/data/jsf/sample.jsf")
+SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 
 
 # ============================================================

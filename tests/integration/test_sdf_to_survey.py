@@ -26,7 +26,7 @@ from sidescanpy.processing import (
 )
 
 
-SAMPLE_SDF = Path("tests/data/sdf/sample.sdf")
+SAMPLE_SDF = Path(__file__).resolve().parents[1] / "data" / "sdf" / "sample.sdf"
 
 
 # ============================================================

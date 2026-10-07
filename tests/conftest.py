@@ -10,7 +10,6 @@ sensible defaults.
 
 import pytest
 import json
-import pickle
 
 import numpy as np
 import pandas as pd
@@ -238,15 +237,6 @@ def tmp_dir(tmp_path):
     """Temporary directory for file I/O tests."""
     return tmp_path
 
-
-@pytest.fixture
-def sample_jsf_messages():
-    """Load pickled JSF messages for testing."""
-    from tests.data.conftest import generate_sample_jsf_messages
-
-    pkl_path = generate_sample_jsf_messages(n_messages=100)
-    with open(pkl_path, "rb") as f:
-        return pickle.load(f)
 
 @pytest.fixture
 def sample_sensor_temperature():

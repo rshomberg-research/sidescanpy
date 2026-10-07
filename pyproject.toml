@@ -5,7 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sidescanpy"
 version = "0.4.59"
-description = "..."
+description = "Read, correct, grid and export sidescan sonar data"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["sidescan", "sonar", "bathymetry", "geophysics", "marine"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
 authors = [{name = "Russ Shomberg"}]
 requires-python = ">=3.12"
 dependencies = [
@@ -20,7 +32,11 @@ dependencies = [
     "scipy>=1.10",
     "pynmea2>=1.18",
     "pyyaml>=6.0.3",
+    "pillow>=9.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/rshomberg-uri/sidescanpy"
 
 [project.scripts]
 sidescan-convert = "sidescanpy.cli.convert:main"
@@ -34,6 +50,7 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
     "pytest-xdist>=3.0",
+    "ruff>=0.6",
 ]
 maps = [
     # Used by viz/basemap.py to draw land/water context behind a
@@ -43,6 +60,21 @@ maps = [
     # extra is installed -- only the cartopy import itself is optional,
     # gated at each basemap function's own call site.
     "cartopy>=0.24",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # line length is not enforced yet
+    "E741",  # ambiguous variable names (l, I) are common in numeric code
+    "B008",
+    "B905",  # zip() without strict=
+    "UP006", "UP007", "UP035", "UP045",  # typing.List/Optional style, migrate later
 ]
 
 [tool.setuptools.packages.find]

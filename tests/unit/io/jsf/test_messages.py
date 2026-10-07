@@ -165,15 +165,6 @@ class TestSonarDataMessage:
         )
         assert message.N_samples == sample_sonar_data_message_dict['N_samples']
 
-    @pytest.mark.skip("Not implemented")
-    def test_sonar_data_backscatter(
-        self,
-        sample_sonar_data_message_header_bytes,
-        sample_sonar_data_message_bytes,
-        sample_sonar_data_message_dict,
-    ):
-        """Test that backscatter data is parsed correctly."""
-        raise NotImplementedError
     
 
 
@@ -342,125 +333,45 @@ class TestNavigationOffsetsMessage:
 # ============================================================================
 # SystemInformationMessage
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestSystemInformationMessage:
-    def test_parse_system_information_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_system_information_message(self):
-        raise NotImplementedError
 
 # ============================================================================
 # FilePaddingMessage
 # ============================================================================
 
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestFilePaddingMessage:
-    def test_file_padding_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_file_padding_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # DopplerVelocityLogDataMessage
 # ============================================================================
 
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestSDopplerVelocityLogDataMessage:
-    def test_parse_doppler_velocity_log_data_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_doppler_velocity_log_data_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # SituationMessage
 # ============================================================================
 
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestSituationMessage:
-    def test_parse_situation_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_situation_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # SituationComprehensiveMessage
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestSituationComprehensiveMessage:
-    def test_parse_situation_comprehensive_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_situation_comprehensive_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # CableCounterDataMessage
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestCableCounterDataMessage:
-    def test_cable_counter_data_message_header(self):
-        raise NotImplementedError
-    
-    def test_cable_counter_data_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # KilometerOfPipeDataMessage
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestKilometerOfPipeDataMessage:
-    def test_parse_kilometer_of_pipe_data_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_kilometer_of_pipe_data_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # ContainerTimeStampMessage
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestContainerTimeStampMessage:
-    def test_parse_container_timestamp_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_container_timestamp_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # UnknownMessage2040
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestUnknownMessage2040Message:
-    def test_parse_unknown_message_2040_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_unknown_message_2040_message(self):
-        raise NotImplementedError
     
 # ============================================================================
 # SonarMessageStatusMessage
 # ============================================================================
-@pytest.mark.skip("Not implemented")
-@pytest.mark.unit
-class TestSonarMessageStatusMessage:
-    def test_parse_sonar_message_status_message_header(self):
-        raise NotImplementedError
-    
-    def test_parse_sonar_message_status_message(self):
-        raise NotImplementedError
   
 # ============================================================================
 # NMEA MESSAGE TESTS
@@ -472,21 +383,9 @@ class TestNMEAMessages:
 
     # TODO: test generic NMEA message
 
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_dbt_header(self):
-        raise NotImplementedError
     
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_dbt_message(self):
-        raise NotImplementedError
     
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_dpt_header(self):
-        raise NotImplementedError
     
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_dpt_message(self):
-        raise NotImplementedError
     
     def test_parse_nmea_zda_header(self, sample_nmea_zda_message_header_bytes):
         """Test that we can parse a NMEA ZDA message header."""
@@ -534,21 +433,9 @@ class TestNMEAMessages:
         assert isinstance(message, NMEARMCMessage)
         assert "$GPRMC" in str(message._raw_message)
 
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_gll_header(self):
-        raise NotImplementedError
     
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_gll_message(self):
-        raise NotImplementedError
 
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_vtg_header(self):
-        raise NotImplementedError
     
-    @pytest.mark.skip("Not implemented")
-    def test_parse_nmea_vtg_message(self):
-        raise NotImplementedError
 
 # ============================================================================
 # ROUND-TRIP TESTS

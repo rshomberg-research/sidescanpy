@@ -419,9 +419,3 @@ class TestGriddingPipelineReprojection:
 
         assert raster.crs == CRS.from_epsg(4326)
         assert np.any(np.isfinite(raster.backscatter))
-
-    def test_resample_to_utm(self, channel):
-        """Resample to UTM (requires channel coordinate conversion)."""
-        # For now, channels are always in WGS84, so direct UTM resampling
-        # would need upstream coordinate transformation
-        pytest.skip("Channel UTM conversion not yet implemented")

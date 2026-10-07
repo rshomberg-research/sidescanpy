@@ -324,23 +324,8 @@ class TestSideScanGriddedRasterReprojection:
             backscatter=backscatter,
         )
 
-    def test_reproject_to_utm(self, sample_raster):
-        """Reproject raster to UTM (may require resampling)."""
-        # Note: direct reprojection without resampling will have mismatched
-        # cell counts due to extent changes. This is expected.
-        # For now, we test that the operation is attempted; actual resampling
-        # is handled in test_resample.py
-        
-        # Skip this test until resample_channel_to_grid is implemented
-        pytest.skip("Resampling not yet implemented; see test_resample.py")
 
-    def test_reproject_preserves_data(self, sample_raster):
-        """Reprojection preserves backscatter values (no resampling)."""
-        pytest.skip("Resampling not yet implemented; see test_resample.py")
 
-    def test_reproject_updates_coordinates(self, sample_raster):
-        """Coordinates updated to match new CRS."""
-        pytest.skip("Resampling not yet implemented; see test_resample.py")
 
     def test_reproject_same_crs_is_noop(self, sample_raster):
         """Reprojecting to same CRS returns equivalent raster."""
