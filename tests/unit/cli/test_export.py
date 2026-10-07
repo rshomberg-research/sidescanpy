@@ -1576,3 +1576,132 @@ class TestSwathPreResampleDownsample:
         full = run(tmp_path / "full", 1e9)  # every factor clamps to 1: no averaging
         for style in averaged:
             np.testing.assert_allclose(averaged[style][:2], full[style][:2], atol=2.0)
+
+
+class TestRunChipAugmentation:
+    """--n-augment / --random-flip / --across-axis slant / --box-size-m."""
+
+    def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
+        defaults = dict(
+            targets_json=targets_json, ss_h5_dir=ss_h5_dir, max_match_dist_m=25.0,
+            output=tmp_path / "out", styles=["chip"], render_level="geometric",
+            size_px=64, swath_size_px=64, box_size=10.0, with_context=False,
+            jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
+            normalization_scope="image", min_confidence="verified", seed=0,
+            resolution_m=None,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _target(self, n_pings=300):
+        lat = float(np.linspace(40.0000, 40.0010, n_pings)[150])
+        lon = float(np.linspace(-70.0000, -70.0010, n_pings)[150])
+        return Target(
+            target_id="7", source_format="x", catalog_source="x",
+            latitude=lat, longitude=lon, channel=1, sample=15,
+            position_confidence="verified",
+        )
+
+    def _yolo_centers(self, out_dir, style="chip"):
+        labels = sorted((out_dir / style / "targets.yolo" / "labels").glob("*.txt"))
+        return {p.stem: [tuple(map(float, line.split()[1:3])) for line in p.read_text().splitlines()] for p in labels}
+
+    def test_n_augment_writes_one_image_and_label_per_draw(self, tmp_path, swath_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, n_augment=4, jitter_px=20)
+        assert export.run_chip(args) == 0
+
+        chip_dir = tmp_path / "out" / "chip"
+        assert sorted(p.name for p in chip_dir.glob("target_*.png")) == [f"target_7_a{k}.png" for k in range(4)]
+        centers = self._yolo_centers(tmp_path / "out")
+        assert set(centers) == {f"target_7_a{k}" for k in range(4)}
+        # independent jitter draws -> target lands in different places
+        assert len({c[0] for c in centers.values()}) > 1
+        log = json.loads((chip_dir / "augmentations.json").read_text())
+        assert [e["augmentation"] for e in log] == [0, 1, 2, 3]
+
+    def test_n_augment_default_keeps_single_file_naming(self, tmp_path, swath_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        assert export.run_chip(self._args(tmp_path, swath_ss_h5_dir, targets_json)) == 0
+        assert (tmp_path / "out" / "chip" / "target_7.png").exists()
+        assert not (tmp_path / "out" / "chip" / "augmentations.json").exists()
+
+    def test_random_flip_mirrors_image_and_label_together(self, tmp_path, swath_ss_h5_dir):
+        """Same seed, same jitter draw: the flipped run's image must be the
+        unflipped image mirrored, and its label center mirrored to match."""
+        from PIL import Image
+
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        plain = self._args(tmp_path, swath_ss_h5_dir, targets_json, output=tmp_path / "plain", n_augment=6)
+        flipped = self._args(tmp_path, swath_ss_h5_dir, targets_json, output=tmp_path / "flip", n_augment=6, random_flip=True)
+        assert export.run_chip(plain) == 0
+        assert export.run_chip(flipped) == 0
+
+        log = json.loads((tmp_path / "flip" / "chip" / "augmentations.json").read_text())
+        assert any(e["flip_h"] or e["flip_v"] for e in log)
+        plain_c, flip_c = self._yolo_centers(tmp_path / "plain"), self._yolo_centers(tmp_path / "flip")
+        for e in log:
+            stem = Path(e["file_name"]).stem
+            a = np.array(Image.open(tmp_path / "plain" / "chip" / e["file_name"]))
+            b = np.array(Image.open(tmp_path / "flip" / "chip" / e["file_name"]))
+            if e["flip_h"]:
+                a = a[:, ::-1]
+            if e["flip_v"]:
+                a = a[::-1, :]
+            np.testing.assert_array_equal(a, b)
+            (cx, cy), (fx, fy) = plain_c[stem][0], flip_c[stem][0]
+            assert fx == pytest.approx(1 - cx if e["flip_h"] else cx, abs=1e-5)
+            assert fy == pytest.approx(1 - cy if e["flip_v"] else cy, abs=1e-5)
+
+    def test_slant_across_axis_neighborhood_uses_signed_slant_range(self, tmp_path, swath_ss_h5_dir):
+        """--across-axis slant swaps the loaded neighborhood's across_track_m
+        for +/-slant_range_m (port negative), which every downstream
+        geometric extraction/co-target lookup reads -- and keeps the
+        water-column samples ground projection drops."""
+        survey = read_survey(next(swath_ss_h5_dir.glob("*.ss.h5")))
+        ds_full = survey.get_frequency("hz_1495000").dataset
+        t = self._target()
+        views = {
+            axis: export._load_geo_neighborhood(
+                ds_full, t, 150, {1: [(t, 150)]}, ["chip"], size_px=64, jitter_px=0,
+                resolution_m=0.002, with_db=False, across_axis=axis,
+            )
+            for axis in ("ground", "slant")
+        }
+        slant = views["slant"].ds
+        np.testing.assert_allclose(slant["across_track_m"].isel(channel=1).values, slant["slant_range_m"].isel(channel=1).values)
+        np.testing.assert_allclose(slant["across_track_m"].isel(channel=0).values, -slant["slant_range_m"].isel(channel=0).values)
+        ground_across = views["ground"].ds["across_track_m"].values
+        assert np.isnan(ground_across).any() and np.isfinite(slant["across_track_m"].values).all()
+        finite = np.isfinite(ground_across)
+        assert (np.abs(slant["across_track_m"].values[finite]) >= np.abs(ground_across[finite]) - 1e-9).all()
+
+    def test_slant_across_axis_runs_end_to_end(self, tmp_path, swath_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, across_axis="slant", resolution_m=0.002, n_augment=2, random_flip=True)
+        assert export.run_chip(args) == 0
+        assert len(list((tmp_path / "out" / "chip").glob("target_7_a*.png"))) == 2
+
+    def test_across_values_slant_signs_port_negative(self):
+        ds = xr.Dataset({"slant_range_m": (("ping", "channel", "sample"), np.ones((2, 2, 3)))})
+        v = export._across_values(ds, "slant").values
+        assert (v[:, 0] < 0).all() and (v[:, 1] > 0).all()
+        with pytest.raises(ValueError):
+            export._across_values(ds, "sideways")
+
+    def test_box_size_m_scales_with_resolution(self, tmp_path, swath_ss_h5_dir):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([self._target()], targets_json)
+        widths = {}
+        for res in (0.05, 0.1):
+            out = tmp_path / f"r{res}"
+            args = self._args(tmp_path, swath_ss_h5_dir, targets_json, output=out, resolution_m=res, box_size_m=1.0)
+            assert export.run_chip(args) == 0
+            line = (out / "chip" / "targets.yolo" / "labels" / "target_7.txt").read_text().split()
+            widths[res] = float(line[3]) * 64
+        assert widths[0.05] == pytest.approx(20.0, abs=0.5)
+        assert widths[0.1] == pytest.approx(10.0, abs=0.5)

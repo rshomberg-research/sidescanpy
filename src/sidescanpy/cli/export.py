@@ -700,6 +700,7 @@ def _neighborhood_ping_spacing_m(ds_full: xr.Dataset, lo: int, hi: int) -> float
 
 def _geo_decimation(
     ds_full: xr.Dataset, ping_idx: int, style: str, *, size_px: int, jitter_px: int, resolution_m: float | None,
+    across_axis: str = "ground",
 ) -> tuple[int, int, int]:
     """(half_span_pings, fp, fs) for one geometric/georef style around
     ``ping_idx``: a ping neighborhood covering the output window in
@@ -720,7 +721,7 @@ def _geo_decimation(
         if style == "chip":
             resolution_m = max(mps, ping_spacing_m)
         else:
-            across = ds_full["across_track_m"].isel(ping=ping_idx).values
+            across = _across_values(ds_full.isel(ping=ping_idx), across_axis).values
             if style != "dual-swath":
                 across = across[0]
             finite = across[np.isfinite(across)]
@@ -752,22 +753,37 @@ class _GeoView:
 
 def _load_geo_neighborhood(
     ds_full: xr.Dataset, t, ping_idx: int, items_by_channel: dict, styles: list[str], *,
-    size_px: int, jitter_px: int, resolution_m: float | None, with_db: bool,
+    size_px: int, jitter_px: int, resolution_m: float | None, with_db: bool, across_axis: str = "ground",
+    per_sample_latlon: bool = True,
 ) -> _GeoView:
     """Block-averaged neighborhood around ``ping_idx`` serving every
     style in ``styles`` (widest span, finest factors), with ``t`` and
     ``items_by_channel`` translated into its averaged sample/ping units.
     Global ping ``p`` maps to ``lo + (p - lo) // fp``, so
     ``_geo_targets_within_window``'s own ``p - lo`` lands on the right
-    averaged row."""
+    averaged row.
+
+    ``across_axis="slant"`` replaces the loaded ``across_track_m`` with
+    signed slant range (see ``_across_values``), so every downstream
+    geometric extraction, co-target lookup and swath-width estimate
+    works in slant-range meters instead of ground-projected meters."""
     n_pings = ds_full.sizes["ping"]
-    plans = [_geo_decimation(ds_full, ping_idx, st, size_px=size_px, jitter_px=jitter_px, resolution_m=resolution_m) for st in styles]
+    plans = [
+        _geo_decimation(ds_full, ping_idx, st, size_px=size_px, jitter_px=jitter_px, resolution_m=resolution_m, across_axis=across_axis)
+        for st in styles
+    ]
     half_span = max(p[0] for p in plans)
     fp = min(p[1] for p in plans)
     fs = min(p[2] for p in plans)
     lo = max(0, ping_idx - half_span)
     hi = min(n_pings, ping_idx + half_span)
-    ds = _load_swath_neighborhood(ds_full, lo, hi, fp, fs, with_db=with_db)
+    extra_vars = ("slant_range_m",) if across_axis == "slant" else ()
+    # Per-sample lat/lon are only read by georef; the geometric level
+    # skips them (two full float64 per-sample arrays per neighborhood).
+    skip_vars = () if per_sample_latlon else ("latitude_per_sample", "longitude_per_sample")
+    ds = _load_swath_neighborhood(ds_full, lo, hi, fp, fs, with_db=with_db, extra_vars=extra_vars, skip_vars=skip_vars)
+    if across_axis == "slant":
+        ds["across_track_m"] = _across_values(ds, "slant")
     items = {
         ch: [(_decimate_target(tt, fs, fp), lo + (p - lo) // fp) for tt, p in ch_its]
         for ch, ch_its in items_by_channel.items()
@@ -776,7 +792,10 @@ def _load_geo_neighborhood(
     return _GeoView(ds=ds, target=_decimate_target(t, fs, fp), local_ping=(ping_idx - lo) // fp, mps=_sample_interval_m(ds), items=items, lo=lo)
 
 
-def _load_swath_neighborhood(ds_full: xr.Dataset, lo: int, hi: int, fp: int, fs: int, *, with_db: bool) -> xr.Dataset:
+def _load_swath_neighborhood(
+    ds_full: xr.Dataset, lo: int, hi: int, fp: int, fs: int, *, with_db: bool, extra_vars: tuple[str, ...] = (),
+    skip_vars: tuple[str, ...] = (),
+) -> xr.Dataset:
     """Nadir-masked ``[lo, hi)`` ping neighborhood, block-averaged by
     ``fp`` pings x ``fs`` samples before any geometric/georef resample.
 
@@ -789,7 +808,7 @@ def _load_swath_neighborhood(ds_full: xr.Dataset, lo: int, hi: int, fp: int, fs:
     divided by ``fs`` so ``_sample_interval_m`` reports the averaged
     cell size.
     """
-    keep = [v for v in _SWATH_LOAD_VARS if v in ds_full]
+    keep = [v for v in (*_SWATH_LOAD_VARS, *extra_vars) if v in ds_full and v not in skip_vars]
     step = fp * max(1, _SWATH_LOAD_BLOCK_PINGS // fp)
     blocks = []
     for b0 in range(lo, hi, step):
@@ -802,6 +821,57 @@ def _load_swath_neighborhood(ds_full: xr.Dataset, lo: int, hi: int, fp: int, fs:
     out = xr.concat(blocks, dim="ping") if len(blocks) > 1 else blocks[0]
     out.attrs = {**ds_full.attrs, "sample_rate_hz": float(ds_full.attrs["sample_rate_hz"]) / fs}
     return out
+
+
+def _across_values(ds: xr.Dataset, across_axis: str):
+    """Across-track coordinate (port negative, starboard positive) for a
+    geometric window: ``across_track_m`` (ground-projected, the default)
+    or, for ``across_axis="slant"``, ``slant_range_m`` carrying the same
+    sign convention -- the slant-range (no ground projection) analogue,
+    still in real meters, so a ``size_px * resolution_m`` window is the
+    same real extent on both axes. Water column is NOT removed in slant
+    mode (``slant_range_m`` is finite everywhere); ``mask_nadir_gap``
+    still blanks the detected nadir gap's backscatter either way."""
+    if across_axis == "ground":
+        return ds["across_track_m"]
+    if across_axis != "slant":
+        raise ValueError(f"unknown across_axis: {across_axis!r}")
+    if "slant_range_m" not in ds:
+        raise KeyError("slant_range_m")
+    sign = xr.DataArray([-1.0, 1.0], dims="channel")
+    return ds["slant_range_m"] * sign
+
+
+def _random_flip(window: np.ndarray, co_targets: list, rng: np.random.Generator, *, edge_coords: bool) -> tuple[np.ndarray, list, bool, bool]:
+    """Independently flip ``window`` horizontally and vertically, each
+    with probability 0.5, remapping every co-target's ``sample`` (col) /
+    ``window_row`` (row) to match -- a training-time augmentation, applied
+    after display orientation, so the annotations stay exact.
+
+    ``edge_coords``: geometric/georef windows locate targets in
+    continuous pixel-edge coordinates (``locate_point``: pixel ``i``
+    spans ``[i, i+1)``), mirrored as ``n - x``; pixel-space windows use
+    integer sample/ping indices (pixel centers), mirrored as ``n - 1 - x``.
+    Returns ``(window, co_targets, flipped_h, flipped_v)``."""
+    flip_h, flip_v = bool(rng.random() < 0.5), bool(rng.random() < 0.5)
+    n_rows, n_cols = window.shape
+    off = 0 if edge_coords else 1
+    if flip_h:
+        window = window[:, ::-1]
+        co_targets = [replace(ct, sample=n_cols - off - ct.sample) for ct in co_targets]
+    if flip_v:
+        window = window[::-1, :]
+        co_targets = [
+            replace(ct, extra_attributes={**ct.extra_attributes, "window_row": n_rows - off - ct.extra_attributes["window_row"]})
+            for ct in co_targets
+        ]
+    return np.ascontiguousarray(window), co_targets, flip_h, flip_v
+
+
+def _augmented_file_name(target_id: str, aug_idx: int, n_augment: int) -> str:
+    """``target_<id>.png`` (single draw, unchanged naming) or
+    ``target_<id>_a<k>.png`` for one of ``n_augment`` draws."""
+    return f"target_{target_id}.png" if n_augment <= 1 else f"target_{target_id}_a{aug_idx}.png"
 
 
 def _decimate_target(t, fs: int, fp: int):
@@ -1318,8 +1388,56 @@ def run_chip(args: argparse.Namespace) -> int:
     rng = np.random.default_rng(args.seed)
     geo = args.render_level not in _PIXEL_LEVELS
     need_db = "db" in (args.render_level, value_var)
-    raw_windows: dict[str, list] = {s: [] for s in styles}
-    window_meta: dict[str, list] = {s: [] for s in styles}  # (co_targets, primary, file_stem, freq_key)
+    n_augment = max(1, int(getattr(args, "n_augment", 1) or 1))
+    random_flip = bool(getattr(args, "random_flip", False))
+    across_axis = getattr(args, "across_axis", "ground")
+    box_size_m = getattr(args, "box_size_m", None)
+    if across_axis != "ground" and args.render_level != "geometric":
+        logger.warning(f"--across-axis={across_axis} only applies to --render-level geometric -- ignoring it")
+        across_axis = "ground"
+    if box_size_m is not None and not geo:
+        logger.warning("--box-size-m only applies to geometric/georef render levels -- ignoring it, using --box-size")
+        box_size_m = None
+
+    # Per-style output state. Under --normalization-scope image (default)
+    # every window is rendered and written as soon as it's extracted, so
+    # peak memory doesn't grow with target count x --n-augment (32 targets
+    # x 4 draws of 1024 px float64 windows is ~1GB if held to the end);
+    # "shared" needs every window first and keeps the old hold-then-write path.
+    stream = args.normalization_scope == "image"
+    pending: dict[str, list] = {s: [] for s in styles}  # (window, co_targets, primary, freq_key, file_name, aug_idx)
+    coco_entries: dict[str, list] = {s: [] for s in styles}
+    sheet: dict[str, tuple[list, list, list]] = {s: ([], [], []) for s in styles}  # thumbnails, captions, boxes
+    aug_log: dict[str, list] = {s: [] for s in styles}
+    n_written: dict[str, int] = {s: 0 for s in styles}
+
+    def emit(style, window, co_targets, primary, freq_key, file_name, aug_idx, reference_stats=None):
+        img_8bit, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
+        style_dir = args.output / style
+        if getattr(args, "bit_depth", 8) == 16:
+            # Dataset image at 16-bit; the contact sheet still uses the
+            # 8-bit render (same stretch/gamma).
+            img_16bit, _meta = to_uint16(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
+            _save_grayscale(img_16bit, style_dir / file_name)
+        else:
+            _save_grayscale(img_8bit, style_dir / file_name)
+        for co in co_targets:
+            coco_entries[style].append(
+                CocoImageEntry(
+                    target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0],
+                    bbox_size=co.extra_attributes.get("bbox_size_px"),
+                )
+            )
+        # Contact sheet: first draw per target only -- one row of every
+        # augmentation of every target is unreadable and, at 1024 px,
+        # a multi-GB figure.
+        if aug_idx == 0:
+            thumbnails, captions, sheet_boxes = sheet[style]
+            thumbnails.append(img_8bit)
+            sheet_boxes.append(co_targets)
+            n_co = len(co_targets)
+            captions.append(f"{primary.target_id} ({freq_key}, {n_co} target{'s' if n_co != 1 else ''})")
+        n_written[style] += 1
 
     for (path, freq_key), items_by_channel in groups.items():
         survey = read_survey(path, chunks={"ping": 512})
@@ -1377,16 +1495,22 @@ def run_chip(args: argparse.Namespace) -> int:
                     mps = _sample_interval_m(masked)
                 else:
                     views = {}
-                    if "chip" in styles:
-                        views["chip"] = _load_geo_neighborhood(
-                            ds_full, t, ping_idx, items_by_channel, ["chip"], size_px=args.size_px,
-                            jitter_px=args.jitter_px, resolution_m=resolution_m_override, with_db=need_db,
-                        )
-                    if swath_geo_styles:
-                        views["swath"] = _load_geo_neighborhood(
-                            ds_full, t, ping_idx, items_by_channel, swath_geo_styles, size_px=args.swath_size_px,
-                            jitter_px=args.jitter_px, resolution_m=resolution_m_override, with_db=need_db,
-                        )
+                    try:
+                        if "chip" in styles:
+                            views["chip"] = _load_geo_neighborhood(
+                                ds_full, t, ping_idx, items_by_channel, ["chip"], size_px=args.size_px,
+                                jitter_px=args.jitter_px, resolution_m=resolution_m_override, with_db=need_db,
+                                across_axis=across_axis, per_sample_latlon=args.render_level == "georef",
+                            )
+                        if swath_geo_styles:
+                            views["swath"] = _load_geo_neighborhood(
+                                ds_full, t, ping_idx, items_by_channel, swath_geo_styles, size_px=args.swath_size_px,
+                                jitter_px=args.jitter_px, resolution_m=resolution_m_override, with_db=need_db,
+                                across_axis=across_axis, per_sample_latlon=args.render_level == "georef",
+                            )
+                    except KeyError as exc:
+                        logger.warning(f"target {t.target_id}: {path.name} has no {exc} (run sidescan-correct --geometric) -- skipping")
+                        continue
 
                 def geo_window(style, size_px, jitter_px):
                     v = views["chip" if style == "chip" else "swath"]
@@ -1455,69 +1579,80 @@ def run_chip(args: argparse.Namespace) -> int:
                                 fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                                 plt.close(fig)
 
-                for style in styles:
-                    size_px = _style_size_px(style, args)
-                    if args.render_level in _PIXEL_LEVELS:
-                        result = _extract_pixel_style_window(
-                            masked, t, channel_idx, n_samples_single, local_ping, lo, style, args.render_level,
-                            size_px, args.jitter_px, rng, placed_by_channel, placed_combined,
-                        )
-                    else:
-                        result = geo_window(style, size_px, args.jitter_px)
-                    if result is None:
-                        logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")
-                        continue
-                    window, co_targets = result
-                    raw_windows[style].append(window)
-                    window_meta[style].append((co_targets, t, path.stem, freq_key))
-                    if style == "dual-swath" and geo and args.with_context:
-                        primary = next((ct for ct in co_targets if ct.target_id == t.target_id), co_targets[0])
-                        fig = render_target_context(window, primary, box_size=(args.box_size, args.box_size), coordinate_system=args.render_level,
-                                                    resolution_m=primary.extra_attributes.get("window_resolution_m"))
-                        fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                        plt.close(fig)
+                # --n-augment: independent jitter (+ optional flip) draws
+                # of the same target from the same loaded neighborhood --
+                # the expensive load above happens once per target, only
+                # the resample repeats.
+                for aug_idx in range(n_augment):
+                    for style in styles:
+                        size_px = _style_size_px(style, args)
+                        if args.render_level in _PIXEL_LEVELS:
+                            result = _extract_pixel_style_window(
+                                masked, t, channel_idx, n_samples_single, local_ping, lo, style, args.render_level,
+                                size_px, args.jitter_px, rng, placed_by_channel, placed_combined,
+                            )
+                        else:
+                            result = geo_window(style, size_px, args.jitter_px)
+                        if result is None:
+                            logger.warning(f"target {t.target_id}: {style}/{args.render_level} window unavailable, skipping")
+                            continue
+                        window, co_targets = result
+                        if style == "dual-swath" and geo and args.with_context and aug_idx == 0:
+                            primary = next((ct for ct in co_targets if ct.target_id == t.target_id), co_targets[0])
+                            fig = render_target_context(window, primary, box_size=(args.box_size, args.box_size), coordinate_system=args.render_level,
+                                                        resolution_m=primary.extra_attributes.get("window_resolution_m"))
+                            fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
+                            plt.close(fig)
+                        if box_size_m is not None:
+                            # Meters placeholder for center-only picks (no
+                            # measured bbox): same real extent at every
+                            # resolution, unlike --box-size's fixed pixels.
+                            co_targets = [
+                                ct if "bbox_size_px" in ct.extra_attributes or not ct.extra_attributes.get("window_resolution_m")
+                                else replace(ct, extra_attributes={**ct.extra_attributes, "bbox_size_px": (box_size_m / ct.extra_attributes["window_resolution_m"],) * 2})
+                                for ct in co_targets
+                            ]
+                        flip_h = flip_v = False
+                        if random_flip:
+                            window, co_targets, flip_h, flip_v = _random_flip(window, co_targets, rng, edge_coords=geo)
+                        file_name = _augmented_file_name(t.target_id, aug_idx, n_augment)
+                        primary = next((ct for ct in co_targets if ct.target_id == t.target_id), None)
+                        aug_log[style].append({
+                            "file_name": file_name, "target_id": t.target_id, "augmentation": aug_idx,
+                            "source_file": path.name, "freq_key": freq_key, "flip_h": flip_h, "flip_v": flip_v,
+                            "target_row": None if primary is None else round(float(primary.extra_attributes["window_row"]), 2),
+                            "target_col": None if primary is None else round(float(primary.sample), 2),
+                            "resolution_m": None if primary is None else primary.extra_attributes.get("window_resolution_m"),
+                            "n_targets": len(co_targets),
+                        })
+                        if stream:
+                            emit(style, window, co_targets, t, freq_key, file_name, aug_idx)
+                        else:
+                            pending[style].append((window, co_targets, t, freq_key, file_name, aug_idx))
 
     total_written = 0
     for style in styles:
-        windows = raw_windows[style]
-        if not windows:
+        if pending[style]:
+            reference_stats = _reference_stats_for_scope(args.normalization_scope, [p[0] for p in pending[style]], args.pct_low, args.pct_high)
+            for window, co_targets, primary, freq_key, file_name, aug_idx in pending[style]:
+                emit(style, window, co_targets, primary, freq_key, file_name, aug_idx, reference_stats=reference_stats)
+            pending[style] = []
+        if not n_written[style]:
             logger.warning(f"{style}: no windows produced at render-level={args.render_level!r} — skipping this style's COCO/YOLO export")
             continue
 
-        reference_stats = _reference_stats_for_scope(args.normalization_scope, windows, args.pct_low, args.pct_high)
-
-        coco_entries = []
-        thumbnails, captions, sheet_boxes = [], [], []
         style_dir = args.output / style
-        for window, (co_targets, primary, file_stem, freq_key) in zip(windows, window_meta[style]):
-            img_8bit, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
-            file_name = f"target_{primary.target_id}.png"
-            if getattr(args, "bit_depth", 8) == 16:
-                # Dataset image at 16-bit; the contact sheet below still
-                # uses the 8-bit render (same stretch/gamma).
-                img_16bit, _meta = to_uint16(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high, reference_stats=reference_stats)
-                _save_grayscale(img_16bit, style_dir / file_name)
-            else:
-                _save_grayscale(img_8bit, style_dir / file_name)
-
-            for co in co_targets:
-                coco_entries.append(
-                    CocoImageEntry(
-                        target=co, file_name=file_name, width=img_8bit.shape[1], height=img_8bit.shape[0],
-                        bbox_size=co.extra_attributes.get("bbox_size_px"),
-                    )
-                )
-            thumbnails.append(img_8bit)
-            sheet_boxes.append(co_targets)
-            n_co = len(co_targets)
-            captions.append(f"{primary.target_id} ({freq_key}, {n_co} target{'s' if n_co != 1 else ''})")
-
+        thumbnails, captions, sheet_boxes = sheet[style]
         sheet_fig = contact_sheet(
             thumbnails, captions, boxes=sheet_boxes, box_size=(args.box_size, args.box_size),
-            ncols=6, suptitle=f"{style}: {len(thumbnails)} chips",
+            ncols=6, suptitle=f"{style}: {len(thumbnails)} chips" + (f" (first of {n_augment} draws each)" if n_augment > 1 else ""),
         )
         sheet_fig.savefig(style_dir / "contact_sheet.png", dpi=150)
         plt.close(sheet_fig)
+        sheet[style] = ([], [], [])
+
+        if n_augment > 1 or random_flip:
+            (style_dir / "augmentations.json").write_text(json.dumps(aug_log[style], indent=1))
 
         # write_coco()/write_yolo() have their own independent
         # min_confidence filter (default "verified", separate from the
@@ -1526,18 +1661,17 @@ def run_chip(args: argparse.Namespace) -> int:
         # (e.g. Klein's .tgt, which is unconditionally "unknown") gets a
         # real crop for every target but zero COCO/YOLO annotations for
         # any of them, silently.
-        coco = write_coco(coco_entries, style_dir / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
+        coco = write_coco(coco_entries[style], style_dir / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
         logger.info(f"{style}: COCO export: {len(coco['images'])} image(s), {len(coco['annotations'])} annotation(s) -> {style_dir / 'targets.coco.json'}")
-        yolo = write_yolo(coco_entries, style_dir / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
+        yolo = write_yolo(coco_entries[style], style_dir / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
         logger.info(f"{style}: YOLO export: {len(yolo['images'])} image(s) -> {style_dir / 'targets.yolo'}")
-        logger.info(f"{style}: wrote {len(windows)} chip(s) + contact sheet to {style_dir}")
-        total_written += len(windows)
+        logger.info(f"{style}: wrote {n_written[style]} chip(s) + contact sheet to {style_dir}")
+        total_written += n_written[style]
 
     if total_written == 0:
         logger.error(f"No style produced any window at render-level={args.render_level!r} — nothing exported")
         return 1
     return 0
-
 
 def run_survey_window(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
@@ -2097,6 +2231,29 @@ def main() -> int:
              "fixed radiometric pixel-space view.",
     )
     p_chip.add_argument("--jitter-px", type=int, default=0)
+    p_chip.add_argument(
+        "--n-augment", type=int, default=1,
+        help="Independent jitter draws per target per style (each its own image, target_<id>_a<k>.png when > 1). "
+             "The target neighborhood is loaded once per target; only the resample repeats. With --jitter-px near "
+             "half the image size, the target lands anywhere in the frame across draws.",
+    )
+    p_chip.add_argument(
+        "--random-flip", action="store_true",
+        help="Flip each image horizontally and vertically, each independently with probability 0.5, with every "
+             "annotation remapped to match. Draws are recorded per image in <style>/augmentations.json.",
+    )
+    p_chip.add_argument(
+        "--across-axis", choices=["ground", "slant"], default="ground",
+        help="'geometric' render level only: across-track axis of the real-meters grid. 'ground' (default) = "
+             "across_track_m, ground-projected. 'slant' = signed slant range, no ground projection (water column "
+             "kept), still meters so --resolution-m means the same real extent on both axes.",
+    )
+    p_chip.add_argument(
+        "--box-size-m", type=float, default=None,
+        help="geometric/georef only: annotation box size in meters for targets with no measured bbox (center-only "
+             "picks), converted per image by its own resolution -- same real extent at every scale. Targets with a "
+             "measured bbox keep it. Default: use --box-size pixels.",
+    )
     p_chip.add_argument("--gamma", type=float, default=common["gamma"])
     p_chip.add_argument(
         "--bit-depth", type=int, choices=[8, 16], default=8,

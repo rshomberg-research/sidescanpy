@@ -7,6 +7,37 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `sidescan-export chip` dataset-augmentation and projection options, all
+  opt-in (defaults reproduce prior output exactly):
+  - `--n-augment N`: N independent jitter draws per target per style, each
+    its own image (`target_<id>_a<k>.png`). The target neighborhood loads
+    once per target; only the resample repeats.
+  - `--random-flip`: independent 50% horizontal and 50% vertical flip per
+    image, annotations remapped to match; each image's draw is recorded in
+    `<style>/augmentations.json`.
+  - `--across-axis {ground,slant}` (geometric level): `slant` builds the
+    real-meters grid on signed slant range instead of ground-projected
+    `across_track_m` (no ground projection, water column kept), so
+    `--resolution-m` still means the same real extent on both axes.
+  - `--box-size-m`: annotation box in meters for center-only targets,
+    converted per image by its own resolution.
+- Under `--normalization-scope image` (default) each image is written as
+  soon as it is extracted instead of holding every float window until the
+  end; contact sheets show the first draw per target only.
+
+### Changed
+
+- Geometric level no longer loads per-sample latitude/longitude into the
+  target neighborhood (only georef reads them).
+
+### Known
+
+- `--resample-method griddata` at 1024 px dominates peak memory on dense
+  surveys: one dual-swath window on survey-a peaked at 4.3 GB
+  (kdtree: 1.9 GB, ~3x faster).
+
 ### Fixed
 
 #### Geometric resampling fills short navigation stalls (2026-09-29)
