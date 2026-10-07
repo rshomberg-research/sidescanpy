@@ -8,10 +8,13 @@ or neither, depending on what the source catalog actually gives up.
 2026 rshomberg@uri.edu
 """
 
+import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 PositionConfidence = Literal["unknown", "approximate", "verified"]
 

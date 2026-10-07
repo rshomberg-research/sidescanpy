@@ -18,13 +18,13 @@ import pytest
 import xarray as xr
 
 from sidescanpy.analysis.tvg_diagnostics import (
-    _linear_to_db,
     before_after_backscatter,
     bin_pings_by_altitude,
     fit_hardware_tvg_curve,
     mean_backscatter_vs_range,
     mean_backscatter_vs_sample_index,
 )
+from sidescanpy.core.units import linear_to_db as _linear_to_db
 from sidescanpy.processing.pipeline import apply_correction_steps
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 

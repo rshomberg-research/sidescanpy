@@ -32,7 +32,7 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
-from sidescanpy import __version__
+from sidescanpy._version import __version__
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 
 logger = logging.getLogger(__name__)

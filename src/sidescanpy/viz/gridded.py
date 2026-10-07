@@ -11,27 +11,11 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
+from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
-
-
-# Deterministic floor-clip artifact values, not real backscatter returns
-# (see sidescanpy/CLAUDE.md Known Issue #5): 0.0 is exact-zero raw linear
-# amplitude (pre-TVG); -120.0 is apply_tvg()'s `20*log10(clip(x, 1e-6))`
-# floor (post-TVG dB). Masked to NaN before color-scaling/plotting so they
-# don't stretch vmin/vmax or render as fake dark cells — matches
-# viz/waterfall.py's plot_waterfall() handling of the same artifact.
-_FLOOR_CLIP_VALUES = (0.0, -120.0)
-
-
-def _mask_floor_clip(backscatter: np.ndarray) -> np.ndarray:
-    """Replace exact floor-clip artifact values with NaN."""
-    mask = np.isin(backscatter, _FLOOR_CLIP_VALUES)
-    if not mask.any():
-        return backscatter
-    return np.where(mask, np.nan, backscatter)
 
 
 # ============================================================
@@ -153,7 +137,7 @@ def plot_gridded_raster(
     # Extract backscatter and coordinates (CRS-aware: lat/lon degrees
     # for a geographic raster, northing/easting meters for a projected
     # one — see SideScanGriddedRaster.y_values/x_values)
-    backscatter = _mask_floor_clip(raster.backscatter)
+    backscatter = mask_floor_clip(raster.backscatter)
     ys = raster.y_values
     xs = raster.x_values
 
@@ -223,7 +207,7 @@ def plot_gridded_raster(
     if show_colorbar:
         units = raster.dataset["backscatter"].attrs.get("units", "unknown units")
         plt.colorbar(im, ax=ax, label=f"Backscatter ({units})")
-        logger.debug(f"Colorbar range: {vmin:.3f} — {vmax:.3f}")
+        logger.debug(f"Colorbar range: {vmin:.3f} -- {vmax:.3f}")
 
     if show_locator:
         from sidescanpy.viz.basemap import plot_locator_thumbnail
@@ -310,7 +294,7 @@ def plot_gridded_with_coverage(
     if fig is None or ax is None:
         fig, ax = plt.subplots(figsize=(10, 8))
 
-    backscatter = _mask_floor_clip(raster.backscatter)
+    backscatter = mask_floor_clip(raster.backscatter)
     ys = raster.y_values
     xs = raster.x_values
 
@@ -411,7 +395,7 @@ def plot_gridded_multiple_methods(
     if vmin is None or vmax is None:
         all_finite = []
         for raster in rasters.values():
-            masked_bs = _mask_floor_clip(raster.backscatter)
+            masked_bs = mask_floor_clip(raster.backscatter)
             finite_vals = masked_bs[np.isfinite(masked_bs)]
             all_finite.extend(finite_vals)
 
@@ -443,7 +427,7 @@ def plot_gridded_multiple_methods(
         ax = axes[row, col]
 
         # Plot
-        backscatter_masked = np.ma.masked_invalid(_mask_floor_clip(raster.backscatter))
+        backscatter_masked = np.ma.masked_invalid(mask_floor_clip(raster.backscatter))
         ys = raster.y_values
         xs = raster.x_values
 
@@ -538,5 +522,5 @@ def export_gridded_png(
     )
 
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
-    logger.info(f"Exported gridded raster to {output_path}")
+    logger.debug(f"Exported gridded raster to {output_path}")
     plt.close(fig)

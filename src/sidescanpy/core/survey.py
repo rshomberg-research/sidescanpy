@@ -124,7 +124,7 @@ class SideScanSurvey:
     def add_frequency(self, freq_key: str, dataset: xr.Dataset) -> None:
         """Add (or replace) a frequency channel. Warns on overwrite."""
         if freq_key in self._freq_channels:
-            logger.warning(f"Overwriting existing frequency channel: {freq_key}")
+            logger.debug(f"Overwriting existing frequency channel: {freq_key}")
         self._freq_channels[freq_key] = SideScanFrequencyChannel(dataset, freq_key)
 
     def get_frequency(self, freq_key: str) -> SideScanFrequencyChannel:
@@ -163,7 +163,7 @@ class SideScanSurvey:
             return
         ds.navigation_record.validate()
         if self._navigation is not None:
-            logger.warning("Overwriting existing navigation record")
+            logger.debug("Overwriting existing navigation record")
         self._navigation = ds
 
     @property
@@ -186,7 +186,7 @@ class SideScanSurvey:
             return
         ds.attitude_record.validate()
         if self._attitude is not None:
-            logger.warning("Overwriting existing attitude record")
+            logger.debug("Overwriting existing attitude record")
         self._attitude = ds
 
     @property
@@ -208,7 +208,7 @@ class SideScanSurvey:
             return
         ds.dvl_record.validate()
         if self._dvl is not None:
-            logger.warning("Overwriting existing DVL record")
+            logger.debug("Overwriting existing DVL record")
         self._dvl = ds
 
     @property
@@ -223,7 +223,7 @@ class SideScanSurvey:
         """Add (or replace) a sensor record. Warns on overwrite."""
         dataset.sensor_record.validate()
         if sensor_type in self._sensors:
-            logger.warning(f"Overwriting existing sensor record: {sensor_type}")
+            logger.debug(f"Overwriting existing sensor record: {sensor_type}")
         self._sensors[sensor_type] = dataset
 
     def get_sensor(self, sensor_type: str) -> xr.Dataset:

@@ -836,7 +836,7 @@ class NMEAGenericMessage(NMEAStringMessage, nmea_prefix=None):
 
     def __post_init__(self):
         super().__post_init__()
-        logger.warning(f"Unimplemented NMEA Message: {self.parse_sentence()}")
+        logger.debug(f"Unimplemented NMEA Message: {self.parse_sentence()}")
 
 # --- Concrete NMEA Subclasses ---
 @dataclass

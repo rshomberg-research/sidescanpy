@@ -40,6 +40,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # must precede any import that pulls in pyplot (viz.targets below) -- otherwise matplotlib probes for a GUI backend on import and can throw/thrash on a headless machine
 
+from sidescanpy.cli._common import add_logging_args, setup_logging_from_args
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.io import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import write_survey
@@ -130,11 +131,11 @@ def run_survey(args: argparse.Namespace) -> int:
         results.append(result)
         if result["status"] == "success":
             cropped = {k: v for k, v in result["cutoffs"].items() if v is not None}
-            logger.debug(f"    ✓ wrote .ss.h5 (far-range cropped: {cropped})" if cropped else "    ✓ wrote .ss.h5")
+            logger.debug(f"    wrote .ss.h5 (far-range cropped: {cropped})" if cropped else "    wrote .ss.h5")
         elif result["status"] == "skipped":
-            logger.debug("    ⤳ skipped (output exists; use --force to reprocess)")
+            logger.debug("    skipped (output exists; use --force to reprocess)")
         else:
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            logger.error(f"    FAILED {result['status']}: {result['error']}")
 
     total_elapsed = time.time() - start_time
     n_success = sum(1 for r in results if r["status"] == "success")
@@ -282,9 +283,9 @@ def main() -> int:
         # the attribute absent unless this copy is actually passed, so
         # it only ever adds capability (accepting -v after the
         # subcommand too), never removes it.
-        p.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="Also accepted after the subcommand, e.g. 'survey ... -v'")
+        add_logging_args(p, subcommand=True)
 
-    parser.add_argument("-v", "--verbose", action="store_true")
+    add_logging_args(parser)
 
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
@@ -294,10 +295,7 @@ def main() -> int:
 
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
+    setup_logging_from_args(args)
 
     return args.func(args)
 

@@ -26,42 +26,19 @@ import logging
 import numpy as np
 import xarray as xr
 
+from sidescanpy._version import __version__
 from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.core.units import linear_to_db, mask_floor_db
 
 logger = logging.getLogger(__name__)
 
-_MIN_LINEAR = 1e-6
-
-
-def _linear_to_db(x: np.ndarray, min_linear: float = _MIN_LINEAR) -> np.ndarray:
-    """Convert linear amplitude to dB, matching ``apply_tvg()``'s step-1
-    arithmetic (``20*log10(clip(x, 1e-6))``) — deliberately duplicated
-    rather than imported, same rationale as ``analysis/tvg_diagnostics.py``'s
-    copy: this must not require modifying the module under investigation.
-    """
-    return 20.0 * np.log10(np.clip(np.asarray(x, dtype=np.float64), min_linear, None))
-
-
-# A leading run of exact-zero raw amplitude (blanking/
-# ring-down) at the *start* of every ping converts to exactly this dB
-# floor via _linear_to_db's clip(x, 1e-6). Left
-# unmasked, this run's artificially low mean gets picked as "the floor"
-# by the bin-minimum search below, and the real (much stronger)
-# near-nadir signal in the very next bin then reads as a spurious "rise"
-# — producing a false-positive crop right at the start of the array.
-# Mirrors viz/waterfall.py's _mask_floor_clip (same value, same cause),
-# duplicated rather than imported per this module's own precedent above.
-_FLOOR_CLIP_DB = -120.0
-
-
-def _mask_floor_clip(db: np.ndarray) -> np.ndarray:
-    """Replace the floor-clip artifact (exact -120dB) with
-    NaN so it's excluded from bin statistics — it is not real low-
-    amplitude signal, it's a blanking/ring-down artifact."""
-    mask = db <= _FLOOR_CLIP_DB
-    if not mask.any():
-        return db
-    return np.where(mask, np.nan, db)
+# A leading run of exact-zero raw amplitude (blanking/ring-down) at the
+# *start* of every ping converts to exactly the dB floor. Left unmasked,
+# this run's artificially low mean gets picked as "the floor" by the
+# bin-minimum search below, and the real (much stronger) near-nadir
+# signal in the very next bin then reads as a spurious "rise" --
+# producing a false-positive crop right at the start of the array.
+# mask_floor_db() turns it into NaN so it is excluded from bin statistics.
 
 
 def detect_far_range_cutoff_sample(
@@ -124,7 +101,7 @@ def detect_far_range_cutoff_sample(
     if n_bins_actual < 3:
         return None
 
-    db = _mask_floor_clip(_linear_to_db(bs))
+    db = mask_floor_db(linear_to_db(np.asarray(bs, dtype=np.float64)))
     min_count = int(n_pings * n_channels * bin_size * min_valid_fraction)
 
     bin_means = np.full(n_bins_actual, np.nan)
@@ -210,10 +187,10 @@ def crop_far_range_noise(
                 step_name="crop_far_range_noise",
                 function_name="sidescanpy.processing.farrange.crop_far_range_noise",
                 params={"cropped": True, "original_n_samples": n_samples, "cropped_n_samples": cutoff},
-                version=_version(),
+                version=__version__,
             )
             survey.add_frequency(freq_key, cropped_ds)
-            logger.info(
+            logger.debug(
                 f"{freq_key}: cropped far-range noise, "
                 f"{n_samples} -> {cutoff} samples"
             )
@@ -230,13 +207,8 @@ def crop_far_range_noise(
                 step_name="crop_far_range_noise",
                 function_name="sidescanpy.processing.farrange.crop_far_range_noise",
                 params={"cropped": False},
-                version=_version(),
+                version=__version__,
             )
             survey.add_frequency(freq_key, unchanged_ds)
             logger.debug(f"{freq_key}: no far-range noise artifact detected, left unchanged")
     return survey, cutoffs
-
-
-def _version() -> str:
-    from sidescanpy import __version__
-    return __version__

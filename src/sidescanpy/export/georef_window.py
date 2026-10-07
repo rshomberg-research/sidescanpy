@@ -18,12 +18,16 @@ used for this elsewhere.
 
 from __future__ import annotations
 
+import logging
+
 import pyproj
 import xarray as xr
 
 from sidescanpy.grids.definition import GridDefinition, utm_crs_for_lonlat
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.grids.resample import ResamplingMethod, resample_channel_to_grid
+
+logger = logging.getLogger(__name__)
 
 
 def extract_georef_window(

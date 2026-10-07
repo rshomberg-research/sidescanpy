@@ -13,8 +13,12 @@ a `Colormap` object, applied by default -- not opt-in -- rather than
 duplicated per call site.
 """
 
+import logging
+
 import matplotlib.pyplot as plt
 from matplotlib.colors import Colormap
+
+logger = logging.getLogger(__name__)
 
 NAN_COLOR = "black"
 

@@ -12,12 +12,15 @@ Row = ping index, column = sample index throughout.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.ndimage import zoom
 
 from sidescanpy.targets.core import Target
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

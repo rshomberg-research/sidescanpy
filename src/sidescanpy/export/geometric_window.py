@@ -14,6 +14,8 @@ and the per-ping cumulative along-track distance from
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import xarray as xr
 from scipy.interpolate import griddata
@@ -21,6 +23,8 @@ from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_2d
 
 from sidescanpy.viz.waterfall import along_track_distance_m
+
+logger = logging.getLogger(__name__)
 
 
 def _clamp_center(center: float, half_extent: float, data_min: float, data_max: float) -> float:

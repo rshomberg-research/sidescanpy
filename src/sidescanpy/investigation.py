@@ -366,7 +366,7 @@ def run_investigation(
         ds = ds.load()
 
     if ds.attrs.get("processing_level") != "raw":
-        logger.info("Dataset is processing_level=%r; reconstructing raw for investigation", ds.attrs.get("processing_level"))
+        logger.debug("Dataset is processing_level=%r; reconstructing raw for investigation", ds.attrs.get("processing_level"))
         ds = reconstruct_raw(ds)
 
     ds = blank_nadir_noise(ds, margin_samples=nadir_margin_samples, min_extent_samples=nadir_min_extent_samples)  # default value_vars covers backscatter_raw + backscatter_intensity, always in sync post-reconstruct_raw
@@ -551,4 +551,4 @@ def _save_report_artifacts(ds, result: InvestigationResult, output_dir: Path) ->
     _save_fig(fig, s5_dir / "distribution.png")
 
     result.save_json(output_dir / "metrics.json")
-    logger.info("Investigation artifacts written to %s", output_dir)
+    logger.debug("Investigation artifacts written to %s", output_dir)

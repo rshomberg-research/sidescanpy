@@ -46,6 +46,7 @@ not a bug.
 2026 rshomberg@uri.edu
 """
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -53,6 +54,8 @@ import numpy as np
 
 from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
 from sidescanpy.targets.core import Target, orient_for_display
+
+logger = logging.getLogger(__name__)
 
 _SOURCE_FORMAT = "jsf_discover"
 
@@ -107,10 +110,6 @@ def read_discover_targets(directory: str | Path) -> list[Target]:
     whole batch (matches the family's "clip/skip rather than error on one
     bad row" convention elsewhere in this library).
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     targets = []
     for path in sorted(Path(directory).glob("Target-*.target")):
         try:

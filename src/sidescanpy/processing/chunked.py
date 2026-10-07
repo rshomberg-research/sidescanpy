@@ -149,7 +149,7 @@ def correct_file_chunked(
                 write_survey(survey, tmp_output, overwrite=True)
             tmp_output.replace(path)
         else:
-            logger.info(f"{path.name}: every requested step already done on every channel, nothing to write")
+            logger.debug(f"{path.name}: every requested step already done on every channel, nothing to write")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

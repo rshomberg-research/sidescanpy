@@ -11,12 +11,12 @@ import pytest
 from matplotlib.colors import PowerNorm
 from pyproj import CRS
 
+from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.viz.gridded import (
     _axis_labels,
     _crs_label,
-    _mask_floor_clip,
     export_gridded_png,
     plot_gridded_multiple_methods,
     plot_gridded_raster,
@@ -147,14 +147,14 @@ class TestMaskFloorClip:
 
     def test_zero_and_neg120_masked_to_nan(self):
         bs = np.array([0.0, -120.0, 5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         assert np.isnan(result[0])
         assert np.isnan(result[1])
         np.testing.assert_array_equal(result[[2, 3, 4]], bs[[2, 3, 4]])
 
     def test_no_floor_values_returns_equivalent_array(self):
         bs = np.array([5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         np.testing.assert_array_equal(result, bs)
 
 

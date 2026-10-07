@@ -85,9 +85,15 @@ from matplotlib.patches import Rectangle
 from PIL import Image
 
 from sidescanpy.analysis.investigation import mask_nadir_gap
-from sidescanpy.cli._common import concat_survey_frequency, resolve_freq_keys
+from sidescanpy.cli._common import (
+    add_logging_args,
+    concat_survey_frequency,
+    resolve_freq_keys,
+    setup_logging_from_args,
+)
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
+from sidescanpy.core.units import linear_to_db
 from sidescanpy.export import (
     ReferenceStats,
     WindowExtent,
@@ -666,7 +672,7 @@ def _with_db_var(ds: xr.Dataset) -> xr.Dataset:
     if "backscatter_raw" not in ds or "backscatter_db" in ds:
         return ds
     raw = ds["backscatter_raw"]
-    return ds.assign(backscatter_db=20.0 * np.log10(raw.clip(min=1e-6)))
+    return ds.assign(backscatter_db=linear_to_db(raw))
 
 
 # Geometric/georef single-swath/dual-swath: source cells kept per output
@@ -1436,7 +1442,7 @@ def run_chip(args: argparse.Namespace) -> int:
         matched.append((t, path, freq_key, ping_idx))
 
     if not matched:
-        logger.error("No targets correlated to any ss_h5 ping — nothing to export")
+        logger.error("No targets correlated to any ss_h5 ping -- nothing to export")
         return 1
 
     # Group by (file, frequency) only -- NOT also channel, unlike before:
@@ -1712,7 +1718,7 @@ def run_chip(args: argparse.Namespace) -> int:
                 emit(style, window, co_targets, primary, freq_key, file_name, aug_idx, reference_stats=reference_stats)
             pending[style] = []
         if not n_written[style]:
-            logger.warning(f"{style}: no windows produced at render-level={args.render_level!r} — skipping this style's COCO/YOLO export")
+            logger.warning(f"{style}: no windows produced at render-level={args.render_level!r} -- skipping this style's COCO/YOLO export")
             continue
 
         style_dir = args.output / style
@@ -1743,7 +1749,7 @@ def run_chip(args: argparse.Namespace) -> int:
         total_written += n_written[style]
 
     if total_written == 0:
-        logger.error(f"No style produced any window at render-level={args.render_level!r} — nothing exported")
+        logger.error(f"No style produced any window at render-level={args.render_level!r} -- nothing exported")
         return 1
     return 0
 
@@ -1808,7 +1814,7 @@ def run_survey_window(args: argparse.Namespace) -> int:
         metas.append(i)
 
     if not raw_windows:
-        logger.error("No windows extracted — nothing to export")
+        logger.error("No windows extracted -- nothing to export")
         return 1
 
     # Percentile/gamma stretch on the native-resolution values *first* —
@@ -2411,9 +2417,9 @@ def main() -> int:
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
         # overwrite a real -v already set before the subcommand.
-        p.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="Also accepted after the subcommand")
+        add_logging_args(p, subcommand=True)
 
-    parser.add_argument("-v", "--verbose", action="store_true")
+    add_logging_args(parser)
 
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
@@ -2423,7 +2429,7 @@ def main() -> int:
 
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    setup_logging_from_args(args)
 
     result = args.func(args)
     logger.info(f"export {args.subcommand} complete")

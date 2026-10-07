@@ -51,11 +51,15 @@ key nothing reads.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import xarray as xr
 
 from sidescanpy.analysis.investigation import StageResult
 from sidescanpy.viz.waterfall import along_track_distance_m
+
+logger = logging.getLogger(__name__)
 
 
 def measure_ping_geometry(ds: xr.Dataset, *, low_pct: float = 1.0, high_pct: float = 99.0) -> dict:

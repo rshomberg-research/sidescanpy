@@ -75,7 +75,7 @@ def export_target_position_scatter_png(targets: list[Target], output_path: str, 
         return False
     fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
-    logger.info(f"Exported target position scatter to {output_path}")
+    logger.debug(f"Exported target position scatter to {output_path}")
     return True
 
 
@@ -174,5 +174,5 @@ def export_track_with_targets_png(
     """
     fig, _ax = plot_track_with_targets(track, targets, crs=crs, show_land=show_land, show_locator=show_locator)
     fig.savefig(output_path, dpi=dpi)
-    logger.info(f"Exported track + targets to {output_path}")
+    logger.debug(f"Exported track + targets to {output_path}")
     plt.close(fig)

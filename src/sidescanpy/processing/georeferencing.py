@@ -30,7 +30,7 @@ import numpy as np
 import pyproj
 import xarray as xr
 
-from sidescanpy import __version__
+from sidescanpy._version import __version__
 
 logger = logging.getLogger(__name__)
 

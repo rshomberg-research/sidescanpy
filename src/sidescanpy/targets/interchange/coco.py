@@ -16,10 +16,13 @@ just with whatever presentation wraps it.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from sidescanpy.targets.core import CONFIDENCE_RANK, Target, bbox_from_center, clip_bbox
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

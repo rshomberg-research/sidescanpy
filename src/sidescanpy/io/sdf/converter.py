@@ -86,7 +86,7 @@ def convert(
     """Convert SDF pages into a validated SideScanSurvey.
 
     Pages can include both SDFSonarPage and SDFUnknownPage (as yielded
-    by read_sdf). Non-sonar pages are filtered out with an info log.
+    by read_sdf). Non-sonar pages are filtered out with a debug log.
 
     Parameters
     ----------
@@ -112,7 +112,7 @@ def convert(
     n_unknown = len(pages_list) - len(sonar_pages)
 
     if n_unknown > 0:
-        logger.info(
+        logger.debug(
             f"Filtered {n_unknown} non-sonar pages from input "
             f"(kept {len(sonar_pages)} sonar pages)"
         )
@@ -128,7 +128,7 @@ def convert(
     elif survey_name is None:
         survey_name = "untitled_survey"
 
-    logger.info(
+    logger.debug(
         f"Converting {len(sonar_pages)} SDF sonar pages → SideScanSurvey "
         f"(name={survey_name!r})"
     )
@@ -142,7 +142,7 @@ def convert(
     for freq_hz in freq_groups:
         freq_groups[freq_hz].sort(key=lambda p: p.ping_number)
 
-    logger.info(f"  {len(freq_groups)} frequency channel(s)")
+    logger.debug(f"  {len(freq_groups)} frequency channel(s)")
 
     # Build a frequency channel per group
     survey = SideScanSurvey(
@@ -156,7 +156,7 @@ def convert(
         ds = _build_channel_dataset(freq_hz, group_pages)
         survey.add_frequency(freq_key, ds)
         ch = survey.get_frequency(freq_key)
-        logger.info(
+        logger.debug(
             f"  {freq_key}: {ch.n_pings} pings × 2 channels × "
             f"{ch.n_samples} samples"
         )

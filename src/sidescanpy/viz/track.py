@@ -217,7 +217,7 @@ def export_track_and_scanlines_png(
         show_locator=show_locator,
     )
     fig.savefig(output_path, dpi=dpi)
-    logger.info(f"Exported track + scan lines to {output_path}")
+    logger.debug(f"Exported track + scan lines to {output_path}")
     plt.close(fig)
 
 

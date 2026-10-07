@@ -11,6 +11,8 @@ figures.
 2026 rshomberg@uri.edu
 """
 
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
@@ -18,6 +20,8 @@ from matplotlib.patches import Rectangle
 
 from sidescanpy.targets.core import Target, bbox_from_center
 from sidescanpy.viz._cmap import resolve_cmap
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CMAP = "copper"
 _DEFAULT_VMIN_PCT = 1.0

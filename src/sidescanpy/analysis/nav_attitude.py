@@ -16,12 +16,16 @@ a real maneuver, which isn't itself an error).
 2026 rshomberg@uri.edu
 """
 
+import logging
+
 import numpy as np
 import xarray as xr
 
 # TODO: impplement logging
 # FIXME: trying to get rid of the Stages.
 from sidescanpy.analysis.investigation import StageResult
+
+logger = logging.getLogger(__name__)
 
 NAV_ATTITUDE_VARS: tuple[str, ...] = (
     "heading_deg", "pitch_deg", "roll_deg", "altitude_m", "depth_m", "heave_m",

@@ -96,7 +96,13 @@ from sidescanpy.analysis.investigation import (
 from sidescanpy.analysis.nav_attitude import nav_attitude_summary
 from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
-from sidescanpy.cli._common import available_frequencies, load_channel_dataset, resolve_freq_keys
+from sidescanpy.cli._common import (
+    add_logging_args,
+    available_frequencies,
+    load_channel_dataset,
+    resolve_freq_keys,
+    setup_logging_from_args,
+)
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
@@ -194,7 +200,7 @@ def run_investigate(args: argparse.Namespace) -> int:
     else:
         freq_keys = _list_frequencies(args.input)
         if not args.all_frequencies and len(freq_keys) > 1:
-            logger.error(f"Multiple frequencies available ({freq_keys}) — pass --frequency or --all-frequencies.")
+            logger.error(f"Multiple frequencies available ({freq_keys}) -- pass --frequency or --all-frequencies.")
             return 1
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -853,9 +859,9 @@ def main() -> int:
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
         # overwrite a real -v already set before the subcommand.
-        p.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS, help="Also accepted after the subcommand")
+        add_logging_args(p, subcommand=True)
 
-    parser.add_argument("-v", "--verbose", action="store_true")
+    add_logging_args(parser)
 
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
@@ -865,7 +871,7 @@ def main() -> int:
 
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    setup_logging_from_args(args)
 
     return args.func(args)
 

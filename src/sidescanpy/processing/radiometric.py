@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 import numpy as np
 import xarray as xr
 
+from sidescanpy.core.units import linear_to_db
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,7 +183,7 @@ def apply_tvg_to_amplitude(
         )
 
     n_samples = amplitude.shape[-1]
-    amplitude_db = 20.0 * np.log10(np.clip(amplitude, 1e-6, None))
+    amplitude_db = linear_to_db(amplitude)
     range_m = np.arange(n_samples, dtype=np.float64) * meters_per_sample
     range_m = np.clip(range_m, params.min_range_m, None)
     gain_db = tvg_gain_db(range_m, params)
@@ -301,8 +303,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     # Convert to dB: 20*log10(linear_value)
     # Clip minimum value to avoid log(0): values < 1e-6 map to ~-120 dB
     raw_linear = ds["backscatter_intensity"]
-    raw_clipped = raw_linear.clip(min=1e-6)
-    backscatter_db = 20.0 * np.log10(raw_clipped)
+    backscatter_db = linear_to_db(raw_linear)
 
     logger.debug(
         "Linear→dB conversion: min=%.2f dB, max=%.2f dB, mean=%.2f dB",

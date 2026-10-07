@@ -9,6 +9,8 @@ pre-computed analysis output" split as `viz/investigation.py`.
 2026 rshomberg@uri.edu
 """
 
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
@@ -16,6 +18,8 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from sidescanpy.analysis.investigation import StageResult
+
+logger = logging.getLogger(__name__)
 
 
 def plot_nav_attitude(

@@ -13,6 +13,8 @@ exist in this library.
 2026 rshomberg@uri.edu
 """
 
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
@@ -22,6 +24,8 @@ from matplotlib.figure import Figure
 from sidescanpy.analysis.investigation import StageResult
 from sidescanpy.processing.radiometric import tvg_gain_db
 from sidescanpy.viz.waterfall import plot_waterfall
+
+logger = logging.getLogger(__name__)
 
 
 def _new_fig_ax(ax: Axes | None, **subplots_kwargs) -> tuple[Figure, Axes]:

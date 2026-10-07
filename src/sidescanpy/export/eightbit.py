@@ -23,10 +23,13 @@ call in that scope.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 ArrayKind = Literal["uint16", "uint32", "float"]
 

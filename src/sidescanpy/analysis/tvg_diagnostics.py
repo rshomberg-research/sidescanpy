@@ -10,34 +10,18 @@ math. Consumes `apply_tvg()`'s existing public API as-is.
 2026 rshomberg@uri.edu
 """
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
+from sidescanpy.core.units import linear_to_db
 from sidescanpy.processing.pipeline import apply_correction_steps
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg, tvg_gain_db
 
-_MIN_LINEAR = 1e-6
-
-
-def _linear_to_db(x, min_linear: float = _MIN_LINEAR):
-    """
-    Convert linear amplitude to dB, matching `apply_tvg()`'s step-1
-    arithmetic exactly (`20*log10(clip(x, 1e-6))`).
-
-    Deliberately duplicated here rather than imported from
-    `radiometric.py` — nothing in that module's public API exposes
-    "dB, no TVG gain," and this function must not require modifying
-    the module under investigation. If this is needed elsewhere too,
-    promoting it to a shared helper is a Stage 2+ cleanup, not now.
-    """
-    if isinstance(x, xr.DataArray):
-        clipped = x.clip(min=min_linear)
-        return 20.0 * np.log10(clipped)
-    clipped = np.clip(x, min_linear, None)
-    return 20.0 * np.log10(clipped)
+logger = logging.getLogger(__name__)
 
 
 def before_after_backscatter(
@@ -71,7 +55,7 @@ def before_after_backscatter(
     ds_geom = apply_correction_steps(ds_raw, {"geometric"})
     ds_tvg = apply_tvg(ds_raw, params)
 
-    backscatter_db_raw = _linear_to_db(ds_raw["backscatter_intensity"])
+    backscatter_db_raw = linear_to_db(ds_raw["backscatter_intensity"])
     backscatter_db_corrected = ds_tvg["backscatter_intensity"]
     tvg_gain_db = backscatter_db_corrected - backscatter_db_raw
 

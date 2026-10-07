@@ -17,6 +17,7 @@ and the real memory numbers behind why it exists.
 2026 rshomberg@uri.edu
 """
 
+import argparse
 import logging
 import shutil
 import time
@@ -27,8 +28,43 @@ import xarray as xr
 
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.log import configure_logging
 
 logger = logging.getLogger(__name__)
+
+
+def add_logging_args(parser: argparse.ArgumentParser, *, subcommand: bool = False) -> None:
+    """Add the shared ``-v/--verbose``, ``-q/--quiet`` and ``--log-file`` flags.
+
+    With ``subcommand=True`` the defaults are ``argparse.SUPPRESS`` so a
+    copy on a subparser only adds the ability to pass the flag after the
+    subcommand -- a plain default would silently overwrite a value already
+    set by the top-level parser (e.g. ``sidescan-convert -v survey ...``).
+    """
+    default = {"default": argparse.SUPPRESS} if subcommand else {}
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", **default,
+        help="Show DEBUG-level library detail (parameters used, defaults applied, fallbacks)",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", **default,
+        help="Only show warnings and errors",
+    )
+    parser.add_argument(
+        "--log-file", type=Path, default=argparse.SUPPRESS if subcommand else None,
+        help="Also write log output to this file",
+    )
+
+
+def setup_logging_from_args(args: argparse.Namespace) -> None:
+    """Configure logging from the flags added by :func:`add_logging_args`."""
+    verbose = getattr(args, "verbose", False)
+    quiet = getattr(args, "quiet", False)
+    log_file = getattr(args, "log_file", None)
+    if quiet and not verbose:
+        configure_logging("WARNING", log_file=log_file)
+    else:
+        configure_logging("INFO", log_file=log_file, library_level="DEBUG" if verbose else None)
 
 
 def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list[str]:
@@ -180,7 +216,7 @@ def process_files_in_place_chunked(
                 f"(need ~{disk_multiplier:.1f}x its current size)"
             )
             results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            logger.error(f"    FAILED {result['status']}: {result['error']}")
             continue
 
         try:
@@ -189,15 +225,15 @@ def process_files_in_place_chunked(
             result["status"] = "failed_process"
             result["error"] = f"{type(e).__name__}: {e}"
             results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            logger.error(f"    FAILED {result['status']}: {result['error']}")
             continue
 
         if applied:
             result["status"] = "success"
-            logger.debug(f"    ✓ {stage_label} applied in place (chunked)")
+            logger.debug(f"    {stage_label} applied in place (chunked)")
         else:
             result["status"] = "skipped"
-            logger.debug("    ⤤ skipped (already done)")
+            logger.debug("    skipped (already done)")
         results.append(result)
 
     total_elapsed = time.time() - start_time
@@ -291,7 +327,7 @@ def process_files_in_place(
                 f"(need ~{disk_multiplier:.1f}x its current size)"
             )
             results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            logger.error(f"    FAILED {result['status']}: {result['error']}")
             continue
 
         try:
@@ -300,13 +336,13 @@ def process_files_in_place(
             result["status"] = "failed_read"
             result["error"] = f"{type(e).__name__}: {e}"
             results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            logger.error(f"    FAILED {result['status']}: {result['error']}")
             continue
 
         if already_done_fn(survey):
             result["status"] = "skipped"
             results.append(result)
-            logger.debug("    ⤤ skipped (already done)")
+            logger.debug("    skipped (already done)")
             continue
 
         try:
@@ -316,12 +352,12 @@ def process_files_in_place(
             result["status"] = "failed_process"
             result["error"] = f"{type(e).__name__}: {e}"
             results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
+            logger.error(f"    FAILED {result['status']}: {result['error']}")
             continue
 
         result["status"] = "success"
         results.append(result)
-        logger.debug(f"    ✓ {stage_label} applied in place")
+        logger.debug(f"    {stage_label} applied in place")
 
     total_elapsed = time.time() - start_time
     n_success = sum(1 for r in results if r["status"] == "success")

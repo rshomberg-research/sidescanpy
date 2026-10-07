@@ -40,7 +40,12 @@ import logging
 import sys
 from pathlib import Path
 
-from sidescanpy.cli._common import process_files_in_place, process_files_in_place_chunked
+from sidescanpy.cli._common import (
+    add_logging_args,
+    process_files_in_place,
+    process_files_in_place_chunked,
+    setup_logging_from_args,
+)
 from sidescanpy.cli._config import (
     apply_config_defaults,
     find_config_path,
@@ -153,7 +158,7 @@ def main() -> int:
         "--no-absorption", action="store_true",
         help="Disable the absorption-loss term entirely. Use when hardware/acquisition already applied it. Requires --tvg.",
     )
-    parser.add_argument("-v", "--verbose", action="store_true")
+    add_logging_args(parser)
     parser.add_argument("--strict-config", action="store_true", help="Treat config-file keys this command does not recognize as an error instead of a warning")
     parser.add_argument(
         "--config", type=Path, default=None,
@@ -211,10 +216,7 @@ def main() -> int:
                 "to see a channel's entire ping range. Run --crop-farrange separately (unchunked) first."
             )
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
+    setup_logging_from_args(args)
 
     tvg_kwargs = {}
     if args.no_spreading:

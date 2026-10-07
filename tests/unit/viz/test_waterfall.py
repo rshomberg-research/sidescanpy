@@ -12,9 +12,9 @@ import numpy as np
 import pytest
 from matplotlib.colors import PowerNorm
 
+from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.viz.waterfall import (
     _compute_y_full,
-    _mask_floor_clip,
     plot_survey_overview,
     plot_waterfall,
     resolve_waterfall_axes,
@@ -91,19 +91,19 @@ class TestMaskFloorClip:
 
     def test_zero_and_neg120_masked_to_nan(self):
         bs = np.array([0.0, -120.0, 5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         assert np.isnan(result[0])
         assert np.isnan(result[1])
         np.testing.assert_array_equal(result[[2, 3, 4]], bs[[2, 3, 4]])
 
     def test_no_floor_values_returns_equivalent_array(self):
         bs = np.array([5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         np.testing.assert_array_equal(result, bs)
 
     def test_all_nan_input_stays_nan(self):
         bs = np.full(4, np.nan)
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         assert np.all(np.isnan(result))
 
 

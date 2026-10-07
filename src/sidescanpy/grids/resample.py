@@ -161,7 +161,7 @@ def resample_channel_to_grid(
     lat_valid = lat_1d[valid_mask]
     lon_valid = lon_1d[valid_mask]
 
-    logger.info(
+    logger.debug(
         f"Resampling {np.sum(valid_mask):,} / {len(backscatter_1d):,} "
         f"valid samples using {method.value} aggregation"
     )
@@ -288,7 +288,7 @@ def resample_channel_to_grid(
             else:
                 raise ValueError(f"Unknown resampling method: {method}")
 
-    logger.info(
+    logger.debug(
         f"Resampling complete: {np.sum(np.isfinite(backscatter_grid)):,} / "
         f"{backscatter_grid.size:,} cells filled"
     )

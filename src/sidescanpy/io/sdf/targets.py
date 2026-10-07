@@ -339,13 +339,13 @@ def calibrate_clock_offset(ss_h5_dir: str | Path, local_utc_offset_hours: float 
         corrupted_utc = first_ping.astype("datetime64[s]").astype(int)
         offset_s = float(corrupted_utc) - true_utc.timestamp()
         offsets.append(offset_s)
-        logger.info(f"  {path.name}: true_start={true_utc} corrupted_first_ping_offset_s={offset_s:.1f}")
+        logger.debug(f"  {path.name}: true_start={true_utc} corrupted_first_ping_offset_s={offset_s:.1f}")
 
     if not offsets:
         raise RuntimeError(f"Could not calibrate offset from any file in {ss_h5_dir}")
     offset_s = float(np.median(offsets))
     spread = max(offsets) - min(offsets)
-    logger.info(f"Calibrated clock offset: {offset_s:.1f}s (median of {len(offsets)} files, spread {spread:.1f}s)")
+    logger.debug(f"Calibrated clock offset: {offset_s:.1f}s (median of {len(offsets)} files, spread {spread:.1f}s)")
     if spread > 120:
         logger.warning(
             f"Offset spread across files is {spread:.1f}s -- larger than expected for a fixed "

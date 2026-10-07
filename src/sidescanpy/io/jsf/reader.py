@@ -70,7 +70,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
     if not fpath.exists():
         raise FileNotFoundError(f"{fpath} does not exist!")
 
-    logger.info(f"Opening JSF file: {fpath}")
+    logger.debug(f"Opening JSF file: {fpath}")
     all_messages = []
     cnt = 0
 
@@ -107,7 +107,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
 
             cnt += 1
 
-    logger.info(f"Successfully parsed {len(all_messages)} messages from {fpath}")
+    logger.debug(f"Successfully parsed {len(all_messages)} messages from {fpath}")
     return all_messages
 
 
@@ -144,7 +144,7 @@ def read_jsf_iter(fpath: Path) -> Generator[JSFMessage, None, None]:
     if not fpath.exists():
         raise FileNotFoundError(f"{fpath} does not exist!")
 
-    logger.info(f"Opening JSF file (streaming): {fpath}")
+    logger.debug(f"Opening JSF file (streaming): {fpath}")
     record_count = 0
 
     with open(fpath, 'rb') as f:
@@ -219,7 +219,7 @@ def get_messages_by_index(
             break
         messages.append(message)
 
-    logger.info(f"Retrieved messages [{start_idx}:{end_idx}] = {len(messages)} messages")
+    logger.debug(f"Retrieved messages [{start_idx}:{end_idx}] = {len(messages)} messages")
     return messages
 
 
@@ -441,8 +441,8 @@ def export_messages_to_json(
         else:
             json.dump(serialized, f, default=str)
 
-    logger.info(f"Exported {len(serialized)} messages to {output_path}")
-    logger.info(f"  File size: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
+    logger.debug(f"Exported {len(serialized)} messages to {output_path}")
+    logger.debug(f"  File size: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
 
 
 def export_messages_by_type_to_json(
@@ -491,7 +491,7 @@ def export_messages_by_type_to_json(
         with open(output_file, 'w') as f:
             json.dump(serialized, f, indent=2, default=str)
 
-        logger.info(f"  {msg_type}: {len(serialized)} messages → {output_file}")
+        logger.debug(f"  {msg_type}: {len(serialized)} messages -> {output_file}")
 
 
 # =============================================================================
@@ -528,7 +528,7 @@ def save_messages_to_pickle(
     with open(filepath, 'wb') as f:
         dump(messages, f)
 
-    logger.info(f"Saved {len(messages)} messages to {filepath}")
+    logger.debug(f"Saved {len(messages)} messages to {filepath}")
 
 
 def load_messages_from_pickle(filepath: Path) -> List[JSFMessage]:
@@ -565,5 +565,5 @@ def load_messages_from_pickle(filepath: Path) -> List[JSFMessage]:
     with open(filepath, 'rb') as f:
         messages = load(f)
 
-    logger.info(f"Loaded {len(messages)} messages from {filepath}")
+    logger.debug(f"Loaded {len(messages)} messages from {filepath}")
     return messages

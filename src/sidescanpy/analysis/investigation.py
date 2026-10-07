@@ -24,6 +24,7 @@ split already established by `tvg_diagnostics.py`/`viz/tvg_diagnostics.py`.
 # could be inluded in the documentation and examples.
 # TODO: implement logging
 
+import logging
 import warnings  # ???: not sure what warnings does vs logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -35,9 +36,12 @@ import xarray as xr
 # seems like it should it be a either distributed or part of the CLI. This whole
 # module has grown way out of control and certainly is not working very well
 from sidescanpy.analysis.tvg_diagnostics import fit_hardware_tvg_curve, mean_backscatter_vs_range
+from sidescanpy.core.units import MIN_LINEAR
 from sidescanpy.processing.radiometric import absorption_for_frequency
 
-_MIN_LINEAR = 1e-6  # ???: what is this refering to?
+logger = logging.getLogger(__name__)
+
+_MIN_LINEAR = MIN_LINEAR  # epsilon added to |x| before the log in the self-referenced dB conversion
 
 @dataclass
 class StageResult:

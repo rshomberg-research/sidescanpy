@@ -13,10 +13,13 @@ much beyond "filter, then compute a box".
 2026 rshomberg@uri.edu
 """
 
+import logging
 from pathlib import Path
 
 from sidescanpy.targets.core import CONFIDENCE_RANK, bbox_from_center, clip_bbox
 from sidescanpy.targets.interchange.coco import CocoImageEntry, resolve_categories
+
+logger = logging.getLogger(__name__)
 
 
 def write_yolo(

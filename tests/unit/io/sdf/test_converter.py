@@ -591,7 +591,7 @@ class TestProcessingMetadata:
 
 class TestFilterUnknownPages:
     def test_filter_logs_count(self, caplog):
-        """Filter unknown pages, log info about how many were dropped."""
+        """Filter unknown pages, log at debug about how many were dropped."""
         import logging
 
         from sidescanpy.io.sdf.pages import SDFPageHeader, SDFUnknownPage
@@ -606,7 +606,7 @@ class TestFilterUnknownPages:
         header = SDFPageHeader.from_bytes(raw)
         unknown = SDFUnknownPage(header=header, body_bytes=b"")
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.DEBUG):
             survey = convert(
                 [sonar1, unknown, sonar2],
                 source_files=[Path("test.sdf")],

@@ -18,6 +18,7 @@ from matplotlib.axes import Axes
 from matplotlib.colors import Colormap, PowerNorm
 from matplotlib.ticker import FuncFormatter
 
+from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
@@ -30,22 +31,6 @@ YAxisMode = Literal["ping", "time", "along_track"]
 _DEFAULT_CMAP = "copper"
 _DEFAULT_VMIN_PCT = 1.0
 _DEFAULT_VMAX_PCT = 99.0
-
-# Deterministic floor-clip artifact values, not real backscatter returns
-# (see sidescanpy/CLAUDE.md Known Issue #5): 0.0 is exact-zero raw linear
-# amplitude (pre-TVG); -120.0 is apply_tvg()'s `20*log10(clip(x, 1e-6))`
-# floor (post-TVG dB). Masked to NaN before color-scaling/plotting so they
-# don't stretch vmin/vmax or render as fake dark pixels.
-_FLOOR_CLIP_VALUES = (0.0, -120.0)
-
-
-def _mask_floor_clip(bs: np.ndarray) -> np.ndarray:
-    """Replace exact floor-clip artifact values with NaN."""
-    mask = np.isin(bs, _FLOOR_CLIP_VALUES)
-    if not mask.any():
-        return bs
-    return np.where(mask, np.nan, bs)
-
 
 def plot_waterfall(
     ds: xr.Dataset,
@@ -162,7 +147,7 @@ def plot_waterfall(
     n_pings_slice = sliced.sizes["ping"]
     n_samples = sliced.sizes["sample"]
 
-    bs = _mask_floor_clip(sliced[value_var].values)
+    bs = mask_floor_clip(sliced[value_var].values)
 
     # Compute x for the slice
     x_port, x_stbd = _compute_x_values(sliced, x_axis)

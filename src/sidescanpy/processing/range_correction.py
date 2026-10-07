@@ -382,7 +382,7 @@ def apply_empirical_range_correction(
     )
     ds_out.attrs["processing_history"] = json.dumps(history)
 
-    logger.info(
+    logger.debug(
         "Empirical range correction applied for freq_hz_start=%s "
         "(matched calibrated freq=%s).",
         freq_hz,
