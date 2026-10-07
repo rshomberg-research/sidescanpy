@@ -245,7 +245,7 @@ class TestRunWaterfall:
         # there and this test would prove nothing.
         from PIL import Image
 
-        raw_args = self._args(tmp_path, georef_ss_h5_dir, value_var="raw", frequency="1495000", output_dir=tmp_path / "raw_out")
+        raw_args = self._args(tmp_path, georef_ss_h5_dir, value_var="uncorrected", frequency="1495000", output_dir=tmp_path / "raw_out")
         rad_args = self._args(tmp_path, georef_ss_h5_dir, value_var="radiometric", frequency="1495000", output_dir=tmp_path / "rad_out")
         assert export.run_waterfall(raw_args) == 0
         assert export.run_waterfall(rad_args) == 0
@@ -914,7 +914,7 @@ class TestRunChip:
         out_raw = tmp_path / "out_raw"
         args_raw = self._args(
             tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric",
-            value_var="raw", output=out_raw, seed=0,
+            value_var="uncorrected", output=out_raw, seed=0,
         )
         assert export.run_chip(args_raw) == 0
 
@@ -928,21 +928,21 @@ class TestRunChip:
         write_targets_json([self._matched_target()], targets_json)
 
         imgs = {}
-        for value_var in ("raw", "db"):
+        for value_var in ("uncorrected", "db"):
             out = tmp_path / f"out_{value_var}"
             args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric", value_var=value_var, output=out, seed=0)
             assert export.run_chip(args) == 0
             imgs[value_var] = np.asarray(Image.open(out / "chip" / "target_7.png"))
-        assert imgs["db"].shape == imgs["raw"].shape
-        assert not np.array_equal(imgs["db"], imgs["raw"])
+        assert imgs["db"].shape == imgs["uncorrected"].shape
+        assert not np.array_equal(imgs["db"], imgs["uncorrected"])
 
-    def test_value_var_raw_has_no_effect_and_warns_under_radiometric_render_level(self, tmp_path, georef_ss_h5_dir, caplog):
+    def test_value_var_uncorrected_has_no_effect_and_warns_under_radiometric_render_level(self, tmp_path, georef_ss_h5_dir, caplog):
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._matched_target()], targets_json)
 
-        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="radiometric", value_var="raw")
+        args = self._args(tmp_path, georef_ss_h5_dir, targets_json, render_level="radiometric", value_var="uncorrected")
         assert export.run_chip(args) == 0
-        assert any("--value-var=raw has no effect" in r.message for r in caplog.records)
+        assert any("--value-var=uncorrected has no effect" in r.message for r in caplog.records)
 
     def test_min_confidence_reaches_coco_yolo_writers(self, tmp_path, georef_ss_h5_dir):
         """Real bug found running this against real Klein SDF data: Klein
@@ -1188,7 +1188,7 @@ class TestRunChip:
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
-        raw_args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="raw", styles=["chip"], output=tmp_path / "raw_out")
+        raw_args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="uncorrected", styles=["chip"], output=tmp_path / "raw_out")
         radiometric_args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level="radiometric", styles=["chip"], output=tmp_path / "rad_out")
         assert export.run_chip(raw_args) == 0
         assert export.run_chip(radiometric_args) == 0
@@ -1229,11 +1229,11 @@ class TestRunChip:
         write_targets_json([self._swath_matched_target()], targets_json)
 
         imgs = {}
-        for level in ("raw", "db"):
+        for level in ("uncorrected", "db"):
             args = self._args(tmp_path, swath_ss_h5_dir, targets_json, render_level=level, styles=["chip"], output=tmp_path / f"{level}_out")
             assert export.run_chip(args) == 0
             imgs[level] = np.array(Image.open(tmp_path / f"{level}_out" / "chip" / "target_7.png"))
-        assert not np.array_equal(imgs["db"], imgs["raw"])
+        assert not np.array_equal(imgs["db"], imgs["uncorrected"])
 
     def test_geometric_level_without_geometric_correction_returns_1(self, tmp_path, ss_h5_dir):
         """ss_h5_dir's survey was never run through sidescan-correct

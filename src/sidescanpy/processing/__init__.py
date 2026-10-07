@@ -80,6 +80,8 @@ from sidescanpy.processing.interpolate import (
 )
 from sidescanpy.processing.inversion import (
     INVERTIBLE_STEPS,
+    LEGACY_RAW_VAR,
+    UNCORRECTED_VAR,
     invert,
     uncorrected_backscatter,
 )
@@ -143,6 +145,8 @@ __all__ = [
     "STEP_GEOREF",
     "invert",
     "uncorrected_backscatter",
+    "LEGACY_RAW_VAR",
+    "UNCORRECTED_VAR",
     "INVERTIBLE_STEPS",
     "processing_level",
     "crop_far_range",

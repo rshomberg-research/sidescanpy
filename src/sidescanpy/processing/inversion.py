@@ -17,7 +17,7 @@ steps (unknown effect).
 Legacy files: TVG records written by older versions (``tvg_correction``) carry
 the same parameters and invert the same way. A legacy file whose only TVG
 evidence is the ``processing_level == "radiometric"`` attribute falls back to
-its ``backscatter_raw`` variable.
+its stored ``LEGACY_RAW_VAR`` (``backscatter_raw``) variable.
 
 2026 rshomberg@uri.edu
 """
@@ -47,6 +47,12 @@ from sidescanpy.processing.range_correction import range_correction_db
 logger = logging.getLogger(__name__)
 
 INVERTIBLE_STEPS: tuple[str, ...] = (STEP_TVG, STEP_RANGE_CORRECTION, STEP_GEOMETRIC, STEP_GEOREF)
+
+UNCORRECTED_VAR = "uncorrected"
+"""Name of the in-memory variable holding the uncorrected signal (never stored on disk)."""
+
+LEGACY_RAW_VAR = "backscatter_raw"
+"""Variable older files stored as a raw copy; read for legacy files, dropped on rewrite."""
 
 _FLOOR_TOLERANCE_DB = 1e-2
 """Inverted dB values within this of the -120 dB floor map back to exact 0
@@ -109,15 +115,15 @@ def _undo_radiometric(ds: xr.Dataset, records: list[tuple[int, str, dict]]) -> x
 
 
 def _legacy_raw(ds: xr.Dataset) -> xr.DataArray | None:
-    """``backscatter_raw`` for a legacy file whose TVG is known only from its attribute."""
+    """The stored ``LEGACY_RAW_VAR`` for a legacy file whose TVG is known only from its attribute."""
     if has_step(ds, STEP_TVG) and not _radiometric_records(ds):
-        if "backscatter_raw" not in ds:
+        if LEGACY_RAW_VAR not in ds:
             raise ValueError(
                 "legacy dataset is marked processing_level='radiometric' but has no TVG "
-                "history record and no backscatter_raw; cannot recover the uncorrected signal"
+                "history record and no " + LEGACY_RAW_VAR + "; cannot recover the uncorrected signal"
             )
-        logger.debug("legacy radiometric dataset without TVG record; using backscatter_raw")
-        return ds["backscatter_raw"]
+        logger.debug("legacy radiometric dataset without TVG record; using %s", LEGACY_RAW_VAR)
+        return ds[LEGACY_RAW_VAR]
     return None
 
 
@@ -182,7 +188,7 @@ def invert(ds: xr.Dataset, steps: Iterable[str] | None = None) -> xr.Dataset:
     legacy = _legacy_raw(ds) if STEP_TVG in requested else None
     records = _radiometric_records(ds)
     if legacy is not None:
-        logger.debug("invert: restoring backscatter_intensity from legacy backscatter_raw")
+        logger.debug("invert: restoring backscatter_intensity from legacy %s", LEGACY_RAW_VAR)
         out = out.assign(backscatter_intensity=legacy)
     elif records:
         wanted = [k for k, (_i, step, _r) in enumerate(records) if step in requested]

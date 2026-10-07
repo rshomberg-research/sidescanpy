@@ -101,9 +101,17 @@ class TestCorrectSteps:
             20 * np.log10(_ds()["backscatter_intensity"].values[:, :, 10:]), rtol=1e-5,
         )
 
-    def test_default_steps_need_aux(self):
+    def test_default_steps_skip_interpolate_aux_without_aux(self, caplog):
+        with caplog.at_level("DEBUG"):
+            out = correct(_ds())
+        assert _steps(out) == [s for s in DEFAULT_STEPS if s != "interpolate_aux"]
+        assert "interpolate_aux skipped: no aux given" in caplog.text
+
+    def test_explicit_interpolate_aux_params_need_aux(self):
         with pytest.raises(ValueError, match="aux"):
-            correct(_ds())
+            correct(_ds(), ["interpolate_aux", "tvg"], {"interpolate_aux": {"method": "linear"}})
+
+    def test_default_steps_with_aux(self):
         survey = _survey()
         out = correct(survey.get_frequency("hz_1495000").dataset, aux=survey)
         assert _steps(out) == list(DEFAULT_STEPS)

@@ -100,6 +100,7 @@ from sidescanpy.cli._common import (
     add_logging_args,
     resolve_freq_keys,
     setup_logging_from_args,
+    uncorrected_alias,
 )
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
@@ -109,7 +110,7 @@ from sidescanpy.investigation import run_investigation
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.inversion import invert, uncorrected_backscatter
+from sidescanpy.processing.inversion import UNCORRECTED_VAR, invert, uncorrected_backscatter
 from sidescanpy.processing.slicing import slice_by_pings
 from sidescanpy.viz.investigation import (
     apply_stage4_fit_window_limits,
@@ -162,16 +163,13 @@ def _resolve_and_load(input_path: Path, requested_frequency: str | None, chunks:
     return freq_key, load_channel_dataset(input_path, freq_key, chunks)
 
 
-_UNCORRECTED_ALIAS = "backscatter_raw"
-
-
 def _ensure_value_vars(ds: xr.Dataset, args: argparse.Namespace) -> xr.Dataset:
-    """Provide ``backscatter_raw`` (the uncorrected signal, inverted from
-    ``processing_history``) when a ``--value-var`` asks for it and the file
-    has no such variable (files no longer store a raw copy)."""
+    """Provide ``uncorrected`` (the uncorrected signal, inverted from
+    ``processing_history``) when a ``--value-var`` asks for it (files store no
+    raw copy)."""
     wanted = {getattr(args, "value_var", None), getattr(args, "garbage_value_var", None)}
-    if _UNCORRECTED_ALIAS in wanted and _UNCORRECTED_ALIAS not in ds:
-        ds = ds.assign({_UNCORRECTED_ALIAS: uncorrected_backscatter(ds)})
+    if UNCORRECTED_VAR in wanted and UNCORRECTED_VAR not in ds:
+        ds = ds.assign({UNCORRECTED_VAR: uncorrected_backscatter(ds)})
     return ds
 
 
@@ -697,7 +695,7 @@ def main() -> int:
     freq_group = p_inv.add_mutually_exclusive_group()
     freq_group.add_argument("--frequency", type=str, help="e.g. hz_1495000")
     freq_group.add_argument("--all-frequencies", action="store_true")
-    p_inv.add_argument("--value-var", default="backscatter_raw", help="Variable to analyze. backscatter_raw = the uncorrected signal (inverted from processing_history when the file stores no raw copy)")
+    p_inv.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
     p_inv.add_argument("--pings", type=str, default="0:8000", help="Ping range 'start:stop' (stop empty = all)")
     p_inv.add_argument("--nadir-n-samples", type=int, default=50)
     p_inv.add_argument("--stage3-bin-width-m", type=float, default=2.0)
@@ -758,7 +756,7 @@ def main() -> int:
     p_seg.add_argument("--gap-factor", type=float, default=8.0, help="Along-track distance jump, as a multiple of the survey's own typical ping spacing, that counts as a gap")
     p_seg.add_argument("--time-gap-factor", type=float, default=8.0, help="Raw ping-timestamp jump, as a multiple of the survey's own typical ping interval, that counts as a gap (independent of the distance check -- either can fire)")
     p_seg.add_argument("--sound-vel-rel-tol", type=float, default=0.05, help="Relative step in sound_vel_ms between consecutive pings that counts as a setting change")
-    p_seg.add_argument("--garbage-value-var", type=str, default="backscatter_raw")
+    p_seg.add_argument("--garbage-value-var", type=uncorrected_alias("backscatter_raw"), default="uncorrected")
     p_seg.add_argument("--garbage-min-run-pings", type=int, default=20)
     p_seg.add_argument("--garbage-degenerate-frac", type=float, default=0.999)
     p_seg.add_argument("--stability-window-pings", type=int, default=100)
@@ -780,7 +778,7 @@ def main() -> int:
                  "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
         )
         p.add_argument("--pings", type=_parse_ping_range, default=(0, 8000), help="'start:stop' (stop empty = all)")
-        p.add_argument("--value-var", default="backscatter_raw", help="Variable to analyze. backscatter_raw = the uncorrected signal (inverted from processing_history when the file stores no raw copy)")
+        p.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
         p.add_argument("--output-dir", required=True, type=Path)
 
     p_nadir = subparsers.add_parser("nadir", help="Classify + locate nadir (Stage 2 on its own)")
@@ -858,7 +856,7 @@ def main() -> int:
              "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
     )
     p_rec.add_argument("--pings", type=_parse_ping_range, default=(0, None), help="'start:stop' (stop empty = all -- default: the whole section)")
-    p_rec.add_argument("--value-var", default="backscatter_raw", help="Variable to analyze. backscatter_raw = the uncorrected signal (inverted from processing_history when the file stores no raw copy)")
+    p_rec.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
     p_rec.add_argument("--nadir-n-samples", type=int, default=50)
     p_rec.add_argument("--bin-width-m", type=float, default=1.0, help="Shared by usable-range and the adopted TVG-fit recipe, matching tvg-fit's own default")
     p_rec.add_argument("--snr-threshold", type=float, default=3.0)

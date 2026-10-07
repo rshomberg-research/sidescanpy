@@ -18,7 +18,8 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
     ``cutoff_sample, n_bins, min_valid_fraction, rise_threshold_db, margin_bins``.
 ``"interpolate_aux"``
     :func:`~sidescanpy.processing.interpolate.interpolate_aux_onto_dataset`;
-    needs the survey's aux records (``aux=`` / :func:`correct_survey`).
+    needs the survey's aux records (``aux=`` / :func:`correct_survey`);
+    :func:`correct` skips it when no ``aux`` is given.
     Params: ``fields, method, extrapolation, drop_invalid``.
 ``"tvg"``
     :func:`~sidescanpy.processing.radiometric.apply_tvg`. Params:
@@ -99,7 +100,7 @@ from sidescanpy.processing.farrange import crop_far_range, detect_far_range_cuto
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
 from sidescanpy.processing.interpolate import interpolate_aux_onto_dataset
-from sidescanpy.processing.inversion import invert
+from sidescanpy.processing.inversion import LEGACY_RAW_VAR, invert
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg, resolve_tvg_params
 from sidescanpy.processing.range_correction import apply_empirical_range_correction
 from sidescanpy.processing.sample_axis import (
@@ -112,7 +113,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_STEPS: tuple[str, ...] = (STEP_INTERPOLATE_AUX, STEP_TVG, STEP_GEOMETRIC, STEP_GEOREF)
 
 _HDF5_ENGINE = "h5netcdf"
-_LEGACY_RAW_VAR = "backscatter_raw"
 
 
 @dataclass(frozen=True)
@@ -366,8 +366,9 @@ def correct(
     params : mapping, optional
         ``{step_name: {param: value}}`` overrides for steps in ``steps``.
     aux : SideScanSurvey, optional
-        Supplies navigation/attitude records to ``"interpolate_aux"``
-        (required only if that step will run).
+        Supplies navigation/attitude records to ``"interpolate_aux"``. When
+        omitted, that step is skipped (DEBUG log) unless ``params`` gives it
+        parameters, which is an error.
     force : bool, default False
         Re-apply steps that were already applied (see module docstring).
 
@@ -379,12 +380,21 @@ def correct(
     Raises
     ------
     ValueError
-        Unknown step name, params for a step not in ``steps``, missing
-        ``aux``, or an impossible ``force`` request.
+        Unknown step name, params for a step not in ``steps``,
+        ``params["interpolate_aux"]`` given without ``aux``, or an
+        impossible ``force`` request.
     TypeError
         A parameter the step does not accept.
     """
     resolved = _resolve_steps(steps, params)
+    if aux is None and any(r.name == STEP_INTERPOLATE_AUX for r in resolved):
+        if any(canonical_step(k) == STEP_INTERPOLATE_AUX for k in (params or {})):
+            raise ValueError(
+                "params were given for step 'interpolate_aux' but no aux: pass aux=survey "
+                "(or use correct_survey / correct_file), or leave the step out"
+            )
+        logger.debug("interpolate_aux skipped: no aux given")
+        resolved = [r for r in resolved if r.name != STEP_INTERPOLATE_AUX]
     actions = _plan(ds, resolved, force=force)
     _check_aux(actions, aux)
     return _execute(ds, actions, aux)
@@ -476,9 +486,9 @@ def _estimate_disk_bytes(path: Path, names: list[str], chunk_pings: int | None) 
 
 
 def _drop_legacy_raw(ds: xr.Dataset) -> xr.Dataset:
-    if _LEGACY_RAW_VAR in ds.variables:
-        logger.debug("dropping legacy %s variable on rewrite", _LEGACY_RAW_VAR)
-        return ds.drop_vars(_LEGACY_RAW_VAR)
+    if LEGACY_RAW_VAR in ds.variables:
+        logger.debug("dropping legacy %s variable on rewrite", LEGACY_RAW_VAR)
+        return ds.drop_vars(LEGACY_RAW_VAR)
     return ds
 
 

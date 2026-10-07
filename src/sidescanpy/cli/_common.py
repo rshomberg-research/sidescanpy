@@ -36,6 +36,20 @@ def add_logging_args(parser: argparse.ArgumentParser, *, subcommand: bool = Fals
     )
 
 
+def uncorrected_alias(*old_names: str):
+    """argparse ``type=`` callable mapping deprecated spellings of the
+    uncorrected-signal choice to ``"uncorrected"`` with a WARNING.
+
+    Kept for one release so existing scripts and configs keep working.
+    """
+    def _convert(value: str) -> str:
+        if value in old_names:
+            logger.warning("%r is deprecated; use 'uncorrected'", value)
+            return "uncorrected"
+        return value
+    return _convert
+
+
 def setup_logging_from_args(args: argparse.Namespace) -> None:
     """Configure logging from the flags added by :func:`add_logging_args`."""
     verbose = getattr(args, "verbose", False)

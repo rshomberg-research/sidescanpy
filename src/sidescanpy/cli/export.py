@@ -28,7 +28,7 @@ Subcommands:
   parallel COCO+YOLO datasets under ``output/<style>/`` (``--styles``):
   ``chip`` (tight single-channel crop), ``single-swath`` (one full
   channel, square), ``dual-swath`` (both channels combined, square).
-  ``--render-level`` selects what every style renders from: ``raw``/
+  ``--render-level`` selects what every style renders from: ``uncorrected``/
   ``radiometric`` (pixel/sample space) or ``geometric``/``georef`` (real
   meters-square, via the same window extractors ``progression`` uses —
   requires that correction already run via ``sidescan-correct``).
@@ -39,7 +39,7 @@ Subcommands:
 - ``survey-window`` — full-channel / geometric / georef windows at
   evenly-spaced ping locations, uncorrelated to any target catalog, so
   every window is honestly a no-target negative.
-- ``progression`` — a 5-stage (raw / dB / TVG / geometric / georef) x
+- ``progression`` — a 5-stage (uncorrected / dB / TVG / geometric / georef) x
   N-target comparison grid, for visual QA of the correction pipeline.
 
 Usage:
@@ -89,6 +89,7 @@ from sidescanpy.cli._common import (
     add_logging_args,
     resolve_freq_keys,
     setup_logging_from_args,
+    uncorrected_alias,
 )
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
@@ -119,7 +120,7 @@ from sidescanpy.grids import (
 )
 from sidescanpy.grids.definition import utm_crs_for_lonlat
 from sidescanpy.io.hdf5 import concat_survey_frequency, read_survey
-from sidescanpy.processing.inversion import uncorrected_backscatter
+from sidescanpy.processing.inversion import UNCORRECTED_VAR, uncorrected_backscatter
 from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
 from sidescanpy.targets.core import project_target_to_frequency
@@ -300,7 +301,7 @@ def run_waterfall(args: argparse.Namespace) -> int:
         logger.error(f"--overlap-pings ({args.overlap_pings}) must be smaller than --window-pings ({args.window_pings})")
         return 1
 
-    value_var = "backscatter_raw" if args.value_var == "raw" else "backscatter_intensity"
+    value_var = UNCORRECTED_VAR if args.value_var == "uncorrected" else "backscatter_intensity"
 
     n_written = 0
     # Correlate every target once (position-based, format-agnostic), then
@@ -326,8 +327,8 @@ def run_waterfall(args: argparse.Namespace) -> int:
             logger.warning(f"{freq_key}: no file has this frequency, skipping")
             continue
         n_pings_total = ds_all.sizes["ping"]
-        if value_var == _RAW_VAR:
-            ds_all = _with_raw_var(ds_all)
+        if value_var == UNCORRECTED_VAR:
+            ds_all = _with_uncorrected_var(ds_all)
 
         boxes_by_ping: dict[int, list] = defaultdict(list)
         for t, path, native_freq_key, local_ping, _dist_m in matched:
@@ -657,42 +658,40 @@ def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
 
 
 _CHIP_STYLES = ("chip", "single-swath", "dual-swath")
-_RENDER_LEVELS = ("raw", "db", "radiometric", "geometric", "georef")
+_RENDER_LEVELS = ("uncorrected", "db", "radiometric", "geometric", "georef")
 # Native sample/ping pixel-space levels (no resolution_m concept) -- the
 # rest resample onto a real-world grid.
-_PIXEL_LEVELS = ("raw", "db", "radiometric")
-# Level/--value-var name -> backscatter variable. Neither "backscatter_raw"
-# nor "backscatter_db" is stored on disk: "backscatter_raw" is the
-# uncorrected signal, inverted from processing_history by _with_raw_var /
+_PIXEL_LEVELS = ("uncorrected", "db", "radiometric")
+# Level/--value-var name -> backscatter variable. Neither "uncorrected"
+# nor "backscatter_db" is stored on disk: "uncorrected" is the
+# uncorrected signal, inverted from processing_history by _with_uncorrected_var /
 # _mask_nadir_gap; "backscatter_db" is 20*log10 of it with no TVG gain, added
 # per loaded neighborhood by _with_db_var (the same raw->dB step
 # apply_tvg_to_amplitude does before adding gain -- the progression grid's
 # own "db" stage).
-_LEVEL_VARS = {"raw": "backscatter_raw", "db": "backscatter_db", "radiometric": "backscatter_intensity"}
+_LEVEL_VARS = {"uncorrected": UNCORRECTED_VAR, "db": "backscatter_db", "radiometric": "backscatter_intensity"}
 
 
-_RAW_VAR = "backscatter_raw"
 
-
-def _with_raw_var(ds: xr.Dataset) -> xr.Dataset:
-    """Add ``backscatter_raw`` (the uncorrected signal, inverted from
+def _with_uncorrected_var(ds: xr.Dataset) -> xr.Dataset:
+    """Add ``uncorrected`` (the uncorrected signal, inverted from
     ``processing_history``; lazy on dask data) unless ``ds`` already has it."""
-    if _RAW_VAR in ds:
+    if UNCORRECTED_VAR in ds:
         return ds
-    return ds.assign({_RAW_VAR: uncorrected_backscatter(ds)})
+    return ds.assign({UNCORRECTED_VAR: uncorrected_backscatter(ds)})
 
 
 def _mask_nadir_gap(ds: xr.Dataset) -> xr.Dataset:
-    """``mask_nadir_gap`` plus ``backscatter_raw``, masked identically (derived
-    from the masked intensity when the file stores no raw copy)."""
-    return _with_raw_var(mask_nadir_gap(ds, value_vars=("backscatter_intensity", _RAW_VAR)))
+    """``mask_nadir_gap`` plus ``uncorrected``, masked identically (derived
+    from the masked intensity)."""
+    return _with_uncorrected_var(mask_nadir_gap(ds, value_vars=("backscatter_intensity", UNCORRECTED_VAR)))
 
 
 def _with_db_var(ds: xr.Dataset) -> xr.Dataset:
     """Add ``backscatter_db`` (``20*log10`` of the uncorrected signal, no TVG) to ``ds``."""
     if "backscatter_db" in ds:
         return ds
-    return ds.assign(backscatter_db=linear_to_db(_with_raw_var(ds)[_RAW_VAR]))
+    return ds.assign(backscatter_db=linear_to_db(_with_uncorrected_var(ds)[UNCORRECTED_VAR]))
 
 
 # Geometric/georef single-swath/dual-swath: source cells kept per output
@@ -704,7 +703,7 @@ _SWATH_LOAD_BLOCK_PINGS = 2048
 # Variables the geometric/georef resample (and mask_nadir_gap) read --
 # everything else in a corrected .ss.h5 is left on disk.
 _SWATH_LOAD_VARS = (
-    "backscatter_raw", "backscatter_intensity", "ground_range_m", "across_track_m",
+    "backscatter_intensity", "ground_range_m", "across_track_m",
     "latitude_per_sample", "longitude_per_sample", "latitude", "longitude", "sound_vel_ms",
 )
 
@@ -1139,7 +1138,7 @@ def _extract_pixel_style_window(
     masked, t, channel_idx: int, n_samples_single: int, local_ping: int, lo: int, style: str, level: str,
     size_px: int, jitter_px: int, rng: np.random.Generator, placed_by_channel: dict, placed_combined: list,
 ) -> tuple[np.ndarray, list] | None:
-    """``raw``/``radiometric`` (sample/ping pixel space) window + the
+    """``uncorrected``/``radiometric`` (sample/ping pixel space) window + the
     co-targets that land inside it, for one target/style. Returns
     ``None`` if this level's backscatter variable isn't present on
     ``masked`` (e.g. ``radiometric`` requested against a never-TVG'd
@@ -1238,7 +1237,7 @@ def _extract_geo_style_window(
     unit conversion, independent of which resolution the crop itself
     renders at.
 
-    ``backscatter_var``, added 2026-09-28 (real user ask: raw vs.
+    ``backscatter_var``, added 2026-09-28 (real user ask: uncorrected vs.
     radiometric values weren't independently selectable once a
     geometric/georef *coordinate* system was chosen -- render-level
     conflated the two axes), selects which variable the resampled grid
@@ -1424,7 +1423,7 @@ def run_chip(args: argparse.Namespace) -> int:
         resolution_m_override = None
     resample_method = getattr(args, "resample_method", "griddata")
 
-    # --render-level raw/radiometric already fully determines pixel-style
+    # --render-level uncorrected/radiometric already fully determines pixel-style
     # values (see _extract_pixel_style_window); --value-var only matters
     # once a geometric/georef coordinate system is in play (chip styles,
     # and --with-context in either coordinate mode -- see run_chip's own
@@ -1433,7 +1432,7 @@ def run_chip(args: argparse.Namespace) -> int:
     if value_var != "radiometric" and args.render_level in _PIXEL_LEVELS:
         logger.warning(
             f"--value-var={value_var} has no effect under --render-level {args.render_level!r} -- that flag alone already "
-            "selects raw vs. radiometric for pixel-space styles; ignoring --value-var",
+            "selects uncorrected vs. radiometric for pixel-space styles; ignoring --value-var",
         )
     backscatter_var = _LEVEL_VARS[value_var]
 
@@ -1871,10 +1870,10 @@ def run_survey_window(args: argparse.Namespace) -> int:
 
 
 # ============================================================
-# Processing-stage progression grid (raw / dB / TVG / geometric / georef)
+# Processing-stage progression grid (uncorrected / dB / TVG / geometric / georef)
 # ============================================================
 
-_PROGRESSION_STAGES = ("raw", "db", "tvg", "geometric", "georef")
+_PROGRESSION_STAGES = ("uncorrected", "db", "tvg", "geometric", "georef")
 
 
 def _sample_interval_m(ds) -> float:
@@ -1959,7 +1958,7 @@ def _target_combined_col(t_sample: int, n_samples_single: int, channel_idx: int)
 
 
 def run_progression(args: argparse.Namespace) -> None:
-    """Build a 7(-ish)-target x 5-stage progression grid (raw / dB-converted
+    """Build a 7(-ish)-target x 5-stage progression grid (uncorrected / dB-converted
     / TVG-applied / geometric-corrected / georef-corrected) at either
     full-channel or chip scale, so the same real target is directly
     comparable across every processing stage.     """
@@ -2025,15 +2024,15 @@ def run_progression(args: argparse.Namespace) -> None:
 
         if args.scale == "full":
             if combine_sides:
-                raw_port = masked["backscatter_raw"].isel(channel=0).values
-                raw_stbd = masked["backscatter_raw"].isel(channel=1).values
+                raw_port = masked["uncorrected"].isel(channel=0).values
+                raw_stbd = masked["uncorrected"].isel(channel=1).values
                 raw_2d = _combine_channels_mirrored(raw_port, raw_stbd)
                 intensity_port = masked["backscatter_intensity"].isel(channel=0).values
                 intensity_stbd = masked["backscatter_intensity"].isel(channel=1).values
                 intensity_2d = _combine_channels_mirrored(intensity_port, intensity_stbd)
                 target_col = _target_combined_col(t.sample, n_samples_single, channel_idx)
             else:
-                raw_2d = masked["backscatter_raw"].isel(channel=channel_idx).values
+                raw_2d = masked["uncorrected"].isel(channel=channel_idx).values
                 intensity_2d = masked["backscatter_intensity"].isel(channel=channel_idx).values
                 target_col = t.sample
             if args.mask_bright_rows:
@@ -2041,7 +2040,7 @@ def run_progression(args: argparse.Namespace) -> None:
                 intensity_2d = _mask_bright_ping_rows(intensity_2d, mad_k=args.mask_bright_rows_k)
             _rw, extent = extract_full_channel(raw_2d, center_ping=float(local_ping), jitter_px=args.jitter_px, rng=rng)
         else:
-            raw_2d = masked["backscatter_raw"].isel(channel=channel_idx).values
+            raw_2d = masked["uncorrected"].isel(channel=channel_idx).values
             intensity_2d = masked["backscatter_intensity"].isel(channel=channel_idx).values
             target_col = t.sample
             if args.mask_bright_rows:
@@ -2056,7 +2055,7 @@ def run_progression(args: argparse.Namespace) -> None:
         db_window = apply_tvg_to_amplitude(raw_window, mps, params=TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
         target_local = (local_ping - extent.row_start, target_col - extent.col_start)
 
-        for stage, window in (("raw", raw_window), ("db", db_window), ("tvg", intensity_window)):
+        for stage, window in (("uncorrected", raw_window), ("db", db_window), ("tvg", intensity_window)):
             img, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high)
             pos = target_local
             if args.scale == "full":
@@ -2206,8 +2205,8 @@ def main() -> int:
              "a marker line at every file boundary. Omit to skip the overview.",
     )
     p_wf.add_argument(
-        "--value-var", choices=["raw", "radiometric"], default="radiometric",
-        help="raw = uncorrected signal, inverted from processing_history (no TVG); radiometric = backscatter_intensity (TVG-corrected, "
+        "--value-var", choices=["uncorrected", "radiometric"], type=uncorrected_alias("raw"), default="radiometric",
+        help="uncorrected = uncorrected signal, inverted from processing_history (no TVG); radiometric = backscatter_intensity (TVG-corrected, "
              "the old default). Combine with --range-mode ground for a geometrically-axed view.",
     )
     p_wf.add_argument("--range-mode", choices=["slant", "ground"], default="slant", help="ground requires geometric ranges already computed (see sidescan-correct --geometric)")
@@ -2270,9 +2269,9 @@ def main() -> int:
              "'dual-swath' (both channels combined, square, port+starboard). Default: all three.",
     )
     p_chip.add_argument(
-        "--render-level", choices=list(_RENDER_LEVELS), default="radiometric",
+        "--render-level", choices=list(_RENDER_LEVELS), type=uncorrected_alias("raw"), default="radiometric",
         help="Processing level every style renders from this run (applies to both COCO and YOLO): "
-             "'raw' (uncorrected signal, linear, no TVG), 'db' (20*log10 of it, no TVG), "
+             "'uncorrected' (uncorrected signal, linear, no TVG), 'db' (20*log10 of it, no TVG), "
              "'radiometric' (TVG-corrected, the old default), 'geometric' (across/along-track meters -- requires --geometric already run via "
              "sidescan-correct), 'georef' (lat/lon-projected meters -- requires --georef already run). "
              "Under geometric/georef every style's image is a real size_px*resolution_m meters square, "
@@ -2290,14 +2289,14 @@ def main() -> int:
              "region (e.g. where the vessel slowed for a closer look) can get an inflated, too-coarse "
              "resolution that makes the whole crop look zoomed far out. Set this from sidescan-analyze's "
              "findings for the dataset, not by trial and error. No effect (logged, not an error) under "
-             "'raw'/'radiometric' render level, which crops in native pixel space and has no resolution_m "
+             "'uncorrected'/'radiometric' render level, which crops in native pixel space and has no resolution_m "
              "concept at all.",
     )
     p_chip.add_argument(
-        "--value-var", choices=["raw", "db", "radiometric"], default="radiometric",
-        help="uncorrected signal vs. dB (20*log10 raw, no TVG) vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
+        "--value-var", choices=["uncorrected", "db", "radiometric"], type=uncorrected_alias("raw"), default="radiometric",
+        help="uncorrected signal vs. dB (20*log10 of it, no TVG) vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
              "styles AND --with-context, in either coordinate mode) -- independent of --render-level, "
-             "which already fully determines this for 'raw'/'radiometric' render levels (no effect there, "
+             "which already fully determines this for 'uncorrected'/'radiometric' render levels (no effect there, "
              "logged not an error). Added 2026-09-28 so coordinate system and value processing are "
              "independently selectable, instead of --render-level conflating both.",
     )
@@ -2305,7 +2304,7 @@ def main() -> int:
         "--resample-method", choices=["kdtree", "binned", "griddata"], default="griddata",
         help="Which resampling function fills the 'geometric' render level's square, fixed-resolution_m "
              "grid (no effect on 'georef', which always uses extract_georef_window's own isotropic KDTree "
-             "radius search, or on 'raw'/'radiometric', which have no resolution_m concept). "
+             "radius search, or on 'uncorrected'/'radiometric', which have no resolution_m concept). "
              "'kdtree' (extract_geometric_window): real physical average of nearby measurements, zero "
              "fabricated values, some directional blur at fine resolution. 'binned' "
              "(extract_geometric_window_binned): real measured means only, zero fabricated values, but a "
@@ -2322,9 +2321,9 @@ def main() -> int:
         help="Also save context/context_<id>.png -- the full loaded ping neighborhood, BOTH channels "
              "combined (port+starboard), with a real box drawn at the target's true position, via "
              "sidescanpy.viz.render_target_context. Independent of --styles -- but, as of 2026-09-28, "
-             "follows --render-level's own coordinate choice (native pixel space for 'raw'/'radiometric', "
+             "follows --render-level's own coordinate choice (native pixel space for 'uncorrected'/'radiometric', "
              "a real-meters resampled grid -- same shape as the 'dual-swath' style -- for "
-             "'geometric'/'georef') and --value-var's raw/radiometric choice, rather than always being a "
+             "'geometric'/'georef') and --value-var's uncorrected/radiometric choice, rather than always being a "
              "fixed radiometric pixel-space view.",
     )
     p_chip.add_argument("--jitter-px", type=int, default=0)
@@ -2400,7 +2399,7 @@ def main() -> int:
 
     p_prog = subparsers.add_parser(
         "progression",
-        help="7-target x 5-stage grid (raw / dB / TVG / geometric / georef), one shared jitter draw per target",
+        help="7-target x 5-stage grid (uncorrected / dB / TVG / geometric / georef), one shared jitter draw per target",
     )
     p_prog.add_argument("--targets-json", required=True, type=Path)
     p_prog.add_argument("--ss-h5-dir", required=True, type=Path)

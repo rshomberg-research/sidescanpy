@@ -42,7 +42,7 @@ class TestRunInvestigate:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
             input=input_path, frequency=None, all_frequencies=False,
-            value_var="backscatter_raw", pings="0:100", nadir_n_samples=10,
+            value_var="uncorrected", pings="0:100", nadir_n_samples=10,
             stage3_bin_width_m=2.0, stage4_bin_width_m=5.0,
             stage4_db_reference_percentile=99.0, snr_threshold=3.0,
             reject_outliers=False, outlier_mad_k=3.5, stage4_fit_value_col="mean",
@@ -83,7 +83,7 @@ class TestRunSegment:
         defaults = dict(
             input=input_path, frequency=None, pings=(0, None),
             gap_factor=8.0, time_gap_factor=8.0, sound_vel_rel_tol=0.05,
-            garbage_value_var="backscatter_raw", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
+            garbage_value_var="uncorrected", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
             stability_window_pings=50, stability_threshold=1.0, stability_min_run_pings=25,
             min_segment_pings=50,
             output_dir=tmp_path / "out",
@@ -272,7 +272,7 @@ class TestRunTvgFit:
 class TestRunNadir:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, strong_return_min_sample_buffer=0.0, strong_return_peak_percentile=100.0,
             min_first_bottom_return_sample=None, boundary_smoothing_window=15, verbose_diagnostics=False,
             output_dir=tmp_path / "out",
@@ -313,7 +313,7 @@ class TestRunNadir:
 class TestRunBeamGeometry:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, stage3_bin_width_m=2.0, snr_threshold=3.0,
             near_angle_max_std_deg=15.0, min_valid_fraction=0.2,
             output_dir=tmp_path / "out",
@@ -337,7 +337,7 @@ class TestRunBeamGeometry:
 class TestRunUsableRange:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             range_var="slant_range_m", bin_width_m=1.0, snr_threshold=3.0,
             reject_outliers=False, outlier_mad_k=3.5,
             output_dir=tmp_path / "out",
@@ -362,7 +362,7 @@ class TestRunUsableRange:
 class TestRunUnits:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             output_dir=tmp_path / "out",
         )
         defaults.update(overrides)
@@ -385,7 +385,7 @@ class TestRunUnits:
 class TestRunRecommendConfig:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, bin_width_m=1.0, snr_threshold=3.0,
             output=tmp_path / "out" / "recommended_config.yaml",
         )

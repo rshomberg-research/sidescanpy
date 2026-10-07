@@ -80,7 +80,7 @@ def _stage(stage, metrics=None, classification=None, notes=None):
 class TestRenderRecommendedConfig:
     def _base_kwargs(self, **overrides):
         kwargs = dict(
-            source_name="a.ss.h5", freq_key="hz_1495000", ping_range=(0, 5000), value_var="backscatter_raw",
+            source_name="a.ss.h5", freq_key="hz_1495000", ping_range=(0, 5000), value_var="uncorrected",
             stage1=_stage("stage1_characterize", {"dtype": "float32"}),
             stage2=_stage("stage2_nadir", {"altitude_sample_median": 12.3, "first_bottom_return_sample_median": 145.2}, classification="gap"),
             stage2_5=_stage("stage2_5_beam_geometry", {"near_angle_deg_median": 25.0, "far_angle_deg": 60.0, "beam_width_deg": 35.0}, classification="determined"),

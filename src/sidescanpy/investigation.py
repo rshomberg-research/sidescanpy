@@ -38,7 +38,7 @@ from sidescanpy.analysis.investigation import (
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.inversion import invert
+from sidescanpy.processing.inversion import LEGACY_RAW_VAR, UNCORRECTED_VAR, invert
 from sidescanpy.viz.investigation import (
     plot_stage1_5_before_after,
     plot_stage1_histograms,
@@ -195,8 +195,8 @@ def run_investigation(
     value_var : str, default "backscatter_intensity"
         Variable to investigate. Every recorded correction is inverted
         first (``sidescanpy.processing.invert``), so the default is the
-        uncorrected signal. The legacy name ``"backscatter_raw"`` maps to it
-        when the dataset has no such variable.
+        uncorrected signal. ``"uncorrected"`` (and the legacy name
+        ``"backscatter_raw"``, when the dataset has no such variable) map to it.
     ping_range : (int, int | None), default (0, None)
         Ping slice — investigating a full multi-thousand-ping survey is
         rarely necessary and slower than a representative subset.
@@ -360,8 +360,8 @@ def run_investigation(
     dataset_path = Path(dataset_path)
     ds, freq_key = _load_channel_dataset(dataset_path, freq_key)
 
-    if value_var == "backscatter_raw" and value_var not in ds:
-        logger.debug("value_var 'backscatter_raw' not present; using the inverted backscatter_intensity")
+    if value_var in (UNCORRECTED_VAR, LEGACY_RAW_VAR) and value_var not in ds:
+        logger.debug("value_var %r not present; using the inverted backscatter_intensity", value_var)
         value_var = "backscatter_intensity"
 
     start, stop = ping_range
