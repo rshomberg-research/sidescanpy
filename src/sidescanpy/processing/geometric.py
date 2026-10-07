@@ -46,11 +46,16 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy._version import __version__
+from sidescanpy.processing.sample_axis import (
+    DEFAULT_SOUND_VEL_MS,
+    sample_index,
+    sample_interval_m,
+)
 
 logger = logging.getLogger(__name__)
 
 
-_DEFAULT_SOUND_VEL_MS = 1500.0
+_DEFAULT_SOUND_VEL_MS = DEFAULT_SOUND_VEL_MS
 
 
 def compute_geometric_ranges(
@@ -94,18 +99,11 @@ def compute_geometric_ranges(
     n_pings = ds.sizes["ping"]
     n_channels = ds.sizes["channel"]
     n_samples = ds.sizes["sample"]
-    sample_rate = float(ds.attrs["sample_rate_hz"])
 
     # ----- per-ping inputs -----
-    sound_vel = ds["sound_vel_ms"].values.astype(np.float64)
-    invalid_sv = np.isnan(sound_vel) | (sound_vel <= 0) # BUG: why is sound_vel getting put at 0. check jsf messages.py
-    if invalid_sv.any():
-        n_invalid = int(invalid_sv.sum())
-        logger.warning(
-            f"{n_invalid} of {n_pings} pings have invalid sound_vel_ms "
-            f"(NaN or non-positive); falling back to {_DEFAULT_SOUND_VEL_MS} m/s"
-        )
-        sound_vel = np.where(invalid_sv, _DEFAULT_SOUND_VEL_MS, sound_vel)
+    sv = ds["sound_vel_ms"].values.astype(np.float64)
+    n_invalid_sv = int((np.isnan(sv) | (sv <= 0)).sum())
+    sample_interval_per_ping = sample_interval_m(ds)
 
     altitude = ds["altitude_m"].values.astype(np.float64)
     pitch_deg = ds["pitch_deg"].values.astype(np.float64)
@@ -113,8 +111,7 @@ def compute_geometric_ranges(
     pitch_rad = np.deg2rad(pitch_deg)
 
     # ----- slant range (attitude-invariant) -----
-    sample_idx = np.arange(n_samples, dtype=np.float64)
-    sample_interval_per_ping = sound_vel / (2.0 * sample_rate)
+    sample_idx = sample_index(ds)
     slant_per_ping = sample_interval_per_ping[:, None] * sample_idx[None, :]
     slant_range = np.broadcast_to(
         slant_per_ping[:, None, :],
@@ -244,7 +241,7 @@ def compute_geometric_ranges(
                 "sound_velocity_source": "sound_vel_ms",
                 "default_sound_vel_ms": _DEFAULT_SOUND_VEL_MS,
                 "expose_unmasked_z": expose_unmasked_z,
-                "n_pings_with_invalid_sv": int(invalid_sv.sum()),
+                "n_pings_with_invalid_sv": n_invalid_sv,
             },
             "function": "sidescanpy.processing.geometric.compute_geometric_ranges",
             "version": __version__,

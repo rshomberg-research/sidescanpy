@@ -29,6 +29,7 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.core.units import linear_to_db
+from sidescanpy.processing.sample_axis import sample_index
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ def apply_tvg_to_amplitude(
     *,
     params: TVGParams | None = None,
     freq_hz: float | None = None,
+    sample_idx: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Apply TVG correction to a plain linear-amplitude array — no xarray
@@ -157,6 +159,10 @@ def apply_tvg_to_amplitude(
         Used only when ``params`` is ``None`` (or has no
         ``absorption_db_per_m`` set), to derive a default via
         ``absorption_for_frequency()``.
+    sample_idx : np.ndarray, optional
+        Absolute sample index of each position on the last axis. Defaults
+        to ``arange(n_samples)`` (the array starts at the ping's first
+        recorded sample); pass it when leading samples were cropped off.
 
     Returns
     -------
@@ -184,7 +190,9 @@ def apply_tvg_to_amplitude(
 
     n_samples = amplitude.shape[-1]
     amplitude_db = linear_to_db(amplitude)
-    range_m = np.arange(n_samples, dtype=np.float64) * meters_per_sample
+    idx = np.arange(n_samples, dtype=np.float64) if sample_idx is None \
+        else np.asarray(sample_idx, dtype=np.float64)
+    range_m = idx * meters_per_sample
     range_m = np.clip(range_m, params.min_range_m, None)
     gain_db = tvg_gain_db(range_m, params)
     return amplitude_db + gain_db
@@ -317,7 +325,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     # ========================================================================
     # Range for sample i: R[i] = i * (sound_velocity / (2 * sample_rate))
     sample_rate = ds.attrs["sample_rate_hz"]
-    n_samples = ds.sizes["sample"]
+    sample_idx = sample_index(ds)
     sound_velocity = ds["sound_vel_ms"].mean().item()  # scalar, m/s
     # FIXME: sound_velocity should change at each ping
     # Also catches exactly-zero (not just NaN): some JSF files have
@@ -328,7 +336,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
         sound_velocity = 1500.0
 
     sample_interval_m = sound_velocity / (2.0 * sample_rate)
-    slant_range = np.arange(n_samples, dtype=np.float32) * sample_interval_m
+    slant_range = (sample_idx * sample_interval_m).astype(np.float32)
     slant_range = np.clip(slant_range, params.min_range_m, None)
 
     logger.debug(
@@ -359,6 +367,8 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     # ========================================================================
     # corrected = backscatter_db + tvg_db
     # tvg_db has shape (n_samples,) and broadcasts over (ping, channel, sample)
+    # Keep the input dtype (float32): never upcast the big array.
+    tvg_db = tvg_db.astype(backscatter_db.dtype)
     corrected_db = backscatter_db + xr.DataArray(tvg_db, dims=["sample"])
     # corrected_db = np.clip(corrected_db, 0, None)   # FIXME: fix the clipping
 

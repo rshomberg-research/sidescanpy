@@ -24,6 +24,7 @@ from sidescanpy.processing.profiles import (  # noqa: F401 (re-export)
     mean_backscatter_vs_range,
 )
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg, tvg_gain_db
+from sidescanpy.processing.sample_axis import sample_index
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +105,8 @@ def mean_backscatter_vs_sample_index(
         count.
     """
     values_da = ds[value_var]
-    n_samples = ds.sizes["sample"]
-    sample_idx_da = xr.DataArray(np.arange(n_samples), dims=["sample"])
+    abs_idx = sample_index(ds)
+    sample_idx_da = xr.DataArray(abs_idx, dims=["sample"])
     idx_b, values_b = xr.broadcast(sample_idx_da, values_da)
 
     idx_flat = idx_b.values.ravel().astype(np.float64)
@@ -122,7 +123,7 @@ def mean_backscatter_vs_sample_index(
     if values_flat.size == 0:
         return pd.DataFrame(columns=columns)
 
-    edges = np.arange(0.0, n_samples + bin_width, bin_width)
+    edges = np.arange(0.0, (abs_idx.max() if abs_idx.size else 0.0) + 1 + bin_width, bin_width)
     rows = _bin_stats(values_flat, idx_flat, edges)
     df = pd.DataFrame(rows)
     return df.rename(columns={"min": "sample_min", "max": "sample_max"})[columns]

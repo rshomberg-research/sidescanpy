@@ -383,8 +383,8 @@ def run_segment(args: argparse.Namespace) -> int:
     for fk in all_freq_keys:
         channel_ds = load_channel_dataset(args.input, fk, _PING_CHUNKS)
         channel = SideScanFrequencyChannel(channel_ds, freq_key=fk)
-        sliced = slice_by_pings(channel, start=start, stop=stop if stop is not None else channel.n_pings)
-        sliced_survey.add_frequency(fk, sliced.dataset.load())
+        sliced = slice_by_pings(channel_ds, start=start, stop=stop if stop is not None else channel.n_pings)
+        sliced_survey.add_frequency(fk, sliced.load())
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     write_segments_report(segments, args.output_dir / "segments.json")

@@ -278,6 +278,8 @@ def _build_frequency_channel(
             "fathometer_reading_m": (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll)
         },
         coords={
+            # Absolute sample index (0 = first recorded sample of the ping)
+            "sample":      (["sample"], np.arange(n_samples)),
             "ping_number": (["ping"], ping_numbers),
             "time":        (["ping"], timestamps.astype("datetime64[ns]")),
             "channel_id":  (["channel"], np.array(["port", "starboard"])),

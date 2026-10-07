@@ -410,9 +410,8 @@ def write_segments(survey: SideScanSurvey, segments: list[Segment], output_dir: 
             survey_name=f"{survey.survey_name}_{seg.label}",
         )
         for freq_key in survey.frequencies:
-            channel = survey.get_frequency(freq_key)
-            sliced = slice_by_pings(channel, start=seg.start, stop=seg.stop)
-            sub_survey.add_frequency(freq_key, sliced.dataset)
+            ds_f = survey.get_frequency(freq_key).dataset
+            sub_survey.add_frequency(freq_key, slice_by_pings(ds_f, start=seg.start, stop=seg.stop))
         out_path = output_dir / f"{seg.label}.ss.h5"
         write_survey(sub_survey, out_path, overwrite=True)
         written.append(out_path)

@@ -83,8 +83,10 @@ from sidescanpy.processing.slicing import (
     slice_by_bbox,
     slice_by_ground_range,
     slice_by_pings,
+    slice_by_range,
     slice_by_samples,
     slice_by_time,
+    slice_survey,
 )
 
 __all__ = [
@@ -104,6 +106,8 @@ __all__ = [
     "crop_far_range_noise",
     "slice_by_pings",
     "slice_by_samples",
+    "slice_by_range",
+    "slice_survey",
     "slice_by_time",
     "slice_by_bbox",
     "slice_by_ground_range",

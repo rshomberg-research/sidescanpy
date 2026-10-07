@@ -21,6 +21,7 @@ from matplotlib.ticker import FuncFormatter
 
 from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.processing.navigation import along_track_distance_m as _along_track_distance_m
+from sidescanpy.processing.sample_axis import sample_index
 from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
@@ -386,7 +387,7 @@ def _compute_x_values(
 
     if x_axis == "sample":
         # Port: -N to 0, Starboard: 0 to +N. Both broadcast to (pings, samples).
-        sample_idx = np.arange(n_samples, dtype=np.float64)
+        sample_idx = sample_index(ds)
         x_stbd = np.broadcast_to(sample_idx[None, :], (n_pings, n_samples)).copy()
         x_port = -x_stbd
         return x_port, x_stbd

@@ -233,11 +233,12 @@ def build_survey_track(
     Cheap by design, but *not* by slicing the sample axis down to one
     sample before georeferencing — that's tempting (we only want the
     farthest-range sample per ping) but wrong:
-    ``compute_geometric_ranges`` computes each sample's position from
-    ``np.arange(ds.sizes["sample"])``, a *local* index into whatever
-    sample axis it's handed, not the sample's true position in the
-    original ping. Pre-slicing to ``sample=[-1]`` collapses the sample
-    axis to length 1, so the function sees "sample 0" (point-blank
+    ``compute_geometric_ranges`` computes each sample's position from the
+    absolute ``sample`` coordinate when present (``processing.sample_axis.
+    sample_index``), so slicing samples is safe for datasets that carry it.
+    For legacy datasets *without* that coordinate it falls back to a
+    *local* index (``arange(ds.sizes["sample"])``): pre-slicing to
+    ``sample=[-1]`` then makes the function see "sample 0" (point-blank
     range) instead of the true far-range edge — silently producing NaN
     via the water-column mask instead of a real position.
 

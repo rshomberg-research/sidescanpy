@@ -456,8 +456,8 @@ def _write_survey_in_parts(survey: SideScanSurvey, out_dir, n_parts: int) -> lis
             survey_name=f"{survey.survey_name}_part{i}",
         )
         for fk in freq_keys:
-            sliced = slice_by_pings(survey.get_frequency(fk), start=start, stop=stop)
-            part_survey.add_frequency(fk, sliced.dataset)
+            sliced = slice_by_pings(survey.get_frequency(fk).dataset, start=start, stop=stop)
+            part_survey.add_frequency(fk, sliced)
         path = out_dir / f"part{i:02d}.ss.h5"
         write_survey(part_survey, path)
         paths.append(path)

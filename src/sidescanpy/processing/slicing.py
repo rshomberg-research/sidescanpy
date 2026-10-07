@@ -1,10 +1,11 @@
 """
 Slicing operations for SideScan frequency channels.
 
-Each function returns a new SideScanFrequencyChannel — sliced version
-of the input. The schema is preserved; the result is validated. Empty
-slices (zero pings or zero samples) are valid and return an empty-but-
-schema-valid channel.
+Every function takes an ``xr.Dataset`` (one frequency channel) and returns
+a new ``xr.Dataset`` -- the sliced version of the input. Empty slices
+(zero pings or zero samples) are valid and return an empty-but-
+schema-valid dataset. ``slice_survey`` maps any of them over every
+frequency of a ``SideScanSurvey``.
 
 Slicing is structural: backscatter values, processing_level, and
 processing_history are preserved. No values are modified.
@@ -12,7 +13,8 @@ processing_history are preserved. No values are modified.
 Available slicing functions:
 
 - ``slice_by_pings`` — by ping index range
-- ``slice_by_samples`` — by sample index range
+- ``slice_by_samples`` — by absolute ``sample`` coordinate range
+- ``slice_by_range`` — by slant range in metres
 - ``slice_by_time`` — by ping timestamp range (supports str or datetime64)
 - ``slice_by_bbox`` — by lat/lon bounding box (per-ping by default,
   per-sample with ``use_per_sample=True``)
@@ -24,11 +26,14 @@ Available slicing functions:
 """
 
 import logging
-from typing import Union
+from collections.abc import Callable
+from typing import Any, Union
 
 import numpy as np
+import xarray as xr
 
-from sidescanpy.core.survey import SideScanFrequencyChannel
+from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.processing.sample_axis import sample_index, sample_interval_m
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +43,17 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 def slice_by_pings(
-    channel: SideScanFrequencyChannel,
+    ds: xr.Dataset,
     *,
     start: int = 0,
     stop: int | None = None,
-) -> SideScanFrequencyChannel:
-    """Return a new channel with pings ``[start, stop)``.
+) -> xr.Dataset:
+    """Return a new dataset with pings ``[start, stop)``.
 
     Parameters
     ----------
-    channel : SideScanFrequencyChannel
-        Input channel.
+    ds : xr.Dataset
+        Input frequency-channel dataset.
     start : int, default 0
         First ping index to include.
     stop : int, optional
@@ -56,16 +61,16 @@ def slice_by_pings(
 
     Returns
     -------
-    SideScanFrequencyChannel
-        New channel with the selected ping range.
+    xr.Dataset
+        New dataset with the selected ping range.
     """
-    n_pings = channel.n_pings
+    n_pings = ds.sizes["ping"]
     if stop is None:
         stop = n_pings
     stop = min(stop, n_pings)
 
-    new_ds = channel.dataset.isel(ping=slice(start, stop))
-    return SideScanFrequencyChannel(new_ds, freq_key=channel.freq_key)
+    new_ds = ds.isel(ping=slice(start, stop))
+    return new_ds
 
 
 # ============================================================
@@ -73,34 +78,76 @@ def slice_by_pings(
 # ============================================================
 
 def slice_by_samples(
-    channel: SideScanFrequencyChannel,
+    ds: xr.Dataset,
     *,
     start: int = 0,
     stop: int | None = None,
-) -> SideScanFrequencyChannel:
-    """Return a new channel with samples ``[start, stop)``.
+) -> xr.Dataset:
+    """Return a new dataset with samples whose index is in ``[start, stop)``.
+
+    Selection is by the *absolute* integer ``sample`` coordinate (label
+    based: 0 is the first recorded sample of the ping), so slicing an
+    already-sliced dataset keeps meaning the same samples. Datasets with
+    no ``sample`` coordinate fall back to positional selection.
 
     Parameters
     ----------
-    channel : SideScanFrequencyChannel
-        Input channel.
+    ds : xr.Dataset
+        Input frequency-channel dataset.
     start : int, default 0
-        First sample index to include.
+        First absolute sample index to include.
     stop : int, optional
-        One past the last sample index. Defaults to ``n_samples``.
+        One past the last absolute sample index. Defaults to unbounded.
 
     Returns
     -------
-    SideScanFrequencyChannel
-        New channel with the selected sample range.
+    xr.Dataset
+        New dataset with the selected sample range.
     """
-    n_samples = channel.n_samples
-    if stop is None:
-        stop = n_samples
-    stop = min(stop, n_samples)
+    if "sample" not in ds.coords:
+        n_samples = ds.sizes["sample"]
+        stop_pos = n_samples if stop is None else min(stop, n_samples)
+        return ds.isel(sample=slice(start, stop_pos))
+    idx = ds["sample"].values
+    mask = idx >= start
+    if stop is not None:
+        mask &= idx < stop
+    return ds.isel(sample=np.flatnonzero(mask))
 
-    new_ds = channel.dataset.isel(sample=slice(start, stop))
-    return SideScanFrequencyChannel(new_ds, freq_key=channel.freq_key)
+
+# ============================================================
+# SLICE BY RANGE
+# ============================================================
+
+def slice_by_range(
+    ds: xr.Dataset,
+    min_m: float | None = None,
+    max_m: float | None = None,
+) -> xr.Dataset:
+    """Return a new dataset with samples whose slant range is in ``[min_m, max_m]``.
+
+    Slant range is ``sample * c / (2 * fs)`` from the absolute ``sample``
+    coordinate, using the mean per-ping sample interval (the same
+    ``sound_vel_ms``/``sample_rate_hz`` logic as
+    ``compute_geometric_ranges``). Because sound velocity varies slightly
+    per ping, the cut is made at a single sample boundary for the whole
+    dataset.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Input frequency-channel dataset.
+    min_m, max_m : float, optional
+        Inclusive slant-range bounds in metres. ``None`` means unbounded.
+    """
+    interval = float(np.nanmean(sample_interval_m(ds))) if ds.sizes["ping"] else np.nan
+    rng = sample_index(ds) * interval
+    mask = np.ones(rng.shape, dtype=bool)
+    if min_m is not None:
+        mask &= rng >= min_m
+    if max_m is not None:
+        mask &= rng <= max_m
+    return ds.isel(sample=np.flatnonzero(mask))
 
 
 # ============================================================
@@ -122,17 +169,17 @@ def _to_datetime64_ns(value: DateTimeLike) -> np.datetime64 | None:
 
 
 def slice_by_time(
-    channel: SideScanFrequencyChannel,
+    ds: xr.Dataset,
     *,
     start: DateTimeLike = None,
     stop: DateTimeLike = None,
-) -> SideScanFrequencyChannel:
-    """Return a new channel with pings whose timestamp is in ``[start, stop)``.
+) -> xr.Dataset:
+    """Return a new dataset with pings whose timestamp is in ``[start, stop)``.
 
     Parameters
     ----------
-    channel : SideScanFrequencyChannel
-        Input channel.
+    ds : xr.Dataset
+        Input frequency-channel dataset.
     start : str, np.datetime64, or None
         Inclusive lower bound. Strings are parsed as ISO-format. ``None``
         means no lower bound.
@@ -141,22 +188,22 @@ def slice_by_time(
 
     Returns
     -------
-    SideScanFrequencyChannel
-        New channel containing only pings whose ``time`` falls in the range.
+    xr.Dataset
+        New dataset containing only pings whose ``time`` falls in the range.
     """
     start_ns = _to_datetime64_ns(start)
     stop_ns = _to_datetime64_ns(stop)
 
-    times = channel.dataset["time"].values
-    mask = np.ones(channel.n_pings, dtype=bool)
+    times = ds["time"].values
+    mask = np.ones(ds.sizes["ping"], dtype=bool)
     if start_ns is not None:
         mask &= times >= start_ns
     if stop_ns is not None:
         mask &= times < stop_ns
 
     selected = np.where(mask)[0]
-    new_ds = channel.dataset.isel(ping=selected)
-    return SideScanFrequencyChannel(new_ds, freq_key=channel.freq_key)
+    new_ds = ds.isel(ping=selected)
+    return new_ds
 
 
 # ============================================================
@@ -164,20 +211,20 @@ def slice_by_time(
 # ============================================================
 
 def slice_by_bbox(
-    channel: SideScanFrequencyChannel,
+    ds: xr.Dataset,
     *,
     lat_min: float,
     lat_max: float,
     lon_min: float,
     lon_max: float,
     use_per_sample: bool = False,
-) -> SideScanFrequencyChannel:
-    """Return a new channel containing pings whose position is within the bbox.
+) -> xr.Dataset:
+    """Return a new dataset containing pings whose position is within the bbox.
 
     Parameters
     ----------
-    channel : SideScanFrequencyChannel
-        Input channel.
+    ds : xr.Dataset
+        Input frequency-channel dataset.
     lat_min, lat_max : float
         Latitude bounds (inclusive). degrees_north.
     lon_min, lon_max : float
@@ -192,11 +239,9 @@ def slice_by_bbox(
 
     Returns
     -------
-    SideScanFrequencyChannel
-        New channel with pings within the bbox.
+    xr.Dataset
+        New dataset with pings within the bbox.
     """
-    ds = channel.dataset
-
     if use_per_sample:
         if "latitude_per_sample" not in ds.data_vars:
             raise ValueError(
@@ -225,7 +270,7 @@ def slice_by_bbox(
 
     selected = np.where(mask)[0]
     new_ds = ds.isel(ping=selected)
-    return SideScanFrequencyChannel(new_ds, freq_key=channel.freq_key)
+    return new_ds
 
 
 # ============================================================
@@ -233,11 +278,11 @@ def slice_by_bbox(
 # ============================================================
 
 def slice_by_ground_range(
-    channel: SideScanFrequencyChannel,
+    ds: xr.Dataset,
     *,
     range_max_m: float,
-) -> SideScanFrequencyChannel:
-    """Return a new channel with samples whose ground_range_m is ≤ range_max_m.
+) -> xr.Dataset:
+    """Return a new dataset with samples whose ground_range_m is ≤ range_max_m.
 
     Trims the sample dimension to the maximum sample index where any
     ping/channel has ground_range_m ≤ range_max_m. Pings with shorter
@@ -245,18 +290,17 @@ def slice_by_ground_range(
 
     Parameters
     ----------
-    channel : SideScanFrequencyChannel
-        Input channel. Must have ``ground_range_m`` (run
+    ds : xr.Dataset
+        Input frequency-channel dataset. Must have ``ground_range_m`` (run
         ``compute_geometric_ranges`` first).
     range_max_m : float
         Maximum ground range to retain (meters).
 
     Returns
     -------
-    SideScanFrequencyChannel
-        New channel with truncated sample dim.
+    xr.Dataset
+        New dataset with truncated sample dim.
     """
-    ds = channel.dataset
     if "ground_range_m" not in ds.data_vars:
         raise ValueError(
             "slice_by_ground_range requires 'ground_range_m' in the dataset. "
@@ -272,8 +316,33 @@ def slice_by_ground_range(
     if not valid_per_sample.any():
         # No sample is within range — return empty sample dim
         new_ds = ds.isel(sample=slice(0, 0))
-        return SideScanFrequencyChannel(new_ds, freq_key=channel.freq_key)
+        return new_ds
 
     # Find the largest sample index that's still in range
     last_valid = int(np.where(valid_per_sample)[0].max()) + 1
-    return slice_by_samples(channel, start=0, stop=last_valid)
+    stop_abs = int(sample_index(ds)[last_valid - 1]) + 1
+    return slice_by_samples(ds, start=0, stop=stop_abs)
+
+
+# ============================================================
+# SURVEY-LEVEL MAPPING
+# ============================================================
+
+def slice_survey(
+    survey: SideScanSurvey,
+    fn: Callable[..., xr.Dataset],
+    **kwargs: Any,
+) -> SideScanSurvey:
+    """Apply a ``Dataset`` slicer to every frequency of ``survey``.
+
+    Returns a new survey with the same metadata and each frequency
+    replaced by ``fn(ds, **kwargs)``. Aux streams are not carried over.
+    """
+    out = SideScanSurvey(
+        source_files=survey.source_files,
+        source_format=survey.source_format,
+        survey_name=survey.survey_name,
+    )
+    for fk in survey.frequencies:
+        out.add_frequency(fk, fn(survey.get_frequency(fk).dataset, **kwargs))
+    return out
