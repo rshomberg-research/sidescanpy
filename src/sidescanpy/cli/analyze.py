@@ -8,17 +8,13 @@
   unfamiliar or long mission, then point every subcommand below at one
   of its clean ``sectionN.ss.h5`` outputs rather than the raw file.
 
-- ``nadir`` / ``beam-geometry`` / ``usable-range`` / ``units`` — each of
-  ``run_investigation()``'s stages 2 / 2.5 / 3 / 1+5, runnable on its
-  own against one frequency channel, each writing only the plot(s) that
-  are the direct evidence for its own classification (not the full
-  per-stage diagnostic set ``investigate`` below produces) -- meant for
-  the iterative workflow of adjusting one ``--config`` value, re-running
-  just that one tool, and looking at the result before adjusting again,
-  rather than re-running the whole five-stage pass every time. Each
-  subcommand's own flags are its analysis parameters (seeds/thresholds),
-  already ``--config``-seedable via the same YAML loader every other
-  subcommand here uses.
+- ``nadir`` / ``beam-geometry`` / ``usable-range`` / ``units`` — one
+  analysis each, against one frequency channel, each writing only the
+  plot that is the direct evidence for its own result (not the full set
+  ``investigate`` produces) -- for adjusting one ``--config`` value,
+  re-running just that tool, and looking again. Each subcommand's flags
+  are its analysis parameters, ``--config``-seedable like every other
+  subcommand here.
 
 - ``nav-attitude`` — plots heading/pitch/roll/altitude/depth/heave and
   the lon/lat position track for one ping range
@@ -30,45 +26,41 @@
   the same targeted-ping-range workflow as ``nadir``/``beam-geometry``/
   etc. above, not the full investigation pass.
 
-- ``recommend-config`` — runs Stage 4 (TVG term selection) and a new
-  ping-geometry measurement (``resolution_m``) against a clean section,
-  plus ``nadir``/``beam-geometry``/``usable-range``/``units`` for
-  evidence, and writes one heavily-commented recommended config YAML
-  (``sidescanpy.cli._recommend``) -- only the two stages with a
-  real downstream config consumer today emit a settable key; every
-  other finding is reported as a comment, not invented as a key nothing
+- ``recommend-config`` — runs the range-decay fit (TVG term selection)
+  and a ping-geometry measurement (``resolution_m``) against a clean
+  section, plus ``nadir``/``beam-geometry``/``usable-range``/``units``
+  for evidence, and writes one heavily-commented recommended config YAML
+  (``sidescanpy.cli._recommend``) -- only the two analyses with a real
+  downstream config consumer today emit a settable key; every other
+  finding is reported as a comment, not invented as a key nothing
   reads. Meant to run against a clean ``sectionN.ss.h5`` from
   ``segment``, and to be reviewed/edited before use, not trusted as-is.
 
-- ``investigate`` — a thin driver over
-  ``sidescanpy.investigation.run_investigation()`` (the
-  ``sidescan-data-investigation`` skill's pipeline), running every stage
-  in one pass and writing the full diagnostic set per stage -- the
-  occasional full-report use case; not the default day-to-day way to
-  iterate on one specific value (see the four subcommands above for
-  that).
+- ``investigate`` — runs every analysis in one pass
+  (``sidescanpy.cli._investigate``) and writes the full plot set plus
+  ``metrics.json`` per frequency, and ``summary.json`` -- the occasional
+  full-report use case; not the day-to-day way to iterate on one value
+  (see the four subcommands above). ``examples/investigate_dataset.py``
+  is the same flow as a readable script.
 - ``tvg-fit`` — the TVG decay-curve fit recipe: bin raw
   backscatter by slant range (matching what ``apply_tvg()`` itself
   actually uses internally, not ``ground_range_m``), auto-place the fit
   window past the near-field peak and the reference range inside it
   (``fit_range_decay(..., r_ref_m="auto", r_fit_min_m="auto")``), and
   render the decay-fit + residuals figure with
-  ``apply_stage4_fit_window_limits`` (robust y-limits from the fit
+  ``set_fit_window_limits`` (robust y-limits from the fit
   window's own values; the full observed x-range always shown, so a
   misconfigured reference/window is visible rather than silently
   cropped out of frame).
 
 Usage:
-    sidescan-analyze segment --input data/active/unknown/ss_h5/20241017181822.ss.h5 \\
-        --output-dir data/active/unknown/exports/segments/
+    sidescan-analyze segment --input ss_h5/mission.ss.h5 --output-dir exports/segments/
 
-    sidescan-analyze investigate --input data/active/unknown/ss_h5/20241017181822.ss.h5 \\
-        --all-frequencies --pings 0:8000 \\
-        --output-dir data/active/unknown/exports/investigation/
+    sidescan-analyze investigate --input ss_h5/mission.ss.h5 \\
+        --all-frequencies --pings 0:8000 --output-dir exports/investigation/
 
-    sidescan-analyze tvg-fit --ss-h5 data/active/unknown/ss_h5/20241017181822.ss.h5 \\
-        --frequency 1495000 --pings 0:5000 --reconstruct-raw \\
-        --output-dir data/active/unknown/exports/tvg_fit/
+    sidescan-analyze tvg-fit --ss-h5 ss_h5/mission.ss.h5 \\
+        --frequency 1495000 --pings 0:5000 --reconstruct-raw --output-dir exports/tvg_fit/
 
 2026 rshomberg@uri.edu
 """
@@ -92,7 +84,9 @@ from sidescanpy.analysis.nadir import analyze_nadir
 from sidescanpy.analysis.navigation import summarize_navigation
 from sidescanpy.analysis.tvg import fit_range_decay
 from sidescanpy.analysis.usable_range import estimate_usable_range
+from sidescanpy.cli import _investigate
 from sidescanpy.cli._common import (
+    add_deprecated_alias,
     add_logging_args,
     resolve_freq_keys,
     setup_logging_from_args,
@@ -104,29 +98,31 @@ from sidescanpy.cli._segments import write_segments, write_segments_report
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.history import STEP_TVG, has_step
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
-from sidescanpy.investigation import run_investigation
-from sidescanpy.io.dispatch import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.inversion import UNCORRECTED_VAR, invert, uncorrected_backscatter
 from sidescanpy.processing.segments import find_segments
 from sidescanpy.processing.slicing import slice_by_pings
-from sidescanpy.viz.investigation import (
-    apply_stage4_fit_window_limits,
+from sidescanpy.viz.analysis import (
+    plot_beam_geometry,
+    plot_nadir_waterfall,
+    plot_nadir_zoom,
+    plot_navigation_summary,
     plot_segments_overview,
-    plot_stage1_histograms,
-    plot_stage2_5_beam_geometry,
-    plot_stage2_nadir_zoom,
-    plot_stage2_waterfall,
-    plot_stage3_usable_range,
-    plot_stage4_residuals,
+    plot_units_distribution,
+    plot_usable_range,
 )
-from sidescanpy.viz.nav_attitude import plot_nav_attitude
-from sidescanpy.viz.tvg_diagnostics import plot_candidate_fit
+from sidescanpy.viz.tvg import plot_candidate_fit, plot_range_decay_residuals, set_fit_window_limits
 
 logger = logging.getLogger(__name__)
 
-_HDF5_SUFFIXES = (".h5", ".hdf5")
+# Deprecated flag / --config key spellings -> current dest names.
+_RENAMED_OPTIONS = {
+    "stage3_bin_width_m": "usable_range_bin_width_m",
+    "stage4_bin_width_m": "decay_bin_width_m",
+    "stage4_db_reference_percentile": "decay_db_reference_percentile",
+    "stage4_fit_value_col": "decay_fit_value_col",
+}
 
 # Real bug, found from a real user report (2026-09-28): every lazy read
 # below used to hardcode chunks={"ping": 500} -- not a multiple of
@@ -188,57 +184,50 @@ def _parse_numeric_or_literal(value: str | None) -> float | str | None:
 # investigate
 # ============================================================
 
-def _list_frequencies(input_path: Path) -> list[str]:
-    if input_path.suffix.lower() in _HDF5_SUFFIXES or input_path.name.endswith(".ss.h5"):
-        survey = read_survey(input_path)
-    else:
-        fmt = detect_format([input_path])
-        survey = read_and_convert([input_path], fmt)
-    return sorted(survey.frequencies)
-
-
 def run_investigate(args: argparse.Namespace) -> int:
     if not args.input.is_file():
         logger.error(f"Input file not found: {args.input}")
         return 1
 
-    ping_range = _parse_ping_range(args.pings)
-
     if args.frequency:
         freq_keys = [args.frequency]
     else:
-        freq_keys = _list_frequencies(args.input)
+        freq_keys = _investigate.list_frequencies(args.input)
         if not args.all_frequencies and len(freq_keys) > 1:
             logger.error(f"Multiple frequencies available ({freq_keys}) -- pass --frequency or --all-frequencies.")
             return 1
+
+    channel = getattr(args, "channel", None)
+    if channel is not None and channel.isdigit():
+        channel = int(channel)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     summary_rows = []
     for freq_key in freq_keys:
         logger.info(f"Investigating {args.input.name} / {freq_key} ({args.value_var})")
-        result = run_investigation(
-            args.input,
-            freq_key=freq_key,
+        row = _investigate.run(
+            args.input, freq_key, args.output_dir / freq_key,
             value_var=args.value_var,
-            ping_range=ping_range,
-            output_dir=args.output_dir / freq_key,
+            ping_range=_parse_ping_range(args.pings),
+            channel=channel,
             nadir_n_samples=args.nadir_n_samples,
-            stage3_bin_width_m=args.stage3_bin_width_m,
-            stage4_bin_width_m=args.stage4_bin_width_m,
-            stage4_db_reference_percentile=args.stage4_db_reference_percentile,
+            usable_range_bin_width_m=args.usable_range_bin_width_m,
             snr_threshold=args.snr_threshold,
+            decay_bin_width_m=args.decay_bin_width_m,
+            decay_db_reference_percentile=args.decay_db_reference_percentile,
+            decay_fit_value_col=args.decay_fit_value_col,
             reject_outliers=args.reject_outliers,
             outlier_mad_k=args.outlier_mad_k,
-            stage4_fit_value_col=args.stage4_fit_value_col,
         )
-        summary_rows.append(result.summary_row())
+        logger.info(
+            f"  {freq_key}: units={row['units']} nadir={row['nadir']} "
+            f"usable_range_m={row['usable_range_m']} tvg_status={row['tvg_status']}"
+        )
+        summary_rows.append(row)
 
     with open(args.output_dir / "summary.json", "w") as f:
         json.dump(summary_rows, f, indent=2, default=str)
 
-    logger.debug("Summary:")
-    for row in summary_rows:
-        logger.debug(f"  {row}")
     logger.info(f"Done. Artifacts written to {args.output_dir}")
     return 0
 
@@ -268,63 +257,64 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
     ds_geo = ds_raw if "ground_range_m" in ds_raw else compute_geometric_ranges(ds_raw)
 
     if args.usable_range_m is not None:
-        # Stage 3's SNR-threshold auto-detection has a known failure
-        # mode on Klein SDF data: real-time hardware AGC flattens
-        # backscatter enough that SNR vs. the far-range noise floor
-        # never crosses threshold at any range, so usable_range_m comes
-        # back None even on perfectly good data (confirmed across every
-        # Klein channel checked in sidescanpy's own investigation
-        # history -- see its CLAUDE.md). --usable-range-m bypasses
-        # Stage 3 entirely for exactly this case.
+        # Usable-range auto-detection fails on some Klein SDF data: hardware
+        # AGC flattens backscatter so SNR never crosses the threshold.
+        # --usable-range-m bypasses it for exactly this case.
         usable_range_m = args.usable_range_m
-        logger.info(f"Using manually-supplied usable_range_m={usable_range_m:.2f} (Stage 3 auto-detection skipped)")
+        logger.info(f"Using manually-supplied usable_range_m={usable_range_m:.2f} (auto-detection skipped)")
     else:
-        stage3 = estimate_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
-        usable_range_m = stage3.usable_range_m
+        usable_range = estimate_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
+        usable_range_m = usable_range.usable_range_m
         if usable_range_m is None:
             logger.error(
-                "Stage 3 could not determine usable_range_m for this survey/ping range -- "
-                "a known Klein SDF failure mode (see sidescanpy's own CLAUDE.md), not necessarily "
-                "bad data. Pass --usable-range-m explicitly to bypass Stage 3's auto-detection."
+                "Could not determine usable_range_m for this survey/ping range -- a known failure mode "
+                "on AGC-flattened data, not necessarily bad data. Pass --usable-range-m explicitly."
             )
             return 1
 
-    stage4 = fit_range_decay(
+    decay = fit_range_decay(
         ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m,
         usable_range_m=usable_range_m, r_ref_m=args.r_ref_m, r_fit_min_m=args.r_fit_min_m,
     )
 
+    if decay.fit is None:
+        logger.error(
+            f"{args.ss_h5.name} {freq_key}: no decay model could be fit "
+            f"(classification={decay.tvg_status}): {'; '.join(decay.notes) or 'no detail'}"
+        )
+        return 1
+
     logger.info(
-        f"{args.ss_h5.name} {freq_key}: tvg-fit classification={stage4.tvg_status} "
-        f"best_candidate={stage4.best_candidate} rmse={stage4.best_rmse_db:.2f}dB",
+        f"{args.ss_h5.name} {freq_key}: tvg-fit classification={decay.tvg_status} "
+        f"best_candidate={decay.best_candidate} rmse={decay.best_rmse_db:.2f}dB",
     )
     logger.debug("=" * 70)
     logger.debug(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
     logger.debug(f"  range_var:        {args.range_var}")
     logger.debug(f"  usable_range_m:   {usable_range_m:.2f}")
-    logger.debug(f"  r_ref_m:          {stage4.r_ref_m:.2f}")
-    logger.debug(f"  fit window:       [{stage4.r_fit_min_m:.2f}, {stage4.r_fit_max_m:.2f}]")
-    logger.debug(f"  classification:   {stage4.tvg_status}")
-    logger.debug(f"  best_candidate:   {stage4.best_candidate}")
-    logger.debug(f"  best_rmse_db:     {stage4.best_rmse_db:.3f}  (fixed-scale)")
-    logger.debug(f"  n_bins_used:      {stage4.n_bins_used}")
-    for note in stage4.notes:
+    logger.debug(f"  r_ref_m:          {decay.r_ref_m:.2f}")
+    logger.debug(f"  fit window:       [{decay.r_fit_min_m:.2f}, {decay.r_fit_max_m:.2f}]")
+    logger.debug(f"  classification:   {decay.tvg_status}")
+    logger.debug(f"  best_candidate:   {decay.best_candidate}")
+    logger.debug(f"  best_rmse_db:     {decay.best_rmse_db:.3f}  (fixed-scale)")
+    logger.debug(f"  n_bins_used:      {decay.n_bins_used}")
+    for note in decay.notes:
         logger.debug(f"  note: {note}")
     logger.debug("=" * 70)
 
-    fit_result = stage4.fit
+    fit_result = decay.fit
 
     fig, (ax_fit, ax_res) = plt.subplots(2, 1, figsize=(9, 10), sharex=True, gridspec_kw={"height_ratios": [1.3, 1]})
     for i, c in enumerate(fit_result.candidates):
         plot_candidate_fit(c, fit_result.observed_range_m, fit_result.observed_loss_db, ax=ax_fit, show_observed=(i == 0))
-    ax_fit.set_title(f"Decay fit — best: {stage4.best_candidate}, RMSE={stage4.best_rmse_db:.2f}dB")
+    ax_fit.set_title(f"Decay fit — best: {decay.best_candidate}, RMSE={decay.best_rmse_db:.2f}dB")
     ax_fit.set_xlabel("")
 
-    plot_stage4_residuals(stage4, ax=ax_res, relative_x=False)
+    plot_range_decay_residuals(decay, ax=ax_res, relative_x=False)
     ax_res.set_title("Residuals")
     ax_res.set_xlabel("Slant range (m)" if args.range_var == "slant_range_m" else f"{args.range_var} (m)")
 
-    apply_stage4_fit_window_limits(ax_fit, stage4)
+    set_fit_window_limits(ax_fit, decay)
 
     fig.suptitle(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
     fig.tight_layout()
@@ -419,7 +409,7 @@ def run_segment(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_nadir(args: argparse.Namespace) -> int:
-    """Stage 2 on its own: classify + locate nadir, write only the
+    """Classify + locate nadir, writing only the
     zoomed boundary-detection plot by default (the direct evidence for
     the classification) -- ``--verbose-diagnostics`` also writes the
     full-survey waterfall boundary overlay.
@@ -430,7 +420,7 @@ def run_nadir(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    stage2 = analyze_nadir(
+    nadir = analyze_nadir(
         ds_geo, value_var=args.value_var,
         nadir_n_samples=args.nadir_n_samples,
         strong_return_min_sample_buffer=args.strong_return_min_sample_buffer,
@@ -439,24 +429,24 @@ def run_nadir(args: argparse.Namespace) -> int:
         boundary_smoothing_window=args.boundary_smoothing_window,
     )
 
-    logger.info(f"{args.input.name} / {freq_key}: nadir = {stage2.nadir_type}")
+    logger.info(f"{args.input.name} / {freq_key}: nadir = {nadir.nadir_type}")
     for key in ("altitude_sample_median", "first_bottom_return_sample_median", "altitude_to_bottom_gap_sample_median"):
-        if getattr(stage2, key) is not None:
-            logger.debug(f"  {key}: {getattr(stage2, key):.2f}")
-    for note in stage2.notes:
+        if getattr(nadir, key) is not None:
+            logger.debug(f"  {key}: {getattr(nadir, key):.2f}")
+    for note in nadir.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage2.to_dict(), f, indent=2, default=str)
+        json.dump(nadir.to_dict(), f, indent=2, default=str)
 
-    fig, _ = plot_stage2_nadir_zoom(ds_geo, args.value_var, stage2=stage2, nadir_n_samples=args.nadir_n_samples)
+    fig, _ = plot_nadir_zoom(ds_geo, args.value_var, nadir=nadir, nadir_n_samples=args.nadir_n_samples)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_zoom.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
     logger.debug(f"wrote {out_path}")
 
     if args.verbose_diagnostics:
-        fig, _ = plot_stage2_waterfall(ds_geo, args.value_var, stage2=stage2)
+        fig, _ = plot_nadir_waterfall(ds_geo, args.value_var, nadir=nadir)
         wf_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_waterfall.png"
         fig.savefig(wf_path, dpi=140)
         plt.close(fig)
@@ -470,12 +460,10 @@ def run_nadir(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_beam_geometry(args: argparse.Namespace) -> int:
-    """Stage 2.5 on its own: triangulate the beam's near/far edges from
-    Stage 2's nadir boundary and Stage 3's usable range (both run here
-    as prerequisites, not separately configurable beyond the flags
-    below -- run the ``nadir``/``usable-range`` subcommands directly
-    first if either needs closer tuning on its own). Writes only the
-    beam-geometry diagram, the direct evidence for the classification.
+    """Triangulate the beam's near/far edges from the nadir boundary and
+    the usable range (both run here as prerequisites -- use the
+    ``nadir``/``usable-range`` subcommands to tune either). Writes only
+    the beam-geometry diagram, the direct evidence for the result.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
@@ -483,26 +471,26 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    stage2 = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
-    stage3 = estimate_usable_range(
-        ds_geo, value_var=args.value_var, bin_width_m=args.stage3_bin_width_m, snr_threshold=args.snr_threshold,
+    nadir = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    usable_range = estimate_usable_range(
+        ds_geo, value_var=args.value_var, bin_width_m=args.usable_range_bin_width_m, snr_threshold=args.snr_threshold,
     )
-    stage2_5 = estimate_beam_geometry(
-        ds_geo, stage2.first_bottom_return_sample, stage3.usable_range_m,
+    beam = estimate_beam_geometry(
+        ds_geo, nadir.first_bottom_return_sample, usable_range.usable_range_m,
         near_angle_max_std_deg=args.near_angle_max_std_deg, min_valid_fraction=args.min_valid_fraction,
     )
 
-    logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {stage2_5.confidence}")
+    logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {beam.confidence}")
     for key in ("near_angle_deg_median", "far_angle_deg", "beam_center_angle_deg", "beam_width_deg"):
-        if getattr(stage2_5, key) is not None:
-            logger.debug(f"  {key}: {getattr(stage2_5, key):.2f}")
-    for note in stage2_5.notes:
+        if getattr(beam, key) is not None:
+            logger.debug(f"  {key}: {getattr(beam, key):.2f}")
+    for note in beam.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage2_5.to_dict(), f, indent=2, default=str)
+        json.dump(beam.to_dict(), f, indent=2, default=str)
 
-    fig, _ = plot_stage2_5_beam_geometry(ds_geo, stage2_5, value_var=args.value_var)
+    fig, _ = plot_beam_geometry(ds_geo, beam, value_var=args.value_var)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_beam_geometry.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
@@ -516,9 +504,8 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_usable_range(args: argparse.Namespace) -> int:
-    """Stage 3 on its own: bin backscatter by range, find the usable-
-    range boundary, write only the median/std-vs-range plot -- the
-    direct evidence for the number.
+    """Bin backscatter by range, find the usable-range boundary, and write
+    only the median/std-vs-range plot -- the direct evidence for the number.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
@@ -526,20 +513,20 @@ def run_usable_range(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
 
-    stage3 = estimate_usable_range(
+    usable_range = estimate_usable_range(
         ds_geo, value_var=args.value_var, range_var=args.range_var, bin_width_m=args.bin_width_m,
         snr_threshold=args.snr_threshold, reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
     )
 
-    usable_range_m = stage3.usable_range_m
+    usable_range_m = usable_range.usable_range_m
     logger.info(f"{args.input.name} / {freq_key}: usable_range_m = {usable_range_m}")
-    for note in stage3.notes:
+    for note in usable_range.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage3.to_dict(), f, indent=2, default=str)
+        json.dump(usable_range.to_dict(), f, indent=2, default=str)
 
-    fig, _ = plot_stage3_usable_range(stage3)
+    fig, _ = plot_usable_range(usable_range)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_usable_range.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
@@ -553,29 +540,27 @@ def run_usable_range(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_units(args: argparse.Namespace) -> int:
-    """Stage 1 + Stage 5 on their own: classify units from the raw
-    value-range signature, write only the distribution histogram -- the
-    direct evidence for the classification. Doesn't cross-check against
-    a Stage 4 TVG-fit result (``run_investigation()``'s fuller version
-    can) -- run ``tvg-fit`` separately if that cross-check matters for
-    a specific source.
+    """Classify units from the raw value-range signature and write only
+    the distribution histogram -- the direct evidence for the call.
+    Doesn't cross-check against a range-decay fit (``investigate`` does)
+    -- run ``tvg-fit`` separately if that matters for a source.
     """
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
 
-    stage1 = characterize_values(ds, value_var=args.value_var)
-    stage5 = infer_units(stage1)
+    values = characterize_values(ds, value_var=args.value_var)
+    units = infer_units(values)
 
-    logger.info(f"{args.input.name} / {freq_key}: units = {stage5.units}")
-    for note in stage5.notes:
+    logger.info(f"{args.input.name} / {freq_key}: units = {units.units}")
+    for note in units.notes:
         logger.debug(f"  note: {note}")
 
     with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(stage5.to_dict(), f, indent=2, default=str)
+        json.dump(units.to_dict(), f, indent=2, default=str)
 
-    fig, _ = plot_stage1_histograms(ds, args.value_var)
+    fig, _ = plot_units_distribution(ds, args.value_var)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_units.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
@@ -591,7 +576,7 @@ def run_units(args: argparse.Namespace) -> int:
 def run_nav_attitude(args: argparse.Namespace) -> int:
     """Navigation/attitude diagnostic (heading/pitch/roll/altitude/
     depth/heave/position) for one ping range -- independent of
-    backscatter entirely, so unlike the other single-stage subcommands
+    backscatter entirely, so unlike the other single-analysis subcommands
     above it needs neither ``--value-var`` nor geometric ranges. Point
     it at the specific ping range a heading/attitude anomaly was
     reported in and look at the trace directly.
@@ -610,7 +595,7 @@ def run_nav_attitude(args: argparse.Namespace) -> int:
     with open(args.output_dir / "metrics.json", "w") as f:
         json.dump(result.to_dict(), f, indent=2, default=str)
 
-    fig, _ = plot_nav_attitude(ds, ping_offset=start, result=result)
+    fig, _ = plot_navigation_summary(ds, ping_offset=start, result=result)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nav_attitude.png"
     fig.savefig(out_path, dpi=140)
     plt.close(fig)
@@ -624,10 +609,10 @@ def run_nav_attitude(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_recommend_config(args: argparse.Namespace) -> int:
-    """Run every stage that has a real downstream config consumer today
-    (Stage 4 TVG term selection, plus the ping-geometry measurement
-    behind ``resolution_m``) against one clean section, plus the
-    informational-only stages (nadir/beam-geometry/usable-range/units)
+    """Run every analysis that has a real downstream config consumer today
+    (the range-decay fit's TVG term selection, plus the ping-geometry
+    measurement behind ``resolution_m``) against one clean section, plus
+    the informational-only analyses (nadir/beam-geometry/usable-range/units)
     for evidence -- and write one heavily-commented recommended config
     YAML (``cli._recommend.render_recommended_config``). Meant to
     run against an already-segmented, clean ``sectionN.ss.h5`` (see
@@ -644,23 +629,23 @@ def run_recommend_config(args: argparse.Namespace) -> int:
     ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
     ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    stage1 = characterize_values(ds_geo, value_var=args.value_var)
-    stage5 = infer_units(stage1)
-    stage2 = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
-    stage3 = estimate_usable_range(
+    values = characterize_values(ds_geo, value_var=args.value_var)
+    units = infer_units(values)
+    nadir = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    usable_range = estimate_usable_range(
         ds_geo, value_var=args.value_var, range_var="slant_range_m",
         bin_width_m=args.bin_width_m, snr_threshold=args.snr_threshold,
     )
     try:
-        stage2_5 = estimate_beam_geometry(ds_geo, stage2.first_bottom_return_sample, stage3.usable_range_m)
+        beam = estimate_beam_geometry(ds_geo, nadir.first_bottom_return_sample, usable_range.usable_range_m)
     except (ValueError, KeyError) as exc:
         logger.warning(f"beam-geometry could not be computed ({exc}) -- omitting from the recommendation")
-        stage2_5 = None
+        beam = None
 
-    usable_range_m = stage3.usable_range_m
-    stage4 = None
+    usable_range_m = usable_range.usable_range_m
+    decay = None
     if usable_range_m is not None:
-        stage4 = fit_range_decay(
+        decay = fit_range_decay(
             ds_geo, range_var="slant_range_m", bin_width_m=args.bin_width_m,
             usable_range_m=usable_range_m, r_ref_m="auto", r_fit_min_m="auto",
         )
@@ -669,14 +654,14 @@ def run_recommend_config(args: argparse.Namespace) -> int:
 
     text = render_recommended_config(
         source_name=args.input.name, freq_key=freq_key, ping_range=(start, stop), value_var=args.value_var,
-        values=stage1, nadir=stage2, beam=stage2_5, usable_range=stage3, decay=stage4, units=stage5,
+        values=values, nadir=nadir, beam=beam, usable_range=usable_range, decay=decay, units=units,
         geometry=geometry,
     )
     args.output.write_text(text)
 
     logger.info(
         f"{args.input.name} / {freq_key}: tvg_status="
-        f"{stage4.tvg_status if stage4 else None}  nadir={stage2.nadir_type}  "
+        f"{decay.tvg_status if decay else None}  nadir={nadir.nadir_type}  "
         f"usable_range_m={usable_range_m}  ping_spacing_m={geometry.ping_spacing_m_median}"
     )
     logger.info(f"wrote {args.output}")
@@ -695,14 +680,23 @@ def main() -> int:
     freq_group.add_argument("--all-frequencies", action="store_true")
     p_inv.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
     p_inv.add_argument("--pings", type=str, default="0:8000", help="Ping range 'start:stop' (stop empty = all)")
+    p_inv.add_argument(
+        "--channel", default=None,
+        help="Restrict the usable-range and range-decay binning to one side: port/starboard or 0/1 "
+             "(default: pool both sides)",
+    )
     p_inv.add_argument("--nadir-n-samples", type=int, default=50)
-    p_inv.add_argument("--stage3-bin-width-m", type=float, default=2.0)
-    p_inv.add_argument("--stage4-bin-width-m", type=float, default=5.0)
-    p_inv.add_argument("--stage4-db-reference-percentile", type=float, default=99.0)
+    p_inv.add_argument("--usable-range-bin-width-m", type=float, default=2.0)
+    p_inv.add_argument("--decay-bin-width-m", type=float, default=5.0)
+    p_inv.add_argument("--decay-db-reference-percentile", type=float, default=99.0)
     p_inv.add_argument("--snr-threshold", type=float, default=3.0)
     p_inv.add_argument("--reject-outliers", action="store_true")
     p_inv.add_argument("--outlier-mad-k", type=float, default=3.5)
-    p_inv.add_argument("--stage4-fit-value-col", choices=["mean", "median"], default="mean")
+    p_inv.add_argument("--decay-fit-value-col", choices=["mean", "median"], default="mean")
+    add_deprecated_alias(p_inv, "--stage3-bin-width-m", "--usable-range-bin-width-m", type=float)
+    add_deprecated_alias(p_inv, "--stage4-bin-width-m", "--decay-bin-width-m", type=float)
+    add_deprecated_alias(p_inv, "--stage4-db-reference-percentile", "--decay-db-reference-percentile", type=float)
+    add_deprecated_alias(p_inv, "--stage4-fit-value-col", "--decay-fit-value-col", choices=["mean", "median"])
     p_inv.add_argument("--output-dir", required=True, type=Path)
     p_inv.set_defaults(func=run_investigate)
 
@@ -725,9 +719,9 @@ def main() -> int:
     p_tvg.add_argument("--range-var", default="slant_range_m", choices=("slant_range_m", "ground_range_m"))
     p_tvg.add_argument(
         "--usable-range-m", type=float, default=None,
-        help="Bypass Stage 3's usable_range_m auto-detection and use this value instead -- "
-             "needed on some Klein SDF data where AGC flattens backscatter enough that Stage 3's "
-             "SNR threshold never trips (see sidescanpy's own CLAUDE.md); not normally needed for JSF.",
+        help="Bypass usable_range_m auto-detection and use this value instead -- needed on some "
+             "Klein SDF data where AGC flattens backscatter enough that the SNR threshold never "
+             "trips; not normally needed for JSF.",
     )
     p_tvg.add_argument("--output-dir", required=True, type=Path)
     p_tvg.set_defaults(func=run_tvg_fit)
@@ -779,7 +773,7 @@ def main() -> int:
         p.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
         p.add_argument("--output-dir", required=True, type=Path)
 
-    p_nadir = subparsers.add_parser("nadir", help="Classify + locate nadir (Stage 2 on its own)")
+    p_nadir = subparsers.add_parser("nadir", help="Classify + locate nadir")
     _common_single_channel_args(p_nadir)
     p_nadir.add_argument("--nadir-n-samples", type=int, default=50)
     p_nadir.add_argument("--strong-return-min-sample-buffer", type=float, default=0.0)
@@ -792,16 +786,17 @@ def main() -> int:
     )
     p_nadir.set_defaults(func=run_nadir)
 
-    p_beam = subparsers.add_parser("beam-geometry", help="Triangulate the beam's near/far edges (Stage 2.5 on its own)")
+    p_beam = subparsers.add_parser("beam-geometry", help="Triangulate the beam's near/far edges")
     _common_single_channel_args(p_beam)
     p_beam.add_argument("--nadir-n-samples", type=int, default=50)
-    p_beam.add_argument("--stage3-bin-width-m", type=float, default=2.0)
+    p_beam.add_argument("--usable-range-bin-width-m", type=float, default=2.0)
+    add_deprecated_alias(p_beam, "--stage3-bin-width-m", "--usable-range-bin-width-m", type=float)
     p_beam.add_argument("--snr-threshold", type=float, default=3.0)
     p_beam.add_argument("--near-angle-max-std-deg", type=float, default=15.0)
     p_beam.add_argument("--min-valid-fraction", type=float, default=0.2)
     p_beam.set_defaults(func=run_beam_geometry)
 
-    p_ur = subparsers.add_parser("usable-range", help="Find the usable-range boundary (Stage 3 on its own)")
+    p_ur = subparsers.add_parser("usable-range", help="Find the usable-range boundary")
     _common_single_channel_args(p_ur)
     p_ur.add_argument("--range-var", default="slant_range_m", choices=("slant_range_m", "ground_range_m"))
     p_ur.add_argument("--bin-width-m", type=float, default=2.0)
@@ -810,7 +805,7 @@ def main() -> int:
     p_ur.add_argument("--outlier-mad-k", type=float, default=3.5)
     p_ur.set_defaults(func=run_usable_range)
 
-    p_units = subparsers.add_parser("units", help="Classify raw-value units from their range signature (Stage 1+5 on their own)")
+    p_units = subparsers.add_parser("units", help="Classify raw-value units from their range signature")
     _common_single_channel_args(p_units)
     p_units.set_defaults(func=run_units)
 
@@ -875,7 +870,10 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        apply_config_to_subparsers((p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec), config, argv)
+        apply_config_to_subparsers(
+            (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec), config, argv,
+            renamed_keys=_RENAMED_OPTIONS,
+        )
 
     args = parser.parse_args(argv)
 

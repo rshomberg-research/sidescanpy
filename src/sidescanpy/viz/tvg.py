@@ -1,9 +1,8 @@
 """
-Plotting functions for TVG diagnostics.
+Plots for TVG and range-decay analysis (:mod:`sidescanpy.analysis.tvg`).
 
-Consumes `sidescanpy.analysis.tvg`'s outputs. Follows
-`viz/gridded.py`'s `(fig, ax)`-return convention and the project-wide
-1.0/99.0 percentile-band defaults.
+Each function draws into an optional ``ax``, returns ``(fig, ax)`` and
+never saves a file.
 
 2026 rshomberg@uri.edu
 """
@@ -17,15 +16,18 @@ import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-from sidescanpy.analysis.tvg import TVGCandidateFit
+from sidescanpy.analysis.tvg import RangeDecayResult, TVGCandidateFit
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
 logger = logging.getLogger(__name__)
 
 
-def _new_fig_ax(ax: Axes | None) -> tuple[Figure, Axes]:
+_CANDIDATE_COLORS = {"flat": "C0", "spreading_only": "C1", "absorption_only": "C2", "full_physics": "C3"}
+
+
+def _new_fig_ax(ax: Axes | None, **subplots_kwargs) -> tuple[Figure, Axes]:
     if ax is None:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(**subplots_kwargs)
     else:
         fig = ax.figure
     return fig, ax
@@ -346,5 +348,113 @@ def plot_candidate_fit(
     ax.set_ylabel(f"Loss relative to {fit.r_ref_m:.1f}m (dB)")
     if title:
         ax.set_title(title)
+    ax.legend(fontsize=8)
+    return fig, ax
+
+
+def plot_range_decay_fit(result: RangeDecayResult, ax: Axes | None = None) -> tuple[Figure, Axes]:
+    """Observed loss-vs-range curve with every candidate model overlaid
+    (one :func:`plot_candidate_fit` call per candidate on a shared axis)."""
+    fit_result = result.fit
+    fig, ax = _new_fig_ax(ax, figsize=(9, 6))
+    if fit_result is None:
+        ax.set_title("No fit available")
+        return fig, ax
+
+    for i, candidate in enumerate(fit_result.candidates):
+        plot_candidate_fit(
+            candidate,
+            fit_result.observed_range_m,
+            fit_result.observed_loss_db,
+            ax=ax,
+            color=_CANDIDATE_COLORS.get(candidate.name),
+            show_observed=(i == 0),
+            title=f"Decay model fit (best: {result.best_candidate})",
+        )
+    return fig, ax
+
+
+def set_fit_window_limits(
+    ax: Axes, result: RangeDecayResult, *, x_pad_fraction: float = 0.12,
+    y_pad_fraction: float = 0.25, y_pad_min_db: float = 1.0, x_pad_min_m: float = 1.0,
+) -> None:
+    """Set robust axis limits on a decay-fit axis from the fit window.
+
+    y-limits come from the observed values inside the fit window
+    (``result.r_fit_min_m``..``r_fit_max_m``) only, so an out-of-window
+    outlier bin cannot compress the fit curves. x-limits deliberately
+    span 0 to the far edge (padded), not the fit window, so a misplaced
+    reference or window stays visible. With a shared x-axis, call this on
+    one panel only. No-op if there is no fit or no recorded window.
+    """
+    fit_result = result.fit
+    if fit_result is None:
+        return
+    r_fit_min_m = result.r_fit_min_m
+    r_fit_max_m = result.r_fit_max_m
+    if r_fit_min_m is None or r_fit_max_m is None:
+        return
+
+    ranges = fit_result.observed_range_m
+    losses = fit_result.observed_loss_db
+    window_mask = (ranges >= r_fit_min_m) & (ranges <= r_fit_max_m)
+    in_window_loss = losses[window_mask]
+    if in_window_loss.size:
+        y_lo, y_hi = float(in_window_loss.min()), float(in_window_loss.max())
+        y_pad = max(y_pad_fraction * (y_hi - y_lo), y_pad_min_db)
+        ax.set_ylim(y_lo - y_pad, y_hi + y_pad)
+
+    x_span = r_fit_max_m - r_fit_min_m
+    # x_pad_min_m keeps a zero-width (single-bin) window from producing
+    # set_xlim(x, x) and matplotlib's "identical low and high xlims" warning.
+    x_pad = max(x_pad_fraction * x_span, x_pad_min_m)
+    x_far_edge = max(r_fit_max_m, float(np.nanmax(ranges))) if ranges.size else r_fit_max_m
+    ax.set_xlim(0.0, x_far_edge + x_pad)
+
+
+def plot_range_decay_residuals(
+    result: RangeDecayResult, *, use_fixed_scale: bool = True, ax: Axes | None = None, relative_x: bool = True,
+) -> tuple[Figure, Axes]:
+    """Residual (model - observed) vs. range within each candidate's fit window.
+
+    ``use_fixed_scale=True`` (default) draws the scale-1.0 residual and
+    labels it with ``fixed_scale_rmse_db``, the number candidates are
+    ranked by; ``False`` draws the free-fit-scaled residual for
+    comparison. The reference uses the nearest bin to ``r_ref_m``,
+    matching ``fit_tvg_curve``'s own RMSE computation exactly.
+    ``relative_x=True`` plots distance from each candidate's ``r_ref_m``;
+    pass ``False`` for absolute range (to stack under
+    :func:`plot_candidate_fit` on a shared x-axis).
+    """
+    fit_result = result.fit
+    fig, ax = _new_fig_ax(ax, figsize=(9, 5))
+    if fit_result is None:
+        ax.set_title("No fit available")
+        return fig, ax
+
+    ranges = fit_result.observed_range_m
+    observed = fit_result.observed_loss_db
+
+    for candidate in fit_result.candidates:
+        model_curve = tvg_gain_db(np.clip(ranges, candidate.params.min_range_m, None), candidate.params)
+        i_ref = int(np.argmin(np.abs(ranges - candidate.r_ref_m)))
+        plotted_scale = 1.0 if use_fixed_scale else candidate.scale
+        model_loss = plotted_scale * (model_curve - model_curve[i_ref])
+        residual = model_loss - observed
+        # r_fit_min_m is None on fits recorded before that field existed.
+        fit_min = candidate.r_fit_min_m if candidate.r_fit_min_m is not None else candidate.r_ref_m
+        in_window = (ranges >= fit_min) & (ranges <= candidate.r_fit_max_m)
+        rmse_shown = candidate.fixed_scale_rmse_db if use_fixed_scale else candidate.rmse_db
+        x = ranges - candidate.r_ref_m if relative_x else ranges
+        ax.plot(
+            x[in_window], residual[in_window],
+            color=_CANDIDATE_COLORS.get(candidate.name), marker=".", markersize=4,
+            label=f"{candidate.name} (RMSE={rmse_shown:.2f}dB)",
+        )
+
+    ax.axhline(0, color="k", linewidth=0.5, alpha=0.5)
+    ax.set_xlabel("Distance from reference range (m)" if relative_x else "Range (m)")
+    ax.set_ylabel("Residual, model - observed (dB)")
+    ax.set_title("Fit residuals")
     ax.legend(fontsize=8)
     return fig, ax

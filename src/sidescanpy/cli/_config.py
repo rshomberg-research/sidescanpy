@@ -30,6 +30,8 @@ from pathlib import Path
 
 import yaml
 
+from sidescanpy.cli._common import warn_deferred
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,22 +95,40 @@ def apply_config_defaults(
         name = subcommand or parser.prog
         if strict:
             parser.error(f"--strict-config: unknown config key(s) for {name!r}: {', '.join(unknown)}")
-        logger.warning("config keys not recognized by %r (ignored): %s", name, ", ".join(unknown))
+        warn_deferred(logger, "config keys not recognized by %r (ignored): %s", name, ", ".join(unknown))
     parser.set_defaults(**{k: v for k, v in config.items() if k in dests})
+
+
+def rename_config_keys(config: dict, renamed: "dict[str, str]") -> dict:
+    """Return ``config`` with deprecated keys mapped to their current names,
+    logging a WARNING for each. A key given under both names keeps the
+    current one."""
+    out = dict(config)
+    for old, new in renamed.items():
+        if old in out:
+            warn_deferred(logger, "config key %r is deprecated; use %r", old, new)
+            value = out.pop(old)
+            out.setdefault(new, value)
+    return out
 
 
 def apply_config_to_subparsers(
     parsers: "list[argparse.ArgumentParser] | tuple[argparse.ArgumentParser, ...]",
     config: dict,
     argv: list[str],
+    *,
+    renamed_keys: "dict[str, str] | None" = None,
 ) -> None:
     """Seed every subparser from a shared ``config``, then report keys
     that match *no* subparser's options (a typo, as opposed to a key
     meant for a sibling subcommand, which a shared file legitimately
     holds). The message names the subcommand invoked in ``argv``.
+    ``renamed_keys`` maps deprecated key names to current ones.
 
     Warns via ``logging``; ``--strict-config`` in ``argv`` makes it an error.
     """
+    if renamed_keys:
+        config = rename_config_keys(config, renamed_keys)
     for p in parsers:
         apply_config_defaults(p, config, check=False)
     names = {p.prog.split()[-1]: p for p in parsers}

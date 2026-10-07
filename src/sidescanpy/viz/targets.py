@@ -45,7 +45,7 @@ def plot_target_position_scatter(targets: list[Target], *, title: Optional[str] 
     ``None`` if no target has both ``latitude``/``longitude`` set.
 
     Promoted from the near-identical scatter block duplicated in both
-    format's own target-catalog-reading pipeline stage (JSF's Discover
+    format's own target-catalog-reading step (JSF's Discover
     catalog already carries position; Klein's ``.tgt`` needs it resolved
     externally first — see ``sidescanpy.io.sdf.targets``).
     """

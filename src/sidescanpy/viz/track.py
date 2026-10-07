@@ -288,7 +288,7 @@ def build_survey_track(
         edge_ds = correct(edge_ds, ("geometric", "georef"))
         # Each file's sample axis may be a different length (e.g. one
         # file's channel was cropped further than another's by the
-        # far-range noise crop stage), so "sample"'s own index label
+        # far-range noise crop step), so "sample"'s own index label
         # for the retained last sample (e.g. 557 vs. 663) differs
         # across files. Left in place, concatenating along "ping" below
         # aligns on that mismatched "sample" label and NaNs out

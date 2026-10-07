@@ -5,14 +5,15 @@ Enforce the package dependency direction: imports only point leftward in
 
 Parses every module under ``src/sidescanpy`` with ``ast`` (including
 function-level lazy imports). Root modules ``log``, ``_version`` and
-``__init__`` count as core-level; the legacy root ``investigation`` module
-is excluded. ``analysis`` and ``processing`` must also never import
-matplotlib (plotting lives in ``viz``).
+``__init__`` count as core-level. ``analysis`` and ``processing`` must also
+never import matplotlib (plotting lives in ``viz``).
 
 2026 rshomberg@uri.edu
 """
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import sidescanpy
@@ -20,7 +21,6 @@ import sidescanpy
 _ORDER = ["core", "io", "processing", "analysis", "grids", "targets", "export", "viz", "cli"]
 _RANK = {name: i for i, name in enumerate(_ORDER)}
 _ROOT_CORE = {"log", "_version", "__init__"}
-_EXCLUDED_ROOT = {"investigation"}
 
 # (importing module, imported package) pairs that violate the order and are
 # known / out of scope for now. Keep as small as possible.
@@ -72,8 +72,6 @@ def _find_violations() -> set[tuple[str, str]]:
         is_pkg = parts[-1] == "__init__"
         if is_pkg:
             parts = parts[:-1]
-        if parts and parts[0] in _EXCLUDED_ROOT:
-            continue
         src_layer = _package_of(parts)
         if src_layer is None:
             continue
@@ -121,3 +119,11 @@ def test_analysis_and_processing_do_not_import_matplotlib():
         if _imports_matplotlib(ast.parse(path.read_text()))
     ]
     assert not offenders, f"matplotlib imported in compute layers: {offenders}"
+
+
+def test_importing_analysis_and_processing_does_not_load_matplotlib():
+    code = (
+        "import sys, sidescanpy.analysis, sidescanpy.processing; "
+        "sys.exit(1 if any(m == 'matplotlib' or m.startswith('matplotlib.') for m in sys.modules) else 0)"
+    )
+    assert subprocess.run([sys.executable, "-c", code]).returncode == 0

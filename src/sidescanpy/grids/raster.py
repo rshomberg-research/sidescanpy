@@ -32,7 +32,7 @@ class SideScanGriddedRaster:
     channel_name : str
         Frequency/channel identifier (e.g., "455 kHz").
     processing_level : str
-        Processing stage: "raw", "radiometric", etc.
+        Processing level: "raw", "radiometric", etc.
     dataset : xr.Dataset
         Validated xarray Dataset with backscatter, lat/lon, metadata.
     """
@@ -57,7 +57,7 @@ class SideScanGriddedRaster:
         channel_name : str, optional
             Channel/frequency name (e.g., "455 kHz").
         processing_level : str, default "raw"
-            Processing stage ("raw", "radiometric", etc.).
+            Processing level ("raw", "radiometric", etc.).
         units : str, default "linear"
             Units of the backscatter values ("linear" or "dB"). Callers
             resampling TVG-corrected data (dB) must pass units="dB" —

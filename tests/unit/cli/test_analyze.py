@@ -1,7 +1,6 @@
 """
-Unit tests for sidescan-analyze — investigate and tvg-fit (the adopted
-auto-window TVG decay-fit recipe, using stage4_decay's own
-r_ref_m="auto"/r_fit_min_m="auto" support).
+Unit tests for sidescan-analyze subcommands (the full ``investigate``
+run is covered in test_investigate.py).
 
 2026 rshomberg@uri.edu
 """
@@ -22,7 +21,7 @@ from tests.conftest import make_minimal_sidescan_dataset
 
 def _decay_survey(n_pings=10, n_samples=800):
     """A survey with a real range-dependent decay in backscatter_raw
-    (so stage4_decay has something non-degenerate to fit) and altitude
+    (so fit_range_decay has something non-degenerate to fit) and altitude
     small enough that slant range genuinely exceeds it."""
     survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
     ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples, freq_hz_start=1_495_000)
@@ -42,10 +41,10 @@ class TestRunInvestigate:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
             input=input_path, frequency=None, all_frequencies=False,
-            value_var="uncorrected", pings="0:100", nadir_n_samples=10,
-            stage3_bin_width_m=2.0, stage4_bin_width_m=5.0,
-            stage4_db_reference_percentile=99.0, snr_threshold=3.0,
-            reject_outliers=False, outlier_mad_k=3.5, stage4_fit_value_col="mean",
+            value_var="uncorrected", pings="0:100", channel=None, nadir_n_samples=10,
+            usable_range_bin_width_m=2.0, decay_bin_width_m=5.0,
+            decay_db_reference_percentile=99.0, snr_threshold=3.0,
+            reject_outliers=False, outlier_mad_k=3.5, decay_fit_value_col="mean",
             output_dir=tmp_path / "out",
         )
         defaults.update(overrides)
@@ -214,7 +213,7 @@ class TestRunTvgFit:
 
     def test_flat_data_without_usable_range_override_returns_1(self, tmp_path):
         """A flat (no real range-dependent decay) backscatter array is
-        the real Klein SDF failure mode this survives -- Stage 3's SNR
+        the real Klein SDF failure mode this survives -- the usable-range SNR
         threshold never trips against the noise floor, so it can't
         auto-determine usable_range_m."""
         flat = _decay_survey()
@@ -229,7 +228,7 @@ class TestRunTvgFit:
         args = self._args(tmp_path, path)
         assert analyze.run_tvg_fit(args) == 1
 
-    def test_usable_range_m_override_bypasses_stage3(self, tmp_path):
+    def test_usable_range_m_override_bypasses_auto_detection(self, tmp_path):
         flat = _decay_survey()
         ds = flat.get_frequency("hz_1495000").dataset
         ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
@@ -267,6 +266,21 @@ class TestRunTvgFit:
         assert analyze.run_tvg_fit(args) == 0
         pngs = list((tmp_path / "out").glob("*.png"))
         assert len(pngs) == 1
+
+
+    def test_unfittable_decay_returns_1_instead_of_crashing(self, tmp_path, monkeypatch):
+        """fit_range_decay returns early (no fit, r_ref_m=None) when there are
+        too few binned samples; tvg-fit used to crash formatting r_ref_m."""
+        from sidescanpy.analysis.tvg import RangeDecayResult
+
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+        early = RangeDecayResult(tvg_status="ambiguous", notes=["Not enough binned samples to fit a decay model."])
+        monkeypatch.setattr(analyze, "fit_range_decay", lambda *a, **k: early)
+
+        args = self._args(tmp_path, path, usable_range_m=10.0)
+        assert analyze.run_tvg_fit(args) == 1
+        assert not list((tmp_path / "out").glob("*.png"))
 
 
 class TestRunNadir:
@@ -313,7 +327,7 @@ class TestRunBeamGeometry:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
-            nadir_n_samples=10, stage3_bin_width_m=2.0, snr_threshold=3.0,
+            nadir_n_samples=10, usable_range_bin_width_m=2.0, snr_threshold=3.0,
             near_angle_max_std_deg=15.0, min_valid_fraction=0.2,
             output_dir=tmp_path / "out",
         )
@@ -418,7 +432,7 @@ class TestRunRecommendConfig:
 
     def test_flat_data_omits_tvg_recommendation_gracefully(self, tmp_path):
         """Same known Klein SDF failure mode TestRunTvgFit covers below --
-        Stage 3 can't determine usable_range_m on flat data, so Stage 4
+        usable_range_m can't be determined on flat data, so the decay fit
         never runs. recommend-config must still write a file (with the
         other sections' evidence), not crash."""
         flat = _decay_survey()
@@ -610,3 +624,77 @@ class TestParseHelpers:
         assert analyze._parse_numeric_or_literal(None) is None
         assert analyze._parse_numeric_or_literal("auto") == "auto"
         assert analyze._parse_numeric_or_literal("6.0") == 6.0
+
+
+class TestDeprecatedOptionSpellings:
+    """Old flag and --config key spellings keep working, with a WARNING."""
+
+    def _run_main(self, monkeypatch, argv):
+        captured = []
+        monkeypatch.setattr(analyze, "run_investigate", lambda args: captured.append(args) or 0)
+        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: None)
+        monkeypatch.setattr("sys.argv", ["sidescan-analyze", *argv])
+        assert analyze.main() == 0
+        return captured[0]
+
+    def test_new_flags_parse(self, monkeypatch, tmp_path):
+        args = self._run_main(monkeypatch, [
+            "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path),
+            "--usable-range-bin-width-m", "3", "--decay-bin-width-m", "4",
+            "--decay-db-reference-percentile", "95", "--decay-fit-value-col", "median",
+        ])
+        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (3.0, 4.0)
+        assert (args.decay_db_reference_percentile, args.decay_fit_value_col) == (95.0, "median")
+
+    def test_old_flags_map_to_new_dests_and_warn(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            args = self._run_main(monkeypatch, [
+                "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path),
+                "--stage3-bin-width-m", "3", "--stage4-bin-width-m", "4",
+                "--stage4-db-reference-percentile", "95", "--stage4-fit-value-col", "median",
+            ])
+        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (3.0, 4.0)
+        assert (args.decay_db_reference_percentile, args.decay_fit_value_col) == (95.0, "median")
+        assert "--stage3-bin-width-m is deprecated; use --usable-range-bin-width-m" in caplog.text
+        assert "--stage4-fit-value-col is deprecated; use --decay-fit-value-col" in caplog.text
+        assert not hasattr(args, "stage3_bin_width_m")
+
+    def test_defaults_unchanged_without_flags(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            args = self._run_main(monkeypatch, ["investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path)])
+        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (2.0, 5.0)
+        assert args.channel is None
+        assert "deprecated" not in caplog.text
+
+    def test_old_flags_hidden_from_help(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", ["sidescan-analyze", "investigate", "--help"])
+        with pytest.raises(SystemExit):
+            analyze.main()
+        out = capsys.readouterr().out
+        assert "--usable-range-bin-width-m" in out
+        assert "--stage3" not in out and "--stage4" not in out
+
+    def test_old_config_keys_map_and_warn(self, monkeypatch, tmp_path, caplog):
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text("stage3_bin_width_m: 3.0\nstage4_fit_value_col: median\n")
+        with caplog.at_level("WARNING"):
+            args = self._run_main(monkeypatch, [
+                "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path), "--config", str(cfg),
+            ])
+        assert args.usable_range_bin_width_m == 3.0
+        assert args.decay_fit_value_col == "median"
+        assert "config key 'stage3_bin_width_m' is deprecated" in caplog.text
+        assert "not recognized" not in caplog.text
+
+    def test_beam_geometry_old_flag(self, monkeypatch, tmp_path, caplog):
+        captured = []
+        monkeypatch.setattr(analyze, "run_beam_geometry", lambda args: captured.append(args) or 0)
+        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: None)
+        monkeypatch.setattr("sys.argv", [
+            "sidescan-analyze", "beam-geometry", "--input", "x.ss.h5", "--frequency", "1",
+            "--output-dir", str(tmp_path), "--stage3-bin-width-m", "7",
+        ])
+        with caplog.at_level("WARNING"):
+            assert analyze.main() == 0
+        assert captured[0].usable_range_bin_width_m == 7.0
+        assert "deprecated" in caplog.text

@@ -32,6 +32,15 @@ Public entry points
 - :func:`invert`, :func:`uncorrected_backscatter` — undo recorded steps
   from their history records.
 - :func:`processing_level` — derived from ``processing_history``.
+- Bottom / nadir handling (:mod:`~sidescanpy.processing.bottom`):
+  :func:`detect_first_bottom_return`, :func:`detect_nadir_noise_extent`,
+  :func:`blank_nadir_noise`, :func:`mask_nadir_gap`,
+  :func:`uniform_exclusion_boundary` and helpers.
+- :func:`reject_range_outliers` — per-range-bin MAD outlier rejection.
+- Segments (:mod:`~sidescanpy.processing.segments`): :func:`find_segments`,
+  :func:`split_by_segments`, :class:`Segment` and the individual detectors.
+- :func:`backscatter_vs_range` / :func:`backscatter_vs_sample` — binned
+  backscatter profiles.
 
 Conventions
 -----------
@@ -54,6 +63,16 @@ from sidescanpy.core.history import (
     STEP_RANGE_CORRECTION,
     STEP_TVG,
     processing_level,
+)
+from sidescanpy.processing.bottom import (
+    altitude_sample_index,
+    blank_nadir_noise,
+    detect_first_bottom_return,
+    detect_nadir_noise_extent,
+    mask_before_sample,
+    mask_nadir_gap,
+    smooth_boundary_across_pings,
+    uniform_exclusion_boundary,
 )
 from sidescanpy.processing.correct import (
     DEFAULT_STEPS,
@@ -89,6 +108,8 @@ from sidescanpy.processing.navigation import (
     along_track_distance_m,
     fill_nav_stalls,
 )
+from sidescanpy.processing.outliers import reject_range_outliers
+from sidescanpy.processing.profiles import backscatter_vs_range, backscatter_vs_sample
 from sidescanpy.processing.radiometric import (
     TVGParams,
     absorption_for_frequency,
@@ -96,6 +117,16 @@ from sidescanpy.processing.radiometric import (
     apply_tvg_to_amplitude,
     francois_garrison_absorption_db_per_m,
     tvg_gain_db,
+)
+from sidescanpy.processing.segments import (
+    Segment,
+    detect_gaps,
+    detect_garbage_runs,
+    detect_setting_changes,
+    detect_unstable_spans,
+    find_segments,
+    score_stability,
+    split_by_segments,
 )
 from sidescanpy.processing.slicing import (
     slice_by_bbox,
@@ -151,4 +182,27 @@ __all__ = [
     "processing_level",
     "crop_far_range",
     "interpolate_aux_onto_dataset",
+    # bottom / nadir
+    "detect_first_bottom_return",
+    "smooth_boundary_across_pings",
+    "detect_nadir_noise_extent",
+    "blank_nadir_noise",
+    "mask_before_sample",
+    "altitude_sample_index",
+    "uniform_exclusion_boundary",
+    "mask_nadir_gap",
+    # outliers
+    "reject_range_outliers",
+    # segments
+    "Segment",
+    "detect_gaps",
+    "detect_setting_changes",
+    "detect_garbage_runs",
+    "score_stability",
+    "detect_unstable_spans",
+    "find_segments",
+    "split_by_segments",
+    # profiles
+    "backscatter_vs_range",
+    "backscatter_vs_sample",
 ]

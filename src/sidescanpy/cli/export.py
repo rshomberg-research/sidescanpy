@@ -1,7 +1,7 @@
 """
 ``sidescan-export``: waterfalls, gridded rasters, survey tracks, and
 configurable annotated-dataset exports (chips / full-channel windows /
-processing-stage progression grids) from already-corrected ``.ss.h5``
+correction-step progression grids) from already-corrected ``.ss.h5``
 files.
 
 Export subcommands for track maps, waterfalls, grids, and target-centered
@@ -39,7 +39,7 @@ Subcommands:
 - ``survey-window`` — full-channel / geometric / georef windows at
   evenly-spaced ping locations, uncorrelated to any target catalog, so
   every window is honestly a no-target negative.
-- ``progression`` — a 5-stage (uncorrected / dB / TVG / geometric / georef) x
+- ``progression`` — a 5-step (uncorrected / dB / TVG / geometric / georef) x
   N-target comparison grid, for visual QA of the correction pipeline.
 
 Usage:
@@ -668,7 +668,7 @@ _PIXEL_LEVELS = ("uncorrected", "db", "radiometric")
 # _mask_nadir_gap; "backscatter_db" is 20*log10 of it with no TVG gain, added
 # per loaded neighborhood by _with_db_var (the same raw->dB step
 # apply_tvg_to_amplitude does before adding gain -- the progression grid's
-# own "db" stage).
+# own "db" step).
 _LEVEL_VARS = {"uncorrected": UNCORRECTED_VAR, "db": "backscatter_db", "radiometric": "backscatter_intensity"}
 
 
@@ -1577,7 +1577,7 @@ def run_chip(args: argparse.Namespace) -> int:
             for t, ping_idx in its:
                 # Slice a bounded ping neighborhood before loading/masking
                 # -- this project's real files run up to 14.8GB with
-                # every correction stage's arrays included; loading one
+                # every correction step's arrays included; loading one
                 # target's neighborhood is bounded regardless of file
                 # size, loading the whole file per group isn't.
                 if not geo:
@@ -1788,7 +1788,7 @@ def run_survey_window(args: argparse.Namespace) -> int:
     for i, center_ping in enumerate(np.linspace(0, n_pings - 1, args.n_windows + 2)[1:-1]):
         if args.mode == "full-channel":
             # Bound the ping neighborhood before loading+masking (real
-            # files here run up to 14.8GB with every correction stage's
+            # files here run up to 14.8GB with every correction step's
             # arrays included) -- native window height == n_samples, plus
             # jitter room.
             half_span = n_samples // 2 + args.jitter_px + 50
@@ -1870,10 +1870,10 @@ def run_survey_window(args: argparse.Namespace) -> int:
 
 
 # ============================================================
-# Processing-stage progression grid (uncorrected / dB / TVG / geometric / georef)
+# Correction-step progression grid (uncorrected / dB / TVG / geometric / georef)
 # ============================================================
 
-_PROGRESSION_STAGES = ("uncorrected", "db", "tvg", "geometric", "georef")
+_PROGRESSION_STEPS = ("uncorrected", "db", "tvg", "geometric", "georef")
 
 
 def _sample_interval_m(ds) -> float:
@@ -1958,10 +1958,11 @@ def _target_combined_col(t_sample: int, n_samples_single: int, channel_idx: int)
 
 
 def run_progression(args: argparse.Namespace) -> None:
-    """Build a 7(-ish)-target x 5-stage progression grid (uncorrected / dB-converted
+    """Build a 7(-ish)-target x 5-step progression grid (uncorrected / dB-converted
     / TVG-applied / geometric-corrected / georef-corrected) at either
     full-channel or chip scale, so the same real target is directly
-    comparable across every processing stage.     """
+    comparable across every correction step.
+    """
     resample_method = getattr(args, "resample_method", "griddata")
     args.output.mkdir(parents=True, exist_ok=True)
     targets = read_targets_json(args.targets_json)
@@ -2019,8 +2020,8 @@ def run_progression(args: argparse.Namespace) -> None:
         local_ping = ping_idx - lo
         mps = _sample_interval_m(masked)
 
-        stage_images: dict[str, np.ndarray] = {}
-        stage_positions: dict[str, tuple[float, float] | None] = {}
+        step_images: dict[str, np.ndarray] = {}
+        step_positions: dict[str, tuple[float, float] | None] = {}
 
         if args.scale == "full":
             if combine_sides:
@@ -2055,15 +2056,15 @@ def run_progression(args: argparse.Namespace) -> None:
         db_window = apply_tvg_to_amplitude(raw_window, mps, params=TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0))
         target_local = (local_ping - extent.row_start, target_col - extent.col_start)
 
-        for stage, window in (("uncorrected", raw_window), ("db", db_window), ("tvg", intensity_window)):
+        for step, window in (("uncorrected", raw_window), ("db", db_window), ("tvg", intensity_window)):
             img, _meta = to_uint8(window, gamma=args.gamma, pct_low=args.pct_low, pct_high=args.pct_high)
             pos = target_local
             if args.scale == "full":
                 native_shape = window.shape
                 img = np.clip(resize_to(img, args.output_size_px), 0, 255).astype(np.uint8)
                 pos = rescale_target_position(target_local[0], target_local[1], native_shape, (args.output_size_px, args.output_size_px))
-            stage_images[stage] = img
-            stage_positions[stage] = pos
+            step_images[step] = img
+            step_positions[step] = pos
 
         along_dist = along_track_distance_m(masked, fill_nav_stalls=True)
         target_along_m = float(along_dist[local_ping])
@@ -2127,8 +2128,8 @@ def run_progression(args: argparse.Namespace) -> None:
         except ValueError:
             geom_img = np.zeros((geo_size_px, geo_size_px), dtype=np.uint8)
             geom_pos = None
-        stage_images["geometric"] = geom_img
-        stage_positions["geometric"] = geom_pos
+        step_images["geometric"] = geom_img
+        step_positions["geometric"] = geom_pos
 
         try:
             target_lat = float(masked["latitude_per_sample"].isel(ping=local_ping, channel=channel_idx, sample=t.sample).values)
@@ -2158,22 +2159,22 @@ def run_progression(args: argparse.Namespace) -> None:
         except (ValueError, KeyError):
             georef_img = np.zeros((geo_size_px, geo_size_px), dtype=np.uint8)
             georef_pos = None
-        stage_images["georef"] = georef_img
-        stage_positions["georef"] = georef_pos
+        step_images["georef"] = georef_img
+        step_positions["georef"] = georef_pos
 
-        for stage in _PROGRESSION_STAGES:
-            file_name = f"{t.target_id}_{stage}.png"
-            _save_grayscale(stage_images[stage], args.output / file_name)
+        for step in _PROGRESSION_STEPS:
+            file_name = f"{t.target_id}_{step}.png"
+            _save_grayscale(step_images[step], args.output / file_name)
 
         columns.append({
             "target_id": t.target_id,
             "source_file": path.name,
-            "positions": {k: (list(v) if v is not None else None) for k, v in stage_positions.items()},
+            "positions": {k: (list(v) if v is not None else None) for k, v in step_positions.items()},
         })
-        logger.info(f"target {t.target_id}: wrote all {len(_PROGRESSION_STAGES)} stages ({path.name})")
+        logger.info(f"target {t.target_id}: wrote all {len(_PROGRESSION_STEPS)} steps ({path.name})")
 
     with open(args.output / "progression_meta.json", "w") as f:
-        json.dump({"scale": args.scale, "stages": list(_PROGRESSION_STAGES), "columns": columns}, f, indent=2)
+        json.dump({"scale": args.scale, "steps": list(_PROGRESSION_STEPS), "columns": columns}, f, indent=2)
     logger.info(f"Wrote progression grid ({args.scale} scale, {len(columns)} targets) to {args.output}")
 
 
@@ -2399,7 +2400,7 @@ def main() -> int:
 
     p_prog = subparsers.add_parser(
         "progression",
-        help="7-target x 5-stage grid (uncorrected / dB / TVG / geometric / georef), one shared jitter draw per target",
+        help="7-target x 5-step grid (uncorrected / dB / TVG / geometric / georef), one shared jitter draw per target",
     )
     p_prog.add_argument("--targets-json", required=True, type=Path)
     p_prog.add_argument("--ss-h5-dir", required=True, type=Path)
@@ -2422,9 +2423,9 @@ def main() -> int:
     p_prog.add_argument("--mask-bright-rows-k", type=float, default=3.5)
     p_prog.add_argument(
         "--resample-method", choices=["kdtree", "binned", "griddata"], default="griddata",
-        help="Which resampling function fills the geometric stage's square, fixed-resolution grid -- "
+        help="Which resampling function fills the geometric step's square, fixed-resolution grid -- "
              "same three options/tradeoffs as sidescan-export chip's own --resample-method (see that "
-             "flag's help text). No effect on the georef stage.",
+             "flag's help text). No effect on the georef step.",
     )
     p_prog.add_argument("--seed", type=int, default=None)
     p_prog.set_defaults(func=run_progression)
