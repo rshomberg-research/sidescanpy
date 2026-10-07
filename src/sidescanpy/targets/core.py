@@ -48,6 +48,10 @@ class Target:
         rather than silently shipping unlocalized or unverified boxes.
     label : str, optional
         Free text, passed through, not interpreted.
+    category : str, optional
+        Class name for multi-class annotation export (COCO/YOLO). ``None``
+        (the default) means "uncategorized": the export writers then use
+        their single default category name.
     extra_attributes : dict
         Format-specific fields that don't generalize (e.g. JSF's
         MutableTag text, or notes about data-quality workarounds
@@ -70,6 +74,7 @@ class Target:
 
     position_confidence: PositionConfidence = "unknown"
     label: str | None = None
+    category: str | None = None
     extra_attributes: dict[str, Any] = field(default_factory=dict)
 
 

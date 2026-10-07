@@ -41,63 +41,72 @@ those consumer projects — see "Quick Reference" below.
 
 ---
 
-## Consumer-Project Architecture Contract (added 2026-09-18 — read this before adding project-local logic anywhere)
+## Consumer-Project Architecture Contract (revised 2026-10-07 — read this before adding code anywhere)
 
-**This section exists because the family has drifted from it multiple
-times without a written record to check against.** Every project
-consuming this library — several source formats, several data sources,
-one shared goal — is expected to converge on the same two-layer split:
+This replaces the 2026-09-18 version, which said investigation,
+visualization and dataset-export flow belonged in this library. That rule
+is how numbered "stage" analysis code, bespoke figure layouts and a very
+large CLI ended up here. It no longer applies.
 
-1. **This library (`sidescanpy`) + its `sidescan-*` CLI carries every
-   genuinely generic capability**: format ingestion, TVG/geometric/
-   georef correction, investigation/diagnostics, visualization
-   (waterfall/track/grid, with options), and dataset export (COCO/YOLO,
-   chips, with options). If a capability would benefit more than one
-   consumer project, it belongs here — not duplicated per-project.
-2. **Each consumer project carries only a handful of thin scripts +
-   configs** whose entire job is: resolve that dataset's own
-   format/hardware quirks, get the data converted into this library's
-   shared `.ss.h5` format as fast as possible, then hand off to the same
-   `sidescan-*` CLI every other project uses. A project-local script
-   that reimplements correction, investigation, or dataset-export logic
-   already generic in this library is exactly the failure mode this
-   section exists to prevent — not a stylistic preference.
+**sidescanpy is a library API.** It provides:
 
-**Analysis is diagnostic, not load-bearing at runtime.** `sidescan-analyze`
-(or any investigation tooling) exists to identify a dataset's quirks —
-hardware TVG state, nadir behavior, sample-rate assumptions — once, with
-a human in the loop deciding what the finding actually means. The
-*correction* that results gets hardcoded into that project's own
-script/config (a fixed `TVGParams` recipe, a fixed nadir margin, etc.),
-not re-derived by an automated classifier on every run. An automated
-classifier that gets overruled by a human is expected and normal (see
-`CHANGELOG.md`'s TVG-recipe history for several real examples); what
-must not happen is a stale automated finding sitting uncorrected in a
-config, or a human override happening in conversation without the
-config being updated to match.
+- format ingestion (`io`) into the shared `.ss.h5` format
+- corrections: radiometric, geometric, georeferencing
+- slicing across pings/samples/frequencies, and manual cuts and masks
+- gridding in both the swath (along/across-track) and georeferenced frames
+- targets, and dataset export (chips/windows, COCO/YOLO, GeoTIFF)
+- small, scoped quantitative analysis tools (nadir/first-bottom detection,
+  TVG curve fitting, usable range, units inference, beam geometry,
+  segment detection, …). Each one takes data and returns a result
+  dataclass or `xr.Dataset`. None of them runs a workflow.
+- thin plotting helpers (`viz`) that render one result and return
+  Axes/Figure without saving anything
+- logging throughout (DEBUG by default; WARNING for data problems)
 
-**Config-file format convention**: YAML for anything a human reads or
-edits (per-dataset settings, correction recipes — the object of the
-"analysis together, script recommends, human decides" workflow), JSON
-reserved for machine-generated/machine-only artifacts a human would
-essentially never hand-edit (`targets.json`, `metrics.json`,
-`summary.json`, COCO annotations). **`sidescan-*`'s own `--config`
-loader (`src/sidescanpy/cli/_config.py`) is currently JSON-only, by a
-documented decision now superseded by this convention — adding YAML
-support there (`pyyaml`, already a dependency elsewhere in this family)
-is real, not-yet-done work, not just a documentation change.**
+**The `sidescan-*` CLI is a thin quick-run convenience.** Each subcommand
+parses arguments, calls one library function and logs a one-line result.
+Library-grade logic never lives in `cli/`.
 
-**Low-side develop, field run.** A consumer project's scripts/configs
-are expected to work unmodified on a field/offline copy of the
-same project, on the assumption that the field data has already been
-brought into the same structure/format as the low-side reference —
-because the actual correction/export logic lives in this library and its
-CLI, not in anything environment-specific.
+**Workflow belongs to the caller.** Orchestration, run-everything
+drivers, numbered "stages", multi-panel figure layouts and per-survey
+decisions live in consumer projects, notebooks and this repo's
+`examples/`. A project typically has one script per step (convert →
+analyze → correct → export) sharing one config. Each step writes its
+outputs, QA figures and a report, so a human can inspect the results
+before running the next step. Analysis and correction are expected to
+iterate, so every correction step must be usable on its own, skippable,
+and replaceable by a caller-supplied function.
 
-**Where a project currently stands relative to this contract is that
-project's own concern, documented in its own `CLAUDE.md`/planning docs —
-not summarized here, so this file doesn't need updating every time a
-project's status changes.**
+**Rules**
+
+- Dependencies point one way: `core ← io ← processing ← analysis ← grids
+  ← targets ← export ← viz ← cli`. `analysis` never imports matplotlib.
+- Functions take and return `xr.Dataset`. `SideScanSurvey` is the
+  multi-frequency container plus file I/O.
+- Corrections are applied in place, and no raw copy is kept alongside
+  them. The raw source files remain the archive, and corrections are
+  mathematically reversible. The library records each step it applied,
+  with its parameters, in `processing_history`. What a project *knows*
+  about its input data (units, hardware TVG state) is the project's to
+  record.
+- Every module has `logger = logging.getLogger(__name__)`. No `print()`,
+  no `basicConfig`, no `__main__` blocks in library code.
+- The word "stage" does not appear in library code.
+- No consumer-project, survey, site or deployment names in source, tests,
+  docs or CHANGELOG. Format and hardware knowledge is described
+  generically ("some Klein 4900 files …").
+- Lean on established libraries (xarray, scipy, pyproj, rioxarray).
+  Identify candidates aggressively but swap conservatively: tag them
+  inline with `# TODO(lib): …` and swap only once a parity test proves
+  the output matches. Justify every new dependency in `pyproject.toml`.
+
+**Config files:** YAML for anything a human edits, JSON for
+machine-written artifacts (`targets.json`, `metrics.json`, COCO
+annotations). The CLI warns on unknown `--config` keys
+(`--strict-config` makes them an error).
+
+Where each consumer currently stands against this contract is documented
+in that project's own `CLAUDE.md`, not here.
 
 ---
 

@@ -16,7 +16,7 @@ much beyond "filter, then compute a box".
 from pathlib import Path
 
 from sidescanpy.targets.core import CONFIDENCE_RANK, bbox_from_center, clip_bbox
-from sidescanpy.targets.interchange.coco import CocoImageEntry
+from sidescanpy.targets.interchange.coco import CocoImageEntry, resolve_categories
 
 
 def write_yolo(
@@ -26,6 +26,7 @@ def write_yolo(
     category_name: str = "target",
     box_size: tuple[float, float] = (40.0, 40.0),
     min_confidence: str = "verified",
+    categories: list[str] | None = None,
 ) -> dict:
     """Write ``entries`` to ``output_dir`` as a YOLO-format label set.
 
@@ -47,6 +48,11 @@ def write_yolo(
     inspection/testing — YOLO has no single canonical in-memory
     representation the way COCO's JSON dict does.
 
+    Class index is the position in the sorted set of ``Target.category``
+    names present (uncategorized -> ``category_name``), or in the explicit
+    ordered ``categories`` list if given; ``data.yaml`` lists the same
+    order. See ``resolve_categories``.
+
     Raises
     ------
     ValueError
@@ -55,6 +61,9 @@ def write_yolo(
     """
     min_rank = CONFIDENCE_RANK[min_confidence]
     included = [e for e in entries if CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
+
+    names = resolve_categories(included, category_name, categories)
+    class_ids = {n: i for i, n in enumerate(names)}
 
     labels_dir = Path(output_dir) / "labels"
     labels_dir.mkdir(parents=True, exist_ok=True)
@@ -85,7 +94,7 @@ def write_yolo(
         cy = (y + h / 2) / entry.height
         norm_w = w / entry.width
         norm_h = h / entry.height
-        lines_by_file[entry.file_name].append(f"0 {cx:.6f} {cy:.6f} {norm_w:.6f} {norm_h:.6f}\n")
+        lines_by_file[entry.file_name].append(f"{class_ids[t.category if t.category is not None else category_name]} {cx:.6f} {cy:.6f} {norm_w:.6f} {norm_h:.6f}\n")
 
     written_images = []
     for file_name in order:
@@ -94,6 +103,7 @@ def write_yolo(
         written_images.append({"file_name": file_name, "label_file": str(label_path)})
 
     data_yaml_path = Path(output_dir) / "data.yaml"
-    data_yaml_path.write_text(f"names:\n  0: {category_name}\nnc: 1\n")
+    names_block = "".join(f"  {i}: {n}\n" for i, n in enumerate(names))
+    data_yaml_path.write_text(f"names:\n{names_block}nc: {len(names)}\n")
 
-    return {"names": [category_name], "images": written_images}
+    return {"names": names, "images": written_images}

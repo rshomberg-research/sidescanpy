@@ -47,6 +47,37 @@ class CocoImageEntry:
     bbox_size: tuple[float, float] | None = None
 
 
+def resolve_categories(
+    entries: list[CocoImageEntry],
+    category_name: str = "target",
+    categories: list[str] | None = None,
+) -> list[str]:
+    """Ordered class names for ``entries`` (index + 1 is the COCO id,
+    index is the YOLO class).
+
+    Uncategorized targets (``Target.category is None``) belong to
+    ``category_name``. With no explicit ``categories``: the sorted set of
+    names present (just ``[category_name]`` when nothing is categorized).
+    With an explicit ordered ``categories`` list, that list is returned
+    as-is so ids stay stable across separately-exported datasets.
+
+    Raises
+    ------
+    ValueError
+        If ``categories`` has duplicates, or a target's category is not in it.
+    """
+    present = {e.target.category if e.target.category is not None else category_name for e in entries}
+    if categories is None:
+        return sorted(present) if present else [category_name]
+    names = list(categories)
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate names in categories: {names}")
+    unknown = sorted(present - set(names))
+    if unknown:
+        raise ValueError(f"target categories {unknown} are not in the explicit categories list {names}")
+    return names
+
+
 def write_coco(
     entries: list[CocoImageEntry],
     output_path: str | Path,
@@ -54,8 +85,16 @@ def write_coco(
     category_name: str = "target",
     box_size: tuple[float, float] = (40.0, 40.0),
     min_confidence: str = "verified",
+    categories: list[str] | None = None,
 ) -> dict:
     """Write ``entries`` to ``output_path`` as a COCO-format JSON dataset.
+
+    Per-annotation class comes from ``Target.category`` (``None`` ->
+    ``category_name``). The ``categories`` list is the sorted set of
+    names present with ids 1..N, or, if ``categories`` is given, that
+    explicit ordered list (see :func:`resolve_categories`). With no
+    categorized targets the output is the single ``category_name``
+    category, id 1.
 
     Only targets with ``position_confidence`` at or above
     ``min_confidence`` (ordered ``unknown < approximate < verified``) are
@@ -81,7 +120,9 @@ def write_coco(
     min_rank = CONFIDENCE_RANK[min_confidence]
     included = [e for e in entries if CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
 
-    categories = [{"id": 1, "name": category_name}]
+    names = resolve_categories(included, category_name, categories)
+    cat_ids = {n: i + 1 for i, n in enumerate(names)}
+    categories_out = [{"id": i, "name": n} for n, i in cat_ids.items()]
     images = []
     annotations = []
 
@@ -113,7 +154,7 @@ def write_coco(
             {
                 "id": annotation_id,
                 "image_id": image_id,
-                "category_id": 1,
+                "category_id": cat_ids[t.category if t.category is not None else category_name],
                 "bbox": list(bbox),
                 "area": bbox[2] * bbox[3],
                 "iscrowd": 0,
@@ -127,9 +168,15 @@ def write_coco(
         )
         annotation_id += 1
 
+    multi = names != [category_name]
     coco = {
         "info": {
             "description": (
+                f"Multi-category sonar contact dataset ({', '.join(names)}). Bounding boxes "
+                f"default to a fixed placeholder size {tuple(box_size)}, not a measured "
+                "target dimension, unless a given CocoImageEntry.bbox_size overrides it "
+                "with a real extent."
+            ) if multi else (
                 "Single-category ('target') sonar contact dataset. No real class "
                 "labels exist in the source catalog (Description/Tag empty on "
                 "every target). Bounding boxes default to a fixed placeholder size "
@@ -138,7 +185,7 @@ def write_coco(
             ),
         },
         "licenses": [],
-        "categories": categories,
+        "categories": categories_out,
         "images": images,
         "annotations": annotations,
     }

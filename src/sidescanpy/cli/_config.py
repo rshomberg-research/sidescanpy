@@ -25,9 +25,18 @@ change.
 
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+
+def has_strict_flag(argv: list[str]) -> bool:
+    """True if ``--strict-config`` appears in ``argv`` (pre-parse, like
+    :func:`find_config_path`)."""
+    return "--strict-config" in argv
 
 
 def find_config_path(argv: list[str]) -> Path | None:
@@ -54,7 +63,15 @@ def load_config(path: Path) -> dict:
     return json.loads(text)
 
 
-def apply_config_defaults(parser: argparse.ArgumentParser, config: dict) -> None:
+def apply_config_defaults(
+    parser: argparse.ArgumentParser,
+    config: dict,
+    *,
+    strict: bool = False,
+    subcommand: str | None = None,
+    check: bool = True,
+    known_extra: "set[str] | frozenset[str]" = frozenset(),
+) -> None:
     """Seed ``parser``'s defaults from ``config``, restricted to keys
     that are actually valid ``dest`` names on it.
 
@@ -63,6 +80,41 @@ def apply_config_defaults(parser: argparse.ArgumentParser, config: dict) -> None
     ignored here, not an error, so one project-wide per-dataset config
     file can be reused across every command without per-command
     filtering by the caller.
+
+    Keys matching no option are logged as a WARNING naming the subcommand
+    (a typo'd key would otherwise silently do nothing). With
+    ``strict=True`` (``--strict-config``) they are a ``parser.error``
+    instead; since a shared config legitimately holds other commands'
+    keys, strict mode is only meaningful for a single-purpose config.
     """
     dests = {action.dest for action in parser._actions}
+    unknown = sorted(k for k in config if k not in dests and k not in known_extra)
+    if unknown and check:
+        name = subcommand or parser.prog
+        if strict:
+            parser.error(f"--strict-config: unknown config key(s) for {name!r}: {', '.join(unknown)}")
+        logger.warning("config keys not recognized by %r (ignored): %s", name, ", ".join(unknown))
     parser.set_defaults(**{k: v for k, v in config.items() if k in dests})
+
+
+def apply_config_to_subparsers(
+    parsers: "list[argparse.ArgumentParser] | tuple[argparse.ArgumentParser, ...]",
+    config: dict,
+    argv: list[str],
+) -> None:
+    """Seed every subparser from a shared ``config``, then report keys
+    that match *no* subparser's options (a typo, as opposed to a key
+    meant for a sibling subcommand, which a shared file legitimately
+    holds). The message names the subcommand invoked in ``argv``.
+
+    Warns via ``logging``; ``--strict-config`` in ``argv`` makes it an error.
+    """
+    for p in parsers:
+        apply_config_defaults(p, config, check=False)
+    names = {p.prog.split()[-1]: p for p in parsers}
+    chosen = next((names[a] for a in argv if a in names), None)
+    if chosen is not None:
+        all_dests = {a.dest for p in parsers for a in p._actions}
+        apply_config_defaults(
+            chosen, config, strict=has_strict_flag(argv), subcommand=chosen.prog.split()[-1], known_extra=all_dests
+        )

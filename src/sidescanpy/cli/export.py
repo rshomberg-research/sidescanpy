@@ -93,7 +93,7 @@ import xarray as xr
 from PIL import Image
 
 from sidescanpy.cli._common import concat_survey_frequency, resolve_freq_keys
-from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
+from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.export import (
     ReferenceStats,
@@ -1390,6 +1390,15 @@ def _extract_geo_style_window(
         return grid, [primary_local]
 
 
+def _parse_categories(value) -> list[str] | None:
+    """``--categories a,b`` (or a list from a config file) -> ordered names, or ``None``."""
+    if value is None:
+        return None
+    names = [v.strip() for v in value.split(",")] if isinstance(value, str) else [str(v) for v in value]
+    names = [n for n in names if n]
+    return names or None
+
+
 def run_chip(args: argparse.Namespace) -> int:
     resolution_m_override = getattr(args, "resolution_m", None)
     if resolution_m_override is not None and args.render_level in _PIXEL_LEVELS:
@@ -1418,6 +1427,12 @@ def run_chip(args: argparse.Namespace) -> int:
     if args.min_confidence != "unknown":
         targets = [t for t in targets if _CONFIDENCE_RANK[t.position_confidence] >= _CONFIDENCE_RANK[args.min_confidence]]
     logger.info(f"Read {len(targets)} target(s) at or above min-confidence={args.min_confidence!r}")
+    categories = _parse_categories(getattr(args, "categories", None))
+    if categories is not None:
+        # Fail before any expensive rendering rather than at the final write.
+        unknown = sorted({t.category for t in targets if t.category is not None} - set(categories))
+        if unknown:
+            raise SystemExit(f"error: target categories {unknown} are not in --categories {categories}")
 
     index = _build_position_index(args.ss_h5_dir)
 
@@ -1729,9 +1744,9 @@ def run_chip(args: argparse.Namespace) -> int:
         # (e.g. Klein's .tgt, which is unconditionally "unknown") gets a
         # real crop for every target but zero COCO/YOLO annotations for
         # any of them, silently.
-        coco = write_coco(coco_entries[style], style_dir / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
+        coco = write_coco(coco_entries[style], style_dir / "targets.coco.json", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence, categories=categories)
         logger.info(f"{style}: COCO export: {len(coco['images'])} image(s), {len(coco['annotations'])} annotation(s) -> {style_dir / 'targets.coco.json'}")
-        yolo = write_yolo(coco_entries[style], style_dir / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence)
+        yolo = write_yolo(coco_entries[style], style_dir / "targets.yolo", box_size=(args.box_size, args.box_size), min_confidence=args.min_confidence, categories=categories)
         logger.info(f"{style}: YOLO export: {len(yolo['images'])} image(s) -> {style_dir / 'targets.yolo'}")
         logger.info(f"{style}: wrote {n_written[style]} chip(s) + contact sheet to {style_dir}")
         total_written += n_written[style]
@@ -2341,6 +2356,11 @@ def main() -> int:
     p_chip.add_argument("--pct-high", type=float, default=common["pct_high"])
     p_chip.add_argument("--normalization-scope", choices=["image", "shared"], default="image")
     p_chip.add_argument("--min-confidence", choices=["unknown", "approximate", "verified"], default="verified")
+    p_chip.add_argument(
+        "--categories", default=None,
+        help="Comma-separated ordered class names (COCO ids 1..N, YOLO indices 0..N-1) so ids stay stable across separately-exported datasets; "
+             "a target whose category is not listed is an error. Default: sorted set of target categories present.",
+    )
     p_chip.add_argument("--seed", type=int, default=None)
     p_chip.set_defaults(func=run_chip)
 
@@ -2399,6 +2419,7 @@ def main() -> int:
     all_subparsers = (p_wf, p_grid, p_track, p_chip, p_sw, p_prog)
     for p in all_subparsers:
         p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
+        p.add_argument("--strict-config", action="store_true", help="Treat config-file keys this subcommand does not recognize as an error instead of a warning")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
         # overwrite a real -v already set before the subcommand.
@@ -2410,8 +2431,7 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        for p in all_subparsers:
-            apply_config_defaults(p, config)
+        apply_config_to_subparsers(all_subparsers, config, argv)
 
     args = parser.parse_args(argv)
 

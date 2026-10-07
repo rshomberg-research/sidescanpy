@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 
 from sidescanpy.cli._common import process_files_in_place, process_files_in_place_chunked
-from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
+from sidescanpy.cli._config import apply_config_defaults, has_strict_flag, find_config_path, load_config
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing import crop_far_range_noise, run_correction_steps
 from sidescanpy.processing.pipeline import step_already_done
@@ -153,6 +153,7 @@ def main() -> int:
         help="Disable the absorption-loss term entirely. Use when hardware/acquisition already applied it. Requires --tvg.",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--strict-config", action="store_true", help="Treat config-file keys this command does not recognize as an error instead of a warning")
     parser.add_argument(
         "--config", type=Path, default=None,
         help="YAML or JSON file seeding this command's defaults (e.g. spreading_loss_db: 0.0) -- explicit flags still override",
@@ -173,7 +174,7 @@ def main() -> int:
     argv = sys.argv[1:]
     config_path = find_config_path(argv)
     if config_path is not None:
-        apply_config_defaults(parser, load_config(config_path))
+        apply_config_defaults(parser, load_config(config_path), strict=has_strict_flag(argv), subcommand=parser.prog)
 
     args = parser.parse_args(argv)
 

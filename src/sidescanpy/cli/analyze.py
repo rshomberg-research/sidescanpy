@@ -107,7 +107,7 @@ from sidescanpy.analysis.nav_attitude import nav_attitude_summary
 from sidescanpy.analysis.recommend import measure_ping_geometry, render_recommended_config
 from sidescanpy.analysis.segmentation import find_segments, write_segments, write_segments_report
 from sidescanpy.cli._common import available_frequencies, load_channel_dataset, resolve_freq_keys
-from sidescanpy.cli._config import apply_config_defaults, find_config_path, load_config
+from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.investigation import run_investigation
@@ -859,6 +859,7 @@ def main() -> int:
 
     for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec):
         p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
+        p.add_argument("--strict-config", action="store_true", help="Treat config-file keys this subcommand does not recognize as an error instead of a warning")
         # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
         # block for why a plain default=False here would silently
         # overwrite a real -v already set before the subcommand.
@@ -870,8 +871,7 @@ def main() -> int:
     config_path = find_config_path(argv)
     if config_path is not None:
         config = load_config(config_path)
-        for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec):
-            apply_config_defaults(p, config)
+        apply_config_to_subparsers((p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec), config, argv)
 
     args = parser.parse_args(argv)
 

@@ -9,6 +9,18 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- Multi-category COCO/YOLO annotations, additive (uncategorized input
+  produces byte-identical output):
+  - New optional `Target.category`, read/written in targets JSON (key
+    omitted when unset) and CSV (`category` column only when any target
+    has one); `read_targets_csv(..., category_column=...)` maps any column.
+  - `write_coco`/`write_yolo` take `categories=[...]`; otherwise classes
+    are the sorted set present (COCO ids 1..N, YOLO 0..N-1, `data.yaml`
+    in the same order). A category outside an explicit list is an error.
+  - `sidescan-export chip --categories a,b,c` for stable ids across
+    separately-exported datasets.
+- `--strict-config` on every `sidescan-*` command with `--config`: config
+  keys matching no option are an error instead of a warning.
 - `sidescan-export chip` dataset-augmentation and projection options, all
   opt-in (defaults reproduce prior output exactly):
   - `--n-augment N`: N independent jitter draws per target per style, each
@@ -36,6 +48,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Changed
 
+- `--config` keys that match no option of any subcommand now log a
+  WARNING naming the subcommand, instead of being silently ignored.
 - Geometric level no longer loads per-sample latitude/longitude into the
   target neighborhood (only georef reads them).
 

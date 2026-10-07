@@ -97,3 +97,52 @@ class TestLoadConfig:
         apply_config_defaults(p, load_config(config_path))
         args = p.parse_args([])
         assert args.spreading_loss_db == 20.0
+
+
+class TestUnknownKeys:
+    def _parsers(self):
+        import argparse
+
+        top = argparse.ArgumentParser(prog="tool")
+        sub = top.add_subparsers(dest="cmd")
+        a = sub.add_parser("cmd_a")
+        a.add_argument("--gamma", type=float, default=1.0)
+        b = sub.add_parser("cmd_b")
+        b.add_argument("--other", type=int, default=0)
+        return a, b
+
+    def test_warns_listing_unknown_keys_and_subcommand(self, caplog):
+        from sidescanpy.cli._config import apply_config_to_subparsers
+
+        a, b = self._parsers()
+        with caplog.at_level("WARNING", logger="sidescanpy.cli._config"):
+            apply_config_to_subparsers((a, b), {"gamma": 2.0, "typo_key": 1}, ["cmd_a"])
+        assert "typo_key" in caplog.text and "cmd_a" in caplog.text
+        assert "other" not in caplog.text
+        assert a.parse_args([]).gamma == 2.0
+
+    def test_key_valid_for_other_subcommand_is_not_flagged(self, caplog):
+        from sidescanpy.cli._config import apply_config_to_subparsers
+
+        a, b = self._parsers()
+        with caplog.at_level("WARNING", logger="sidescanpy.cli._config"):
+            apply_config_to_subparsers((a, b), {"gamma": 2.0, "other": 3}, ["cmd_a"])
+        assert "other" not in caplog.text
+
+    def test_strict_config_errors(self, capsys):
+        import pytest
+
+        from sidescanpy.cli._config import apply_config_to_subparsers
+
+        a, b = self._parsers()
+        with pytest.raises(SystemExit):
+            apply_config_to_subparsers((a, b), {"typo_key": 1}, ["cmd_a", "--strict-config"])
+        assert "typo_key" in capsys.readouterr().err
+
+    def test_no_warning_when_all_keys_known(self, caplog):
+        from sidescanpy.cli._config import apply_config_defaults
+
+        a, _ = self._parsers()
+        with caplog.at_level("WARNING", logger="sidescanpy.cli._config"):
+            apply_config_defaults(a, {"gamma": 2.0})
+        assert caplog.text == ""

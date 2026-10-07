@@ -20,6 +20,11 @@ from sidescanpy.targets.core import Target
 def write_targets_json(targets: list[Target], path: str | Path) -> None:
     """Write ``targets`` to ``path`` as a JSON list of records."""
     records = [asdict(t) for t in targets]
+    for r in records:
+        # Omit an unset category so output for uncategorized catalogs is
+        # unchanged from before the field existed.
+        if r.get("category") is None:
+            r.pop("category", None)
     Path(path).write_text(json.dumps(records, indent=2))
 
 
@@ -55,9 +60,13 @@ _CSV_FIELDS = [
 
 def write_targets_csv(targets: list[Target], path: str | Path) -> None:
     """Write ``targets`` to ``path`` as a flattened CSV (lossy: ``bbox``/
-    ``extra_attributes`` are JSON-encoded into single cells)."""
+    ``extra_attributes`` are JSON-encoded into single cells). A
+    ``category`` column is written only if at least one target has one."""
+    fields = list(_CSV_FIELDS)
+    if any(t.category is not None for t in targets):
+        fields.insert(fields.index("label") + 1, "category")
     with Path(path).open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_CSV_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for t in targets:
             row = asdict(t)
@@ -66,8 +75,14 @@ def write_targets_csv(targets: list[Target], path: str | Path) -> None:
             writer.writerow(row)
 
 
-def read_targets_csv(path: str | Path) -> list[Target]:
-    """Read a CSV previously written by ``write_targets_csv``."""
+def read_targets_csv(path: str | Path, *, category_column: str | None = None) -> list[Target]:
+    """Read a CSV previously written by ``write_targets_csv``.
+
+    ``category_column`` names the column to use as ``Target.category``
+    (default: the ``category`` column if present, else none). Empty cells
+    become ``None``.
+    """
+    category_column = category_column or "category"
     targets = []
     with Path(path).open(newline="") as f:
         for row in csv.DictReader(f):
@@ -88,6 +103,7 @@ def read_targets_csv(path: str | Path) -> list[Target]:
                     bbox=tuple(bbox) if bbox is not None else None,
                     position_confidence=row["position_confidence"],
                     label=row["label"] or None,
+                    category=(row.get(category_column) or None),
                     extra_attributes=extra_attributes,
                 )
             )

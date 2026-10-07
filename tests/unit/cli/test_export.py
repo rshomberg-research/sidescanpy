@@ -1771,3 +1771,31 @@ class TestSwathFill:
             res[fill] = spy.call_args.kwargs["resolution_m"]
         assert res[False] > 0.3          # ping-spacing floor
         assert res[True] < 0.01          # ~0.1 m swath / 64 px
+
+
+class TestChipCategories:
+    def test_parse_categories(self):
+        from sidescanpy.cli.export import _parse_categories
+
+        assert _parse_categories(None) is None
+        assert _parse_categories("") is None
+        assert _parse_categories("class_b, class_a") == ["class_b", "class_a"]
+        assert _parse_categories(["class_a", "class_b"]) == ["class_a", "class_b"]
+
+    def test_chip_rejects_unlisted_category(self, tmp_path):
+        import argparse
+
+        from sidescanpy.cli.export import run_chip
+        from sidescanpy.targets.core import Target
+        from sidescanpy.targets.io import write_targets_json
+
+        tj = tmp_path / "t.json"
+        write_targets_json(
+            [Target(target_id="1", source_format="x", catalog_source="c", position_confidence="verified", category="class_z")], tj
+        )
+        args = argparse.Namespace(
+            targets_json=tj, output=tmp_path / "out", min_confidence="verified",
+            ss_h5_dir=tmp_path, categories="class_a,class_b",
+        )
+        with pytest.raises(SystemExit, match="class_z"):
+            run_chip(args)
