@@ -16,7 +16,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.pipeline import apply_correction_steps
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg, tvg_gain_db
 

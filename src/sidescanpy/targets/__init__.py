@@ -15,7 +15,12 @@ the shared data model, JSON/CSV IO, and export interchange formats.
 """
 
 from sidescanpy.targets.core import PositionConfidence, Target, bbox_from_center, clip_bbox
-from sidescanpy.targets.io import read_targets_csv, read_targets_json, write_targets_csv, write_targets_json
+from sidescanpy.targets.io import (
+    read_targets_csv,
+    read_targets_json,
+    write_targets_csv,
+    write_targets_json,
+)
 
 __all__ = [
     "Target",

@@ -219,7 +219,6 @@ class TestBuildSurveyTrack:
         accounting for that used to align on the mismatched label and
         NaN out whichever file didn't have that particular value."""
         from sidescanpy.core import SideScanSurvey
-
         from tests.conftest import make_minimal_sidescan_dataset
 
         # altitude_m must be well below the (very short, default-fixture)

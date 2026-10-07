@@ -12,18 +12,18 @@ For analysis/conversion, use the converter module to transform to standard schem
 2026 rshomberg@uri.edu
 """
 
-import logging
-from pathlib import Path
-from typing import Optional, Generator, List, Dict, Any
 import json
-from dataclasses import asdict, fields as dataclass_fields
+import logging
 from collections import defaultdict
+from dataclasses import fields as dataclass_fields
+from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional
 
 import numpy as np
 
 from sidescanpy.io.jsf.messages import (
-    JSFMessageHeader,
     JSFMessage,
+    JSFMessageHeader,
     SonarDataMessage,
 )
 
@@ -62,7 +62,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
     --------
     >>> messages = read_jsf(Path("survey.jsf"))
     >>> print(f"Read {len(messages)} messages")
-    
+
     >>> # Read first 1000 messages only
     >>> messages = read_jsf(Path("survey.jsf"), N=1000)
     """
@@ -99,7 +99,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
                     message = SonarDataMessage.from_bytes(header, message_bytes)
                 else:
                     message = JSFMessage.from_bytes(header, message_bytes)
-                
+
                 all_messages.append(message)
                 logger.debug(f"Message {cnt}: {type(message).__name__}")
             except Exception as e:
@@ -206,19 +206,19 @@ def get_messages_by_index(
     --------
     >>> # Get messages 100-150
     >>> messages = get_messages_by_index(Path("survey.jsf"), 100, 150)
-    
+
     >>> # Get first 50 messages
     >>> messages = get_messages_by_index(Path("survey.jsf"), 0, 50)
     """
     messages = []
-    
+
     for idx, message in enumerate(read_jsf_iter(fpath)):
         if idx < start_idx:
             continue
         if end_idx is not None and idx >= end_idx:
             break
         messages.append(message)
-    
+
     logger.info(f"Retrieved messages [{start_idx}:{end_idx}] = {len(messages)} messages")
     return messages
 
@@ -311,15 +311,15 @@ def get_message_statistics(messages: List[JSFMessage]) -> Dict[str, Any]:
         'by_type': defaultdict(int),
         'frequencies': defaultdict(int),
     }
-    
+
     for msg in messages:
         msg_type = type(msg).__name__
         stats['by_type'][msg_type] += 1
-        
+
         if isinstance(msg, SonarDataMessage):
             freq = int(msg.transmit_freq_start)
             stats['frequencies'][freq] += 1
-    
+
     return dict(stats)
 
 
@@ -344,15 +344,15 @@ def _serialize_message(message: JSFMessage) -> Dict[str, Any]:
         JSON-compatible dictionary.
     """
     msg_dict = {}
-    
+
     for field in dataclass_fields(message):
         field_name = field.name
         field_value = getattr(message, field_name)
-        
+
         # Skip private fields
         if field_name.startswith('_'):
             continue
-        
+
         # Handle special types
         if field_value is None:
             msg_dict[field_name] = None
@@ -380,7 +380,7 @@ def _serialize_message(message: JSFMessage) -> Dict[str, Any]:
             ]
         else:
             msg_dict[field_name] = field_value
-    
+
     msg_dict['_message_type'] = type(message).__name__
     return msg_dict
 
@@ -413,17 +413,17 @@ def export_messages_to_json(
     --------
     >>> messages = read_jsf(Path("survey.jsf"), N=100)
     >>> export_messages_to_json(messages, Path("debug.json"))
-    
+
     >>> # Export only sonar messages
     >>> sonar_msgs = filter_messages_by_type(messages, 'SonarDataMessage')
     >>> export_messages_to_json(sonar_msgs, Path("sonar_debug.json"), max_messages=50)
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     if max_messages is not None:
         messages = messages[:max_messages]
-    
+
     # Serialize all messages
     serialized = []
     for i, msg in enumerate(messages):
@@ -433,14 +433,14 @@ def export_messages_to_json(
             serialized.append(msg_dict)
         except Exception as e:
             logger.warning(f"Failed to serialize message {i}: {e}")
-    
+
     # Write to JSON
     with open(output_path, 'w') as f:
         if pretty:
             json.dump(serialized, f, indent=2, default=str)
         else:
             json.dump(serialized, f, default=str)
-    
+
     logger.info(f"Exported {len(serialized)} messages to {output_path}")
     logger.info(f"  File size: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
 
@@ -468,17 +468,17 @@ def export_messages_by_type_to_json(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Group by type
     by_type = defaultdict(list)
     for msg in messages:
         msg_type = type(msg).__name__
         by_type[msg_type].append(msg)
-    
+
     # Write each type to its own file
     for msg_type, msgs in sorted(by_type.items()):
         output_file = output_dir / f"{msg_type}.json"
-        
+
         serialized = []
         for i, msg in enumerate(msgs):
             try:
@@ -487,10 +487,10 @@ def export_messages_by_type_to_json(
                 serialized.append(msg_dict)
             except Exception as e:
                 logger.warning(f"Failed to serialize {msg_type} message {i}: {e}")
-        
+
         with open(output_file, 'w') as f:
             json.dump(serialized, f, indent=2, default=str)
-        
+
         logger.info(f"  {msg_type}: {len(serialized)} messages → {output_file}")
 
 

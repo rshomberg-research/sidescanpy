@@ -11,7 +11,12 @@ import pytest
 from sidescanpy.targets.core import Target
 from sidescanpy.targets.interchange.coco import CocoImageEntry, write_coco
 from sidescanpy.targets.interchange.yolo import write_yolo
-from sidescanpy.targets.io import read_targets_csv, read_targets_json, write_targets_csv, write_targets_json
+from sidescanpy.targets.io import (
+    read_targets_csv,
+    read_targets_json,
+    write_targets_csv,
+    write_targets_json,
+)
 
 
 def _entry(tid, category=None, file_name=None):

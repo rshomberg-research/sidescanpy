@@ -4,18 +4,17 @@ Unit tests for resampling channel data to grids.
 Tests the resample_channel_to_grid() pipeline and aggregation methods.
 """
 
-import pytest
 import numpy as np
+import pytest
 import xarray as xr
 from pyproj import CRS
 
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.grids.resample import (
-    resample_channel_to_grid,
     ResamplingMethod,
+    resample_channel_to_grid,
 )
-
 
 # Helpers to create test channel data
 
@@ -279,7 +278,7 @@ class TestResampleChannelToGridQuality:
 
         backscatter_resampled = raster.backscatter
         finite_mask = np.isfinite(backscatter_resampled)
-        
+
         if np.any(finite_mask):
             assert np.nanmin(backscatter_resampled) >= min_input - 1e-6
             assert np.nanmax(backscatter_resampled) <= max_input + 1e-6
@@ -312,7 +311,7 @@ class TestResampleChannelToGridQuality:
 
     def test_median_between_min_max(self, channel, grid):
         """Median aggregation is between min and max."""
-        raster_min = resample_channel_to_grid(
+        _raster_min = resample_channel_to_grid(
             channel,
             grid_def=grid,
             method=ResamplingMethod.NEAREST,  # Proxy for min

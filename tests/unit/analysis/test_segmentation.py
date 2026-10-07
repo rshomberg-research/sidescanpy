@@ -9,12 +9,11 @@ survey data.
 """
 
 import numpy as np
-import pytest
 
 from sidescanpy.analysis.segmentation import (
     Segment,
-    detect_garbage_runs,
     detect_gaps,
+    detect_garbage_runs,
     detect_setting_changes,
     detect_unstable_spans,
     find_segments,
@@ -23,7 +22,7 @@ from sidescanpy.analysis.segmentation import (
     write_segments_report,
 )
 from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.io.hdf5 import read_survey
 from tests.conftest import make_minimal_sidescan_dataset
 
 

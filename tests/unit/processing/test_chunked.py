@@ -12,7 +12,6 @@ boundaries included.
 
 import numpy as np
 import pytest
-import xarray as xr
 
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey

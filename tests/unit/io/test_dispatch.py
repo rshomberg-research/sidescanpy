@@ -11,7 +11,6 @@ import pytest
 
 from sidescanpy.io.dispatch import detect_format, read_and_convert
 
-
 # ============================================================
 # detect_format
 # ============================================================

@@ -7,7 +7,7 @@ No data — just the schema/contract.
 """
 
 import logging
-from typing import NamedTuple, Tuple
+from typing import Tuple
 
 import numpy as np
 from pyproj import CRS, Geod, Transformer
@@ -272,15 +272,15 @@ class GridDefinition:
             ]
             # Sample edges densely to capture distortion
             n_edge_samples = 10
-            south_edge = [(west + i * (east - west) / n_edge_samples, south) 
+            south_edge = [(west + i * (east - west) / n_edge_samples, south)
                           for i in range(n_edge_samples + 1)]
-            north_edge = [(west + i * (east - west) / n_edge_samples, north) 
+            north_edge = [(west + i * (east - west) / n_edge_samples, north)
                           for i in range(n_edge_samples + 1)]
-            west_edge = [(west, south + i * (north - south) / n_edge_samples) 
+            west_edge = [(west, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            east_edge = [(east, south + i * (north - south) / n_edge_samples) 
+            east_edge = [(east, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            
+
             points_to_transform = corners + south_edge + north_edge + west_edge + east_edge
         else:
             # (x, y) order for projected
@@ -291,15 +291,15 @@ class GridDefinition:
                 (east, south),
             ]
             n_edge_samples = 10
-            south_edge = [(west + i * (east - west) / n_edge_samples, south) 
+            south_edge = [(west + i * (east - west) / n_edge_samples, south)
                           for i in range(n_edge_samples + 1)]
-            north_edge = [(west + i * (east - west) / n_edge_samples, north) 
+            north_edge = [(west + i * (east - west) / n_edge_samples, north)
                           for i in range(n_edge_samples + 1)]
-            west_edge = [(west, south + i * (north - south) / n_edge_samples) 
+            west_edge = [(west, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            east_edge = [(east, south + i * (north - south) / n_edge_samples) 
+            east_edge = [(east, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            
+
             points_to_transform = corners + south_edge + north_edge + west_edge + east_edge
 
         transformed_points = [transformer.transform(x, y) for x, y in points_to_transform]

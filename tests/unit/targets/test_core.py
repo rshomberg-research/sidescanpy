@@ -4,7 +4,12 @@
 
 import numpy as np
 
-from sidescanpy.targets.core import Target, detrend_by_range, orient_for_display, project_target_to_frequency
+from sidescanpy.targets.core import (
+    Target,
+    detrend_by_range,
+    orient_for_display,
+    project_target_to_frequency,
+)
 
 
 def test_defaults_are_none_or_empty():

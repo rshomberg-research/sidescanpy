@@ -12,22 +12,20 @@ target SDFPageHeader.from_bytes(bytes_512) directly.
 """
 
 import math
-import struct
+from datetime import UTC
 
-import numpy as np
 import pytest
 
 from sidescanpy.io.sdf.pages import (
     PAGE_HEADER_BYTES,
-    PAGE_VERSIONS_SONAR,
     SDFPageHeader,
 )
 from tests.unit.io.sdf.conftest import (
-    HEADER_TOTAL_BYTES,
     PAGE_HEADER_BYTES as CONFTEST_PAGE_HEADER_BYTES,
+)
+from tests.unit.io.sdf.conftest import (
     make_sdf_header_bytes,
 )
-
 
 # ============================================================
 # BASIC FIELDS (uint32, fields 1-26)
@@ -123,9 +121,9 @@ class TestTimestamp:
                                    hour=14, minute=50, second=5,
                                    fseconds=0.0)
         h = SDFPageHeader.from_bytes(raw)
-        from datetime import datetime, timezone
+        from datetime import datetime
         expected = datetime(2026, 5, 13, 14, 50, 5,
-                            tzinfo=timezone.utc).timestamp()
+                            tzinfo=UTC).timestamp()
         assert h.timestamp == pytest.approx(expected, abs=1e-3)
 
     def test_year_offset_from_1900(self):
@@ -134,9 +132,9 @@ class TestTimestamp:
                                    hour=14, minute=50, second=5,
                                    fseconds=0.0)
         h = SDFPageHeader.from_bytes(raw)
-        from datetime import datetime, timezone
+        from datetime import datetime
         expected = datetime(2026, 5, 13, 14, 50, 5,
-                            tzinfo=timezone.utc).timestamp()
+                            tzinfo=UTC).timestamp()
         assert h.timestamp == pytest.approx(expected, abs=1e-3)
 
     def test_year_normalized_in_post_init(self):
@@ -151,9 +149,9 @@ class TestTimestamp:
                                    hour=14, minute=50, second=5,
                                    fseconds=0.123456)
         h = SDFPageHeader.from_bytes(raw)
-        from datetime import datetime, timezone
+        from datetime import datetime
         base = datetime(2026, 5, 13, 14, 50, 5,
-                        tzinfo=timezone.utc).timestamp()
+                        tzinfo=UTC).timestamp()
         assert h.timestamp == pytest.approx(base + 0.123456, abs=1e-5)
 
     def test_hsecond_stored_separately(self):
@@ -162,9 +160,9 @@ class TestTimestamp:
         h = SDFPageHeader.from_bytes(raw)
         assert h.hsecond == 50
         # timestamp uses fseconds, not hsecond
-        from datetime import datetime, timezone
+        from datetime import datetime
         base = datetime(2026, 5, 13, 14, 50, 5,
-                        tzinfo=timezone.utc).timestamp()
+                        tzinfo=UTC).timestamp()
         assert h.timestamp == pytest.approx(base + 0.5, abs=1e-5)
 
     def test_timestamp_ns(self):
@@ -757,9 +755,9 @@ class TestSonarPageWrapping:
                                    hour=14, minute=50, second=5,
                                    fseconds=0.0)
         page = SDFSonarPage(header=SDFPageHeader.from_bytes(raw))
-        from datetime import datetime, timezone
+        from datetime import datetime
         expected = datetime(2026, 5, 13, 14, 50, 5,
-                            tzinfo=timezone.utc).timestamp()
+                            tzinfo=UTC).timestamp()
         assert page.timestamp == pytest.approx(expected, abs=1e-3)
 
     def test_delegates_center_freq_hz(self):

@@ -18,7 +18,6 @@ from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5.reader import read_survey
 from sidescanpy.io.hdf5.writer import write_survey
 
-
 # ============================================================
 # RETURN TYPE
 # ============================================================

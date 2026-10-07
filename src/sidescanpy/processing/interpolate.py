@@ -26,7 +26,7 @@ Two layers:
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 import numpy as np
@@ -445,7 +445,7 @@ def _append_history_entry(
 
     entry = {
         "step":         "interpolate_aux_onto_pings",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "timestamp_utc": datetime.now(UTC).isoformat(),
         "params": {
             "fields":        fields,
             "method":        method,

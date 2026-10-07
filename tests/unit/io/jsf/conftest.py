@@ -5,34 +5,20 @@ These fixtures contain real message data extracted from actual JSF survey files.
 Source: 20251015170335.jsf (ping 69, first sonar data message)
 """
 
-import pytest
-import numpy as np
 from pathlib import Path
+from unittest.mock import Mock
+
+import numpy as np
+import pytest
 
 from sidescanpy.io.jsf.messages import (
+    DopplerVelocityLogDataMessage,
     JSFMessageHeader,
-    JSFMessage,
-    SonarDataMessage,
-    NavigationOffsetsMessage,
-    SystemInformationMessage,
-    FilePaddingMessage,
-    NMEAStringMessage,
-    NMEADBTMessage,
     NMEARMCMessage,
-    NMEADPTMessage,
     PitchRollDataMessage,
     PressureSensorReadingMessage,
-    DopplerVelocityLogDataMessage,
-    SituationMessage,
-    SituationComprehensiveMessage,
-    CableCounterDataMessage,
-    KilometerOfPipeDataMessage,
-    ContainerTimeStampMessage,
-    UnknownMessage2040,
-    SonarMessageStatusMessage
+    SonarDataMessage,
 )
-
-from unittest.mock import Mock
 
 # ============================================================================
 # SONAR DATA MESSAGE (SonarDataMessage) - Ping 69, 1495000 Hz, Channel 0 (Port)
@@ -42,7 +28,7 @@ from unittest.mock import Mock
 def sample_sonar_data_message_header_bytes():
     """
     Raw header bytes for a SonarDataMessage.
-    
+
     Header breakdown:
     - marker: 5633 (0x1601)
     - protocol_version: 17
@@ -63,7 +49,7 @@ def sample_sonar_data_message_header_bytes():
 def sample_sonar_data_message_bytes():
     """
     Complete SonarDataMessage payload (9824 bytes).
-    
+
     Contains:
     - ping_number: 69
     - timestamp: 2006-03-01T16:59:29.874 (Unix: 1141232369.874)
@@ -702,7 +688,7 @@ def sample_sonar_data_message_bytes():
 def sample_sonar_data_message_dict():
     """
     Parsed SonarDataMessage as a dictionary (expected structure).
-    
+
     Use this to validate parsing logic.
     """
     return {
@@ -731,7 +717,7 @@ def sample_sonar_data_message_dict():
         'backscatter_raw': None,    # FIXME: fixture missing backscatter_raw
     }
 
-@pytest.fixture 
+@pytest.fixture
 def sample_sonar_data_message(sample_sonar_data_message_header_bytes, sample_sonar_data_message_bytes) -> SonarDataMessage:
     """Actual sonar data message"""
     header = JSFMessageHeader.from_bytes(sample_sonar_data_message_header_bytes)

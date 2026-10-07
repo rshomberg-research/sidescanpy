@@ -60,7 +60,7 @@ def _validate_channel_data(channel: xr.Dataset, backscatter_var: str) -> None:
         )
 
 
-class ResamplingMethod(str, Enum):
+class ResamplingMethod(str, Enum):  # noqa: UP042  (StrEnum changes str()/format() behavior)
     """Resampling aggregation method."""
 
     MEAN = "mean"
@@ -134,7 +134,7 @@ def resample_channel_to_grid(
     # Extract frequency and metadata
     frequency_hz = channel.attrs.get("frequency_hz", 0)
     processing_level = channel.attrs.get("processing_level", "raw")
-    
+
     # Convert frequency to friendly name
     if frequency_hz > 0:
         freq_khz = frequency_hz / 1000
@@ -245,7 +245,7 @@ def resample_channel_to_grid(
 
             # Get backscatter values for contributing samples
             contrib_backscatter = backscatter_valid[indices]
-            
+
             # Filter out NaN
             valid_contrib = contrib_backscatter[np.isfinite(contrib_backscatter)]
 
@@ -276,14 +276,14 @@ def resample_channel_to_grid(
                 dy = sample_ys - cell_y
                 dx = sample_xs - cell_x
                 distances = np.sqrt(dy**2 + dx**2)
-                
+
                 # Avoid division by zero
                 distances[distances == 0] = 1e-9
-                
+
                 # Weight by 1/distance
                 weights = 1.0 / distances
                 weights /= np.sum(weights)
-                
+
                 backscatter_grid[i, j] = np.sum(valid_contrib * weights[:len(valid_contrib)])
             else:
                 raise ValueError(f"Unknown resampling method: {method}")

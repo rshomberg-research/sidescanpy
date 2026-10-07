@@ -4,44 +4,46 @@ Test module for SideScanPy core schema validation and xr.Accessor
 2026 rshomberg@uri.edu
 """
 
-import pytest 
-import json 
-import numpy as np 
-import xarray as xr 
-from datetime import datetime, timezone
+import json
+from datetime import datetime
+
+import numpy as np
+import pytest
+import xarray as xr
 
 from sidescanpy.core.schema import (
-    REQUIRED_DIMS,
-    REQUIRED_COORDS,
-    REQUIRED_VARS,
-    REQUIRED_ATTRS, 
-    KNOWN_PROCESSING_LEVELS,
-    HDF5_GROUP_AUX_STREAMS,
-    HDF5_GROUP_NAVIGATION,
-    HDF5_GROUP_ATTITUDE,
-    HDF5_GROUP_FREQUENCIES,
-    HDF5_FREQ_PREFIX,
     HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
-    HDF5_COMPRESSION_LEVEL,    
-    REQUIRED_NAV_DIMS,
-    REQUIRED_NAV_COORDS,
-    REQUIRED_NAV_VARS,
-    REQUIRED_NAV_ATTRS,
-    REQUIRED_ATT_DIMS,
-    REQUIRED_ATT_COORDS,
-    REQUIRED_ATT_VARS,
+    HDF5_COMPRESSION_LEVEL,
+    HDF5_FREQ_PREFIX,
+    HDF5_GROUP_ATTITUDE,
+    HDF5_GROUP_AUX_STREAMS,
+    HDF5_GROUP_FREQUENCIES,
+    HDF5_GROUP_NAVIGATION,
+    KNOWN_PROCESSING_LEVELS,
     REQUIRED_ATT_ATTRS,
-    REQUIRED_DVL_DIMS,
-    REQUIRED_DVL_COORDS,
-    REQUIRED_DVL_VARS,
+    REQUIRED_ATT_COORDS,
+    REQUIRED_ATT_DIMS,
+    REQUIRED_ATT_VARS,
+    REQUIRED_ATTRS,
+    REQUIRED_COORDS,
+    REQUIRED_DIMS,
     REQUIRED_DVL_ATTRS,
-    REQUIRED_GEN_DIMS,
-    REQUIRED_GEN_COORDS,
+    REQUIRED_DVL_COORDS,
+    REQUIRED_DVL_DIMS,
+    REQUIRED_DVL_VARS,
     REQUIRED_GEN_ATTRS,
+    REQUIRED_GEN_COORDS,
+    REQUIRED_GEN_DIMS,
+    REQUIRED_NAV_ATTRS,
+    REQUIRED_NAV_COORDS,
+    REQUIRED_NAV_DIMS,
+    REQUIRED_NAV_VARS,
+    REQUIRED_VARS,
 )
 
-@pytest.mark.unit 
+
+@pytest.mark.unit
 class TestConstants:
     """Verify schema constants are correctly defined"""
 
@@ -92,7 +94,7 @@ class TestConstants:
         assert isinstance(HDF5_COMPRESSION_LEVEL, int)
 
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestAccessorRegistration:
     """Verify xr.Accessor is registered and accessible"""
 
@@ -115,10 +117,10 @@ class TestAccessorRegistration:
 
     def test_append_to_history_method_exists(self, sample_dataset):
         assert hasattr(sample_dataset.sidescan, "append_to_history")
-        assert callable(sample_dataset.sidescan.append_to_history)    
+        assert callable(sample_dataset.sidescan.append_to_history)
 
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestValidationValid:
     """Test that valid datasets pass validation."""
 
@@ -174,7 +176,7 @@ class TestValidationMissingCoords:
         bad_ds = sample_dataset.drop_vars(coord_name)
         assert bad_ds.sidescan.is_valid() is False
 
-        
+
 @pytest.mark.unit
 class TestValidationMissingVars:
     """Test that missing variables raise ValueError."""
@@ -330,7 +332,6 @@ class TestAppendToHistory:
         assert "version" in entry
 
     def test_append_to_history_timestamp_is_iso_format(self, sample_dataset):
-        from datetime import datetime
         sample_dataset.sidescan.append_to_history(
             step_name="test",
             function_name="test_fn",

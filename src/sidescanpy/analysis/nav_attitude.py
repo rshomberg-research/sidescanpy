@@ -20,7 +20,6 @@ import numpy as np
 import xarray as xr
 
 # TODO: impplement logging
-
 # FIXME: trying to get rid of the Stages.
 from sidescanpy.analysis.investigation import StageResult
 

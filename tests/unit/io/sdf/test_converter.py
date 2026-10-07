@@ -17,9 +17,7 @@ import pytest
 
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.sdf.converter import convert
-from sidescanpy.io.sdf.pages import SDFSonarPage
 from tests.unit.io.sdf.conftest import make_sdf_sonar_page
-
 
 # ============================================================
 # BASIC CONVERSION
@@ -401,9 +399,9 @@ class TestSampleRate:
 class TestNavigationAuxRecord:
     def test_nav_record_built_from_pages(self):
         pages = [
-            make_sdf_sonar_page(ping_number=1, latitude=44.1, longitude=-68.1,
+            make_sdf_sonar_page(ping_number=1, latitude_deg=44.1, longitude_deg=-68.1,
                                timestamp=1746136200.0),
-            make_sdf_sonar_page(ping_number=2, latitude=44.2, longitude=-68.2,
+            make_sdf_sonar_page(ping_number=2, latitude_deg=44.2, longitude_deg=-68.2,
                                timestamp=1746136201.0),
         ]
         survey = convert(pages, source_files=[Path("test.sdf")])
@@ -433,7 +431,7 @@ class TestNavigationAuxRecord:
         times = nav["time"].values
         assert np.all(np.diff(times) >= np.timedelta64(0, "ns"))
 
-    def test_nav_record_built_from_pages(self):
+    def test_nav_record_built_from_pages_deg_kwargs(self):
         pages = [
             make_sdf_sonar_page(ping_number=1, latitude_deg=44.1, longitude_deg=-68.1,
                             timestamp=1746136200.0),
@@ -506,7 +504,7 @@ class TestSchemaValidation:
                                ping_number=1),
         ]
         survey = convert(pages, source_files=[Path("test.sdf")])
-        for fk, channel in survey.freq_channels.items():
+        for _fk, channel in survey.freq_channels.items():
             channel.dataset.sidescan.validate()
 
     def test_processing_level_is_raw(self):
@@ -595,6 +593,7 @@ class TestFilterUnknownPages:
     def test_filter_logs_count(self, caplog):
         """Filter unknown pages, log info about how many were dropped."""
         import logging
+
         from sidescanpy.io.sdf.pages import SDFPageHeader, SDFUnknownPage
 
         # Build mixed input: 2 sonar + 1 unknown
@@ -624,7 +623,6 @@ class TestFilterUnknownPages:
     def test_only_unknown_pages_raises(self):
         """If input has only unknown pages, should raise ValueError."""
         from sidescanpy.io.sdf.pages import SDFPageHeader, SDFUnknownPage
-
         from tests.unit.io.sdf.conftest import make_sdf_header_bytes
         raw = make_sdf_header_bytes(page_version=9999)
         header = SDFPageHeader.from_bytes(raw)

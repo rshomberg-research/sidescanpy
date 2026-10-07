@@ -18,16 +18,14 @@ import xarray as xr
 
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.processing.interpolate import (
+    DEFAULT_FIELD_SOURCES,
     interpolate_aux_onto_pings,
     interpolate_onto_channel,
-    DEFAULT_FIELD_SOURCES,
 )
 from tests.conftest import (
-    make_minimal_sidescan_dataset,
     make_minimal_navigation_record,
-    make_minimal_attitude_record,
+    make_minimal_sidescan_dataset,
 )
-
 
 # ============================================================
 # HELPERS — synthetic aux records with known formulas

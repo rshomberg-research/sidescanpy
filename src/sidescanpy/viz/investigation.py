@@ -13,12 +13,11 @@ exist in this library.
 2026 rshomberg@uri.edu
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-
-import matplotlib.pyplot as plt
 
 from sidescanpy.analysis.investigation import StageResult
 from sidescanpy.processing.radiometric import tvg_gain_db

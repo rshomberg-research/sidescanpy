@@ -1,8 +1,9 @@
 """Fixtures for integration tests"""
 
+from pathlib import Path
+
 import pytest
 
-from pathlib import Path 
 
 @pytest.fixture
 def small_jsf_file():

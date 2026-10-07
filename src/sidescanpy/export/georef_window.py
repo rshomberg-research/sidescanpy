@@ -18,7 +18,6 @@ used for this elsewhere.
 
 from __future__ import annotations
 
-import numpy as np
 import pyproj
 import xarray as xr
 

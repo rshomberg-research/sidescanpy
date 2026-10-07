@@ -87,7 +87,7 @@ import logging
 import re
 import struct
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -332,7 +332,7 @@ def calibrate_clock_offset(ss_h5_dir: str | Path, local_utc_offset_hours: float 
         # .timestamp() on a naive datetime uses the *system's* local
         # timezone, not UTC -- force UTC explicitly or this silently
         # reintroduces a timezone-sized error into the calibration.
-        true_utc = (local_dt + timedelta(hours=local_utc_offset_hours)).replace(tzinfo=timezone.utc)
+        true_utc = (local_dt + timedelta(hours=local_utc_offset_hours)).replace(tzinfo=UTC)
         survey = read_survey(path)
         freq_key = next(iter(survey.frequencies))
         first_ping = survey.get_frequency(freq_key).dataset["time"].values[0]

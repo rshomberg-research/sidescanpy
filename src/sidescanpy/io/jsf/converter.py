@@ -21,24 +21,23 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
-from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.jsf.messages import (
-    JSFMessage,
-    SonarDataMessage,
-    PitchRollDataMessage,
-    DopplerVelocityLogDataMessage,
-    PressureSensorReadingMessage,
-    NMEAStringMessage,
-    NMEARMCMessage,
-    NMEAGGAMessage,
-    NMEAGLLMessage,
-)
-
 from sidescanpy.core.schema import (
-    make_empty_navigation_record,
     make_empty_attitude_record,
     make_empty_dvl_record,
+    make_empty_navigation_record,
     make_empty_sensor_record,
+)
+from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.io.jsf.messages import (
+    DopplerVelocityLogDataMessage,
+    JSFMessage,
+    NMEAGGAMessage,
+    NMEAGLLMessage,
+    NMEARMCMessage,
+    NMEAStringMessage,
+    PitchRollDataMessage,
+    PressureSensorReadingMessage,
+    SonarDataMessage,
 )
 
 logger = logging.getLogger(__name__)
@@ -215,7 +214,7 @@ def _build_frequency_channel(
     heave      = np.full(n_pings, np.nan, dtype=np.float32)
 
     for i, (port, stbd) in enumerate(paired_pings):
-        anchor: SonarDataMessage = port if port is not None else stbd 
+        anchor: SonarDataMessage = port if port is not None else stbd
         # Both port and stbd carry the same ping_number/timestamp by JSF
         # convention, so taking from either is equivalent.
         ping_numbers[i] = anchor.ping_number
@@ -407,7 +406,7 @@ def _build_navigation_record(nmea_msgs: list[NMEAStringMessage]) -> xr.Dataset:
 
     if not positional:
         return make_empty_navigation_record(source="extracted_from_nmea_messages")
-    
+
     positional.sort(key=lambda t: t[0])
     times = np.array([t[0] for t in positional], dtype="int64").astype("datetime64[ns]")
     lats  = np.array([t[1] for t in positional], dtype=np.float64)
@@ -438,7 +437,7 @@ def _build_attitude_record(att_msgs: list[PitchRollDataMessage]) -> xr.Dataset:
     """
     if not att_msgs:
         return make_empty_attitude_record(source="pitch_roll_data_message")
-    
+
     sorted_msgs = sorted(att_msgs, key=lambda m: int(m.timestamp))
     n = len(sorted_msgs)
     times = np.fromiter(
@@ -462,7 +461,7 @@ def _build_dvl_record(dvl_msgs: list[DopplerVelocityLogDataMessage]) -> xr.Datas
 
     if not dvl_msgs:
         return make_empty_dvl_record(source="doppler_velocity_log_data_message")
-    
+
     sorted_msgs = sorted(dvl_msgs, key=lambda m: int(m.timestamp))
     n = len(sorted_msgs)
     times = np.fromiter(
@@ -493,7 +492,7 @@ def _build_sensor_record(
     types come online."""
     if not sensor_msgs:
         return make_empty_sensor_record(sensor_type, source="empty")
-    
+
     if sensor_type == "pressure":
         sorted_msgs = sorted(sensor_msgs, key=lambda m: int(m.timestamp))
         n = len(sorted_msgs)
@@ -516,7 +515,7 @@ def _build_sensor_record(
                 "sensor_type": "pressure",
             },
         )
-    
+
     raise NotImplementedError(
         f"Sensor type '{sensor_type}' is not yet supported by the converter"
     )

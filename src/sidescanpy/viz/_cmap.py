@@ -13,8 +13,8 @@ a `Colormap` object, applied by default -- not opt-in -- rather than
 duplicated per call site.
 """
 
-from matplotlib.colors import Colormap
 import matplotlib.pyplot as plt
+from matplotlib.colors import Colormap
 
 NAN_COLOR = "black"
 

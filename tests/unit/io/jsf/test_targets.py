@@ -10,9 +10,12 @@ import sqlite3
 from pathlib import Path
 
 import numpy as np
-import pytest
 
-from sidescanpy.io.jsf.targets import decode_and_correct_window, decode_target_window, read_discover_targets
+from sidescanpy.io.jsf.targets import (
+    decode_and_correct_window,
+    decode_target_window,
+    read_discover_targets,
+)
 
 _SCHEMA = """
 CREATE TABLE Target (

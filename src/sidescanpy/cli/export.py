@@ -74,17 +74,17 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-import pyproj
-
 import matplotlib
+import pyproj
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 import numpy as np
 import xarray as xr
+from matplotlib.patches import Rectangle
 from PIL import Image
 
+from sidescanpy.analysis.investigation import mask_nadir_gap
 from sidescanpy.cli._common import concat_survey_frequency, resolve_freq_keys
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.core import HDF5_CHUNK_PING
@@ -106,8 +106,12 @@ from sidescanpy.export import (
     to_uint8,
     to_uint16,
 )
-from sidescanpy.analysis.investigation import mask_nadir_gap
-from sidescanpy.grids import ResamplingMethod, bbox_from_channel_dataset, resample_channel_to_grid, utm_grid_from_wgs84_bbox
+from sidescanpy.grids import (
+    ResamplingMethod,
+    bbox_from_channel_dataset,
+    resample_channel_to_grid,
+    utm_grid_from_wgs84_bbox,
+)
 from sidescanpy.grids.definition import utm_crs_for_lonlat
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
@@ -1558,7 +1562,7 @@ def run_chip(args: argparse.Namespace) -> int:
                     if need_db:
                         masked = _with_db_var(masked)
                     local_ping = ping_idx - lo
-                    mps = _sample_interval_m(masked)
+                    _sample_interval_m(masked)
                 else:
                     views = {}
                     try:
@@ -1580,8 +1584,10 @@ def run_chip(args: argparse.Namespace) -> int:
                         logger.warning(f"target {t.target_id}: {path.name} has no {exc} (run sidescan-correct --geometric) -- skipping")
                         continue
 
-                def geo_window(style, size_px, jitter_px):
-                    v = views["chip" if style == "chip" else "swath"]
+                def geo_window(style, size_px, jitter_px, channel_idx=channel_idx, orig_bbox=orig_bbox):
+                    # B023: only called within this loop iteration; `views` is unbound on
+                    # the non-geo branch so it cannot be bound as a default arg.
+                    v = views["chip" if style == "chip" else "swath"]  # noqa: B023
                     result = _extract_geo_style_window(
                         v.ds, v.target, channel_idx, v.local_ping, style, args.render_level, size_px, jitter_px, rng, v.mps,
                         v.items, v.lo, resolution_m_override=resolution_m_override, backscatter_var=backscatter_var,

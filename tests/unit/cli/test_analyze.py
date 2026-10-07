@@ -15,9 +15,9 @@ import pytest
 
 from sidescanpy.cli import analyze
 from sidescanpy.core import HDF5_CHUNK_PING
+from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
 from tests.conftest import make_minimal_sidescan_dataset
-from sidescanpy.core.survey import SideScanSurvey
 
 
 def _decay_survey(n_pings=10, n_samples=800):

@@ -5,23 +5,24 @@ Tests matplotlib plotting functions (verify they don't crash and return
 correct types; visual verification is manual).
 """
 
-import pytest
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pytest
 from matplotlib.colors import PowerNorm
 from pyproj import CRS
 
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.viz.gridded import (
-    plot_gridded_raster,
-    plot_gridded_with_coverage,
-    plot_gridded_multiple_methods,
-    export_gridded_png,
     _axis_labels,
     _crs_label,
     _mask_floor_clip,
+    export_gridded_png,
+    plot_gridded_multiple_methods,
+    plot_gridded_raster,
+    plot_gridded_with_coverage,
 )
+
 
 @pytest.fixture
 def sample_raster():
@@ -31,13 +32,13 @@ def sample_raster():
         resolution_m=5000.0,
     )
     backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
-    
+
     raster = SideScanGriddedRaster(
         grid_def=grid,
         backscatter=backscatter,
         channel_name="455 kHz",
     )
-    
+
     # Add n_contributing_samples (as would be done by resample_channel_to_grid)
     n_contrib = np.random.randint(10, 100, size=backscatter.shape)
     n_contrib[np.isnan(backscatter)] = 0

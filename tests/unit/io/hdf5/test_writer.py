@@ -10,22 +10,19 @@ Round-trip identity is tested separately in test_round_trip.py.
 """
 
 import json
-from pathlib import Path
 
 import h5netcdf
-import numpy as np
 import pytest
 
 from sidescanpy.core.schema import (
-    HDF5_GROUP_AUX_STREAMS,
-    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_ATTITUDE,
+    HDF5_GROUP_AUX_STREAMS,
     HDF5_GROUP_DVL,
-    HDF5_GROUP_SENSORS,
     HDF5_GROUP_FREQUENCIES,
+    HDF5_GROUP_NAVIGATION,
+    HDF5_GROUP_SENSORS,
 )
 from sidescanpy.io.hdf5.writer import write_survey
-
 
 # ============================================================
 # FILE CREATION

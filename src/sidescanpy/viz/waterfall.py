@@ -196,7 +196,7 @@ def plot_waterfall(
     else:
         fig = ax.figure
 
-    
+
 
     # Plot port (will be on the left side via negative x or signed values)
     x_port, y_port_clean, c_port = _mask_invalid_coord(x_port, y_port, bs[:, 0, :])

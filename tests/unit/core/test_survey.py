@@ -8,7 +8,6 @@ management (navigation, attitude, dvl, sensors).
 """
 
 import logging
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -18,7 +17,6 @@ from sidescanpy.core.survey import (
     SideScanFrequencyChannel,
     SideScanSurvey,
 )
-
 
 # ============================================================
 # SideScanFrequencyChannel

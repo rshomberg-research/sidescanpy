@@ -15,13 +15,12 @@ import xarray as xr
 
 from sidescanpy.core.survey import SideScanFrequencyChannel
 from sidescanpy.processing.slicing import (
+    slice_by_bbox,
+    slice_by_ground_range,
     slice_by_pings,
     slice_by_samples,
     slice_by_time,
-    slice_by_bbox,
-    slice_by_ground_range,
 )
-
 
 # ============================================================
 # HELPERS

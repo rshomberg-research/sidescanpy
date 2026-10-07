@@ -13,13 +13,13 @@ or processing_level.
 """
 
 import json
+
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
 from sidescanpy.processing.geometric import compute_geometric_ranges
-
 
 # ============================================================
 # HELPERS

@@ -17,10 +17,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.io.jsf import read_jsf
 from sidescanpy.io.jsf.converter import convert
-from sidescanpy.io.hdf5 import read_survey, write_survey
-
 
 SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 

@@ -8,13 +8,13 @@ for tracking processing state.
 2026 rshomberg@uri.edu
 """
 
+import json
 import logging
-import json 
-from datetime import datetime, timezone
-from typing import Optional, Any 
+from datetime import UTC, datetime
+from typing import Any
 
-import xarray as xr 
-import numpy as np 
+import numpy as np
+import xarray as xr
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,8 @@ REQUIRED_ATTRS  : set = {
     "processing_history",
 }
 KNOWN_PROCESSING_LEVELS : set = {
-    "raw", 
-    "radiometric", 
+    "raw",
+    "radiometric",
 }
 
 
@@ -84,22 +84,22 @@ HDF5_COMPRESSION_LEVEL  : int = 4
 @xr.register_dataset_accessor("sidescan")
 class SideScanAccessor:
     """
-    xarray.Dataset accessor for sidescan specific validation and utilities 
+    xarray.Dataset accessor for sidescan specific validation and utilities
 
     Provides methods to validate datasets against the SideScanPy schema, track
     processing state, and compute derived quantities like slant range.
 
     Accessed via `ds.sidescan` on any xarray.Dataset
-        
+
     Examples
     --------
     >>> import xarray as xr
     >>> ds = xr.Dataset(...)
     >>> ds.sidescan.validate()  # Raises ValueError if invalid
     >>> ds.sidescan.is_valid()  # Returns bool
-    >>> ds.sidescan.processing_level  # Returns str    
+    >>> ds.sidescan.processing_level  # Returns str
     """
-    
+
     _ds : xr.Dataset
 
     def __init__(self, ds: xr.Dataset) -> None:
@@ -177,7 +177,7 @@ class SideScanAccessor:
             return True
         except ValueError:
             return False
-        
+
     @property
     def processing_level(self) -> str:
         """
@@ -265,7 +265,7 @@ class SideScanAccessor:
         history = self.processing_history
         history.append({
             "step": step_name,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "params": params,
             "function": function_name,
             "version": version,
@@ -514,7 +514,7 @@ class SensorRecordAccessor:
 
     def is_empty(self) -> bool:
         return self._ds.sizes.get("obs", 0) == 0
-    
+
     # ============================================================
 # EMPTY RECORD BUILDERS
 # ============================================================

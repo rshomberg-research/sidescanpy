@@ -3,14 +3,14 @@
 
 JSF files are from EdgeTech Side Scan Sonars. They are binary formatted and
 contain a series of messages. Each message starts with a header that contains
-basic information about the message. 
+basic information about the message.
 
-    
+
 2025 rshomberg@uri.edu
 '''
 
-# TODO: organize and document  
-# - [ ] include struct symbol explanations 
+# TODO: organize and document
+# - [ ] include struct symbol explanations
 
 # FIXME: right now a lot of the conversion is happening inside the messages.py
 # and occurring on read. Consider modifying to read as raw jsf messages and
@@ -20,23 +20,18 @@ basic information about the message.
 
 
 import logging
-from pathlib import Path
 import struct
-import pynmea2
-
-from dataclasses import dataclass, field, astuple
 from abc import ABC, abstractmethod
+from dataclasses import astuple, dataclass, field
+from datetime import UTC, datetime, timedelta, timezone
+from typing import ClassVar, Dict, Optional, Type
 
-import struct
-from typing import ClassVar, Tuple, Optional
-from typing import ClassVar, Type, Dict
-
-from datetime import datetime, timezone, timedelta
 import numpy as np
+import pynmea2
 
 logger = logging.getLogger(__name__)
 
-# FIXME: just refactored and changed name to JSFMessage from JSFMessageBody.  
+# FIXME: just refactored and changed name to JSFMessage from JSFMessageBody.
 # It now contains the header as well
 
 @dataclass
@@ -59,7 +54,7 @@ class JSFMessageHeader:
     def from_bytes(cls, data: bytes) -> "JSFMessageHeader":
         unpacked = cls.STRUCT.unpack(data[:cls.STRUCT.size])
         return cls(*unpacked)
-    
+
     def to_bytes(self) -> bytes:
         """Packs the dataclass fields into a 16-byte binary buffer."""
         return self.STRUCT.pack(*astuple(self))
@@ -81,7 +76,7 @@ class JSFMessage(ABC):
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         if hasattr(cls, 'MESSAGE_TYPE') and cls.MESSAGE_TYPE is not getattr(JSFMessage, 'MESSAGE_TYPE', None):
-            JSFMessage._registry[cls.MESSAGE_TYPE] = cls    
+            JSFMessage._registry[cls.MESSAGE_TYPE] = cls
 
     @classmethod
     def from_bytes(cls, _header: 'JSFMessageHeader', data: bytes) -> 'JSFMessage':
@@ -91,7 +86,7 @@ class JSFMessage(ABC):
         msg_cls = cls._registry.get(_header.message_type)
         if not msg_cls:
             raise ValueError(f"Unsupported message type: {_header.message_type}")
-        
+
         return msg_cls.from_bytes(_header, data)
 
     @classmethod
@@ -132,7 +127,7 @@ class SonarDataMessage(JSFMessage):
     _raw_timestamp_sec: int = field(repr=False)     # seconds since 1970
     _starting_depth:    int = field(repr=False)     # ???: "starting dep (window offset) in samples"
     ping_number:        int = field(repr=True)      # sequential ping number, matched for channels
-    
+
     _reserved01:  int = field(repr=False)
     _reserved02:  int = field(repr=False)
 
@@ -221,7 +216,7 @@ class SonarDataMessage(JSFMessage):
 
     _raw_sample_freq:   int = field(repr=False) # sample freqency (Hz) usually (see Data Format)
     _pulse_id:          int = field(repr=False) # ???: outgoing pulse identifier (not used?)
-    
+
     _raw_altitude:  int = field(repr=False) # altitude (mm (see validity flags))
     sound_speed_ms:    Optional[float]         # sound speed (m/s) (see validity flags)
     mixer_freq:     float                   # mixer frequency (Hz), should be close to center frequency
@@ -239,7 +234,7 @@ class SonarDataMessage(JSFMessage):
     _number_of_pulses:  int = field(repr=False) # Number of pulses in the water (should be 1)
 
     # Orientation Sensor Data Block
-    _raw_compass_heading:   int = field(repr=False) # Compass heading (1/100 deg) (see validity flag) 
+    _raw_compass_heading:   int = field(repr=False) # Compass heading (1/100 deg) (see validity flag)
     # FIXME: unclear if compass is magnetic or True
     _raw_pitch:             int = field(repr=False) # Pitch (degrees/180)&32768.0 positive bow up   (see validity flags)
     _raw_roll:              int = field(repr=False) # Roll  (degrees/180)&32768.0 positive port up  (see validity flags)
@@ -250,7 +245,7 @@ class SonarDataMessage(JSFMessage):
     _trigger_source_code:   int = field(repr=False) # ???: Trigger source (see docs)
     _mark_number_code:      int = field(repr=False) # ???: Mark number (see MSB)
 
-    # NMEA Navigation Data Block  
+    # NMEA Navigation Data Block
     _position_fix_hr:    int = field(repr=False) # time (hour) of lat/lon fix (see validity flags)
     _position_fix_min:   int = field(repr=False) # time (minute) of lat/lon fix (see validity flags)
     _position_fix_sec:   int = field(repr=False) # time (second) of lat/lon fix (see validity flags)
@@ -345,30 +340,31 @@ class SonarDataMessage(JSFMessage):
 
         # TODO: clean up timestamp fixes
 
-        # NOTE: from docs -   
+        # NOTE: from docs -
         # For higher resolution (milliseconds) use the Year, and Day values of
         # bytes 156 to 159, and then use the milliSecondsToday value of bytes
         # 200-203 to complete the timestamp
-        # base_date = datetime(self._cpu_time_year, 1, 1, 
+        # base_date = datetime(self._cpu_time_year, 1, 1,
         #                      tzinfo=timezone.utc,
-        #                      ) 
+        #                      )
         # dt = base_date + timedelta(days=self._cpu_time_day - 1, milliseconds=self._timestamp_day_offset_ms)
         # logger.debug((dt, dt.timestamp(), float(dt.timestamp())))
         # self.timestamp_ns = int(np.datetime64(dt, "ns").astype('datetime64[ns]').astype(np.int64))
-        base_date = datetime(self._cpu_time_year, 1, 1) 
+        base_date = datetime(self._cpu_time_year, 1, 1)
         dt = base_date + timedelta(days=self._cpu_time_day - 1, milliseconds=self._timestamp_day_offset_ms)
-        
+
         # Convert instantly to a flat, safe integer
         self.timestamp_ns = int(np.datetime64(dt, "ns").astype(np.int64))
 
         # TODO: why does this not work
         # self.timestamp = self._raw_timestamp_sec + self._timestamp_day_offset_ms % 1e3
 
-        # NOTE: from docs -  
+        # NOTE: from docs -
         # MSBs – Most Significant Bits – High order bits to extend 16 bits
         # unsigned short values to 20 bits. The 4MSB bits become the most
         # significant portion of the new 20 bit value
-        combine_20bit = lambda msb,lsb: (msb << 16) | lsb
+        def combine_20bit(msb, lsb):
+            return (msb << 16) | lsb
 
         msb_field = self._most_significant_bits
         start_freq_msb  = (msb_field >> 0) & 0xF    # bits  0- 3
@@ -385,8 +381,8 @@ class SonarDataMessage(JSFMessage):
         lsb2_field = self._least_significant_bits2
         speed_sub_frac  = (lsb2_field) & 0xF          # bits  0- 3
         sweep_length_us = (lsb2_field >> 4) & 0x3FF   # bits  4-13
-        reserved        = (lsb2_field >> 14) & 0x3    # bits 14-15
-    
+        _reserved       = (lsb2_field >> 14) & 0x3    # bits 14-15
+
         self.course = self._raw_course_msb + course_frac / 256.0      # FIXME: check math
         self.speed  = self._raw_speed_msb/10 + speed_sub_frac/100.0   # FIXME: check math
 
@@ -395,57 +391,57 @@ class SonarDataMessage(JSFMessage):
         # FIXME: do validity flags better (see DVL message)
         # FIXME: change from None to np.nan
         if validity_flags['lat_lon'] is not True:
-            logger.debug(f"Invalid lat/lon")
+            logger.debug("Invalid lat/lon")
             self.latitude   = None
             self.longitude  = None
         if validity_flags['course'] is not True:
-            logger.debug(f"Invalid course")
+            logger.debug("Invalid course")
             self.course = None
         if validity_flags['heading'] is not True:
-            logger.debug(f"Invalid heading")
+            logger.debug("Invalid heading")
             self.heading_deg = None
         if validity_flags['pressure'] is not True:
-            logger.debug(f"Invalid pressure value")
+            logger.debug("Invalid pressure value")
             self.pressure_psi = None
         if validity_flags['pitch_roll'] is not True:
-            logger.debug(f"Invalid pitch/role value")
+            logger.debug("Invalid pitch/role value")
             self.pitch_deg  = None
             self.roll_deg   = None
         if validity_flags['altitude'] is not True:
-            logger.debug(f"Invalid altitude value")
+            logger.debug("Invalid altitude value")
             self.altitude_m = None
         if validity_flags['water_temp'] is not True:
-            logger.debug(f"Invalid water temperature")
+            logger.debug("Invalid water temperature")
             self.water_temp_C = None
         if validity_flags['depth'] is not True:
-            logger.debug(f"Invalid depth value")
+            logger.debug("Invalid depth value")
             self.depth_m = None
         if validity_flags['annotation'] is not True:
-            logger.debug(f"Invalid annotation value")
+            logger.debug("Invalid annotation value")
             self.annotation_string = None
         if validity_flags['cable_counter'] is not True:
-            logger.debug(f"Invalid cable out value")
+            logger.debug("Invalid cable out value")
             self.cable_out_m = None
         if validity_flags['kp'] is not True:
-            logger.debug(f"Invalid kilometers of pipe value")
+            logger.debug("Invalid kilometers of pipe value")
             self.pipe_length_km = None
         if validity_flags['position_interpolated'] is not True:
             # TODO: figure out position
-            logger.debug(f"Position not interpolated")
+            logger.debug("Position not interpolated")
             # NOTE: Unless the Validity Flag Bit 13 “Position Interpolated” is
             # set, the position stored in message 80 is the value recorded by
             # Discover and is not the sonar’s position. It is the last
             # navigation position received prior to pinging and Layback is not
             # applied.
         if validity_flags['water_sound_speed'] is not True:
-            logger.debug(f"Invalid sound speed value")
+            logger.debug("Invalid sound speed value")
             self.sound_speed = None
 
         # Get position information
         self.gps_offset_x = self._raw_x_distance_antenna_to_tow_point/1e2
         self.gps_offset_y = self._raw_y_distance_antenna_to_tow_point/1e2
 
-        self._raw_pipe_dist_km  # TODO: unsure what this is for
+        self._raw_pipe_dist_km  # noqa: B018  FIXME: bare attribute access, no effect; unused field -- TODO: unsure what this is for
 
         if self._coord_units_code == 1:
             raise NotImplementedError(f"Coordinate Units ({self._coord_units_code} (mm) not implemented)")    # TODO
@@ -458,7 +454,7 @@ class SonarDataMessage(JSFMessage):
             raise ValueError(f"Invalid coordinate code: {self._coord_units_code}")
         # TODO: check validity bit 13 "Position Interpolated"
         # TODO: adjust units
-        
+
 
         # Pulse Information
         byte_list = [
@@ -487,16 +483,16 @@ class SonarDataMessage(JSFMessage):
             self._annotation_str23,
             self._annotation_str24,
         ]   # ???: always seems to be empty
-        annotation_string = ''.join(bytes(byte).decode() for byte in byte_list)
+        _annotation_string = ''.join(bytes(byte).decode() for byte in byte_list)
 
-        num_samples = combine_20bit(samples_msb, self._raw_num_samples_lsb)
+        _num_samples = combine_20bit(samples_msb, self._raw_num_samples_lsb)
         # logger.debug((samples_msb, self._raw_num_samples_lsb))
         # logger.debug(f"Number of samples {num_samples}")
         # FIXME: this value is lower than the number of bytes, and the MSB seems to be 0
         # NOTE: it is half. I think you multiply by two to get number of bytes
         self.sample_interval = (self._raw_sampling_interval_ns_msb + sample_interval_frac / 256.0) / 1e9
-        self._gain_factor           # ???: do we need to use this
-        self._user_transmit_level   # ???: do we need to use this
+        self._gain_factor  # noqa: B018  FIXME: bare attribute access, no effect; unused field -- ???: do we need to use this
+        self._user_transmit_level  # noqa: B018  FIXME: bare attribute access, no effect; unused field -- ???: do we need to use this
         self.transmit_freq_start    = combine_20bit(start_freq_msb,self._raw_transmit_freq_start_lsb)   * 1e1   # daHz -> Hz
         self.transmit_freq_end      = combine_20bit(end_freq_msb,self._raw_transmit_freq_end_lsb)       * 1e1   # daHz -> Hz
 
@@ -507,7 +503,7 @@ class SonarDataMessage(JSFMessage):
         # TODO: see validity flags
         self.depth_m          = self._raw_depth / 1e3 # mm -> m
         # TODO: see validity flags
-        
+
         if self._data_format == 0:      # one short per sample (total bytes = 2 * samples)
             self.sample_freq = self._raw_sample_freq
         elif self._data_format == 1:    # two shorts per sample (real, imag) (total bytes = 4 * samples)
@@ -526,7 +522,7 @@ class SonarDataMessage(JSFMessage):
 
         # Weighting Factor
         # TODO: all data MUST be scaled by 2**(-N)
-        self._weighting_factor  # Weighting Factor for Block Floating Point Expansion -- defined as 2 to N Volts for LSB
+        self._weighting_factor  # noqa: B018  FIXME: bare attribute access, no effect; unused field -- Weighting Factor for Block Floating Point Expansion -- defined as 2 to N Volts for LSB
         assert self._number_of_pulses==1, f"Number of pulses ({self._number_of_pulses}) != 1"
 
         # Orientation Sensor Block
@@ -547,9 +543,9 @@ class SonarDataMessage(JSFMessage):
 
         # TODO: check position fix compared to cpu time
         # print((self._position_fix_sec, self._cpu_time_sec))
-        
 
-        self._max_abs_adc_val   # ???: error checking?
+
+        self._max_abs_adc_val  # noqa: B018  FIXME: bare attribute access, no effect; unused field -- ???: error checking?
 
         byte_list = [
             self._sonar_software_version1,
@@ -559,15 +555,15 @@ class SonarDataMessage(JSFMessage):
             self._sonar_software_version5,
             self._sonar_software_version6,
         ]
-        sonar_software_version = ''.join(bytes(byte).decode() for byte in byte_list)    # ???: appears to be empty
+        _sonar_software_version = ''.join(bytes(byte).decode() for byte in byte_list)    # ???: appears to be empty
 
         if self._init_spherical_correction_factor == -1:
-            raise NotImplementedError(f"Initial spherical correction factor (-1) is disabled")
+            raise NotImplementedError("Initial spherical correction factor (-1) is disabled")
         self._init_spherical_correction_factor/1e2  # ???: not sure what this does but it is 0
 
         if self._packet_number > 1:
-            raise NotImplementedError(f"Multiple packets not implemented")
-        
+            raise NotImplementedError("Multiple packets not implemented")
+
         self._raw_adc_decimation/1e2 # ???: always 1.0?
 
         self.water_temp_C = self._raw_water_temp / 1e1    # TODO: check validity flags
@@ -586,7 +582,7 @@ class SonarDataMessage(JSFMessage):
         fixed_bytes = data[:240]
         if len(fixed_bytes) < 240:
             raise ValueError(f"Truncated message body header: expected 240 bytes, got {len(fixed_bytes)}")
-            
+
         fixed_fields = cls.STRUCT.unpack(fixed_bytes)
 
         # 2. Safely unpack explicit offsets using standard offsets (from your spec)
@@ -602,7 +598,7 @@ class SonarDataMessage(JSFMessage):
             raise ValueError("Data is compressed and must be decompressed (see docs)")
         else:
             raise ValueError(f"Invalid data format: {data_format} (see docs)")
-        
+
         # 4. Compute expected sizes and validate buffer integrity
         bytes_per_sample = 2 * ints_per_sample
         expected_data_bytes = num_samples * bytes_per_sample
@@ -631,13 +627,13 @@ class SonarDataMessage(JSFMessage):
         ).copy()
 
         # 6. Instantiate using keyword header injection
-        obj = cls(_header=_header, *fixed_fields, _raw_trace_data=raw_trace_data)
+        obj = cls(*fixed_fields, _header=_header, _raw_trace_data=raw_trace_data)
         # obj._raw_header_bytes = fixed_fields  # Preserved internally for serialization symmetry
         return obj
-    
+
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
     @property
     def timestamp(self) -> np.datetime64:
         """Returns the nanosecond timestamp as a NumPy datetime64 object."""
@@ -691,8 +687,8 @@ class NavigationOffsetsMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "NavigationOffsetsMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
-    
+        return cls(*values, _header=_header)
+
     def to_bytes(self) -> bytes:
         # Fast explicit structural packing
         return self.STRUCT.pack(
@@ -718,7 +714,7 @@ class SystemInformationMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "SystemInformationMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
@@ -737,11 +733,11 @@ class FileTimeStampMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "FileTimeStampMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
 @dataclass
 class FilePaddingMessage(JSFMessage):
     # TODO: document
@@ -751,17 +747,17 @@ class FilePaddingMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "FilePaddingMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
 
 
 # Auxiliary Messages
-from dataclasses import dataclass, field
-import struct
-from typing import ClassVar
-import pynmea2  # Assuming pynmea2 is being used
+import struct  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from typing import ClassVar  # noqa: E402
+
 
 @dataclass
 class NMEAStringMessage(JSFMessage):
@@ -779,7 +775,7 @@ class NMEAStringMessage(JSFMessage):
 
     # Dynamic string field appended to the end of bytes
     _raw_message: str = field(repr=False)
-    
+
     # Calculated field initialized post-construction
     timestamp: float = field(init=False)
 
@@ -801,7 +797,7 @@ class NMEAStringMessage(JSFMessage):
     def _parse_body(cls, _header: 'JSFMessageHeader', data: bytes) -> "NMEAStringMessage":
         # 1. Unpack the fixed header parameters
         fixed_fields = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        
+
         # 2. Extract and decode the remaining variable-length string payload
         message_str = bytes(data[cls.STRUCT.size:]).decode('ascii', errors='replace').rstrip('\x00')
         logger.debug(f"{message_str}")
@@ -813,11 +809,11 @@ class NMEAStringMessage(JSFMessage):
                 return subclass(*fixed_fields, _raw_message=message_str, _header=_header)
 
         # 4. Fall back to the generic message if no prefix matches
-        logger.debug(f"No message string matches for prefix")
+        logger.debug("No message string matches for prefix")
         parsed = pynmea2.parse(message_str)
         logger.debug(f"{parsed}")
         # FIXME: the fall back is not working, it tries to use DPT (i think fixed)
-        return NMEAGenericMessage(*fixed_fields, _raw_message=message_str, _header=_header)       
+        return NMEAGenericMessage(*fixed_fields, _raw_message=message_str, _header=_header)
 
     def to_bytes(self) -> bytes:
         """Serializes fixed fields and appends the variable length NMEA string."""
@@ -832,10 +828,10 @@ class NMEAStringMessage(JSFMessage):
         )
         # Encode the dynamic NMEA string back to ascii bytes
         string_bytes = self._raw_message.encode('ascii', errors='replace')
-        
+
         return fixed_bytes + string_bytes
 
-@dataclass 
+@dataclass
 class NMEAGenericMessage(NMEAStringMessage, nmea_prefix=None):
 
     def __post_init__(self):
@@ -890,7 +886,7 @@ class NMEAVTGMessage(NMEAStringMessage, nmea_prefix="$GPVTG"):
 
     def __repr__(self) -> str:
         return super().__repr__()
-    
+
 @dataclass
 class NMEAGGAMessage(NMEAStringMessage, nmea_prefix="$GPGGA"):
     latitude:           float = field(init=False, default=float("nan"))
@@ -932,7 +928,7 @@ class NMEAGGAMessage(NMEAStringMessage, nmea_prefix="$GPGGA"):
 
     def __repr__(self) -> str:
         return super().__repr__()
-    
+
 @dataclass
 class NMEARMCMessage(NMEAStringMessage, nmea_prefix="$GPRMC"):
     latitude:        float = field(init=False)
@@ -958,7 +954,7 @@ class NMEAGLLMessage(NMEAStringMessage, nmea_prefix="$GPGLL"):
         self.longitude = parsed.longitude
         self.lat_dir   = parsed.lat_dir    # keep for diagnostics
         self.lon_dir   = parsed.lon_dir
-        
+
     def __repr__(self) -> str:
         return super().__repr__()
 
@@ -986,20 +982,20 @@ class NMEAZDAMessage(NMEAStringMessage, nmea_prefix="$GPZDA"):
         super().__post_init__()
         parsed = self.parse_sentence()
         logger.debug(f"Parsed NMEA ZDA String: {parsed}")
-        
+
         # Keep tzinfo for live operations, but see below for the pickle fix
         self.tzinfo = parsed.tzinfo
         self.day    = parsed.day
         self.month  = parsed.month
-        self.year   = parsed.year 
-        self.local_zone  = parsed.local_zone 
+        self.year   = parsed.year
+        self.local_zone  = parsed.local_zone
         self.local_zone_minutes = parsed.local_zone_minutes
 
     def __repr__(self) -> str:
         return super().__repr__()
 
     # --- ADD SERIALIZATION OVERRIDES ---
-    
+
     def __getstate__(self):
         """Removes the unpicklable pynmea2 tzinfo object before pickling."""
         state = self.__dict__.copy()
@@ -1013,13 +1009,13 @@ class NMEAZDAMessage(NMEAStringMessage, nmea_prefix="$GPZDA"):
         self.__dict__.update(state)
         # Reconstruct tzinfo on the fly using standard Python datetime tools
         # to ensure it behaves normally after loading.
-        from datetime import timezone, timedelta
+        from datetime import timedelta
         try:
             hours = int(self.local_zone or 0)
             minutes = int(self.local_zone_minutes or 0)
             self.tzinfo = timezone(timedelta(hours=hours, minutes=minutes))
         except Exception:
-            self.tzinfo = timezone.utc
+            self.tzinfo = UTC
 
 @dataclass
 class PitchRollDataMessage(JSFMessage):
@@ -1060,7 +1056,7 @@ class PitchRollDataMessage(JSFMessage):
     pitch_deg:  Optional[float] = field(init=False, default=None) # deg positive bow up
     roll_deg:   Optional[float] = field(init=False, default=None) # deg positive port up
 
-    heave_m:      Optional[float] = field(init=False, default=None) # meters positive down 
+    heave_m:      Optional[float] = field(init=False, default=None) # meters positive down
     heading_deg:    Optional[float] = field(init=False, default=None) # deg (0-360)
     yaw_deg:        Optional[float] = field(init=False, default=None) # deg (0-360)
 
@@ -1140,11 +1136,11 @@ class PitchRollDataMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "PitchRollDataMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
 @dataclass
 class PressureSensorReadingMessage(JSFMessage):
     MESSAGE_TYPE: ClassVar[int] = 2060
@@ -1203,35 +1199,35 @@ class PressureSensorReadingMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "PressureSensorReadingMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         # TODO: at some point write a to_bytes for each message type and a writer.py for generating jsf files.
         raise NotImplementedError
-    
+
 
 def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME: maybe move this
     """
     Calculate altitude, pitch, and roll from DVL 4-beam distances using plane fitting.
-    
+
     This method fits a plane to the 4 beam endpoints and extracts:
     - Altitude (vertical distance to the fitted plane)
     - Pitch (rotation about cross-track axis)
     - Roll (rotation about along-track axis)
-    
+
     DVL beams are typically arranged in a Janus configuration:
     - Beam 1: Forward-starboard (+x, +y)
     - Beam 2: Aft-starboard (-x, +y)
     - Beam 3: Aft-port (-x, -y)
     - Beam 4: Forward-port (+x, -y)
-    
+
     Parameters:
     -----------
     beam_distances : array-like
         Bottom distances for 4 beams, shape (n_samples, 4) or (4,)
     beam_angle : float
         Beam angle from vertical in degrees (default: 20.0)
-        
+
     Returns:
     --------
     results : dict
@@ -1249,19 +1245,19 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
 
     beam_distances = np.asarray(beam_distances)
     beam_angle_rad = np.radians(beam_angle)
-    
+
     # Handle both single measurement and time series
     single_measurement = beam_distances.ndim == 1
     if single_measurement:
         beam_distances = beam_distances.reshape(1, -1)
-    
+
     n_samples = beam_distances.shape[0]
-    
+
     # Define beam unit vectors in DVL coordinate frame
     # DVL frame: x=forward, y=starboard, z=down
     sin_a = np.sin(beam_angle_rad)
     cos_a = np.cos(beam_angle_rad)
-    
+
     # Beam unit vectors (normalized)
     beam_vectors = np.array([
         [sin_a, sin_a, cos_a],    # Beam 1: forward-starboard
@@ -1269,7 +1265,7 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
         [-sin_a, -sin_a, cos_a],  # Beam 3: aft-port
         [sin_a, -sin_a, cos_a]    # Beam 4: forward-port
     ])
-    
+
     # Initialize output arrays
     altitude = np.zeros(n_samples)
     pitch = np.zeros(n_samples)
@@ -1279,12 +1275,12 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
     plane_normals = np.zeros((n_samples, 3))
     all_bottom_points = np.zeros((n_samples, 4, 3))
     altitude_per_beam = np.zeros((n_samples, 4))
-    
+
     for i in range(n_samples):
         # Get valid beams
         valid = ~np.isnan(beam_distances[i]) & (beam_distances[i] > 0)
         n_valid = np.sum(valid)
-        
+
         if n_valid < 3:
             # Need at least 3 points to fit a plane
             quality_flag[i] = 2
@@ -1292,16 +1288,16 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
             pitch[i] = np.nan
             roll[i] = np.nan
             continue
-        
+
         # Calculate 3D positions of beam endpoints
         # bottom_point = beam_distance * beam_unit_vector
         bottom_points = beam_distances[i, valid, np.newaxis] * beam_vectors[valid]
         all_bottom_points[i, valid] = bottom_points
-        
+
         # Fit plane to bottom points using least squares
         # Plane equation: ax + by + cz + d = 0
         # Normalized form: nx*x + ny*y + nz*z = d (where [nx,ny,nz] is unit normal)
-        
+
         if n_valid == 3:
             # Exactly 3 points - compute plane directly
             p1, p2, p3 = bottom_points
@@ -1314,47 +1310,47 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
             # Fit plane by finding normal vector that minimizes squared distances
             centroid = np.mean(bottom_points, axis=0)
             centered = bottom_points - centroid
-            
+
             # SVD to find best-fit plane
             _, _, vh = np.linalg.svd(centered)
             normal = vh[-1]  # Last row = normal to best-fit plane
-        
+
         # Ensure normal points upward (negative z in DVL frame)
         if normal[2] > 0:
             normal = -normal
-        
+
         plane_normals[i] = normal
-        
+
         # Calculate altitude as distance from origin to plane along z-axis
         # Distance from origin to plane: d = normal · point_on_plane
         d = np.dot(normal, bottom_points[0])
         altitude[i] = d / abs(normal[2])  # Project onto vertical
-        
+
         # Calculate pitch and roll from plane normal
         # Normal vector: [nx, ny, nz] where nz ≈ -1 for level bottom
         # Pitch: rotation about y-axis (cross-track)
         # Roll: rotation about x-axis (along-track)
-        
+
         nx, ny, nz = normal
-        
+
         # pitch = arctan(nx / -nz)  # positive when bow down
         # roll = arctan(ny / -nz)   # positive when starboard down
         pitch[i] = np.degrees(np.arctan2(nx, -nz))
         roll[i] = np.degrees(np.arctan2(ny, -nz))
-        
+
         # Calculate residuals (how well points fit the plane)
         distances_to_plane = np.abs(np.dot(bottom_points, normal) - d)
         altitude_std[i] = np.sqrt(np.mean(distances_to_plane**2))
-        
+
         # Altitude per beam (vertical component only)
         altitude_per_beam[i, valid] = bottom_points[:, 2]
-        
+
         # Quality flag
         if altitude_std[i] > 0.5:
             quality_flag[i] = 1  # Suspect - high residuals
         elif n_valid < 4:
             quality_flag[i] = 1  # Suspect - missing beam
-    
+
     # Prepare results
     results = {
         'altitude': altitude,
@@ -1367,7 +1363,7 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
         'quality_flag': quality_flag,
         'n_valid_beams': np.sum(~np.isnan(beam_distances) & (beam_distances > 0), axis=1)
     }
-    
+
     # If single measurement, return scalars
     if single_measurement:
         for key in ['altitude', 'pitch', 'roll', 'altitude_std', 'n_valid_beams']:
@@ -1376,7 +1372,7 @@ def calculate_dvl_altitude_plane_fit(beam_distances, beam_angle=20.0):  # FIXME:
         results['altitude_per_beam'] = results['altitude_per_beam'][0]
         results['bottom_points'] = results['bottom_points'][0]
         results['plane_normal'] = results['plane_normal'][0]
-    
+
     return results
 
 @dataclass
@@ -1426,7 +1422,7 @@ class DopplerVelocityLogDataMessage(JSFMessage):
     timestamp:      float = field(init=False)
 
     bottom_dist:    Optional[float] = field(init=False, default=None) # meters
-    
+
     bottom_vel_x:   Optional[float] = field(init=False, default=None) # m/s
     bottom_vel_y:   Optional[float] = field(init=False, default=None) # m/s
     bottom_vel_z:   Optional[float] = field(init=False, default=None) # m/s
@@ -1472,9 +1468,9 @@ class DopplerVelocityLogDataMessage(JSFMessage):
 
         validity_flags = self.parse_validity_flags(self._data_validity_flags)
         if validity_flags['error_detected']:    # FIXME: not sure what to do with this
-            logger.warning(f"DVL Error detected")
+            logger.warning("DVL Error detected")
             return
-        
+
 
         if validity_flags['earth_coord']:   # FIXME: what should I do with these
             logger.debug("DVL uses earth coordinates")
@@ -1490,21 +1486,21 @@ class DopplerVelocityLogDataMessage(JSFMessage):
             ]).mean() / 1e2 # cm -> m # ???: not sure if this is right
             # FIXME: this should be based fitting a plane
 
-        logger.debug((f'Botom Dist = {np.array([
+        logger.debug(f'Botom Dist = {np.array([
                 self._raw_bottom_dist1,
                 self._raw_bottom_dist2,
                 self._raw_bottom_dist3,
-                self._raw_bottom_dist4,                
-            ]) / 1e2}'))
+                self._raw_bottom_dist4,
+            ]) / 1e2}')
         logger.debug(f'Bottom Dist (mean) = {self.bottom_dist}')
-        
+
         # FIXME: this is in utils but not used
         # beam_results = calculate_dvl_altitude_plane_fit(
         #     np.array([
         #         self._raw_bottom_dist1,
         #         self._raw_bottom_dist2,
         #         self._raw_bottom_dist3,
-        #         self._raw_bottom_dist4,                
+        #         self._raw_bottom_dist4,
         #     ]) / 1e2 # cm -> m
         # )
 
@@ -1559,7 +1555,7 @@ class DopplerVelocityLogDataMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "DopplerVelocityLogDataMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
@@ -1571,11 +1567,11 @@ class SituationMessage(JSFMessage): # TODO
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "SituationMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
 @dataclass
 class SituationComprehensiveMessage(JSFMessage):    # TODO
     MESSAGE_TYPE: ClassVar[int] = 2091
@@ -1584,7 +1580,7 @@ class SituationComprehensiveMessage(JSFMessage):    # TODO
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "SituationComprehensiveMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
@@ -1596,11 +1592,11 @@ class CableCounterDataMessage(JSFMessage):  # TODO
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "CableCounterDataMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
 @dataclass
 class KilometerOfPipeDataMessage(JSFMessage):   # TODO
     MESSAGE_TYPE: ClassVar[int] = 2101
@@ -1609,7 +1605,7 @@ class KilometerOfPipeDataMessage(JSFMessage):   # TODO
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "KilometerOfPipeDataMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
@@ -1636,11 +1632,11 @@ class ContainerTimeStampMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "ContainerTimeStampMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
 
 @dataclass
 class UnknownMessage2040(JSFMessage):
@@ -1663,19 +1659,19 @@ class UnknownMessage2040(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "UnknownMessage2040":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError
-    
+
     def __repr__(self) -> str:
         """Print raw values in hex and decimal for manual inspection"""
-        values = [self.raw_0, self.raw_1, self.raw_2, self.raw_3, self.raw_4, 
+        values = [self.raw_0, self.raw_1, self.raw_2, self.raw_3, self.raw_4,
                   self.raw_5, self.raw_6, self.raw_7, self.raw_8]
         hex_str = ' '.join(f'0x{v:08x}' for v in values)
-        dec_str = ' '.join(f'{v:12d}' for v in values)
+        _dec_str = ' '.join(f'{v:12d}' for v in values)
         return f"UnknownMessage2040(HEX: {hex_str})"
-    
+
 
 @dataclass
 class SonarMessageStatusMessage(JSFMessage):
@@ -1684,7 +1680,7 @@ class SonarMessageStatusMessage(JSFMessage):
 
     overflow_count: int                 # UINT32
     error_count: int                    # UINT32
-    
+
     last_error_0: int = field(repr=False)
     last_error_1: int = field(repr=False)
     last_error_2: int = field(repr=False)
@@ -1695,10 +1691,10 @@ class SonarMessageStatusMessage(JSFMessage):
     last_error_7: int = field(repr=False)
     last_error_8: int = field(repr=False)
     last_error_9: int = field(repr=False)
-    
+
     free_disk_space: int                    # UINT32, kilobytes
     data_acquisition_indicator: int         # UINT32
-    
+
     service_needed: int                     # UINT8, bitmap
     reserved_37: int = field(repr=False)    # UINT8
     reserved_38: int = field(repr=False)    # UINT8
@@ -1707,17 +1703,17 @@ class SonarMessageStatusMessage(JSFMessage):
     time_status: int                        # UINT8, bitmap
 
     reserved_42_43: int = field(repr=False) # UINT16
-    
+
     bottle_temperature: int             # INT32, Degrees C * 1000
     ambient_temperature: int            # INT32, Degrees C * 1000
     power_48_volts: int                 # INT32, millivolts
-    
-    reserved_56_59: int = field(repr=False)   
+
+    reserved_56_59: int = field(repr=False)
     low_rate_io_0: int = field(repr=False)
     low_rate_io_1: int = field(repr=False)
     low_rate_io_2: int = field(repr=False)
     low_rate_io_3: int = field(repr=False)
-    
+
     serial_port_state_0: int = field(repr=False)
     serial_port_state_1: int = field(repr=False)
     serial_port_state_2: int = field(repr=False)
@@ -1726,7 +1722,7 @@ class SonarMessageStatusMessage(JSFMessage):
     serial_port_state_5: int = field(repr=False)
     serial_port_state_6: int = field(repr=False)
     serial_port_state_7: int = field(repr=False)
-    
+
     runtime_alerts: int                 # INT32, bitmap
     reserved_80: int = field(repr=False)
     reserved_84: int = field(repr=False)
@@ -1737,7 +1733,7 @@ class SonarMessageStatusMessage(JSFMessage):
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "SonarMessageStatusMessage":
         values = cls.STRUCT.unpack(data[:cls.STRUCT.size])
-        return cls(_header=_header, *values)
+        return cls(*values, _header=_header)
 
     def to_bytes(self) -> bytes:
         raise NotImplementedError

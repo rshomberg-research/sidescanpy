@@ -46,44 +46,39 @@ See ``docs/processing.md`` for full reference.
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.processing.interpolate import (
-    interpolate_aux_onto_pings,
-    interpolate_onto_channel,
-    DEFAULT_FIELD_SOURCES,
+from sidescanpy.processing.farrange import (
+    crop_far_range_noise,
+    detect_far_range_cutoff_sample,
 )
-from sidescanpy.processing.radiometric import (
-    apply_tvg,
-    apply_tvg_to_amplitude,
-    tvg_gain_db,
-    TVGParams,
-    absorption_for_frequency,
-)
-
 from sidescanpy.processing.geometric import (
     compute_geometric_ranges,
 )
-
-from sidescanpy.processing.farrange import (
-    detect_far_range_cutoff_sample,
-    crop_far_range_noise,
-)
-
 from sidescanpy.processing.georeferencing import compute_georeferencing
-
+from sidescanpy.processing.interpolate import (
+    DEFAULT_FIELD_SOURCES,
+    interpolate_aux_onto_pings,
+    interpolate_onto_channel,
+)
+from sidescanpy.processing.pipeline import (
+    VALID_PROCESS_LEVELS,
+    VALID_STEPS,
+    apply_correction_steps,
+    run_correction_steps,
+    run_pipeline,
+)
+from sidescanpy.processing.radiometric import (
+    TVGParams,
+    absorption_for_frequency,
+    apply_tvg,
+    apply_tvg_to_amplitude,
+    tvg_gain_db,
+)
 from sidescanpy.processing.slicing import (
+    slice_by_bbox,
+    slice_by_ground_range,
     slice_by_pings,
     slice_by_samples,
     slice_by_time,
-    slice_by_bbox,
-    slice_by_ground_range,
-)
-
-from sidescanpy.processing.pipeline import (
-    run_pipeline,
-    run_correction_steps,
-    apply_correction_steps,
-    VALID_PROCESS_LEVELS,
-    VALID_STEPS,
 )
 
 __all__ = [

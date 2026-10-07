@@ -96,7 +96,7 @@ class TestRunCorrectionSteps:
         from compute_geometric_ranges — an ordering constraint documented
         in workflow-decisions.md, not something run_correction_steps
         papers over."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="Run compute_geometric_ranges first"):
             run_correction_steps(sample_multi_frequency_survey, {"georef"})
 
     def test_unknown_step_raises(self, sample_multi_frequency_survey):
@@ -165,6 +165,10 @@ class TestStepAlreadyDone:
     def test_unknown_step_raises(self, sample_dataset):
         with pytest.raises(ValueError, match="Unknown correction step"):
             step_already_done(sample_dataset, "not_a_real_step")
+
+    def test_tvg_only_skips_geometric(self, sample_dataset):
+        result = apply_correction_steps(sample_dataset, {"tvg"})
+        assert result.attrs["processing_level"] == "radiometric"
         assert "ground_range_m" not in result.data_vars
 
     def test_geometric_without_tvg(self, sample_dataset):
@@ -182,7 +186,7 @@ class TestStepAlreadyDone:
         apply_correction_steps(sample_dataset, {"tvg"})
         assert sample_dataset.attrs["processing_level"] == original_level
 
-    def test_unknown_step_raises(self, sample_dataset):
+    def test_apply_unknown_step_raises(self, sample_dataset):
         with pytest.raises(ValueError, match="Unknown correction step"):
             apply_correction_steps(sample_dataset, {"bogus"})
 

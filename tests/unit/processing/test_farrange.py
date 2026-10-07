@@ -8,7 +8,6 @@ detection and cropping (Known Issue #6).
 import json
 
 import numpy as np
-import pytest
 
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing.farrange import (

@@ -249,7 +249,7 @@ def build_survey_track(
     georeferencing every ping — just the ones actually needed for a
     rung — while staying correct.
 
-    
+
     Parameters
     ----------
     surveys : dict[Path, SideScanSurvey]

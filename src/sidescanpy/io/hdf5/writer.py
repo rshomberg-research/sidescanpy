@@ -26,20 +26,19 @@ import logging
 from pathlib import Path
 
 import h5netcdf
-import xarray as xr
 
 from sidescanpy.core.schema import (
+    HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
     HDF5_COMPRESSION_LEVEL,
-    HDF5_CHUNK_PING,
-    HDF5_GROUP_FREQUENCIES,
-    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_ATTITUDE,
     HDF5_GROUP_DVL,
+    HDF5_GROUP_FREQUENCIES,
+    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_SENSORS,
-    make_empty_navigation_record,
     make_empty_attitude_record,
     make_empty_dvl_record,
+    make_empty_navigation_record,
 )
 from sidescanpy.core.survey import SideScanSurvey
 

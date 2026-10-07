@@ -24,15 +24,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sidescanpy.io.jsf import read_jsf, convert
 from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.io.jsf import convert, read_jsf
 from sidescanpy.processing import (
     apply_tvg,
-    interpolate_aux_onto_pings,
     compute_geometric_ranges,
     compute_georeferencing,
+    interpolate_aux_onto_pings,
 )
-
 
 SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 
@@ -99,7 +98,7 @@ class TestPipelineCompletion:
 
     def test_processing_history_records_all_steps(self, processed_survey):
         """Each channel should record TVG, geometric, georef steps."""
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             history = json.loads(channel.dataset.attrs["processing_history"])
             steps = [entry["step"] for entry in history]
             assert "tvg_correction" in steps
@@ -108,11 +107,11 @@ class TestPipelineCompletion:
 
     def test_processing_level_radiometric(self, processed_survey):
         """After TVG, processing_level should be 'radiometric'."""
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             assert channel.dataset.attrs["processing_level"] == "radiometric"
 
     def test_each_channel_validates(self, processed_survey):
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             channel.dataset.sidescan.validate()
 
 
@@ -198,7 +197,7 @@ class TestGeoreferencingOutput:
             assert np.all(finite <= 90),  f"{fk}: lat above 90"
 
     def test_lon_per_sample_in_valid_range(self, processed_survey):
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             lon = channel.dataset["longitude_per_sample"].values
             finite = lon[np.isfinite(lon)]
             assert finite.size > 0

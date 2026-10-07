@@ -24,7 +24,7 @@ appended.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import pyproj
@@ -168,7 +168,7 @@ def compute_georeferencing(
     history.append(
         {
             "step": "compute_georeferencing",
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "params": {
                 "ellipsoid": ellipsoid,
             },

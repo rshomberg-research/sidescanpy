@@ -395,6 +395,7 @@ class TestFillNavStalls:
 
     def test_flag_is_opt_in(self):
         import xarray as xr
+
         from sidescanpy.viz.waterfall import along_track_distance_m
 
         lat = 40.0 + np.concatenate([np.arange(30), np.full(5, 29.0), 29 + np.arange(1, 31)]) * 1e-6

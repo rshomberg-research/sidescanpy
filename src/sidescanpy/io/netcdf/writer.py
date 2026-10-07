@@ -11,9 +11,9 @@ import logging
 from pathlib import Path
 
 from sidescanpy.core.schema import (
+    HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
     HDF5_COMPRESSION_LEVEL,
-    HDF5_CHUNK_PING,
 )
 from sidescanpy.core.survey import SideScanFrequencyChannel
 

@@ -209,7 +209,7 @@ def detect_garbage_runs(
 
 
 def score_stability(altitude: np.ndarray, pitch: np.ndarray, start: int, span: int) -> float:
-    """Lower = more stable = a better section candidate. 
+    """Lower = more stable = a better section candidate.
     (altitude coefficient-of-variation + pitch std, weighted 1:1 by raw
     magnitude -- not first-principles-derived, just a combination where
     both terms land in a similar range for a genuinely calm stretch, and

@@ -10,39 +10,37 @@ Real binary parsing is tested separately against actual JSF byte fixtures.
 2026 rshomberg@uri.edu
 """
 
-import pytest
-from unittest.mock import Mock
-
 import logging
 from pathlib import Path
 
 import numpy as np
+import pytest
 import xarray as xr
 
-from sidescanpy.core.survey import SideScanSurvey, SideScanFrequencyChannel
+from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.jsf.converter import (
-    convert,
-    _build_frequency_channel,
-    _build_navigation_record,
     _build_attitude_record,
     _build_dvl_record,
+    _build_frequency_channel,
+    _build_navigation_record,
     _build_sensor_record,
+    convert,
 )
 
 # ============================================================
 # CONVERT — top-level API
 # ============================================================
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertEmpty:
     def test_empty_message_list_raises(self):
         with pytest.raises(ValueError, match="empty"):
             convert([], source_files=[Path("dummy.jsf")])
 
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConversionSingleFrequency:
-    
+
     def test_returns_sidescan_survey(self, paired_sonar_msgs):
         result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
         assert isinstance(result, SideScanSurvey)
@@ -58,9 +56,9 @@ class TestConversionSingleFrequency:
 
     def test_aux_records_empty_when_no_aux_messages(self, paired_sonar_msgs):
         result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
-        assert result.has_navigation    is False 
-        assert result.has_attitude      is False 
-        assert result.has_dvl           is False 
+        assert result.has_navigation    is False
+        assert result.has_attitude      is False
+        assert result.has_dvl           is False
         assert result.n_sensors         == 0
 
 
@@ -103,7 +101,7 @@ class TestConvertMultiFrequency:
                     transmit_freq_end=547_500,
                 )
             )
-        
+
         result = convert(msgs, source_files=[Path("test.jsf")])
         assert result.n_frequencies == 2
         assert 547_500      in result.frequency_hz_list
@@ -115,7 +113,7 @@ class TestConvertMultiFrequency:
 # CONVERT — auxiliary streams
 # ============================================================
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertWithNavigation:
 
     def test_navigation_populated_from_nmea(self, paired_sonar_msgs, nmea_rmc_msgs):
@@ -175,7 +173,7 @@ class TestConvertWithSensor:
 # CONVERT — repair modes
 # ============================================================
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertRepairDrop:
     def test_orphan_port_dropped(self, make_sonar_msg, paired_sonar_msgs, caplog):
         # Add one extra port record with no matching starboard
@@ -193,7 +191,7 @@ class TestConvertRepairDrop:
         assert ch.n_pings == 5
 
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertRepairNanPad:
     def test_orphan_port_nan_padded(self, make_sonar_msg, paired_sonar_msgs):
         msgs = paired_sonar_msgs + [

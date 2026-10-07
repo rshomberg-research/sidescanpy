@@ -15,10 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.jsf import read_jsf
 from sidescanpy.io.jsf.converter import convert
-from sidescanpy.core.survey import SideScanSurvey
-
 
 SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 

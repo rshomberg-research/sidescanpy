@@ -40,25 +40,25 @@ Future:
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.viz.waterfall import (
-    plot_waterfall,
-    plot_survey_overview,
-    along_track_distance_m,
-    resolve_waterfall_axes,
-)
+from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 from sidescanpy.viz.gridded import (
+    export_gridded_png,
+    plot_gridded_multiple_methods,
     plot_gridded_raster,
     plot_gridded_with_coverage,
-    plot_gridded_multiple_methods,
-    export_gridded_png,
 )
+from sidescanpy.viz.targets import export_track_with_targets_png, plot_track_with_targets
 from sidescanpy.viz.track import (
-    plot_track_and_scanlines,
-    export_track_and_scanlines_png,
     build_survey_track,
+    export_track_and_scanlines_png,
+    plot_track_and_scanlines,
 )
-from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
-from sidescanpy.viz.targets import plot_track_with_targets, export_track_with_targets_png
+from sidescanpy.viz.waterfall import (
+    along_track_distance_m,
+    plot_survey_overview,
+    plot_waterfall,
+    resolve_waterfall_axes,
+)
 
 __all__ = [
     "plot_waterfall",

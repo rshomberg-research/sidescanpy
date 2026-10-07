@@ -9,7 +9,7 @@ inferred structure documented in that module (see its docstring for the
 
 import struct
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -232,7 +232,7 @@ class TestCalibrateClockOffset:
 
     def test_matches_known_offset(self, tmp_path):
         true_local_start = datetime(2018, 9, 14, 7, 20, 0)
-        true_utc = true_local_start.replace(tzinfo=timezone.utc) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
+        true_utc = true_local_start.replace(tzinfo=UTC) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
         known_offset_s = 500.0
         corrupted_utc_start = pd.Timestamp(true_utc) + pd.Timedelta(seconds=known_offset_s)
         _write_ss_h5_with_corrupted_time(tmp_path, true_local_start, corrupted_utc_start)
@@ -242,10 +242,10 @@ class TestCalibrateClockOffset:
 
     def test_median_across_multiple_files(self, tmp_path):
         base_local = datetime(2018, 9, 14, 7, 20, 0)
-        true_utc = base_local.replace(tzinfo=timezone.utc) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
+        _true_utc = base_local.replace(tzinfo=UTC) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
         for i, offset in enumerate([400.0, 500.0, 600.0]):
             local_start = base_local + timedelta(minutes=i)
-            this_true_utc = local_start.replace(tzinfo=timezone.utc) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
+            this_true_utc = local_start.replace(tzinfo=UTC) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
             corrupted_start = pd.Timestamp(this_true_utc) + pd.Timedelta(seconds=offset)
             _write_ss_h5_with_corrupted_time(tmp_path, local_start, corrupted_start, filename_prefix=f"sonar_data_{i}_")
 
@@ -263,7 +263,7 @@ class TestResolveTargetsOffsetCorrected:
 
     def _make_calibrated_survey(self, tmp_path, known_offset_s=500.0):
         true_local_start = datetime(2018, 9, 14, 7, 20, 0)
-        true_utc = true_local_start.replace(tzinfo=timezone.utc) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
+        true_utc = true_local_start.replace(tzinfo=UTC) + timedelta(hours=self._LOCAL_UTC_OFFSET_HOURS)
         corrupted_utc_start = pd.Timestamp(true_utc) + pd.Timedelta(seconds=known_offset_s)
         _write_ss_h5_with_corrupted_time(tmp_path, true_local_start, corrupted_utc_start, n_pings=20, altitude_m=8.0)
         return true_utc, known_offset_s

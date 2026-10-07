@@ -8,13 +8,12 @@ sensible defaults.
 2026 rshomberg@uri.edu
 """
 
-import pytest
 import json
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
-
 
 # ============================================================
 # BUILDERS — pure functions, no pytest decoration

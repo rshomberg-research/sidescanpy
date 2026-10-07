@@ -4,8 +4,8 @@ Integration tests for the gridding pipeline.
 Tests the full workflow: channel → grid definition → resampling → raster.
 """
 
-import pytest
 import numpy as np
+import pytest
 import xarray as xr
 from pyproj import CRS
 
@@ -283,7 +283,7 @@ class TestGriddingPipelineQuality:
 
         backscatter_grid = raster.backscatter
         finite_mask = np.isfinite(backscatter_grid)
-        
+
         if np.any(finite_mask):
             min_grid = np.min(backscatter_grid[finite_mask])
             max_grid = np.max(backscatter_grid[finite_mask])
@@ -299,7 +299,7 @@ class TestGriddingPipelineQuality:
         )
 
         backscatter_grid = raster.backscatter
-        
+
         # Max aggregation should produce some high values
         finite_vals = backscatter_grid[np.isfinite(backscatter_grid)]
         if len(finite_vals) > 0:
@@ -313,17 +313,17 @@ class TestGriddingPipelineQuality:
             grid_def=grid,
             method=ResamplingMethod.MEAN,
         )
-        
+
         raster_median = resample_channel_to_grid(
             channel,
             grid_def=grid,
             method=ResamplingMethod.MEDIAN,
         )
-        
+
         # Correlation between mean and median should be high
         mean_vals = raster_mean.backscatter[np.isfinite(raster_mean.backscatter)]
         median_vals = raster_median.backscatter[np.isfinite(raster_median.backscatter)]
-        
+
         if len(mean_vals) > 10 and len(median_vals) > 10:
             # Get overlapping cells
             finite_both = (
@@ -376,7 +376,7 @@ class TestGriddingPipelineEdgeCases:
     def test_grid_partially_outside_channel(self):
         """Grid partially outside survey area."""
         channel = _make_realistic_channel(num_pings=100, samples_per_ping=256)
-        
+
         # Grid extends beyond channel bounds
         grid = GridDefinition(
             bbox=(38.0, -73.0, 42.0, -69.0),  # Larger than channel

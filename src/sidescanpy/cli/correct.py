@@ -41,7 +41,12 @@ import sys
 from pathlib import Path
 
 from sidescanpy.cli._common import process_files_in_place, process_files_in_place_chunked
-from sidescanpy.cli._config import apply_config_defaults, has_strict_flag, find_config_path, load_config
+from sidescanpy.cli._config import (
+    apply_config_defaults,
+    find_config_path,
+    has_strict_flag,
+    load_config,
+)
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.processing import crop_far_range_noise, run_correction_steps
 from sidescanpy.processing.pipeline import step_already_done

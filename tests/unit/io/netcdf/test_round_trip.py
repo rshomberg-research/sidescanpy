@@ -7,16 +7,14 @@ no group structure. Used for sharing or processing one frequency in isolation.
 2026 rshomberg@uri.edu
 """
 
-from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
 
 from sidescanpy.core.survey import SideScanFrequencyChannel
-from sidescanpy.io.netcdf.writer import write_frequency_channel
 from sidescanpy.io.netcdf.reader import read_frequency_channel
-
+from sidescanpy.io.netcdf.writer import write_frequency_channel
 
 # ============================================================
 # WRITE

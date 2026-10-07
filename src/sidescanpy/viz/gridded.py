@@ -7,8 +7,8 @@ Functions for plotting SideScanGriddedRaster objects with matplotlib.
 import logging
 from typing import Optional, Tuple
 
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 
 from sidescanpy.grids.raster import SideScanGriddedRaster
@@ -222,7 +222,7 @@ def plot_gridded_raster(
 
     if show_colorbar:
         units = raster.dataset["backscatter"].attrs.get("units", "unknown units")
-        cbar = plt.colorbar(im, ax=ax, label=f"Backscatter ({units})")
+        plt.colorbar(im, ax=ax, label=f"Backscatter ({units})")
         logger.debug(f"Colorbar range: {vmin:.3f} — {vmax:.3f}")
 
     if show_locator:
@@ -341,7 +341,6 @@ def plot_gridded_with_coverage(
         alpha = np.ones_like(n_contrib)
 
     # Create RGBA image
-    backscatter_masked = np.ma.masked_invalid(backscatter)
     norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
     cmap_obj = resolve_cmap(cmap)
 
@@ -351,7 +350,7 @@ def plot_gridded_with_coverage(
 
     # Plot as image
     extent = [xs.min(), xs.max(), ys.min(), ys.max()]
-    im = ax.imshow(
+    ax.imshow(
         colors,
         extent=extent,
         origin="lower",

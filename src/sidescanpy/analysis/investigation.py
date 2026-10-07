@@ -19,12 +19,12 @@ split already established by `tvg_diagnostics.py`/`viz/tvg_diagnostics.py`.
 2026 rshomberg@uri.edu
 """
 
-# FIXME: implement logging.  
+# FIXME: implement logging.
 # FIXME: get rid of the stages. I do not want to keep them numbered, but they
-# could be inluded in the documentation and examples.  
+# could be inluded in the documentation and examples.
 # TODO: implement logging
 
-import warnings # ???: not sure what warnings does vs logging
+import warnings  # ???: not sure what warnings does vs logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1341,7 +1341,7 @@ def stage2_5_beam_geometry(
 
     usable_range_m = stage3.metrics.get("usable_range_m") if stage3 else None
     far_ray: dict[str, dict] = {}
-    for ch, label in ((0, "port"), (1, "starboard")):
+    for _ch, label in ((0, "port"), (1, "starboard")):
         entry = {
             "predicted_across_track_m": None, "predicted_slant_range_m": None,
             "angle_from_vertical_deg": None, "angle_from_horizontal_deg": None,

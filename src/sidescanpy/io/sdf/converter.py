@@ -65,7 +65,7 @@ from sidescanpy.core.schema import (
     make_empty_navigation_record,
 )
 from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.sdf.pages import SDFSonarPage, SDFUnknownPage
+from sidescanpy.io.sdf.pages import SDFSonarPage
 
 logger = logging.getLogger(__name__)
 
@@ -378,4 +378,4 @@ def _build_attitude_record(pages: list[SDFSonarPage]) -> xr.Dataset:
         },
         coords={"time": (("obs",), times)},
         attrs={"source": "extracted_from_sdf_pages"},
-    )        
+    )

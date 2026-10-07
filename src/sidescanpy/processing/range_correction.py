@@ -29,7 +29,7 @@ in the requested step set.
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
@@ -271,7 +271,7 @@ def fit_range_correction(
         "target_level_db": target_level_db,
         "n_bins": int(len(df)),
         "n_samples_total": int(counts.sum()),
-        "fitted_at_utc": datetime.now(timezone.utc).isoformat(),
+        "fitted_at_utc": datetime.now(UTC).isoformat(),
     }
     return range_centers.tolist(), correction_db.tolist(), fit_metadata
 
@@ -372,7 +372,7 @@ def apply_empirical_range_correction(
     history.append(
         {
             "step": STEP_NAME,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "params": {
                 "freq_hz_matched": table.matched_frequency(freq_hz),
                 "fit_metadata": table.metadata_for(freq_hz),

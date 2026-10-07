@@ -16,7 +16,6 @@ import pytest
 
 from sidescanpy.io.sdf.pages import (
     HEADER_TOTAL_BYTES,
-    MARKER_BYTES,
     PAGE_HEADER_BYTES,
     SDFSonarPage,
     SDFUnknownPage,
@@ -31,7 +30,6 @@ from tests.unit.io.sdf.conftest import (
     make_sdf_header_bytes,
     make_sdf_page_bytes,
 )
-
 
 # ============================================================
 # EAGER READ
@@ -286,11 +284,12 @@ class TestMarkerRecovery:
             pos += len(chunk) - overlap
 
         return None
-    
+
     @pytest.mark.unit
     def test_scan_terminates_on_pathological_size(self, tmp_path):
         """Marker scan must terminate even when scan range hits exact tail edge."""
         import time
+
         from sidescanpy.io.sdf.reader import _scan_for_next_marker
 
         # Construct a file where scan hits the chunk-boundary edge case
@@ -447,7 +446,9 @@ class TestHighBitMasking:
         stbd_data = np.array([10, 20, 30, 40, 50], dtype=np.uint32)
 
         from tests.unit.io.sdf.conftest import (
-            MARKER, PAGE_HEADER_BYTES, make_sdf_data_section,
+            MARKER,
+            PAGE_HEADER_BYTES,
+            make_sdf_data_section,
             make_sdf_header_bytes,
         )
         data_section = make_sdf_data_section(port_data, stbd_data)
@@ -482,7 +483,9 @@ class TestHighBitMasking:
         stbd_data = np.zeros(7, dtype=np.uint32)
 
         from tests.unit.io.sdf.conftest import (
-            MARKER, PAGE_HEADER_BYTES, make_sdf_data_section,
+            MARKER,
+            PAGE_HEADER_BYTES,
+            make_sdf_data_section,
             make_sdf_header_bytes,
         )
         data_section = make_sdf_data_section(port_data, stbd_data)
@@ -520,7 +523,9 @@ class TestHighBitMasking:
         )
 
         from tests.unit.io.sdf.conftest import (
-            MARKER, PAGE_HEADER_BYTES, make_sdf_data_section,
+            MARKER,
+            PAGE_HEADER_BYTES,
+            make_sdf_data_section,
             make_sdf_header_bytes,
         )
         data_section = make_sdf_data_section(port_data, stbd_data)
@@ -547,7 +552,9 @@ class TestHighBitMasking:
         stbd_data = np.zeros(2, dtype=np.uint32)
 
         from tests.unit.io.sdf.conftest import (
-            MARKER, PAGE_HEADER_BYTES, make_sdf_data_section,
+            MARKER,
+            PAGE_HEADER_BYTES,
+            make_sdf_data_section,
             make_sdf_header_bytes,
         )
         data_section = make_sdf_data_section(port_data, stbd_data)

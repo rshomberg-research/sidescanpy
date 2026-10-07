@@ -44,7 +44,6 @@ from sidescanpy.io.sdf.pages import (
     SDFUnknownPage,
 )
 
-
 logger = logging.getLogger(__name__)
 
 

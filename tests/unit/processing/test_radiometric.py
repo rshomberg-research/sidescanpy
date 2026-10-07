@@ -9,18 +9,18 @@ These tests prove the algorithm is mathematically correct by:
 """
 
 import json
+
 import numpy as np
 import pytest
 import xarray as xr
 
 from sidescanpy.processing.radiometric import (
+    TVGParams,
+    absorption_for_frequency,
     apply_tvg,
     apply_tvg_to_amplitude,
     tvg_gain_db,
-    TVGParams,
-    absorption_for_frequency,
 )
-
 
 # ============================================================================
 # STEP 1: LINEAR → dB CONVERSION TESTS
@@ -77,14 +77,14 @@ class TestSlantRangeCalculation:
         sample_idx = 100
         sound_velocity = 1500.0  # m/s
         sample_rate = 1000.0  # Hz
-        
+
         # Range = time_of_flight * sound_velocity / 2
         # where time_of_flight = sample_idx / sample_rate
         time_of_flight = sample_idx / sample_rate  # 0.1 s
         range_expected = time_of_flight * sound_velocity / 2.0  # 75 m
-        
+
         range_computed = sample_idx * (sound_velocity / (2.0 * sample_rate))
-        
+
         assert abs(range_computed - range_expected) < 1e-10
         assert abs(range_computed - 75.0) < 1e-10
 
@@ -99,12 +99,12 @@ class TestSlantRangeCalculation:
         """Slant range should increase with sample index."""
         sound_velocity = 1500.0
         sample_rate = 1000.0
-        
+
         ranges = []
         for i in range(0, 101, 10):
             r = i * (sound_velocity / (2.0 * sample_rate))
             ranges.append(max(r, 0.5))  # Apply min clip
-        
+
         # All differences should be positive
         diffs = np.diff(ranges)
         assert np.all(diffs >= 0)
@@ -121,7 +121,7 @@ class TestTVGGainCalculation:
         """Spreading loss = 20 * log10(range_m)."""
         range_m = 100.0
         spreading_db = 20.0 * np.log10(range_m)
-        
+
         # 20*log10(100) = 20*2 = 40 dB
         assert abs(spreading_db - 40.0) < 1e-10
 
@@ -130,7 +130,7 @@ class TestTVGGainCalculation:
         alpha_db_per_m = 0.1  # dB/m
         range_m = 100.0
         absorption_db = 2.0 * alpha_db_per_m * range_m
-        
+
         # 2 * 0.1 * 100 = 20 dB
         assert abs(absorption_db - 20.0) < 1e-10
 
@@ -140,20 +140,20 @@ class TestTVGGainCalculation:
         spreading = 20.0 * np.log10(range_m)  # 40 dB
         absorption = 2.0 * 0.1 * range_m      # 20 dB
         total_tvg = spreading + absorption
-        
+
         assert abs(total_tvg - 60.0) < 1e-10
 
     def test_tvg_increases_with_range(self):
         """TVG gain should monotonically increase with range."""
         ranges = np.array([10.0, 50.0, 100.0, 200.0])
         tvg_gains = []
-        
+
         for r in ranges:
             spreading = 20.0 * np.log10(r)
             absorption = 2.0 * 0.1 * r
             tvg = spreading + absorption
             tvg_gains.append(tvg)
-        
+
         diffs = np.diff(tvg_gains)
         assert np.all(diffs > 0), f"TVG gains should increase: {tvg_gains}"
 
@@ -214,19 +214,19 @@ class TestEnd2EndCorrection:
     def test_correction_with_spreading_only(self):
         """Test TVG with spreading loss, no absorption."""
         ds = self.create_simple_dataset(backscatter_val=1.0, n_samples=101)
-        
+
         # Apply TVG: spreading only
         result = apply_tvg(ds, TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0))
-        
+
         # Sample 100: range = 100 * (1500 / 2000) = 75 m
         sample_idx = 100
         range_m = 75.0
-        
+
         # Expected: 20*log10(1.0) + 20*log10(75)
         expected = 0.0 + 20.0 * np.log10(range_m)  # ≈ 37.5 dB
-        
+
         actual = float(result["backscatter_intensity"][0, 0, sample_idx])
-        
+
         # Should match within 0.1 dB
         assert abs(actual - expected) < 0.1, \
             f"Expected {expected:.2f} dB, got {actual:.2f} dB (diff: {abs(actual - expected):.4f})"
@@ -234,52 +234,52 @@ class TestEnd2EndCorrection:
     def test_correction_with_spreading_and_absorption(self):
         """Test TVG with both spreading and absorption."""
         ds = self.create_simple_dataset(backscatter_val=1.0, n_samples=101)
-        
+
         # Apply TVG: spreading + absorption
         result = apply_tvg(ds, TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.1))
-        
+
         # Sample 100: range = 75 m
         sample_idx = 100
         range_m = 75.0
-        
+
         # Expected: 20*log10(1.0) + 20*log10(75) + 2*0.1*75
         spreading = 20.0 * np.log10(range_m)    # ≈ 37.5 dB
         absorption = 2.0 * 0.1 * range_m         # = 15.0 dB
         expected = 0.0 + spreading + absorption  # ≈ 52.5 dB
-        
+
         actual = float(result["backscatter_intensity"][0, 0, sample_idx])
-        
+
         assert abs(actual - expected) < 0.1, \
             f"Expected {expected:.2f} dB, got {actual:.2f} dB"
 
     def test_near_field_vs_far_field_gain_difference(self):
         """Verify TVG gain increases from near to far field."""
         ds = self.create_simple_dataset(backscatter_val=1.0, n_samples=200)
-        
+
         result = apply_tvg(ds, TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.1))
-        
+
         # Near field (sample 10): range ≈ 7.5 m
         near_idx = 10
         near_range = near_idx * (1500.0 / 2000.0)
         near_tvg = 20.0 * np.log10(near_range) + 2.0 * 0.1 * near_range
         near_expected = 0.0 + near_tvg
-        
+
         # Far field (sample 150): range ≈ 112.5 m
         far_idx = 150
         far_range = far_idx * (1500.0 / 2000.0)
         far_tvg = 20.0 * np.log10(far_range) + 2.0 * 0.1 * far_range
         far_expected = 0.0 + far_tvg
-        
+
         near_actual = float(result["backscatter_intensity"][0, 0, near_idx])
         far_actual = float(result["backscatter_intensity"][0, 0, far_idx])
-        
+
         # Far field should have MORE correction (higher value)
         assert far_actual > near_actual, \
             f"Far field ({far_actual:.2f}) should exceed near field ({near_actual:.2f})"
-        
+
         gain_difference = far_actual - near_actual
         expected_difference = far_expected - near_expected
-        
+
         assert abs(gain_difference - expected_difference) < 0.2
 
     def test_backscatter_raw_unchanged_by_tvg(self):
@@ -336,7 +336,7 @@ class TestNaNInfHandling:
     def create_dataset_with_zeros(self):
         """Create dataset with zero backscatter (water column)."""
         import pandas as pd
-        
+
         n_pings, n_samples = 5, 50
         coords = {
             "ping": np.arange(n_pings),
@@ -382,9 +382,9 @@ class TestNaNInfHandling:
         """Ensure log(0) doesn't produce inf."""
         ds = self.create_dataset_with_zeros()
         result = apply_tvg(ds)
-        
+
         data = result["backscatter_intensity"].values
-        
+
         # Count inf values
         inf_count = np.isinf(data).sum()
         assert inf_count == 0, f"Found {inf_count} inf values in output"
@@ -393,26 +393,26 @@ class TestNaNInfHandling:
         """Ensure no NaN values in corrected data."""
         ds = self.create_dataset_with_zeros()
         result = apply_tvg(ds)
-        
+
         data = result["backscatter_intensity"].values
-        
+
         # Count NaN values
         nan_count = np.isnan(data).sum()
         total = data.size
-        
+
         assert nan_count == 0, f"Found {nan_count}/{total} NaN values in output"
 
     def test_zero_maps_to_negative_value(self):
         """Zero backscatter should map to very negative dB (not -inf)."""
         ds = self.create_dataset_with_zeros()
         result = apply_tvg(ds)
-        
+
         data = result["backscatter_intensity"].values
-        
+
         # Find values from originally-zero samples
         # These should be roughly 20*log10(1e-6) ≈ -120 dB
         zero_corrected = data[:, :, :10]
-        
+
         # Should be finite and very negative
         assert np.all(np.isfinite(zero_corrected)), "Corrected zeros should be finite"
         assert np.all(zero_corrected < -50), "Corrected zeros should be very negative"
@@ -432,7 +432,7 @@ class TestMetadataTracking:
         """Processing level should change from raw to radiometric."""
         ds = sample_dataset
         assert ds.attrs["processing_level"] == "raw"
-        
+
         result = apply_tvg(ds)
         assert result.attrs["processing_level"] == "radiometric"
 
@@ -443,7 +443,7 @@ class TestMetadataTracking:
         """Processing history should contain TVG step."""
         ds = sample_dataset
         result = apply_tvg(ds)
-        
+
         history = json.loads(result.attrs["processing_history"])
         assert len(history) == 1
         assert history[0]["step"] == "tvg_correction"
@@ -456,7 +456,7 @@ class TestMetadataTracking:
         ds = sample_dataset
         params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.15)
         result = apply_tvg(ds, params)
-        
+
         history = json.loads(result.attrs["processing_history"])
         assert history[0]["params"]["spreading_loss_db"] == 20.0
         assert history[0]["params"]["absorption_db_per_m"] == 0.15

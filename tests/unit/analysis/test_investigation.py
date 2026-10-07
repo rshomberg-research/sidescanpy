@@ -1875,9 +1875,10 @@ class TestUniformExclusionBoundary:
 
         ranges = np.broadcast_to(np.linspace(0, 40, n_samples), arr.shape).copy()
 
+        import xarray as xr
+
         from sidescanpy.analysis.investigation import _mask_before_sample
         from sidescanpy.analysis.tvg_diagnostics import mean_backscatter_vs_range
-        import xarray as xr
 
         def _bin(masked):
             ds = xr.Dataset(

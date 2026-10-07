@@ -40,7 +40,7 @@ appended with a record of the computation.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import xarray as xr
@@ -238,7 +238,7 @@ def compute_geometric_ranges(
     history.append(
         {
             "step": "compute_geometric_ranges",
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "params": {
                 "altitude_source": "altitude_m",
                 "sound_velocity_source": "sound_vel_ms",

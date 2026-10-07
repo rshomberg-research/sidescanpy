@@ -12,6 +12,7 @@ specified ellipsoid).
 """
 
 import json
+
 import numpy as np
 import pandas as pd
 import pyproj
@@ -20,7 +21,6 @@ import xarray as xr
 
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
-
 
 # ============================================================
 # HELPERS

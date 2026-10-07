@@ -10,7 +10,6 @@ survey (Klein 4900, dual-frequency 455/900 kHz).
 2026 rshomberg@uri.edu
 """
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +23,6 @@ from sidescanpy.processing import (
     compute_georeferencing,
     interpolate_aux_onto_pings,
 )
-
 
 SAMPLE_SDF = Path(__file__).resolve().parents[1] / "data" / "sdf" / "sample.sdf"
 

@@ -30,33 +30,32 @@ See ``docs/io_sdf.md`` for full reference.
 2026 rshomberg@uri.edu
 """
 
+# converter (still uses old API; will need updating)
+from sidescanpy.io.sdf.converter import convert
 from sidescanpy.io.sdf.pages import (
-    SDFPageHeader,
-    SDFSonarPage,
-    SDFUnknownPage,
+    HEADER_TOTAL_BYTES,
     MARKER,
     MARKER_BYTES,
     PAGE_HEADER_BYTES,
-    HEADER_TOTAL_BYTES,
     PAGE_VERSIONS_SONAR,
+    SDFPageHeader,
+    SDFSonarPage,
+    SDFUnknownPage,
 )
 from sidescanpy.io.sdf.reader import (
-    read_sdf,
-    read_sdf_iter,
-    read_sdf_header,
     SDFPage,
+    read_sdf,
+    read_sdf_header,
+    read_sdf_iter,
 )
-
-# converter (still uses old API; will need updating)
-from sidescanpy.io.sdf.converter import convert
-
 from sidescanpy.io.sdf.targets import (
-    read_klein_targets,
     decode_target_window,
+    read_klein_targets,
     resolve_target_position,
 )
 
 __all__ = [
+    "convert",
     "SDFPageHeader",
     "SDFSonarPage",
     "SDFUnknownPage",

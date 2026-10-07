@@ -27,14 +27,14 @@ Conventions encoded here:
 2026 rshomberg@uri.edu
 """
 
-from dataclasses import astuple, dataclass, field
-from datetime import datetime, timezone
 import logging
 import math
-import numpy as np
 import struct
+from dataclasses import astuple, dataclass, field
+from datetime import UTC, datetime
 from typing import ClassVar
 
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -341,7 +341,7 @@ class SDFPageHeader:
             dt = datetime(
                 self._year, self._month, self._day,
                 self._hour, self._minute, self._second,
-                tzinfo=timezone.utc,
+                tzinfo=UTC,
             )
             self.timestamp = dt.timestamp() + self._fseconds
             self.timestamp_ns = int(self.timestamp * 1e9)

@@ -4,8 +4,8 @@ Unit tests for GridDefinition.
 Tests the contract: bounding box + resolution + projection → grid metadata.
 """
 
-import pytest
 import numpy as np
+import pytest
 from pyproj import CRS
 
 # Import will fail until sidescanpy/grids/definition.py exists.
@@ -16,6 +16,7 @@ from sidescanpy.grids.definition import (
     utm_crs_for_lonlat,
     utm_grid_from_wgs84_bbox,
 )
+
 
 @pytest.mark.unit
 class TestGridDefinitionInstantiation:

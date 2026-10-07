@@ -23,7 +23,7 @@ This module converts to dB, applies TVG, and outputs in dB.
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 import xarray as xr
@@ -375,7 +375,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     ds_out.attrs = dict(ds.attrs)             # shallow but with our own attrs dict
     ds_out = ds_out.assign(
         backscatter_intensity=corrected_db,    # replaces ref to old array
-    )    
+    )
     # ds_out["backscatter_intensity"] = corrected_db
     # ds_out["backscatter_raw"] = backscatter_db  # Store dB version for reference
 
@@ -386,7 +386,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     history.append(
         {
             "step": "tvg_correction",
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "params": {
                 "spreading_loss_db": params.spreading_loss_db,
                 "absorption_db_per_m": params.absorption_db_per_m,

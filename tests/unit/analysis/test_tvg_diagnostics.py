@@ -28,7 +28,6 @@ from sidescanpy.analysis.tvg_diagnostics import (
 from sidescanpy.processing.pipeline import apply_correction_steps
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
-
 # ============================================================
 # HELPERS
 # ============================================================
