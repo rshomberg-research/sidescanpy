@@ -700,7 +700,7 @@ def _neighborhood_ping_spacing_m(ds_full: xr.Dataset, lo: int, hi: int) -> float
 
 def _geo_decimation(
     ds_full: xr.Dataset, ping_idx: int, style: str, *, size_px: int, jitter_px: int, resolution_m: float | None,
-    across_axis: str = "ground",
+    across_axis: str = "ground", swath_fill: bool = False,
 ) -> tuple[int, int, int]:
     """(half_span_pings, fp, fs) for one geometric/georef style around
     ``ping_idx``: a ping neighborhood covering the output window in
@@ -726,7 +726,10 @@ def _geo_decimation(
                 across = across[0]
             finite = across[np.isfinite(across)]
             swath_width_m = float(finite.max() - finite.min()) if finite.size else size_px * mps
-            resolution_m = max(swath_width_m / size_px, ping_spacing_m)
+            # --swath-fill drops the ping-spacing floor (see
+            # _extract_geo_style_window); estimate the same way so the
+            # sample-axis averaging stays fine enough.
+            resolution_m = swath_width_m / size_px if swath_fill else max(swath_width_m / size_px, ping_spacing_m)
     half_extent_m = (size_px / 2.0 + jitter_px) * resolution_m
     half_span = int(1.5 * half_extent_m / ping_spacing_m) + 50
     fs = max(1, int(resolution_m / (_SWATH_OVERSAMPLE * mps)))
@@ -754,7 +757,7 @@ class _GeoView:
 def _load_geo_neighborhood(
     ds_full: xr.Dataset, t, ping_idx: int, items_by_channel: dict, styles: list[str], *,
     size_px: int, jitter_px: int, resolution_m: float | None, with_db: bool, across_axis: str = "ground",
-    per_sample_latlon: bool = True,
+    per_sample_latlon: bool = True, swath_fill: bool = False,
 ) -> _GeoView:
     """Block-averaged neighborhood around ``ping_idx`` serving every
     style in ``styles`` (widest span, finest factors), with ``t`` and
@@ -769,7 +772,7 @@ def _load_geo_neighborhood(
     works in slant-range meters instead of ground-projected meters."""
     n_pings = ds_full.sizes["ping"]
     plans = [
-        _geo_decimation(ds_full, ping_idx, st, size_px=size_px, jitter_px=jitter_px, resolution_m=resolution_m, across_axis=across_axis)
+        _geo_decimation(ds_full, ping_idx, st, size_px=size_px, jitter_px=jitter_px, resolution_m=resolution_m, across_axis=across_axis, swath_fill=swath_fill)
         for st in styles
     ]
     half_span = max(p[0] for p in plans)
@@ -840,6 +843,57 @@ def _across_values(ds: xr.Dataset, across_axis: str):
         raise KeyError("slant_range_m")
     sign = xr.DataArray([-1.0, 1.0], dims="channel")
     return ds["slant_range_m"] * sign
+
+
+# --swath-fill: percentile of per-ping reach that sets the swath frame's
+# edges -- the far edge is where at least (100 - this)% of pings still
+# have data, the near (nadir-side, single-swath only) edge where at least
+# that share already do. Longer-reaching pings are cropped slightly
+# instead of every row carrying a black margin.
+_SWATH_FILL_PCT = 10.0
+
+
+def _swath_fill_extent(
+    across: np.ndarray, values: np.ndarray, *, combine: bool, channel_idx: int | None,
+) -> tuple[float, float] | None:
+    """``(lo, hi)`` across-track meters that the recorded data fills, for
+    a swath style's frame (``--swath-fill``). ``across``/``values``:
+    ``(ping, channel, sample)``. A sample counts only where both the
+    coordinate and the backscatter are finite -- in slant mode the
+    coordinate is finite everywhere, including the masked nadir gap.
+
+    Dual swath spans port's far edge to starboard's far edge (not
+    centered on nadir: a side that reaches farther keeps its range). A
+    side with no data at all (one-sided recording) mirrors the other, so
+    nadir stays centered. Single swath spans that channel's near edge to
+    its far edge. ``None`` if there is no usable data."""
+    valid = np.isfinite(across) & np.isfinite(values)
+    mag = np.where(valid, np.abs(across), np.nan)
+
+    def reach(ch):
+        m = mag[:, ch, :]
+        rows = np.isfinite(m).any(axis=1)
+        if not rows.any():
+            return None
+        with np.errstate(all="ignore"):
+            far = float(np.percentile(np.nanmax(m[rows], axis=1), _SWATH_FILL_PCT))
+            near = float(np.percentile(np.nanmin(m[rows], axis=1), 100.0 - _SWATH_FILL_PCT))
+        return near, far
+
+    if combine:
+        port, stbd = reach(0), reach(1)
+        if port is None and stbd is None:
+            return None
+        port_far = port[1] if port else stbd[1]
+        stbd_far = stbd[1] if stbd else port[1]
+        return -port_far, stbd_far
+    r = reach(channel_idx)
+    if r is None:
+        return None
+    near, far = r
+    if not far > near:
+        return None
+    return (-far, -near) if channel_idx == 0 else (near, far)
 
 
 def _random_flip(window: np.ndarray, co_targets: list, rng: np.random.Generator, *, edge_coords: bool) -> tuple[np.ndarray, list, bool, bool]:
@@ -1127,6 +1181,7 @@ def _extract_geo_style_window(
     resolution_m_override: float | None = None,
     backscatter_var: str = "backscatter_intensity",
     resample_method: str = "griddata",
+    swath_fill: bool = False,
 ) -> tuple[np.ndarray, list] | None:
     """``geometric``/``georef`` (real-meters) window + the primary target's
     own position within it.
@@ -1204,6 +1259,16 @@ def _extract_geo_style_window(
     if style == "chip":
         resolution_m = resolution_m_override if resolution_m_override is not None else max(mps, ping_spacing_m)
         center_across_m = target_across_m + _jitter_offset_m(jitter_px, resolution_m, rng)
+    elif swath_fill and resolution_m_override is None and (
+        extent := _swath_fill_extent(masked["across_track_m"].values, masked[backscatter_var].values, combine=combine, channel_idx=channel_idx)
+    ):
+        # --swath-fill: the frame's width is exactly where the data is, at
+        # square pixels -- no ping-spacing floor on resolution (that floor
+        # left the swath narrower than the image whenever pings are
+        # coarser than swath_width / size_px), and not pinned to nadir.
+        lo_m, hi_m = extent
+        resolution_m = max((hi_m - lo_m) / size_px, 1e-6)
+        center_across_m = (lo_m + hi_m) / 2.0
     else:
         across_all = masked["across_track_m"].values if combine else masked["across_track_m"].isel(channel=channel_idx).values
         across_finite = across_all[np.isfinite(across_all)]
@@ -1392,6 +1457,7 @@ def run_chip(args: argparse.Namespace) -> int:
     random_flip = bool(getattr(args, "random_flip", False))
     across_axis = getattr(args, "across_axis", "ground")
     box_size_m = getattr(args, "box_size_m", None)
+    swath_fill = bool(getattr(args, "swath_fill", False))
     if across_axis != "ground" and args.render_level != "geometric":
         logger.warning(f"--across-axis={across_axis} only applies to --render-level geometric -- ignoring it")
         across_axis = "ground"
@@ -1501,12 +1567,14 @@ def run_chip(args: argparse.Namespace) -> int:
                                 ds_full, t, ping_idx, items_by_channel, ["chip"], size_px=args.size_px,
                                 jitter_px=args.jitter_px, resolution_m=resolution_m_override, with_db=need_db,
                                 across_axis=across_axis, per_sample_latlon=args.render_level == "georef",
+                                swath_fill=swath_fill,
                             )
                         if swath_geo_styles:
                             views["swath"] = _load_geo_neighborhood(
                                 ds_full, t, ping_idx, items_by_channel, swath_geo_styles, size_px=args.swath_size_px,
                                 jitter_px=args.jitter_px, resolution_m=resolution_m_override, with_db=need_db,
                                 across_axis=across_axis, per_sample_latlon=args.render_level == "georef",
+                                swath_fill=swath_fill,
                             )
                     except KeyError as exc:
                         logger.warning(f"target {t.target_id}: {path.name} has no {exc} (run sidescan-correct --geometric) -- skipping")
@@ -1517,7 +1585,7 @@ def run_chip(args: argparse.Namespace) -> int:
                     result = _extract_geo_style_window(
                         v.ds, v.target, channel_idx, v.local_ping, style, args.render_level, size_px, jitter_px, rng, v.mps,
                         v.items, v.lo, resolution_m_override=resolution_m_override, backscatter_var=backscatter_var,
-                        resample_method=resample_method,
+                        resample_method=resample_method, swath_fill=swath_fill and args.render_level == "geometric",
                     )
                     if result is None:
                         return None
@@ -2253,6 +2321,13 @@ def main() -> int:
         help="geometric/georef only: annotation box size in meters for targets with no measured bbox (center-only "
              "picks), converted per image by its own resolution -- same real extent at every scale. Targets with a "
              "measured bbox keep it. Default: use --box-size pixels.",
+    )
+    p_chip.add_argument(
+        "--swath-fill", action="store_true",
+        help="'geometric' level, single-swath/dual-swath without --resolution-m: size the frame to the across-track "
+             "extent the data fills (the far edge most pings reach; dual swath spans port to starboard, not "
+             "centered on nadir), at square pixels -- no black side margins. Default keeps the old frame: the "
+             "farthest single ping's width, nadir-centered, never finer than the ping spacing.",
     )
     p_chip.add_argument("--gamma", type=float, default=common["gamma"])
     p_chip.add_argument(

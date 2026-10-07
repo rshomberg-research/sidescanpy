@@ -23,6 +23,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
     `--resolution-m` still means the same real extent on both axes.
   - `--box-size-m`: annotation box in meters for center-only targets,
     converted per image by its own resolution.
+  - `--swath-fill` (geometric single-swath/dual-swath, no `--resolution-m`):
+    frame spans the across-track extent the data actually fills (far edge
+    most pings reach, 10th percentile; dual swath port-far to
+    starboard-far rather than nadir-centered), square pixels, no
+    ping-spacing floor on resolution. The old frame left black side
+    margins (survey-a: median ~20 px, up to 150 px per side; far wider on
+    surveys whose ping spacing exceeds swath width / size).
 - Under `--normalization-scope image` (default) each image is written as
   soon as it is extracted instead of holding every float window until the
   end; contact sheets show the first draw per target only.

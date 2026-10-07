@@ -1705,3 +1705,69 @@ class TestRunChipAugmentation:
             widths[res] = float(line[3]) * 64
         assert widths[0.05] == pytest.approx(20.0, abs=0.5)
         assert widths[0.1] == pytest.approx(10.0, abs=0.5)
+
+
+class TestSwathFill:
+    """--swath-fill: swath frame sized to where the data is, square pixels."""
+
+    def _arrays(self, n_pings=50, n_samples=100, port_reach=40.0, stbd_reach=60.0, near=2.0):
+        # across: port negative, starboard positive; reach in meters
+        frac = np.linspace(0.0, 1.0, n_samples)
+        across = np.empty((n_pings, 2, n_samples))
+        across[:, 0, :] = -(near + frac * (port_reach - near))
+        across[:, 1, :] = near + frac * (stbd_reach - near)
+        values = np.ones_like(across)
+        return across, values
+
+    def test_dual_swath_spans_port_far_to_starboard_far(self):
+        across, values = self._arrays()
+        lo, hi = export._swath_fill_extent(across, values, combine=True, channel_idx=None)
+        assert lo == pytest.approx(-40.0) and hi == pytest.approx(60.0)
+
+    def test_short_pings_crop_long_ones_not_pad(self):
+        across, values = self._arrays()
+        values[:45, 1, 80:] = np.nan  # 90% of pings stop short on starboard
+        _lo, hi = export._swath_fill_extent(across, values, combine=True, channel_idx=None)
+        assert hi < 60.0 * 0.82
+
+    def test_one_sided_recording_mirrors_other_side(self):
+        across, values = self._arrays()
+        values[:, 0, :] = np.nan
+        lo, hi = export._swath_fill_extent(across, values, combine=True, channel_idx=None)
+        assert (lo, hi) == pytest.approx((-60.0, 60.0))
+
+    def test_single_swath_near_to_far_per_channel(self):
+        across, values = self._arrays()
+        assert export._swath_fill_extent(across, values, combine=False, channel_idx=1) == pytest.approx((2.0, 60.0))
+        assert export._swath_fill_extent(across, values, combine=False, channel_idx=0) == pytest.approx((-40.0, -2.0))
+
+    def test_no_data_returns_none(self):
+        across, values = self._arrays()
+        values[:] = np.nan
+        assert export._swath_fill_extent(across, values, combine=True, channel_idx=None) is None
+
+    def test_fill_resolution_is_not_floored_at_ping_spacing(self, tmp_path, swath_ss_h5_dir, mocker):
+        """Fixture swath (~0.1 m) is far narrower than ping spacing
+        (~0.37 m): the old frame floors resolution at ping spacing (swath
+        a sliver of the image); --swath-fill uses width / size_px."""
+        lat = float(np.linspace(40.0000, 40.0010, 300)[150])
+        lon = float(np.linspace(-70.0000, -70.0010, 300)[150])
+        t = Target(target_id="7", source_format="x", catalog_source="x", latitude=lat, longitude=lon,
+                   channel=1, sample=15, position_confidence="verified")
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([t], targets_json)
+        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        res = {}
+        for fill in (False, True):
+            spy.reset_mock()
+            args = argparse.Namespace(
+                targets_json=targets_json, ss_h5_dir=swath_ss_h5_dir, max_match_dist_m=25.0,
+                output=tmp_path / f"out{fill}", styles=["dual-swath"], render_level="geometric",
+                size_px=64, swath_size_px=64, box_size=10.0, with_context=False, jitter_px=0, gamma=1.0,
+                pct_low=1.0, pct_high=99.0, normalization_scope="image", min_confidence="verified", seed=0,
+                resolution_m=None, swath_fill=fill,
+            )
+            assert export.run_chip(args) == 0
+            res[fill] = spy.call_args.kwargs["resolution_m"]
+        assert res[False] > 0.3          # ping-spacing floor
+        assert res[True] < 0.01          # ~0.1 m swath / 64 px
