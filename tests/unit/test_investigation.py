@@ -33,7 +33,7 @@ def _make_two_channel_survey_path(tmp_path, *, n_pings=40, n_samples=300):
     own distinct, correct TVG status."""
     n_channels = 2
     time = pd.date_range("2026-01-01", periods=n_pings, freq="1s").values.astype("datetime64[ns]")
-    freq_hz = 1_495_000
+    freq_hz = 200_000  # low enough that full-physics loss stays above the dB floor at the test range
     base = xr.Dataset(
         {
             "backscatter_raw": (["ping", "channel", "sample"], np.ones((n_pings, n_channels, n_samples), dtype=np.float32)),

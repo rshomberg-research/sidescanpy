@@ -10,6 +10,9 @@ slicing leading samples never changes the computed ranges.
 """
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import numpy as np
 import xarray as xr
@@ -18,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SOUND_VEL_MS = 1500.0
 """Fallback sound velocity (m/s) for NaN / non-positive per-ping values."""
+
+
+_warn_invalid_sound_vel: ContextVar[bool] = ContextVar("warn_invalid_sound_vel", default=True)
+
+
+@contextmanager
+def invalid_sound_vel_warning_suppressed() -> Iterator[None]:
+    """Silence the invalid-``sound_vel_ms`` warning inside the block.
+
+    For callers that process one channel in pieces (ping chunks): they warn
+    once for the whole channel themselves instead of once per piece.
+    """
+    token = _warn_invalid_sound_vel.set(False)
+    try:
+        yield
+    finally:
+        _warn_invalid_sound_vel.reset(token)
 
 
 def sample_index(ds: xr.Dataset) -> np.ndarray:
@@ -42,7 +62,7 @@ def sample_interval_m(ds: xr.Dataset) -> np.ndarray:
     sound_vel = ds["sound_vel_ms"].values.astype(np.float64)
     invalid = np.isnan(sound_vel) | (sound_vel <= 0)
     if invalid.any():
-        logger.warning(
+        (logger.warning if _warn_invalid_sound_vel.get() else logger.debug)(
             "%d of %d pings have invalid sound_vel_ms (NaN or non-positive); "
             "falling back to %s m/s",
             int(invalid.sum()), sound_vel.size, DEFAULT_SOUND_VEL_MS,

@@ -22,7 +22,8 @@ Public entry points
   :func:`apply_tvg`, but on a plain ``(..., n_samples)`` array rather
   than a full ``xr.Dataset`` — for data that isn't a survey channel
   (e.g. a target catalog's own decoded crop window).
-- :func:`absorption_for_frequency` — frequency-dependent absorption
+- :func:`francois_garrison_absorption_db_per_m` / :func:`absorption_for_frequency`
+  — seawater absorption (Francois-Garrison)
   defaults for typical coastal seawater.
 - :func:`correct`, :func:`correct_survey`, :func:`correct_file` — the one
   correction API: an ordered list of built-in or caller-supplied steps,
@@ -91,6 +92,7 @@ from sidescanpy.processing.radiometric import (
     absorption_for_frequency,
     apply_tvg,
     apply_tvg_to_amplitude,
+    francois_garrison_absorption_db_per_m,
     tvg_gain_db,
 )
 from sidescanpy.processing.slicing import (
@@ -113,6 +115,7 @@ __all__ = [
     "tvg_gain_db",
     "TVGParams",
     "absorption_for_frequency",
+    "francois_garrison_absorption_db_per_m",
     "DEFAULT_FIELD_SOURCES",
     "compute_geometric_ranges",
     "compute_georeferencing",

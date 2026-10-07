@@ -19,6 +19,7 @@ from sidescanpy.processing.radiometric import (
     absorption_for_frequency,
     apply_tvg,
     apply_tvg_to_amplitude,
+    francois_garrison_absorption_db_per_m,
     tvg_gain_db,
 )
 
@@ -473,6 +474,81 @@ class TestAbsorptionForFrequency:
         alpha_high = absorption_for_frequency(1495000)    # 1495 kHz
 
         assert alpha_low < alpha_mid < alpha_high
+
+
+class TestFrancoisGarrison:
+    """Francois & Garrison (1982) absorption.
+
+    No tabulated reference values are reproduced here (none could be
+    verified offline). The checks are: (a) closed-form limits of the
+    published formula (fresh water leaves only the pure-water term
+    A3*P3*f^2; zero frequency gives zero), (b) widely quoted order-of-
+    magnitude seawater values with generous tolerances (about 0.06 dB/km
+    at 1 kHz, about 30-40 dB/km at 100 kHz, a few hundred dB/km at 1 MHz,
+    ~0.1 dB/m at 400 kHz), (c) qualitative physics (monotonic in
+    frequency, temperature branch continuity at 20 C, unit conversion).
+    """
+
+    def test_zero_frequency_is_zero(self):
+        assert francois_garrison_absorption_db_per_m(0.0) == 0.0
+
+    def test_scalar_in_float_out_array_in_array_out(self):
+        assert isinstance(francois_garrison_absorption_db_per_m(100e3), float)
+        out = francois_garrison_absorption_db_per_m(np.array([100e3, 400e3, 900e3]))
+        assert out.shape == (3,)
+        assert out[0] == pytest.approx(francois_garrison_absorption_db_per_m(100e3))
+
+    def test_fresh_water_reduces_to_pure_water_term(self):
+        # S=0 kills both relaxation terms; remaining alpha = A3 * P3 * f^2
+        # with the paper's T <= 20 C cubic and depth factor P3.
+        t, d, f_khz = 10.0, 0.0, 1000.0
+        a3 = 4.937e-4 - 2.59e-5 * t + 9.11e-7 * t**2 - 1.50e-8 * t**3
+        got = francois_garrison_absorption_db_per_m(f_khz * 1000.0, temperature_c=t, salinity_psu=0.0, depth_m=d)
+        assert got * 1000.0 == pytest.approx(a3 * f_khz**2, rel=1e-9)
+        assert got * 1000.0 == pytest.approx(311.0, rel=0.02)  # ~0.31 dB/m at 1 MHz, 10 C
+
+    def test_one_khz_cold_deep_ocean_order_of_magnitude(self):
+        alpha_db_km = francois_garrison_absorption_db_per_m(1e3, temperature_c=4.0, depth_m=1000.0) * 1000.0
+        assert 0.03 < alpha_db_km < 0.12
+
+    def test_hundred_khz_order_of_magnitude(self):
+        deep = francois_garrison_absorption_db_per_m(100e3, temperature_c=4.0, depth_m=1000.0) * 1000.0
+        coastal = francois_garrison_absorption_db_per_m(100e3) * 1000.0
+        assert 15.0 < deep < 45.0
+        assert 25.0 < coastal < 45.0
+        assert deep < coastal  # MgSO4 relaxation is pressure-reduced at depth
+
+    def test_one_megahertz_order_of_magnitude(self):
+        alpha_db_km = francois_garrison_absorption_db_per_m(1e6) * 1000.0
+        assert 250.0 < alpha_db_km < 400.0
+
+    def test_sidescan_frequencies_in_published_range(self):
+        # ~0.1 dB/m at 400 kHz is the commonly quoted figure
+        assert 0.08 < francois_garrison_absorption_db_per_m(400e3) < 0.12
+
+    def test_monotonic_in_frequency(self):
+        f = np.linspace(10e3, 2e6, 200)
+        assert np.all(np.diff(francois_garrison_absorption_db_per_m(f)) > 0)
+
+    def test_pure_water_branches_continuous_at_20_c(self):
+        lo = francois_garrison_absorption_db_per_m(1e6, temperature_c=20.0)
+        hi = francois_garrison_absorption_db_per_m(1e6, temperature_c=20.0 + 1e-9)
+        # the paper's two polynomials agree to ~0.05% at 20 C (not exactly)
+        assert hi == pytest.approx(lo, rel=2e-3)
+
+    def test_sound_velocity_override_changes_relaxation_amplitudes(self):
+        base = francois_garrison_absorption_db_per_m(500e3)
+        slower = francois_garrison_absorption_db_per_m(500e3, sound_velocity_ms=1400.0)
+        assert slower > base  # A1, A2 scale as 1/c
+
+    def test_wrapper_matches_and_forwards_environment(self):
+        assert absorption_for_frequency(547_500) == francois_garrison_absorption_db_per_m(547_500)
+        assert absorption_for_frequency(547_500, temperature_c=25.0) == pytest.approx(
+            francois_garrison_absorption_db_per_m(547_500, temperature_c=25.0))
+
+    def test_defaults_are_typical_coastal(self):
+        assert francois_garrison_absorption_db_per_m(300e3) == pytest.approx(
+            francois_garrison_absorption_db_per_m(300e3, temperature_c=10.0, salinity_psu=35.0, depth_m=10.0, ph=8.0))
 
 
 # ============================================================================

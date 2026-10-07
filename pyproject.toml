@@ -81,7 +81,7 @@ ignore = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-sidescanpy = ["processing/calibration/*.json", "assets/natural_earth/**/*"]
+sidescanpy = ["assets/natural_earth/**/*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

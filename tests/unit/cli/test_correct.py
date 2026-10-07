@@ -147,6 +147,58 @@ class TestSingleStep:
         assert _has_var(result, "latitude_per_sample")
 
 
+def _range_table(path):
+    """Write a small synthetic range-correction table covering both test frequencies."""
+    from sidescanpy.processing.range_correction import RangeCorrectionTable
+
+    table = RangeCorrectionTable()
+    for f in (1_495_000, 547_500):
+        table.add_curve(f, [0.0, 10.0, 50.0], [1.0, 2.0, 3.0])
+    table.save(str(path))
+    return path
+
+
+class TestRangeCorrectionTableFlag:
+    def test_range_correction_requires_table(self, ss_h5_path, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction"],
+        )
+        with pytest.raises(SystemExit) as exc:
+            correct.main()
+        assert exc.value.code == 2
+        assert "--range-correction-table" in capsys.readouterr().err
+
+    def test_table_without_flag_is_an_error(self, ss_h5_path, monkeypatch, tmp_path, capsys):
+        table_path = _range_table(tmp_path / "t.json")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--range-correction-table", str(table_path)],
+        )
+        with pytest.raises(SystemExit):
+            correct.main()
+        assert "requires --range-correction" in capsys.readouterr().err
+
+    def test_water_conditions_passed_to_tvg(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg",
+             "--temperature-c", "15", "--salinity-psu", "32", "--depth-m", "30", "--ph", "7.9"],
+        )
+        assert correct.main() == 0
+        for ch in read_survey(ss_h5_path).freq_channels.values():
+            tvg = [h for h in json.loads(ch.dataset.attrs["processing_history"]) if h["step"] == "tvg"][0]
+            assert (tvg["params"]["temperature_c"], tvg["params"]["salinity_psu"],
+                    tvg["params"]["depth_m"], tvg["params"]["ph"]) == (15.0, 32.0, 30.0, 7.9)
+
+    def test_water_conditions_require_tvg(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv", ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--geometric", "--temperature-c", "15"],
+        )
+        with pytest.raises(SystemExit):
+            correct.main()
+
+
 class TestCombinedSteps:
     def test_all_four_in_one_pass(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
@@ -165,13 +217,12 @@ class TestCombinedSteps:
         assert _crop_history_present(result)
 
     def test_range_correction_included_in_one_pass(self, ss_h5_path, monkeypatch):
-        # sample_multi_frequency_survey's two channels (hz_1495000/hz_547500)
-        # are exactly the bundled default calibration's own scope.
+        table_path = _range_table(ss_h5_path.parent.parent / "rc_table.json")
         monkeypatch.setattr(
             "sys.argv",
             [
                 "sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent),
-                "--tvg", "--geometric", "--range-correction",
+                "--tvg", "--geometric", "--range-correction", "--range-correction-table", str(table_path),
             ],
         )
         assert correct.main() == 0
@@ -232,7 +283,8 @@ class TestIdempotency:
     def test_range_correction_rerun_skips_completed_step(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
             "sys.argv",
-            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction"],
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction",
+             "--range-correction-table", str(_range_table(ss_h5_path.parent.parent / "rc_table.json"))],
         )
         assert correct.main() == 0
         assert correct.main() == 0  # would raise inside apply_empirical_range_correction if double-applied
@@ -249,7 +301,9 @@ class TestIdempotency:
         import sys
         old_argv = sys.argv
         try:
-            sys.argv = ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--range-correction"]
+            table_path = _range_table(tmp_path.parent / (tmp_path.name + "_rc_table.json"))
+            sys.argv = ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--range-correction",
+                        "--range-correction-table", str(table_path)]
             assert correct.main() == 0
         finally:
             sys.argv = old_argv

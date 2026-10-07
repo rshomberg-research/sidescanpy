@@ -11,11 +11,12 @@ correction). Instead it fits and removes whatever
 range-dependent shape is actually observed in TVG-corrected data, per
 frequency.
 
-**Known limitation, deliberately not hidden:** the bundled default
-calibration table (`load_default()`) is fit from one real survey and
-validated only against a held-out ping range of that *same* survey — not
-genuine cross-survey validation. Revisit once a second independent real
-survey is available.
+The library ships no calibration table: a table is fit from a specific
+survey and instrument, so it belongs with the project that fitted it. Fit
+one with :func:`fit_range_correction`, store it with
+:meth:`RangeCorrectionTable.save`, and pass it (or its path) as the
+``table`` argument of :func:`apply_empirical_range_correction` /
+the ``"range_correction"`` step.
 
 This is a separate, optional correction step (``"range_correction"``)
 from `apply_tvg()` — not in ``sidescanpy.processing.DEFAULT_STEPS``; opt in
@@ -28,7 +29,6 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from importlib.resources import files
 from pathlib import Path
 
 import numpy as np
@@ -41,9 +41,6 @@ from sidescanpy.processing.profiles import mean_backscatter_vs_range
 logger = logging.getLogger(__name__)
 
 STEP_NAME = STEP_RANGE_CORRECTION
-
-_DEFAULT_CALIBRATION_PACKAGE = "sidescanpy.processing.calibration"
-_DEFAULT_CALIBRATION_RESOURCE = "range_correction_default.json"
 
 # Frequency matching tolerance (Hz) — real freq_hz_start values are exact
 # per-instrument constants, not estimated, so an exact-ish match is
@@ -178,16 +175,6 @@ class RangeCorrectionTable:
     def load(cls, path: str) -> "RangeCorrectionTable":
         return cls.from_dict(json.loads(Path(path).read_text()))
 
-    @classmethod
-    def load_default(cls) -> "RangeCorrectionTable":
-        """Load the calibration table bundled with the installed package."""
-        text = (
-            files(_DEFAULT_CALIBRATION_PACKAGE)
-            .joinpath(_DEFAULT_CALIBRATION_RESOURCE)
-            .read_text()
-        )
-        return cls.from_dict(json.loads(text))
-
 
 def fit_range_correction(
     ds: xr.Dataset,
@@ -267,7 +254,7 @@ def fit_range_correction(
 
 
 def apply_empirical_range_correction(
-    ds: xr.Dataset, table: RangeCorrectionTable | None = None
+    ds: xr.Dataset, table: "RangeCorrectionTable | str | Path | None" = None
 ) -> xr.Dataset:
     """
     Apply a previously-fit empirical range correction to TVG-corrected
@@ -279,9 +266,10 @@ def apply_empirical_range_correction(
         TVG-corrected (``"tvg"`` in processing_history) with a
         ``ground_range_m`` variable — i.e. already run through the
         ``"tvg"`` and ``"geometric"`` steps.
-    table : RangeCorrectionTable, optional
-        Defaults to ``RangeCorrectionTable.load_default()`` (the bundled
-        calibration).
+    table : RangeCorrectionTable or path
+        Required. The calibration to apply, or the path of a JSON file
+        written by :meth:`RangeCorrectionTable.save`. The library has no
+        built-in default table.
 
     Returns
     -------
@@ -300,10 +288,21 @@ def apply_empirical_range_correction(
 
     Raises
     ------
+    TypeError
+        If ``table`` is missing or not a table / path.
     ValueError
         If ``ds`` isn't TVG+geometric corrected, or the range correction is
         already recorded in processing_history (refuses to double-apply).
     """
+    if table is None:
+        raise TypeError(
+            "the range_correction step requires a `table` (a RangeCorrectionTable or the path "
+            "of a saved one); the library has no built-in default table"
+        )
+    if isinstance(table, (str, Path)):
+        table = RangeCorrectionTable.load(str(table))
+    elif not isinstance(table, RangeCorrectionTable):
+        raise TypeError(f"`table` must be a RangeCorrectionTable or a path, got {type(table).__name__}")
     if not has_step(ds, STEP_TVG):
         raise ValueError(
             "apply_empirical_range_correction expects TVG-corrected data. Run apply_tvg() first."
@@ -318,10 +317,6 @@ def apply_empirical_range_correction(
             "range correction already applied to this dataset "
             "(found in processing_history). Refusing to double-apply."
         )
-
-    is_default = table is None
-    if table is None:
-        table = RangeCorrectionTable.load_default()
 
     freq_hz = ds.attrs["freq_hz_start"]
     matched = table.matched_frequency(freq_hz)
@@ -343,14 +338,13 @@ def apply_empirical_range_correction(
         backscatter_intensity=(ds["backscatter_intensity"] + correction_da).astype(ds["backscatter_intensity"].dtype),
     )
     logger.debug(
-        "Empirical range correction applied for freq_hz_start=%s (matched calibrated freq=%s, %s table).",
-        freq_hz, matched, "default" if is_default else "custom",
+        "Empirical range correction applied for freq_hz_start=%s (matched calibrated freq=%s).",
+        freq_hz, matched,
     )
     return append_history(
         ds_out,
         STEP_RANGE_CORRECTION,
         {
-            "table": "default" if is_default else "custom",
             "freq_hz_matched": matched,
             "range_m": list(curve.range_m),
             "correction_db": list(curve.correction_db),

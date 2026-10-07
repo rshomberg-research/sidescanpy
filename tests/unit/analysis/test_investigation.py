@@ -42,7 +42,7 @@ def _make_raw_dataset(
     n_samples: int = 200,
     sample_rate_hz: float = 1000.0,
     backscatter: np.ndarray | None = None,
-    freq_hz: float = 1_495_000,
+    freq_hz: float = 200_000,
 ) -> xr.Dataset:
     """Minimal valid raw sidescan dataset — mirrors
     test_tvg_diagnostics.py's `_make_test_dataset` helper."""

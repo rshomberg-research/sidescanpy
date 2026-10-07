@@ -23,9 +23,14 @@ Usage:
     sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --tvg --geometric --georef \\
         --ping-chunk-size 1000
 
-    # Empirical range correction on top of tvg+geometric (bundled table is
-    # calibrated for two frequencies only; others are skipped with a warning):
-    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --range-correction
+    # Absorption from the Francois-Garrison formula for given water conditions:
+    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --tvg \\
+        --temperature-c 14 --salinity-psu 31 --depth-m 20
+
+    # Empirical range correction on top of tvg+geometric, from a table you
+    # fitted earlier (frequencies without a curve are skipped with a warning):
+    sidescan-correct --ss-h5-dir data/<survey>/ss_h5/ --range-correction \\
+        --range-correction-table range_table.json
 
 2026 rshomberg@uri.edu
 """
@@ -86,12 +91,16 @@ def main() -> int:
     parser.add_argument(
         "--range-correction", action="store_true",
         help=(
-            "Apply the bundled empirical range-correction curve (residual TVG-vs-range "
+            "Apply an empirical range-correction curve (residual TVG-vs-range "
             "shape TVG's spreading/absorption terms don't capture -- see "
-            "processing/range_correction.py). Requires --geometric to have run (this "
-            "invocation or a prior one). Only calibrated for hz_1495000/hz_547500 -- a "
-            "channel at another frequency is skipped with a warning, not guessed."
+            "processing/range_correction.py). Requires --range-correction-table and "
+            "--geometric to have run (this invocation or a prior one). A channel at a "
+            "frequency the table has no curve for is skipped with a warning, not guessed."
         ),
+    )
+    parser.add_argument(
+        "--range-correction-table", type=Path, default=None, metavar="PATH",
+        help="JSON range-correction table (RangeCorrectionTable.save). Required by --range-correction.",
     )
     parser.add_argument("--georef", action="store_true", help="Apply georeferencing")
     parser.add_argument(
@@ -100,7 +109,23 @@ def main() -> int:
     )
     parser.add_argument(
         "--absorption-db-per-m", type=float, default=None,
-        help="Override TVG absorption coefficient (dB/m). Default: frequency-derived. Requires --tvg.",
+        help="Override TVG absorption coefficient (dB/m). Default: Francois-Garrison (1982, JASA 72:896, 72:1879) from frequency and water conditions. Requires --tvg.",
+    )
+    parser.add_argument(
+        "--temperature-c", type=float, default=None,
+        help="Water temperature (C) for the Francois-Garrison (1982, JASA 72:896 and 72:1879) absorption. Default 10. Requires --tvg; ignored with --absorption-db-per-m.",
+    )
+    parser.add_argument(
+        "--salinity-psu", type=float, default=None,
+        help="Salinity (psu) for the Francois-Garrison (1982, JASA 72:896 and 72:1879) absorption. Default 35. Requires --tvg.",
+    )
+    parser.add_argument(
+        "--depth-m", type=float, default=None,
+        help="Water depth (m) for the Francois-Garrison (1982, JASA 72:896 and 72:1879) absorption. Default 10. Requires --tvg.",
+    )
+    parser.add_argument(
+        "--ph", type=float, default=None,
+        help="Seawater pH for the Francois-Garrison (1982, JASA 72:896 and 72:1879) absorption. Default 8. Requires --tvg.",
     )
     parser.add_argument(
         "--no-spreading", action="store_true",
@@ -141,7 +166,15 @@ def main() -> int:
         parser.error("--no-spreading and --spreading-loss-db are mutually exclusive")
     if args.no_absorption and args.absorption_db_per_m is not None:
         parser.error("--no-absorption and --absorption-db-per-m are mutually exclusive")
-    tvg_override_requested = (
+    water = {k: getattr(args, k) for k in ("temperature_c", "salinity_psu", "depth_m", "ph")
+             if getattr(args, k) is not None}
+    if args.range_correction and args.range_correction_table is None:
+        parser.error("--range-correction requires --range-correction-table PATH (the library has no built-in table)")
+    if args.range_correction_table is not None and not args.range_correction:
+        parser.error("--range-correction-table requires --range-correction")
+    if args.range_correction_table is not None and not args.range_correction_table.is_file():
+        parser.error(f"--range-correction-table: no such file: {args.range_correction_table}")
+    tvg_override_requested = bool(water) or (
         args.no_spreading or args.spreading_loss_db is not None
         or args.no_absorption or args.absorption_db_per_m is not None
     )
@@ -162,9 +195,13 @@ def main() -> int:
         tvg_params["absorption_db_per_m"] = 0.0
     elif args.absorption_db_per_m is not None:
         tvg_params["absorption_db_per_m"] = args.absorption_db_per_m
+    tvg_params.update(water)
     if tvg_params:
         logger.info(f"TVG override: {tvg_params}")
-    params = {STEP_TVG: tvg_params} if tvg_params else None
+    params = {STEP_TVG: tvg_params} if tvg_params else {}
+    if args.range_correction:
+        params[STEP_RANGE_CORRECTION] = {"table": str(args.range_correction_table)}
+    params = params or None
     steps = _steps_from_args(args)
 
     files = sorted(args.ss_h5_dir.glob("*.ss.h5"))

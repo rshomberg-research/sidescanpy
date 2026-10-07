@@ -162,15 +162,6 @@ class TestRangeCorrectionTable:
         )
         assert loaded.metadata_for(1_495_000) == {"note": "test"}
 
-    def test_load_default_returns_a_table(self):
-        """The bundled default (range_correction_default.json) may be
-        empty (before scripts/fit_range_correction.py has been run
-        against real data) or populated (after) — either way,
-        load_default() must return a usable RangeCorrectionTable without
-        erroring."""
-        table = RangeCorrectionTable.load_default()
-        assert isinstance(table.frequencies(), list)
-
 
 class TestApplyEmpiricalRangeCorrection:
     def _table_for_freq(self, freq_hz=1_495_000):
@@ -255,16 +246,24 @@ class TestApplyEmpiricalRangeCorrection:
         apply_empirical_range_correction(ds, table=self._table_for_freq())
         np.testing.assert_array_equal(ds["backscatter_intensity"].values, original)
 
-    def test_defaults_to_bundled_table_when_none_given(self):
-        """No explicit table argument -> loads RangeCorrectionTable.load_default().
-        Uses a frequency deliberately not among sidescanpy's calibrated
-        set (hz_1495000, hz_547500) so this deterministically exercises
-        the "no calibrated match" skip path regardless of whatever the
-        bundled default currently contains."""
-        ds = _make_radiometric_geometric_dataset(
-            n_pings=2, n_samples=3000, freq_hz_start=999_999_000
-        )
-        result = apply_empirical_range_correction(ds)
+    def test_table_is_required(self):
+        ds = _make_radiometric_geometric_dataset(n_pings=2, n_samples=3000)
+        with pytest.raises(TypeError, match="requires a `table`"):
+            apply_empirical_range_correction(ds)
+        with pytest.raises(TypeError, match="must be a RangeCorrectionTable or a path"):
+            apply_empirical_range_correction(ds, table=42)
+
+    def test_table_accepted_as_path(self, tmp_path):
+        ds = _make_radiometric_geometric_dataset(n_pings=2, n_samples=3000)
+        path = tmp_path / "table.json"
+        self._table_for_freq().save(str(path))
+        via_path = apply_empirical_range_correction(ds, table=path)
+        direct = apply_empirical_range_correction(ds, table=self._table_for_freq())
         np.testing.assert_array_equal(
-            result["backscatter_intensity"].values, ds["backscatter_intensity"].values
+            via_path["backscatter_intensity"].values, direct["backscatter_intensity"].values
         )
+
+    def test_library_ships_no_default_table(self):
+        assert not hasattr(RangeCorrectionTable, "load_default")
+        with pytest.raises(ImportError):
+            __import__("sidescanpy.processing.calibration")

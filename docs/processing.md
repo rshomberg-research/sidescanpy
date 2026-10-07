@@ -103,24 +103,27 @@ range.
 @dataclass
 class TVGParams:
     spreading_loss_db: float = 20.0
-    absorption_db_per_m: float | None = None  # frequency default if None
+    absorption_db_per_m: float | None = None  # Francois-Garrison default if None
     min_range_m: float = 0.5  # range clip for sample 0
 ```
 
-### `absorption_for_frequency`
+### `francois_garrison_absorption_db_per_m` / `absorption_for_frequency`
 
-Frequency-dependent absorption defaults for typical coastal seawater (T=10°C,
-S=35 ppt, 10 m depth):
+One-way seawater absorption (dB/m) from the Francois-Garrison model: boric
+acid + magnesium sulfate relaxation + pure-water viscosity. Vectorised over
+frequency; inputs `temperature_c`, `salinity_psu`, `depth_m`, `ph` (and an
+optional `sound_velocity_ms`). Defaults are typical coastal water (10 C,
+35 psu, 10 m, pH 8) -- pass your own conditions when known.
+`absorption_for_frequency(f, **env)` is a thin wrapper. When a `tvg` step has
+no `absorption_db_per_m`, it is derived this way (the step accepts
+`temperature_c`, `salinity_psu`, `depth_m`, `ph`; `sidescan-correct` has
+`--temperature-c --salinity-psu --depth-m --ph`) and the resolved absorption
+and water conditions are recorded in `processing_history`.
 
-| Frequency | Absorption |
-|---|---|
-| < 400 kHz | 0.05 dB/m |
-| 400 kHz – 1 MHz | 0.10 dB/m |
-| ≥ 1 MHz | 0.20 dB/m |
+References:
 
-These are reasonable defaults from the Francois-Garrison formula. For precise
-values, compute using full F-G with CTD data and pass via
-`TVGParams(absorption_db_per_m=...)`.
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part I: Pure water and magnesium sulfate contributions," J. Acoust. Soc. Am. 72(3), 896-907 (1982).
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part II: Boric acid contribution and equation for total absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982).
 
 ## `compute_geometric_ranges`
 

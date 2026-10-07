@@ -22,13 +22,17 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
     Params: ``fields, method, extrapolation, drop_invalid``.
 ``"tvg"``
     :func:`~sidescanpy.processing.radiometric.apply_tvg`. Params:
-    ``spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms``.
+    ``spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms``,
+    plus ``temperature_c, salinity_psu, depth_m, ph`` (Francois-Garrison
+    inputs, used only when ``absorption_db_per_m`` is None; model of Francois &
+    Garrison, J. Acoust. Soc. Am. 72(3) 896-907 and 72(6) 1879-1890, 1982).
 ``"geometric"``
     :func:`~sidescanpy.processing.geometric.compute_geometric_ranges`.
     Params: ``expose_unmasked_z``.
 ``"range_correction"``
     :func:`~sidescanpy.processing.range_correction.apply_empirical_range_correction`
-    (needs tvg + geometric). Params: ``table``.
+    (needs tvg + geometric). Params: ``table`` (required: a
+    ``RangeCorrectionTable`` or the path of a saved one; no built-in default).
 ``"georef"``
     :func:`~sidescanpy.processing.georeferencing.compute_georeferencing`
     (needs geometric). Params: ``ellipsoid``.
@@ -98,6 +102,10 @@ from sidescanpy.processing.interpolate import interpolate_aux_onto_dataset
 from sidescanpy.processing.inversion import invert
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg, resolve_tvg_params
 from sidescanpy.processing.range_correction import apply_empirical_range_correction
+from sidescanpy.processing.sample_axis import (
+    invalid_sound_vel_warning_suppressed,
+    sample_interval_m,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,8 +138,15 @@ def _tvg_step(
     absorption_db_per_m: float | None = None,
     min_range_m: float = 0.5,
     sound_velocity_ms: float | None = None,
+    temperature_c: float | None = None,
+    salinity_psu: float | None = None,
+    depth_m: float | None = None,
+    ph: float | None = None,
 ) -> xr.Dataset:
-    return apply_tvg(ds, TVGParams(spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms))
+    return apply_tvg(ds, TVGParams(
+        spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms,
+        temperature_c, salinity_psu, depth_m, ph,
+    ))
 
 
 def _interpolate_aux_step(
@@ -253,6 +268,11 @@ def _resolve_steps(
     for r in resolved:
         r.params = canon_params.get(r.name, {})
         r.record_params = _bind(r.name, r.fn, r.params, r.builtin)
+        if r.builtin and r.name == STEP_RANGE_CORRECTION and r.params.get("table") is None:
+            raise TypeError(
+                "step 'range_correction' requires params['range_correction']['table'] "
+                "(a RangeCorrectionTable or the path of a saved one); there is no built-in default table"
+            )
     return resolved
 
 
@@ -483,10 +503,14 @@ def _resolve_channel_params(ds: xr.Dataset, actions: list[_Action]) -> list[_Act
         if action.kind == "apply" and r.builtin and r.name == STEP_TVG:
             light = ds[["sound_vel_ms"]].load()
             resolved = resolve_tvg_params(light, TVGParams(**r.record_params))
-            r = _Resolved(r.name, r.fn, True, {**r.params, **{
-                "absorption_db_per_m": resolved.absorption_db_per_m,
-                "sound_velocity_ms": resolved.sound_velocity_ms,
-            }}, r.record_params)
+            # A derived absorption is recomputed (identically) per chunk from the
+            # now-fixed water conditions so those get recorded with it.
+            fixed = {"sound_velocity_ms": resolved.sound_velocity_ms}
+            if r.record_params.get("absorption_db_per_m") is None:
+                fixed.update({k: getattr(resolved, k) for k in ("temperature_c", "salinity_psu", "depth_m", "ph")})
+            else:
+                fixed["absorption_db_per_m"] = resolved.absorption_db_per_m
+            r = _Resolved(r.name, r.fn, True, {**r.params, **fixed}, r.record_params)
         elif action.kind == "apply" and r.builtin and r.name == STEP_CROP_FARRANGE \
                 and r.record_params.get("cutoff_sample") is None:
             detect = {k: v for k, v in r.record_params.items() if k != "cutoff_sample"}
@@ -598,13 +622,17 @@ def _correct_file_chunked(path, out, resolved, force, progress, chunk_pings) -> 
                 continue
             _check_aux(actions, survey)
             actions = _resolve_channel_params(ds, actions)
+            if any(a.kind == "apply" and a.step.name == STEP_GEOMETRIC for a in actions):
+                # One warning per channel (not per chunk) about invalid sound velocities.
+                sample_interval_m(ds[["sound_vel_ms"]].load())
             n_pings = ds.sizes["ping"]
             chunk_paths = []
             for lo in range(0, n_pings, chunk_pings):
                 hi = min(lo + chunk_pings, n_pings)
                 if progress is not None:
                     progress(f"{freq_key}: pings {lo}-{hi} of {n_pings}")
-                chunk = _execute(ds.isel(ping=slice(lo, hi)).load(), actions, survey)
+                with invalid_sound_vel_warning_suppressed():
+                    chunk = _execute(ds.isel(ping=slice(lo, hi)).load(), actions, survey)
                 chunk_path = tmp_dir / f"{freq_key}_{lo:012d}.nc"
                 _drop_legacy_raw(chunk).to_netcdf(chunk_path, engine=_HDF5_ENGINE)
                 chunk_paths.append(chunk_path)

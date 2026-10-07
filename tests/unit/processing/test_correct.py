@@ -21,9 +21,11 @@ from sidescanpy.processing import (
     correct_file,
     correct_survey,
     estimate_correct_disk_bytes,
+    francois_garrison_absorption_db_per_m,
     invert,
     uncorrected_backscatter,
 )
+from sidescanpy.processing.range_correction import RangeCorrectionTable
 from tests.conftest import (
     make_minimal_attitude_record,
     make_minimal_navigation_record,
@@ -54,6 +56,14 @@ def _survey(n_pings=40):
     return survey
 
 
+def _rc_table(freqs=(1_495_000, 547_500)):
+    """Small synthetic range-correction table (flat +2 dB, ramping to +4 dB)."""
+    table = RangeCorrectionTable()
+    for f in freqs:
+        table.add_curve(f, [0.0, 5.0, 20.0], [2.0, 3.0, 4.0])
+    return table
+
+
 def _steps(ds):
     return [h["step"] for h in read_history(ds)]
 
@@ -74,8 +84,9 @@ class TestCorrectSteps:
         assert set(rec) == {"step", "params", "function", "version", "timestamp_utc"}
         # actual params used, defaults resolved
         assert rec["params"] == {
-            "spreading_loss_db": 20.0, "absorption_db_per_m": 0.2,
+            "spreading_loss_db": 20.0, "absorption_db_per_m": pytest.approx(francois_garrison_absorption_db_per_m(1_495_000)),
             "min_range_m": 0.5, "sound_velocity_ms": 1500.0,
+            "temperature_c": 10.0, "salinity_psu": 35.0, "depth_m": 10.0, "ph": 8.0,
         }
 
     def test_skip_by_leaving_out(self):
@@ -186,6 +197,20 @@ class TestIdempotency:
         correct(correct(_ds(), [counted]), [counted])
         assert len(calls) == 1
 
+    def test_tvg_water_conditions_drive_default_absorption_and_are_recorded(self):
+        warm = correct(_ds(), ["tvg"], {"tvg": {"temperature_c": 25.0, "salinity_psu": 30.0}})
+        rec = read_history(warm)[0]["params"]
+        assert rec["temperature_c"] == 25.0 and rec["salinity_psu"] == 30.0
+        assert rec["depth_m"] == 10.0 and rec["ph"] == 8.0
+        assert rec["absorption_db_per_m"] == pytest.approx(
+            francois_garrison_absorption_db_per_m(1_495_000, temperature_c=25.0, salinity_psu=30.0))
+
+    def test_tvg_explicit_absorption_ignores_water_conditions(self):
+        out = correct(_ds(), ["tvg"], {"tvg": {"absorption_db_per_m": 0.1, "temperature_c": 25.0}})
+        rec = read_history(out)[0]["params"]
+        assert rec["absorption_db_per_m"] == 0.1
+        assert "temperature_c" not in rec
+
     def test_force_reapplies_tvg_with_new_params_not_stacked(self):
         once = correct(_ds(), ["tvg"])
         redo = correct(once, ["tvg"], {"tvg": {"spreading_loss_db": 0.0}}, force=True)
@@ -196,10 +221,11 @@ class TestIdempotency:
 
     def test_force_tvg_requires_later_radiometric_steps_listed(self):
         ds = correct(_ds(), ["tvg", "geometric"])
-        ds = correct(ds, ["range_correction"])  # hz_1495000 is in the bundled table
+        rc = {"range_correction": {"table": _rc_table()}}
+        ds = correct(ds, ["range_correction"], rc)
         with pytest.raises(ValueError, match="range_correction"):
             correct(ds, ["tvg"], force=True)
-        redo = correct(ds, ["tvg", "range_correction"], force=True)
+        redo = correct(ds, ["tvg", "range_correction"], rc, force=True)
         assert _steps(redo).count("tvg") == 1
 
     def test_geometric_done_if_vars_present_without_record(self):
@@ -231,7 +257,7 @@ class TestInvert:
 
     def test_round_trip_with_range_correction(self):
         ds = _ds()
-        corrected = correct(ds, ["tvg", "geometric", "range_correction"])
+        corrected = correct(ds, ["tvg", "geometric", "range_correction"], {"range_correction": {"table": _rc_table()}})
         assert "range_correction" in applied_steps(corrected)
         np.testing.assert_allclose(uncorrected_backscatter(corrected).values,
                                    ds["backscatter_intensity"].values, rtol=1e-5, atol=1e-6)
@@ -243,9 +269,13 @@ class TestInvert:
         assert _steps(back) == ["geometric"]
 
     def test_cannot_invert_tvg_under_later_range_correction(self):
-        corrected = correct(_ds(), ["tvg", "geometric", "range_correction"])
+        corrected = correct(_ds(), ["tvg", "geometric", "range_correction"], {"range_correction": {"table": _rc_table()}})
         with pytest.raises(ValueError, match="range_correction"):
             invert(corrected, ["tvg"])
+
+    def test_range_correction_without_table_is_a_clear_error(self):
+        with pytest.raises(TypeError, match="requires.*table"):
+            correct(_ds(), ["tvg", "geometric", "range_correction"])
 
     def test_non_invertible_step(self):
         with pytest.raises(ValueError, match="cannot invert"):
@@ -342,8 +372,9 @@ class TestCorrectFile:
         ("crop_farrange", "interpolate_aux", "tvg", "geometric", "range_correction", "georef"),
     ])
     def test_chunked_equals_unchunked(self, ss_h5, tmp_path, steps):
-        eager = correct_file(ss_h5, steps, out_path=tmp_path / "eager.ss.h5")
-        chunked = correct_file(ss_h5, steps, out_path=tmp_path / "chunked.ss.h5", chunk_pings=7)
+        params = {"range_correction": {"table": _rc_table()}} if "range_correction" in steps else None
+        eager = correct_file(ss_h5, steps, params, out_path=tmp_path / "eager.ss.h5")
+        chunked = correct_file(ss_h5, steps, params, out_path=tmp_path / "chunked.ss.h5", chunk_pings=7)
         a, b = read_survey(eager), read_survey(chunked)
         for fk in a.frequencies:
             da, db = a.get_frequency(fk).dataset.load(), b.get_frequency(fk).dataset.load()
@@ -353,6 +384,18 @@ class TestCorrectFile:
             assert _steps(da) == _steps(db)
             for ra, rb in zip(read_history(da), read_history(db), strict=True):
                 assert ra["params"] == rb["params"]
+
+    def test_invalid_sound_velocity_warns_once_per_channel_when_chunked(self, tmp_path, caplog):
+        survey = _survey(n_pings=45)
+        for fk in survey.frequencies:
+            survey.get_frequency(fk).dataset["sound_vel_ms"].values[:10] = np.nan
+        path = tmp_path / "sv.ss.h5"
+        write_survey(survey, path)
+        with caplog.at_level("WARNING", logger="sidescanpy"):
+            correct_file(path, ["interpolate_aux", "geometric"], out_path=tmp_path / "o.ss.h5", chunk_pings=7)
+        msgs = [r.getMessage() for r in caplog.records if "invalid sound_vel_ms" in r.getMessage()]
+        assert len(msgs) == len(survey.frequencies)  # once per channel, not once per chunk
+        assert all("10 of 45 pings" in m for m in msgs)
 
     def test_chunked_crop_detects_on_whole_channel(self, tmp_path):
         survey = _survey(n_pings=30)

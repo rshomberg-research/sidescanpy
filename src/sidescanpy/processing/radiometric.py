@@ -14,6 +14,12 @@ TVG correction adds these losses back, so equal backscatter at different ranges
 produces equal corrected values. This is essential for radiometric calibration
 and mosaic generation.
 
+The default absorption coefficient comes from the Francois-Garrison seawater
+absorption model (:func:`francois_garrison_absorption_db_per_m`):
+
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part I: Pure water and magnesium sulfate contributions," J. Acoust. Soc. Am. 72(3), 896-907 (1982).
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part II: Boric acid contribution and equation for total absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982).
+
 Input backscatter is assumed to be linear amplitude; this module converts to
 dB, applies TVG, and outputs dB. The step is recorded in ``processing_history``
 with its resolved parameters so it can be inverted exactly.
@@ -34,6 +40,12 @@ from sidescanpy.processing.sample_axis import DEFAULT_SOUND_VEL_MS, sample_index
 
 logger = logging.getLogger(__name__)
 
+# "Typical coastal" water used when the caller gives no conditions.
+DEFAULT_TEMPERATURE_C = 10.0
+DEFAULT_SALINITY_PSU = 35.0
+DEFAULT_DEPTH_M = 10.0
+DEFAULT_PH = 8.0
+
 
 @dataclass
 class TVGParams:
@@ -47,7 +59,10 @@ class TVGParams:
         Standard value is 20.0 for spherical spreading in 3D.
     absorption_db_per_m : float, optional
         Absorption coefficient (dB per meter).
-        If None, uses frequency-dependent default from absorption_for_frequency().
+        If None, derived from the channel frequency with
+        :func:`francois_garrison_absorption_db_per_m` (Francois & Garrison,
+        J. Acoust. Soc. Am. 72(3) 896-907 and 72(6) 1879-1890, 1982) and the
+        four water parameters below (typical-coastal defaults where None).
     min_range_m : float, default=0.5
         Minimum range threshold (meters).
         Ranges below this are clipped to avoid log(0) singularity.
@@ -55,56 +70,112 @@ class TVGParams:
     sound_velocity_ms : float, optional
         Sound velocity (m/s) used to turn sample index into slant range.
         If None, the mean of the dataset's per-ping ``sound_vel_ms``.
+    temperature_c, salinity_psu, depth_m, ph : float, optional
+        Water conditions for the Francois-Garrison absorption; used only
+        when ``absorption_db_per_m`` is None (defaults 10 C, 35 psu, 10 m,
+        pH 8 -- pass real values when known).
     """
 
     spreading_loss_db: float = 20.0
     absorption_db_per_m: float | None = None
     min_range_m: float = 0.5
     sound_velocity_ms: float | None = None
+    temperature_c: float | None = None
+    salinity_psu: float | None = None
+    depth_m: float | None = None
+    ph: float | None = None
 
 
-def absorption_for_frequency(freq_hz: float) -> float:
+def francois_garrison_absorption_db_per_m(
+    frequency_hz,
+    *,
+    temperature_c: float = DEFAULT_TEMPERATURE_C,
+    salinity_psu: float = DEFAULT_SALINITY_PSU,
+    depth_m: float = DEFAULT_DEPTH_M,
+    ph: float = DEFAULT_PH,
+    sound_velocity_ms: float | None = None,
+):
     """
-    Return a reasonable default absorption coefficient (dB/m) by frequency.
+    Seawater sound absorption (dB/m, one-way) after Francois & Garrison (1982).
 
-    Uses simplified Francois-Garrison values for typical coastal seawater
-    (T=10°C, S=35 ppt, pH=8, D=10 m). For precise values, compute using
-    the full Francois-Garrison formula with CTD data.
+    Sum of three relaxation / viscosity terms (``f`` in kHz, result in dB/km
+    before conversion)::
+
+        alpha = A1 P1 f1 f^2 / (f1^2 + f^2)      boric acid
+              + A2 P2 f2 f^2 / (f2^2 + f^2)      magnesium sulfate
+              + A3 P3 f^2                        pure water (viscosity)
+
+    with the paper's coefficients: ``f1 = 2.8 sqrt(S/35) 10^(4 - 1245/(T+273))``,
+    ``f2 = 8.17 10^(8 - 1990/(T+273)) / (1 + 0.0018 (S - 35))``, ``A3`` having
+    separate polynomial branches for ``T <= 20 C`` and ``T > 20 C``, and
+    depth factors ``P2``, ``P3``. Valid roughly 0.4 - 1000 kHz, -1.8 to 30 C,
+    S 30-35 psu, depth 0 - 6 km.
+
+    References
+    ----------
+    .. [1] R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part I: Pure water and magnesium sulfate contributions," J. Acoust. Soc. Am. 72(3), 896-907 (1982)
+           (pure water and magnesium sulfate terms).
+    .. [2] R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part II: Boric acid contribution and equation for total absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982)
+           (boric acid term and the equation for total absorption).
+
+    The defaults are "typical coastal" values (10 C, 35 psu, 10 m, pH 8),
+    not a measurement: callers with real conditions should pass their own.
 
     Parameters
     ----------
-    freq_hz : float
-        Sonar transmit frequency (Hz).
+    frequency_hz : float or array_like
+        Frequency (Hz). Vectorised.
+    temperature_c, salinity_psu, depth_m, ph : float
+        Water conditions (degrees C, practical salinity units, metres, pH).
+    sound_velocity_ms : float, optional
+        Sound speed (m/s) in the relaxation-amplitude terms. Default: the
+        paper's own ``c = 1412 + 3.21 T + 1.19 S + 0.0167 D``.
 
     Returns
     -------
-    float
-        Absorption coefficient (dB/m).
-
-    Notes
-    -----
-    Francois-Garrison formula is implemented as:
-        alpha = A1*P1*f1*f^2/(f1^2 + f^2) + A2*P2*f2*f^2/(f2^2 + f^2) + A3*P3*f^2
-    Where:
-        - First term: boric acid relaxation (~1 kHz)
-        - Second term: MgSO4 relaxation (~100 kHz, dominant for 500-1500 kHz)
-        - Third term: pure water viscosity
-
-    Reference values (typical coastal seawater):
-        - 100 kHz: ~0.01 dB/m
-        - 547.5 kHz: ~0.10 dB/m
-        - 1495 kHz: ~0.20 dB/m
+    float or np.ndarray
+        Absorption coefficient in dB per metre (the paper's dB/km / 1000),
+        a float for scalar input.
     """
-    # TODO: replace with more accurate function
-    if freq_hz >= 1_000_000:
-        # ~1.5 MHz and above
-        return 0.20
-    elif freq_hz >= 400_000:
-        # ~547.5 kHz
-        return 0.10
+    f_khz = np.asarray(frequency_hz, dtype=np.float64) / 1000.0
+    t, s, d = float(temperature_c), float(salinity_psu), float(depth_m)
+    c = 1412.0 + 3.21 * t + 1.19 * s + 0.0167 * d if sound_velocity_ms is None else float(sound_velocity_ms)
+    kelvin = t + 273.0
+
+    # Boric acid term: Part II (JASA 72(6), 1879-1890), eqs. for A1, P1 (=1), f1
+    a1 = 8.86 / c * 10.0 ** (0.78 * ph - 5.0)
+    f1 = 2.8 * np.sqrt(s / 35.0) * 10.0 ** (4.0 - 1245.0 / kelvin)
+    # Magnesium sulfate term: Part I (JASA 72(3), 896-907), eqs. for A2, P2, f2
+    a2 = 21.44 * s / c * (1.0 + 0.025 * t)
+    p2 = 1.0 - 1.37e-4 * d + 6.2e-9 * d * d
+    f2 = 8.17 * 10.0 ** (8.0 - 1990.0 / kelvin) / (1.0 + 0.0018 * (s - 35.0))
+    # Pure-water term: Part I (JASA 72(3), 896-907), eqs. for A3 (two T branches at 20 C), P3
+    if t <= 20.0:
+        a3 = 4.937e-4 - 2.59e-5 * t + 9.11e-7 * t**2 - 1.50e-8 * t**3
     else:
-        # Lower frequencies
-        return 0.05
+        a3 = 3.964e-4 - 1.146e-5 * t + 1.45e-7 * t**2 - 6.5e-10 * t**3
+    p3 = 1.0 - 3.83e-5 * d + 4.9e-10 * d * d
+
+    f2_sq = f_khz * f_khz
+    # Total absorption: Part II (JASA 72(6)), sum of the three terms
+    alpha_db_per_km = (
+        a1 * f1 * f2_sq / (f1 * f1 + f2_sq)
+        + a2 * p2 * f2 * f2_sq / (f2 * f2 + f2_sq)
+        + a3 * p3 * f2_sq
+    )
+    alpha_db_per_m = alpha_db_per_km / 1000.0
+    return float(alpha_db_per_m) if alpha_db_per_m.ndim == 0 else alpha_db_per_m
+
+
+def absorption_for_frequency(frequency_hz, **env):
+    """
+    Default absorption coefficient (dB/m, one-way) for a sonar frequency.
+
+    Thin wrapper over :func:`francois_garrison_absorption_db_per_m`; ``env``
+    (``temperature_c, salinity_psu, depth_m, ph, sound_velocity_ms``) is
+    passed through, defaulting to its typical-coastal-water values.
+    """
+    return francois_garrison_absorption_db_per_m(frequency_hz, **env)
 
 
 def tvg_gain_db(range_m: np.ndarray, params: TVGParams) -> np.ndarray:
@@ -275,8 +346,22 @@ def resolve_tvg_params(ds: xr.Dataset, params: TVGParams | None) -> TVGParams:
     """
     params = TVGParams() if params is None else replace(params)
     if params.absorption_db_per_m is None:
-        params.absorption_db_per_m = absorption_for_frequency(ds.attrs["freq_hz_start"])
-        logger.debug("TVG absorption default for %s Hz: %.4f dB/m", ds.attrs["freq_hz_start"], params.absorption_db_per_m)
+        params.temperature_c = DEFAULT_TEMPERATURE_C if params.temperature_c is None else params.temperature_c
+        params.salinity_psu = DEFAULT_SALINITY_PSU if params.salinity_psu is None else params.salinity_psu
+        params.depth_m = DEFAULT_DEPTH_M if params.depth_m is None else params.depth_m
+        params.ph = DEFAULT_PH if params.ph is None else params.ph
+        params.absorption_db_per_m = francois_garrison_absorption_db_per_m(
+            ds.attrs["freq_hz_start"], temperature_c=params.temperature_c, salinity_psu=params.salinity_psu,
+            depth_m=params.depth_m, ph=params.ph,
+        )
+        logger.debug(
+            "TVG absorption (Francois-Garrison, T=%.1f C, S=%.1f psu, D=%.1f m, pH=%.2f) for %s Hz: %.5f dB/m",
+            params.temperature_c, params.salinity_psu, params.depth_m, params.ph,
+            ds.attrs["freq_hz_start"], params.absorption_db_per_m,
+        )
+    elif any(v is not None for v in (params.temperature_c, params.salinity_psu, params.depth_m, params.ph)):
+        logger.debug("TVG: absorption_db_per_m given explicitly; ignoring water-condition parameters")
+        params.temperature_c = params.salinity_psu = params.depth_m = params.ph = None
     if params.sound_velocity_ms is None:
         # TODO: per-ping sound velocity instead of one mean per channel.
         sv = float(ds["sound_vel_ms"].mean().item())
@@ -302,12 +387,18 @@ def tvg_gain_for_dataset(ds: xr.Dataset, params: TVGParams) -> np.ndarray:
 
 def tvg_params_record(params: TVGParams) -> dict:
     """History-record params for a resolved TVGParams."""
-    return {
+    record = {
         "spreading_loss_db": float(params.spreading_loss_db),
         "absorption_db_per_m": float(params.absorption_db_per_m),
         "min_range_m": float(params.min_range_m),
         "sound_velocity_ms": float(params.sound_velocity_ms),
     }
+    # Water conditions behind a derived absorption (absent when it was given explicitly).
+    for key in ("temperature_c", "salinity_psu", "depth_m", "ph"):
+        value = getattr(params, key)
+        if value is not None:
+            record[key] = float(value)
+    return record
 
 
 def tvg_params_from_record(record_params: dict) -> TVGParams:

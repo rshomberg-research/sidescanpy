@@ -42,7 +42,7 @@ from sidescanpy.core.history import (
 )
 from sidescanpy.core.units import FLOOR_DB, db_to_linear
 from sidescanpy.processing.radiometric import tvg_gain_for_dataset, tvg_params_from_record
-from sidescanpy.processing.range_correction import RangeCorrectionTable, range_correction_db
+from sidescanpy.processing.range_correction import range_correction_db
 
 logger = logging.getLogger(__name__)
 
@@ -90,14 +90,10 @@ def _undo_range_correction(ds: xr.Dataset, db: xr.DataArray, record: dict) -> xr
     if "range_m" in params and "correction_db" in params:
         range_m, correction_db = params["range_m"], params["correction_db"]
     else:
-        # Legacy record: no curve stored; it was always the bundled default table.
-        logger.debug("legacy range_correction record without its curve; using the bundled default table")
-        table = RangeCorrectionTable.load_default()
-        matched = params.get("freq_hz_matched") or table.matched_frequency(ds.attrs["freq_hz_start"])
-        if matched is None:
-            raise ValueError("cannot invert legacy range_correction record: no matching default curve")
-        curve = table._curves[table.matched_frequency(float(matched))]
-        range_m, correction_db = curve.range_m, curve.correction_db
+        raise ValueError(
+            "cannot invert this range_correction record: it does not store its correction curve "
+            "(written by an older version that used a bundled default table)"
+        )
     return (db - range_correction_db(ds, range_m, correction_db)).astype(db.dtype)
 
 
