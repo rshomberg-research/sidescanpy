@@ -998,9 +998,13 @@ def real_jsf_file_path():
 
     Originally sourced from a real EdgeTech JSF survey file
     (ping 69, first sonar data message), stored here as a fixed test
-    fixture (`sample.jsf`).
+    fixture (`sample.jsf`). Survey data is never committed, so tests
+    using it skip where the file is absent (e.g. CI).
     """
-    return Path(__file__).resolve().parents[3] / "data" / "jsf" / "sample.jsf"
+    path = Path(__file__).resolve().parents[3] / "data" / "jsf" / "sample.jsf"
+    if not path.exists():
+        pytest.skip(f"real JSF sample not present: {path}")
+    return path
 
 # Reference epoch for synthesizing timestamps
 _EPOCH_2026_NS = int(np.datetime64("2026-01-01T00:00:00", "ns").astype("int64"))
