@@ -489,9 +489,7 @@ def extract_geometric_window_griddata(
     real targets, ``resolution_m=0.03m``, ~60-66% of cells with no real
     sample at that resolution): griddata never shows a gap, but most of
     what fills those gaps is triangulated from real points several real
-    ping-widths away, not a resolved local measurement. See
-    ``docs/_internal/`` or the artifact this session's comparison work
-    produced for the real-image side-by-side against
+    ping-widths away, not a resolved local measurement. Compare
     :func:`extract_geometric_window` (zero fabrication, real radius
     averaging) and :func:`extract_geometric_window_binned` (zero
     fabrication, real gaps shown honestly).

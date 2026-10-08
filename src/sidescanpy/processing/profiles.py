@@ -58,10 +58,6 @@ def backscatter_vs_range(
     """
     Bin samples by range and return per-bin mean/median/std/p10/p90/count.
 
-    Generalizes the manual binning loop from
-    `docs/_internal/handoff-tvg-range-residual.md`'s "How to reproduce"
-    section into a reusable function.
-
     Parameters
     ----------
     ds : xr.Dataset

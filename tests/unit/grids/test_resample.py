@@ -705,8 +705,8 @@ class TestResampleChannelToGrid3DValidation:
     def test_preserves_port_starboard_spatial_distinction(self):
         """
         Port and starboard samples resample into their own distinct grid
-        cells, not a blended average. Regression test for the historical
-        bug described in docs/_internal/v0.6.0-gridding-refactor.md.
+        cells, not a blended average. Regression test for an early bug
+        where callers pre-flattened the channel axis before gridding.
         """
         num_pings, num_samples = 30, 20
         lat_track = np.linspace(39.0, 39.01, num_pings)

@@ -6,12 +6,8 @@ Resamples a bounded square region directly at an explicit
 builds on the survey-wide georeferencing/gridding path already in
 ``sidescanpy.grids``. Produces a ``SideScanGriddedRaster`` (an in-memory
 xarray-backed raster with northing/easting coordinates and CRS
-metadata), not a GeoTIFF file directly — writing an actual GeoTIFF needs
-``rasterio``, a dependency this library hasn't taken on yet (see
-``docs/_internal/v0.7.0-geotiff-and-cropping.md``); a caller needing a
-real GeoTIFF file wraps this raster's own data with an optional,
-guarded ``rasterio`` import at the call site, the same pattern already
-used for this elsewhere.
+metadata), not a file; :func:`sidescanpy.grids.to_geotiff` writes it as
+a GeoTIFF (needs the ``geo`` extra).
 
 2026 rshomberg@uri.edu
 """

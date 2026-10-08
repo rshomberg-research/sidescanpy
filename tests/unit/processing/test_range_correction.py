@@ -1,7 +1,6 @@
 """
 Unit tests for sidescanpy.processing.range_correction — the empirical,
-data-driven range correction for the residual TVG range-dependence
-(CLAUDE.md Known Issue #4, docs/_internal/v0.9.0-empirical-range-correction.md).
+data-driven range correction for a survey's residual TVG range-dependence.
 
 2026 rshomberg@uri.edu
 """
