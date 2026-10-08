@@ -115,7 +115,7 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    # Deprecated shim, kept for one release.
+    # Deprecated shim, kept until 0.8.0.
     if name == "along_track_distance_m":
         import warnings
 

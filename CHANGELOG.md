@@ -5,7 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [Unreleased]
+## [0.7.0] — 2026-10-08
+
+New XTF reader and a changed TVG default (results change for callers who
+relied on the default spreading coefficient). The deprecation shims from
+0.6.0 are kept for one more release and removed in 0.8.0.
 
 ### Changed
 
@@ -60,13 +64,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   grid segment. `min_margin_deg=` still sets a degree minimum explicitly.
   Auto-fitted grids (`grid_channel`, `sidescan-export grid`) are tighter.
 
-## [0.6.0] — Unreleased
+## [0.6.0] — 2026-10-08
 
 A restructure into a library API with a thin CLI. Workflow, numbered
 "stages" and figure layouts moved out of the library into the CLI and
 `examples/`. Many module paths changed; see the migration table below.
 No deprecation shims are kept except where noted, and those are removed
-in 0.7.0.
+in 0.8.0 (originally planned for 0.7.0).
 
 Between 0.5.0 and this release, `main` carried a 0.4.x patch series
 (0.4.6–0.4.59) that added the `sidescan-*` CLI, the investigation tools,
@@ -200,7 +204,7 @@ here; their history is in git.
 | `analysis.segmentation.find_segments` | `processing.find_segments` |
 | `analysis.recommend.measure_ping_geometry` | `analysis.measure_ping_geometry` |
 | `viz.investigation`, `viz.tvg_diagnostics`, `viz.nav_attitude` | `viz.analysis`, `viz.tvg` (plots take `ax`, never save) |
-| `viz.waterfall.along_track_distance_m` | `processing.along_track_distance_m` (old path warns until 0.7.0) |
+| `viz.waterfall.along_track_distance_m` | `processing.along_track_distance_m` (old path warns until 0.8.0) |
 | `viz.track.build_survey_track` | `processing.build_survey_track` (returns `SurveyTrack`) |
 | `targets.core.Target` | `sidescanpy.targets.Target` (defined in `core.target`) |
 | `targets.interchange.coco` / `yolo` | `export.ml.write_coco` / `write_yolo` |

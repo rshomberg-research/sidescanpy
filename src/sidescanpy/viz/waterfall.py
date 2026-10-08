@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def __getattr__(name: str):
-    # Deprecated shim, kept for one release.
+    # Deprecated shim, kept until 0.8.0.
     if name == "along_track_distance_m":
         warnings.warn(
             "sidescanpy.viz.waterfall.along_track_distance_m has moved to "
