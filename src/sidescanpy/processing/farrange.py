@@ -31,6 +31,11 @@ from sidescanpy.core.history import STEP_CROP_FARRANGE, append_history, read_his
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.core.units import linear_to_db, mask_floor_db
 from sidescanpy.processing.inversion import uncorrected_backscatter
+from sidescanpy.processing.sample_axis import (
+    invalid_sound_vel_warning_suppressed,
+    sample_index,
+    sample_interval_m,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +95,11 @@ def detect_far_range_cutoff_sample(
     more above that floor, returns a cropped sample count (the floor bin's
     end, plus ``margin_bins`` of slack). If no such rise is found, returns
     ``None`` — nothing should be cropped.
+
+    A cutoff whose slant range is not beyond the median ``altitude_m`` is
+    rejected with a WARNING and ``None`` is returned: on recordings that
+    include the transmit pulse and the water column, the "floor" found is
+    the water column and the "rise" is the seafloor return.
 
     Parameters
     ----------
@@ -157,7 +167,36 @@ def detect_far_range_cutoff_sample(
 
     cutoff_bin = floor_bin + margin_bins
     cutoff_sample = min((cutoff_bin + 1) * bin_size, n_samples)
+    if _cutoff_inside_water_column(ds, cutoff_sample):
+        return None
     return cutoff_sample
+
+
+def _cutoff_inside_water_column(ds: xr.Dataset, cutoff_sample: int) -> bool:
+    """True when the cutoff's slant range is not beyond the median altitude.
+
+    A recording that starts at the transmit pulse has its strongest bin at
+    the start and a quiet water column before the first bottom return; the
+    detector then reads the water column as the floor and the seafloor as
+    the noise rising back up. Such a cutoff is rejected (WARNING) rather
+    than cropping away the whole swath.
+    """
+    if "altitude_m" not in ds or "sound_vel_ms" not in ds or "sample_rate_hz" not in ds.attrs:
+        return False
+    altitude = float(np.nanmedian(ds["altitude_m"].values)) if np.isfinite(ds["altitude_m"].values).any() else np.nan
+    if not np.isfinite(altitude) or altitude <= 0:
+        return False
+    with invalid_sound_vel_warning_suppressed():  # georeferencing warns about it where it matters
+        spacing = float(np.nanmedian(sample_interval_m(ds)))
+    cutoff_range = spacing * sample_index(ds)[cutoff_sample - 1]
+    if cutoff_range > altitude:
+        return False
+    logger.warning(
+        "far-range cutoff at sample %d (%.1f m slant range) is inside the water column "
+        "(median altitude %.1f m); not cropping",
+        cutoff_sample, cutoff_range, altitude,
+    )
+    return True
 
 
 def crop_far_range(

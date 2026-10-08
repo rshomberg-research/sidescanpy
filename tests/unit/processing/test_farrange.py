@@ -32,6 +32,9 @@ def _make_profile_dataset(db_profile: np.ndarray, n_pings: int = 50) -> "xr.Data
     db = db_profile[None, None, :] + noise_db
     linear = _db_to_linear(db).astype(np.float32)
     ds["backscatter_intensity"].values[...] = linear
+    # The profiles model a swath beyond the water column: keep the altitude
+    # below the first sample's range (400 kHz -> 1.9 mm per sample).
+    ds["altitude_m"].values[...] = 0.5
     return ds
 
 
@@ -145,6 +148,17 @@ class TestDetectFarRangeCutoffSample:
         ds["backscatter_intensity"].values[:, :, :blank_len] = 0.0
 
         assert detect_far_range_cutoff_sample(ds) is None
+
+    def test_cutoff_inside_water_column_rejected(self, caplog):
+        # Transmit pulse first, a quiet water column, then the seafloor
+        # return: the detector's floor is the water column.
+        n_samples = 2000
+        profile = _decay_then_rise_profile(n_samples, floor_at=800)
+        ds = _make_profile_dataset(profile)
+        ds["altitude_m"].values[...] = 3.0  # ~1600 samples at 1.9 mm/sample
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.farrange"):
+            assert detect_far_range_cutoff_sample(ds) is None
+        assert "inside the water column" in caplog.text
 
     def test_too_few_samples_returns_none(self):
         # n_samples=2 with bin_size floored at 1 gives only 2 bins (< 3

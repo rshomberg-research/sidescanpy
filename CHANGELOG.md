@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.6.2] — 2026-10-08
+
+### Fixed
+
+- `processing.detect_far_range_cutoff_sample` no longer crops inside the
+  water column. On recordings that start at the transmit pulse, the quiet
+  water column read as the noise floor and the seafloor return as noise
+  rising again, cropping away nearly the whole swath. A cutoff whose slant
+  range is not beyond the median `altitude_m` is now rejected with a
+  WARNING.
+- `examples/project_template/04_export.py` skips grid segments with no
+  georeferenced samples (noted in the report) instead of failing.
+
 ## [0.6.1] — 2026-10-08
 
 ### Changed

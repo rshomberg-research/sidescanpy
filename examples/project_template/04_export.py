@@ -17,6 +17,7 @@ Usage:
 """
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -112,7 +113,7 @@ def export_waterfalls(cfg, paths, files, matched, report, *, range_mode: str) ->
 def export_grids(cfg, paths, files, report) -> None:
     opts = cfg["export"].get("grid", {})
     maps = cfg["export"].get("basemap", {})
-    n_png = n_tif = 0
+    n_png = n_tif = n_unpositioned = 0
     geotiff = opts.get("geotiff", False)
     if geotiff:
         try:
@@ -128,8 +129,12 @@ def export_grids(cfg, paths, files, report) -> None:
             ds = survey.get_frequency(freq_key).dataset
             for i, (start, stop) in enumerate(ping_windows(ds.sizes["ping"], opts.get("segment_pings", 2048)), 1):
                 out = paths.step_dir("exports") / "gridded" / freq_key / path.stem / f"segment_{i:03d}.png"
-                raster = grid_channel(ds.isel(ping=slice(start, stop)).load(), opts.get("resolution_m", 1.0),
-                                      opts.get("method", "mean"))
+                segment = ds.isel(ping=slice(start, stop)).load()
+                if not np.isfinite(segment["latitude_per_sample"].values).any():
+                    # e.g. a short-range frequency whose whole swath lies inside the water column
+                    n_unpositioned += 1
+                    continue
+                raster = grid_channel(segment, opts.get("resolution_m", 1.0), opts.get("method", "mean"))
                 fig, _ax = plot_gridded_raster(raster, cmap=opts.get("cmap", "copper"), vmin_pct=opts.get("vmin_pct", 2.0),
                                                vmax_pct=opts.get("vmax_pct", 98.0), gamma=opts.get("gamma", 2.5),
                                                show_land=maps.get("show_land", False),
@@ -142,6 +147,9 @@ def export_grids(cfg, paths, files, report) -> None:
         logger.info("gridded %s", path.name)
     report.results["grid_pngs"] = n_png
     report.results["grid_geotiffs"] = n_tif
+    if n_unpositioned:
+        report.note(f"{n_unpositioned} grid segment(s) skipped: no georeferenced samples "
+                    "(swath inside the water column, or georef not applied)")
 
 
 def main(argv=None) -> None:
