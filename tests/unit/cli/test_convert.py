@@ -1,5 +1,5 @@
 """
-Unit tests for sidescan-convert — survey (.jsf/.sdf -> .ss.h5) and
+Unit tests for sidescan-convert — survey (.jsf/.sdf/.xtf -> .ss.h5) and
 targets (catalog -> targets.json) subcommands, replacing the old
 per-project 01_convert.py / 11_read_targets.py scripts.
 
@@ -42,7 +42,7 @@ class TestRunSurvey:
         (tmp_path / "raw").mkdir()
         (tmp_path / "raw" / "20241017181822.jsf").write_bytes(b"")
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert", lambda paths, fmt, survey_name=None: sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda path, survey_name=None, min_pings=50: [(path.stem, sample_multi_frequency_survey)])
 
         assert convert.run_survey(self._args(tmp_path)) == 0
 
@@ -60,7 +60,7 @@ class TestRunSurvey:
 
         called = []
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: called.append(1) or sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda p, **k: called.append(1) or [(p.stem, sample_multi_frequency_survey)])
 
         assert convert.run_survey(self._args(tmp_path)) == 0
         assert called == []
@@ -74,7 +74,7 @@ class TestRunSurvey:
         (out_dir / "a.ss.h5").write_bytes(b"sentinel")
 
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda p, **k: [(p.stem, sample_multi_frequency_survey)])
 
         assert convert.run_survey(self._args(tmp_path, force=True)) == 0
         assert (out_dir / "a.ss.h5").read_bytes() != b"sentinel"
@@ -196,12 +196,73 @@ class TestRunTargets:
         assert not (tmp_path / "out" / "position_scatter.png").exists()
 
 
+class TestSurveyXtf:
+    def test_converts_synthetic_xtf_end_to_end(self, tmp_path):
+        from tests.unit.io.xtf.conftest import (
+            dual_frequency_infos,
+            file_header,
+            ramp,
+            sonar_packet,
+            write_xtf,
+        )
+
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        pk = [sonar_packet([(c, ramp(256, "<u2", i + c)) for c in range(4)], ping_number=i)
+              for i in range(20)]
+        write_xtf(raw / "LINE1.XTF", file_header(dual_frequency_infos()), pk)
+        args = argparse.Namespace(
+            input_dir=str(raw), output_dir=str(tmp_path / "ss_h5"),
+            input_format="xtf", force=False, crop_farrange=False,
+        )
+        assert convert.run_survey(args) == 0
+        result = read_survey(tmp_path / "ss_h5" / "LINE1.ss.h5")
+        assert result.source_format == "xtf"
+        assert set(result.freq_channels) == {"hz_100000", "hz_400000"}
+
+
+    def test_range_change_writes_one_output_per_segment(self, tmp_path):
+        from tests.unit.io.xtf.conftest import (
+            dual_frequency_infos,
+            file_header,
+            ramp,
+            sonar_packet,
+            write_xtf,
+        )
+
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        pk = [
+            sonar_packet([(c, ramp(256, "<u2", i + c)) for c in range(4)], ping_number=i,
+                         chan_fields={"SlantRange": r, "TimeDuration": r / 750.0})
+            for i, r in enumerate([100.0] * 12 + [150.0] * 2 + [200.0] * 10)
+        ]
+        write_xtf(raw / "LINE1.XTF", file_header(dual_frequency_infos()), pk)
+        out = tmp_path / "ss_h5"
+        args = ["survey", "--input-dir", str(raw), "--output-dir", str(out),
+                "--no-crop-farrange", "--min-segment-pings", "5"]
+        assert convert.main(args) == 0
+        assert sorted(p.name for p in out.iterdir()) == ["LINE1_seg01.ss.h5", "LINE1_seg02.ss.h5"]
+        seg2 = read_survey(out / "LINE1_seg02.ss.h5")
+        assert seg2.survey_name == "LINE1_seg02"
+        ds = seg2.get_frequency("hz_100000").dataset
+        assert ds.sizes["ping"] == 10
+        assert ds.attrs["sample_rate_hz"] == pytest.approx(256 * 750.0 / 200.0)
+
+        # Existing segment outputs are skipped one by one; the missing one is rewritten.
+        (out / "LINE1_seg01.ss.h5").unlink()
+        mtime = (out / "LINE1_seg02.ss.h5").stat().st_mtime_ns
+        assert convert.main(args) == 0
+        assert (out / "LINE1_seg01.ss.h5").exists()
+        assert (out / "LINE1_seg02.ss.h5").stat().st_mtime_ns == mtime
+
+
 class TestMainDispatch:
     def test_survey_subcommand_via_argv(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
         (tmp_path / "raw").mkdir()
         (tmp_path / "raw" / "a.jsf").write_bytes(b"")
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda p, **k: [(p.stem, sample_multi_frequency_survey)])
         monkeypatch.setattr(
             "sys.argv",
             [
@@ -225,7 +286,7 @@ class TestMainDispatch:
         (tmp_path / "raw").mkdir()
         (tmp_path / "raw" / "a.jsf").write_bytes(b"")
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda p, **k: [(p.stem, sample_multi_frequency_survey)])
         monkeypatch.setattr(
             "sys.argv",
             [
@@ -245,7 +306,7 @@ class TestMainDispatch:
         (tmp_path / "raw").mkdir()
         (tmp_path / "raw" / "a.jsf").write_bytes(b"")
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda p, **k: [(p.stem, sample_multi_frequency_survey)])
 
         def _fake_run_survey(args):
             captured["verbose"] = args.verbose

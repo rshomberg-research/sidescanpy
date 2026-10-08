@@ -57,6 +57,7 @@ nav:
       - JSF: io_jsf.md
       - JSF aux sources: jsf_aux_source_selection.md
       - SDF: io_sdf.md
+      - XTF: io_xtf.md
       - HDF5 (.ss.h5): io_hdf5.md
       - NetCDF: io_netcdf.md
   - API reference: reference/

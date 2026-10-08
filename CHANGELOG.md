@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [Unreleased]
+
+### Added
+
+- XTF reader (`io.xtf`): numpy structured dtypes for the file, channel and
+  ping headers, packet framing, a streaming sonar-ping reader and a
+  converter to `SideScanSurvey`. Files are split into segments where the
+  range setting changes; `io.dispatch` and `sidescan-convert` produce one
+  survey per segment. Port samples are reversed so sample 0 is nearest the
+  sonar, as in the other readers. See the "XTF" guide page.
+
 ## [0.6.2] — 2026-10-08
 
 ### Fixed

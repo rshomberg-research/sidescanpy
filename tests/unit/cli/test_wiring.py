@@ -64,7 +64,7 @@ class TestConvertWiring:
     def test_no_crop_skips_crop(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
         (tmp_path / "raw").mkdir()
         (tmp_path / "raw" / "a.sdf").write_bytes(b"")
-        monkeypatch.setattr(convert, "read_and_convert", lambda *a, **k: sample_multi_frequency_survey)
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda p, **k: [(p.stem, sample_multi_frequency_survey)])
         monkeypatch.setattr(convert, "crop_far_range_noise", lambda s: pytest.fail("crop must not run"))
         rc = convert.main(["survey", "--input-dir", str(tmp_path / "raw"), "--output-dir", str(tmp_path / "out"),
                            "--no-crop-farrange"])
