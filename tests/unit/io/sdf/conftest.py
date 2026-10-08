@@ -10,8 +10,6 @@ known values and verify parsing.
 """
 
 import struct
-from dataclasses import asdict
-
 
 # ============================================================
 # CONSTANTS — Klein SDF page layout (per spec)
@@ -229,9 +227,9 @@ def make_sdf_header_bytes(
         'd'
         'I'
         '3f'
-        'f' 
-        'i' 
-        'I' 
+        'f'
+        'i'
+        'I'
         '26I'
         ,
 
@@ -319,7 +317,7 @@ def make_sdf_header_bytes(
         # processed_ping_number,
 
         # 2f: fields 94-95
-        # processed_ping_spacing_m, 
+        # processed_ping_spacing_m,
         temperature_ambient_c,
 
         # i: field 99 (SIGNED)
@@ -332,7 +330,7 @@ def make_sdf_header_bytes(
         *reserved,
     )
 
-import numpy as np
+import numpy as np  # noqa: E402
 
 
 def make_sdf_data_section(
@@ -405,7 +403,8 @@ def make_sdf_page_bytes(
 
     return marker + header + data_section
 
-import math
+import math  # noqa: E402
+from datetime import UTC  # noqa: E402
 
 
 def make_sdf_sonar_page(
@@ -451,7 +450,8 @@ def make_sdf_sonar_page(
     center_freq_hz : int
         Center frequency (will be stored as kHz in the header).
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from sidescanpy.io.sdf.pages import SDFPageHeader, SDFSonarPage
 
     if n_port_samples is None:
@@ -460,7 +460,7 @@ def make_sdf_sonar_page(
         n_stbd_samples = num_samples
 
     # Convert timestamp to date components
-    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    dt = datetime.fromtimestamp(timestamp, tz=UTC)
     fseconds = (timestamp - int(timestamp))
 
     range_m = int(range_m)

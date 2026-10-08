@@ -1,7 +1,7 @@
 """
 Smoke tests for sidescanpy.viz.contact_sheet.
 
-Matches how viz/waterfall.py and viz/tvg_diagnostics.py are tested:
+Matches how viz/waterfall.py and viz/tvg.py are tested:
 figure produced, correct shape, no exceptions — not pixel comparisons.
 
 2026 rshomberg@uri.edu
@@ -13,7 +13,7 @@ import pytest
 
 matplotlib.use("Agg")
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
 from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 
 

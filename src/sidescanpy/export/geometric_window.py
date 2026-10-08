@@ -7,12 +7,14 @@ size_px)``, centered on a given real-world point — a survey-local frame
 per-sample ``across_track_m`` that
 ``processing/geometric.py::compute_geometric_ranges`` already attaches,
 and the per-ping cumulative along-track distance from
-``viz.waterfall.along_track_distance_m``.
+``processing.navigation.along_track_distance_m``.
 
 2026 rshomberg@uri.edu
 """
 
 from __future__ import annotations
+
+import logging
 
 import numpy as np
 import xarray as xr
@@ -20,7 +22,9 @@ from scipy.interpolate import griddata
 from scipy.spatial import cKDTree
 from scipy.stats import binned_statistic_2d
 
-from sidescanpy.viz.waterfall import along_track_distance_m
+from sidescanpy.processing.navigation import along_track_distance_m
+
+logger = logging.getLogger(__name__)
 
 
 def _clamp_center(center: float, half_extent: float, data_min: float, data_max: float) -> float:
@@ -151,7 +155,7 @@ def extract_geometric_window(
         ``along_search_radius_m`` (still sized to bridge real ping
         gaps) fixes this: real across-track texture is preserved
         instead of averaged away, without reintroducing along-track
-        gaps. See ``docs/planning/anisotropic-crop-search-radius.md``
+        gaps. See ``docs/_internal/anisotropic-crop-search-radius.md``
         for the full investigation.
     avoid_edge_gaps : bool, default False
         When True and the requested center is close enough to the edge
@@ -180,7 +184,7 @@ def extract_geometric_window(
         pixel density on both axes. On a survey whose along-track
         native resolution is much coarser than across-track (ping
         spacing an order of magnitude or more wider than sample
-        interval — real vendor-format data measured at ~16:1), the
+        interval — one real survey measured at ~16:1), the
         along-track search radius floor (tied to real ping-to-ping
         gaps, independent of ``resolution_m`` — see
         ``along_search_radius_m`` above) ends up wide relative to a
@@ -294,6 +298,11 @@ def extract_geometric_window(
     gg_along, gg_across = np.meshgrid(grid_along, grid_across, indexing="ij")
     query_points = np.column_stack([gg_along.ravel() / along_radius, gg_across.ravel() / across_radius])
 
+    # TODO(lib): the same per-cell query_ball_point loop grids.resample
+    # replaced with cKDTree.sparse_distance_matrix + bincount
+    # (grids.resample._aggregate_cells, MEAN); needs a parity test like
+    # tests/unit/grids/test_resample_parity.py (allclose at float64
+    # rounding: summation order differs).
     grid_values = np.full(query_points.shape[0], np.nan)
     for i, pt in enumerate(query_points):
         idx = tree.query_ball_point(pt, r=1.0)
@@ -480,9 +489,7 @@ def extract_geometric_window_griddata(
     real targets, ``resolution_m=0.03m``, ~60-66% of cells with no real
     sample at that resolution): griddata never shows a gap, but most of
     what fills those gaps is triangulated from real points several real
-    ping-widths away, not a resolved local measurement. See
-    ``docs/planning/`` or the artifact this session's comparison work
-    produced for the real-image side-by-side against
+    ping-widths away, not a resolved local measurement. Compare
     :func:`extract_geometric_window` (zero fabrication, real radius
     averaging) and :func:`extract_geometric_window_binned` (zero
     fabrication, real gaps shown honestly).
@@ -499,8 +506,8 @@ def extract_geometric_window_griddata(
     sample are NaN -- outside the recorded swath (past max range, the
     nadir gap, the excluded channel of a single-channel window), where
     either pass above would otherwise extend the nearest edge sample
-    into smeared wedges/streaks of invented seafloor (seen on real
-    survey-a chips wider than the swath, 2026-09-29).
+    into smeared wedges/streaks of invented seafloor (seen on
+    chips wider than the swath).
     ``None`` (default) derives it from the data: 1.5x the larger of
     the 95th-percentile along-track ping gap, the median across-track
     sample step, and the output resolution -- so gaps *between* real
@@ -566,7 +573,7 @@ def extract_geometric_window_griddata(
         # loaded neighborhood (the full swath across-track, plus along-
         # track slack) -- Delaunay cost scales with point count, and a
         # tight chip can be a few percent of what's loaded (real case:
-        # ~11s per dual-swath window on survey-a before this).
+        # ~11s per dual-swath window without this).
         # A margin of 2x max_fill_distance_m keeps every point that can
         # affect a cell: cells with no point within max_fill_distance_m
         # are NaN below anyway, and interpolation triangles near the
@@ -580,6 +587,10 @@ def extract_geometric_window_griddata(
     if len(points) == 0:
         grid = np.full((along_size_px, across_size_px), np.nan)
         return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
+    # TODO(lib): scipy.interpolate.LinearNDInterpolator/NearestNDInterpolator
+    # built once per window would avoid griddata re-triangulating for the
+    # NaN-fill pass below; parity test: identical grids (same Qhull
+    # triangulation of the same points).
     if len(points) < 3:
         grid_values = griddata(points, values_valid, query_points, method="nearest")
     else:

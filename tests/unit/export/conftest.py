@@ -89,3 +89,29 @@ def geometric_channel_factory():
 @pytest.fixture
 def georef_channel_factory():
     return lambda **kwargs: make_test_channel(georef=True, **kwargs)
+
+
+@pytest.fixture
+def georef_ss_h5_dir(tmp_path):
+    """A corrected two-frequency survey (see ``surveys.geo_friendly_survey``) on disk."""
+    from sidescanpy.io.hdf5 import write_survey
+    from sidescanpy.processing import correct_survey
+    from tests.unit.export.surveys import geo_friendly_survey
+
+    d = tmp_path / "ss_h5"
+    d.mkdir()
+    write_survey(correct_survey(geo_friendly_survey()), d / "survey_a.ss.h5")
+    return d
+
+
+@pytest.fixture
+def swath_ss_h5_dir(tmp_path):
+    """A corrected 300 x 30 survey (see ``surveys.swath_friendly_survey``) on disk."""
+    from sidescanpy.io.hdf5 import write_survey
+    from sidescanpy.processing import correct_survey
+    from tests.unit.export.surveys import swath_friendly_survey
+
+    d = tmp_path / "ss_h5"
+    d.mkdir()
+    write_survey(correct_survey(swath_friendly_survey()), d / "survey_a.ss.h5")
+    return d

@@ -1,8 +1,6 @@
 """
-Unit tests for sidescan-analyze — investigate (promoted from
-project-a/scripts/investigate_dataset.py) and tvg-fit (the adopted
-auto-window TVG decay-fit recipe, using stage4_decay's own
-r_ref_m="auto"/r_fit_min_m="auto" support).
+Unit tests for sidescan-analyze subcommands (the full ``investigate``
+run is covered in test_investigate.py).
 
 2026 rshomberg@uri.edu
 """
@@ -15,15 +13,16 @@ import numpy as np
 import pytest
 
 from sidescanpy.cli import analyze
+from sidescanpy.cli._common import flush_pending_warnings
 from sidescanpy.core import HDF5_CHUNK_PING
+from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
 from tests.conftest import make_minimal_sidescan_dataset
-from sidescanpy.core.survey import SideScanSurvey
 
 
 def _decay_survey(n_pings=10, n_samples=800):
     """A survey with a real range-dependent decay in backscatter_raw
-    (so stage4_decay has something non-degenerate to fit) and altitude
+    (so fit_range_decay has something non-degenerate to fit) and altitude
     small enough that slant range genuinely exceeds it."""
     survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
     ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples, freq_hz_start=1_495_000)
@@ -42,11 +41,12 @@ def _decay_survey(n_pings=10, n_samples=800):
 class TestRunInvestigate:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
+            plots=True,
             input=input_path, frequency=None, all_frequencies=False,
-            value_var="backscatter_raw", pings="0:100", nadir_n_samples=10,
-            stage3_bin_width_m=2.0, stage4_bin_width_m=5.0,
-            stage4_db_reference_percentile=99.0, snr_threshold=3.0,
-            reject_outliers=False, outlier_mad_k=3.5, stage4_fit_value_col="mean",
+            value_var="uncorrected", pings="0:100", channel=None, nadir_n_samples=10,
+            usable_range_bin_width_m=2.0, decay_bin_width_m=5.0,
+            decay_db_reference_percentile=99.0, snr_threshold=3.0,
+            reject_outliers=False, outlier_mad_k=3.5, decay_fit_value_col="mean",
             output_dir=tmp_path / "out",
         )
         defaults.update(overrides)
@@ -82,9 +82,10 @@ class TestRunInvestigate:
 class TestRunSegment:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
+            plots=True,
             input=input_path, frequency=None, pings=(0, None),
             gap_factor=8.0, time_gap_factor=8.0, sound_vel_rel_tol=0.05,
-            garbage_value_var="backscatter_raw", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
+            garbage_value_var="uncorrected", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
             stability_window_pings=50, stability_threshold=1.0, stability_min_run_pings=25,
             min_segment_pings=50,
             output_dir=tmp_path / "out",
@@ -122,9 +123,9 @@ class TestRunSegment:
     def test_garbage_run_produces_excluded_segment_not_written(self, tmp_path):
         survey = self._clean_survey(n_pings=200)
         ds = survey.get_frequency("hz_1495000").dataset
-        arr = ds["backscatter_raw"].values.copy()
+        arr = ds["backscatter_intensity"].values.copy()
         arr[80:130] = 0.0
-        ds["backscatter_raw"] = (("ping", "channel", "sample"), arr)
+        ds["backscatter_intensity"] = (("ping", "channel", "sample"), arr)
         path = tmp_path / "a.ss.h5"
         write_survey(survey, path)
 
@@ -176,6 +177,7 @@ class TestRunSegment:
 class TestRunTvgFit:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             ss_h5=ss_h5_path, frequency=1495000, pings=(0, None),
             reconstruct_raw=False, bin_width_m=1.0, r_ref_m="auto",
             r_fit_min_m="auto", range_var="slant_range_m",
@@ -194,9 +196,9 @@ class TestRunTvgFit:
         assert len(pngs) == 1
 
     def test_not_raw_without_reconstruct_flag_returns_1(self, tmp_path):
-        from sidescanpy.processing import run_correction_steps
+        from sidescanpy.processing import correct_survey
 
-        corrected = run_correction_steps(_decay_survey(), {"tvg"})
+        corrected = correct_survey(_decay_survey(), ["interpolate_aux", "tvg"])
         path = tmp_path / "a.ss.h5"
         write_survey(corrected, path)
 
@@ -204,9 +206,9 @@ class TestRunTvgFit:
         assert analyze.run_tvg_fit(args) == 1
 
     def test_reconstruct_raw_recovers_from_already_corrected_file(self, tmp_path):
-        from sidescanpy.processing import run_correction_steps
+        from sidescanpy.processing import correct_survey
 
-        corrected = run_correction_steps(_decay_survey(), {"tvg"})
+        corrected = correct_survey(_decay_survey(), ["interpolate_aux", "tvg"])
         path = tmp_path / "a.ss.h5"
         write_survey(corrected, path)
 
@@ -215,7 +217,7 @@ class TestRunTvgFit:
 
     def test_flat_data_without_usable_range_override_returns_1(self, tmp_path):
         """A flat (no real range-dependent decay) backscatter array is
-        the real Klein SDF failure mode this survives -- Stage 3's SNR
+        the real Klein SDF failure mode this survives -- the usable-range SNR
         threshold never trips against the noise floor, so it can't
         auto-determine usable_range_m."""
         flat = _decay_survey()
@@ -230,7 +232,7 @@ class TestRunTvgFit:
         args = self._args(tmp_path, path)
         assert analyze.run_tvg_fit(args) == 1
 
-    def test_usable_range_m_override_bypasses_stage3(self, tmp_path):
+    def test_usable_range_m_override_bypasses_auto_detection(self, tmp_path):
         flat = _decay_survey()
         ds = flat.get_frequency("hz_1495000").dataset
         ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
@@ -254,7 +256,7 @@ class TestRunTvgFit:
 
     def test_literal_freq_key_fallback_for_non_hz_naming(self, tmp_path):
         """Not every consumer uses JSF/SDF's "hz_<freq>" freq_key
-        convention (e.g. vendor-format's "sensor1_data1") -- --frequency must
+        convention (e.g. a vendor HDF5 format's "sensor1_data1") -- --frequency must
         resolve to a literal freq_key when "hz_<value>" doesn't exist,
         not assume every survey uses that naming."""
         survey = _decay_survey()
@@ -270,10 +272,26 @@ class TestRunTvgFit:
         assert len(pngs) == 1
 
 
+    def test_unfittable_decay_returns_1_instead_of_crashing(self, tmp_path, monkeypatch):
+        """fit_range_decay returns early (no fit, r_ref_m=None) when there are
+        too few binned samples; tvg-fit used to crash formatting r_ref_m."""
+        from sidescanpy.analysis.tvg import RangeDecayResult
+
+        path = tmp_path / "a.ss.h5"
+        write_survey(_decay_survey(), path)
+        early = RangeDecayResult(tvg_status="ambiguous", notes=["Not enough binned samples to fit a decay model."])
+        monkeypatch.setattr(analyze, "fit_range_decay", lambda *a, **k: early)
+
+        args = self._args(tmp_path, path, usable_range_m=10.0)
+        assert analyze.run_tvg_fit(args) == 1
+        assert not list((tmp_path / "out").glob("*.png"))
+
+
 class TestRunNadir:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            plots=True,
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, strong_return_min_sample_buffer=0.0, strong_return_peak_percentile=100.0,
             min_first_bottom_return_sample=None, boundary_smoothing_window=15, verbose_diagnostics=False,
             output_dir=tmp_path / "out",
@@ -291,8 +309,7 @@ class TestRunNadir:
         pngs = list((tmp_path / "out").glob("*_nadir_zoom.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage2_nadir"
-        assert metrics["classification"] is not None
+        assert metrics["nadir_type"] is not None
 
     def test_verbose_diagnostics_also_writes_waterfall(self, tmp_path):
         path = tmp_path / "a.ss.h5"
@@ -314,8 +331,9 @@ class TestRunNadir:
 class TestRunBeamGeometry:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
-            nadir_n_samples=10, stage3_bin_width_m=2.0, snr_threshold=3.0,
+            plots=True,
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
+            nadir_n_samples=10, usable_range_bin_width_m=2.0, snr_threshold=3.0,
             near_angle_max_std_deg=15.0, min_valid_fraction=0.2,
             output_dir=tmp_path / "out",
         )
@@ -332,13 +350,14 @@ class TestRunBeamGeometry:
         pngs = list((tmp_path / "out").glob("*_beam_geometry.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage2_5_beam_geometry"
+        assert "near_angle_deg_median" in metrics
 
 
 class TestRunUsableRange:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            plots=True,
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             range_var="slant_range_m", bin_width_m=1.0, snr_threshold=3.0,
             reject_outliers=False, outlier_mad_k=3.5,
             output_dir=tmp_path / "out",
@@ -356,14 +375,14 @@ class TestRunUsableRange:
         pngs = list((tmp_path / "out").glob("*_usable_range.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage3_usable_range"
-        assert "usable_range_m" in metrics["metrics"]
+        assert "usable_range_m" in metrics
 
 
 class TestRunUnits:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            plots=True,
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             output_dir=tmp_path / "out",
         )
         defaults.update(overrides)
@@ -379,14 +398,14 @@ class TestRunUnits:
         pngs = list((tmp_path / "out").glob("*_units.png"))
         assert len(pngs) == 1
         metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
-        assert metrics["stage"] == "stage5_units"
-        assert metrics["classification"] is not None
+        assert metrics["units"] is not None
 
 
 class TestRunRecommendConfig:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
-            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="backscatter_raw",
+            plots=True,
+            input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, bin_width_m=1.0, snr_threshold=3.0,
             output=tmp_path / "out" / "recommended_config.yaml",
         )
@@ -422,7 +441,7 @@ class TestRunRecommendConfig:
 
     def test_flat_data_omits_tvg_recommendation_gracefully(self, tmp_path):
         """Same known Klein SDF failure mode TestRunTvgFit covers below --
-        Stage 3 can't determine usable_range_m on flat data, so Stage 4
+        usable_range_m can't be determined on flat data, so the decay fit
         never runs. recommend-config must still write a file (with the
         other sections' evidence), not crash."""
         flat = _decay_survey()
@@ -457,8 +476,8 @@ def _write_survey_in_parts(survey: SideScanSurvey, out_dir, n_parts: int) -> lis
             survey_name=f"{survey.survey_name}_part{i}",
         )
         for fk in freq_keys:
-            sliced = slice_by_pings(survey.get_frequency(fk), start=start, stop=stop)
-            part_survey.add_frequency(fk, sliced.dataset)
+            sliced = slice_by_pings(survey.get_frequency(fk).dataset, start=start, stop=stop)
+            part_survey.add_frequency(fk, sliced)
         path = out_dir / f"part{i:02d}.ss.h5"
         write_survey(part_survey, path)
         paths.append(path)
@@ -469,7 +488,7 @@ class TestDirectoryInput:
     """``--input``/``--ss-h5`` accepting a directory of ``.ss.h5`` files
     (lazily dask-concatenated in filename order, same convention
     ``sidescan-export``'s own ``--ss-h5-dir`` already uses), added
-    2026-09-27 -- see ``cli._common.load_channel_dataset``'s own
+    2026-09-27 -- see ``io.hdf5.load_channel_dataset``'s own
     docstring for the real motivation: a mission too large to
     concatenate into one file at conversion time on a memory-constrained
     container can now still be analyzed as one logical survey, without
@@ -491,8 +510,8 @@ class TestDirectoryInput:
 
         single_metrics = json.loads((tmp_path / "out_single" / "metrics.json").read_text())
         dir_metrics = json.loads((tmp_path / "out_dir" / "metrics.json").read_text())
-        assert single_metrics["classification"] == dir_metrics["classification"]
-        assert single_metrics["metrics"]["nadir_mean"] == pytest.approx(dir_metrics["metrics"]["nadir_mean"])
+        assert single_metrics["nadir_type"] == dir_metrics["nadir_type"]
+        assert single_metrics["nadir_mean"] == pytest.approx(dir_metrics["nadir_mean"])
 
     def test_tvg_fit_directory_input_succeeds(self, tmp_path):
         survey = _decay_survey(n_pings=10, n_samples=800)
@@ -614,3 +633,77 @@ class TestParseHelpers:
         assert analyze._parse_numeric_or_literal(None) is None
         assert analyze._parse_numeric_or_literal("auto") == "auto"
         assert analyze._parse_numeric_or_literal("6.0") == 6.0
+
+
+class TestDeprecatedOptionSpellings:
+    """Old flag and --config key spellings keep working, with a WARNING."""
+
+    def _run_main(self, monkeypatch, argv):
+        captured = []
+        monkeypatch.setattr(analyze, "run_investigate", lambda args: captured.append(args) or 0)
+        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: flush_pending_warnings())
+        monkeypatch.setattr("sys.argv", ["sidescan-analyze", *argv])
+        assert analyze.main() == 0
+        return captured[0]
+
+    def test_new_flags_parse(self, monkeypatch, tmp_path):
+        args = self._run_main(monkeypatch, [
+            "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path),
+            "--usable-range-bin-width-m", "3", "--decay-bin-width-m", "4",
+            "--decay-db-reference-percentile", "95", "--decay-fit-value-col", "median",
+        ])
+        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (3.0, 4.0)
+        assert (args.decay_db_reference_percentile, args.decay_fit_value_col) == (95.0, "median")
+
+    def test_old_flags_map_to_new_dests_and_warn(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            args = self._run_main(monkeypatch, [
+                "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path),
+                "--stage3-bin-width-m", "3", "--stage4-bin-width-m", "4",
+                "--stage4-db-reference-percentile", "95", "--stage4-fit-value-col", "median",
+            ])
+        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (3.0, 4.0)
+        assert (args.decay_db_reference_percentile, args.decay_fit_value_col) == (95.0, "median")
+        assert "--stage3-bin-width-m is deprecated; use --usable-range-bin-width-m" in caplog.text
+        assert "--stage4-fit-value-col is deprecated; use --decay-fit-value-col" in caplog.text
+        assert not hasattr(args, "stage3_bin_width_m")
+
+    def test_defaults_unchanged_without_flags(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            args = self._run_main(monkeypatch, ["investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path)])
+        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (2.0, 5.0)
+        assert args.channel is None
+        assert "deprecated" not in caplog.text
+
+    def test_old_flags_hidden_from_help(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", ["sidescan-analyze", "investigate", "--help"])
+        with pytest.raises(SystemExit):
+            analyze.main()
+        out = capsys.readouterr().out
+        assert "--usable-range-bin-width-m" in out
+        assert "--stage3" not in out and "--stage4" not in out
+
+    def test_old_config_keys_map_and_warn(self, monkeypatch, tmp_path, caplog):
+        cfg = tmp_path / "cfg.yaml"
+        cfg.write_text("stage3_bin_width_m: 3.0\nstage4_fit_value_col: median\n")
+        with caplog.at_level("WARNING"):
+            args = self._run_main(monkeypatch, [
+                "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path), "--config", str(cfg),
+            ])
+        assert args.usable_range_bin_width_m == 3.0
+        assert args.decay_fit_value_col == "median"
+        assert "config key 'stage3_bin_width_m' is deprecated" in caplog.text
+        assert "not recognized" not in caplog.text
+
+    def test_beam_geometry_old_flag(self, monkeypatch, tmp_path, caplog):
+        captured = []
+        monkeypatch.setattr(analyze, "run_beam_geometry", lambda args: captured.append(args) or 0)
+        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: flush_pending_warnings())
+        monkeypatch.setattr("sys.argv", [
+            "sidescan-analyze", "beam-geometry", "--input", "x.ss.h5", "--frequency", "1",
+            "--output-dir", str(tmp_path), "--stage3-bin-width-m", "7",
+        ])
+        with caplog.at_level("WARNING"):
+            assert analyze.main() == 0
+        assert captured[0].usable_range_bin_width_m == 7.0
+        assert "deprecated" in caplog.text

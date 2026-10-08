@@ -12,7 +12,7 @@ from sidescanpy.export.geometric_window import (
     extract_geometric_window_griddata,
     locate_point,
 )
-from sidescanpy.viz.waterfall import along_track_distance_m
+from sidescanpy.processing.navigation import along_track_distance_m
 
 
 def _real_center(ds, channel_idx=0):
@@ -91,7 +91,7 @@ class TestExtractGeometricWindow:
 
     def test_avoid_edge_gaps_reduces_nans_near_edge(self, geometric_channel):
         # A target right at the far (max-range) edge of the recorded swath
-        # -- real-data case (project-a target 0011, sample 7751 of a
+        # -- real-data case (a real target, sample 7751 of a
         # 7792-wide window) where a window centered exactly on it would be
         # half no-data. avoid_edge_gaps=True should shift the window inward
         # instead. Default (False) preserves the original unconditional

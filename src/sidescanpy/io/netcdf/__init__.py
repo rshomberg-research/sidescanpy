@@ -15,8 +15,8 @@ Public entry points
 Conventions
 -----------
 - Engine: ``h5netcdf``.
-- Compression: gzip level 4 on ``backscatter_raw`` and
-  ``backscatter_intensity``. Per-ping scalars uncompressed.
+- Compression: gzip level 4 on per-sample variables (e.g.
+  ``backscatter_intensity``). Per-ping scalars uncompressed.
 - Chunking: ``HDF5_CHUNK_PING`` along the ping axis on disk.
   Override on read via ``chunks={"ping": N}``.
 - Round-trip is bit-exact for variable values, attributes, and

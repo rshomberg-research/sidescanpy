@@ -1,7 +1,6 @@
 """
 Unit tests for sidescanpy.processing.range_correction — the empirical,
-data-driven range correction for the residual TVG range-dependence
-(CLAUDE.md Known Issue #4, docs/planning/v0.9.0-empirical-range-correction.md).
+data-driven range correction for a survey's residual TVG range-dependence.
 
 2026 rshomberg@uri.edu
 """
@@ -59,10 +58,10 @@ def _inject_range_dependent_residual(ds, shape_fn):
 
 
 class TestFitRangeCorrection:
-    def test_requires_radiometric_level(self):
+    def test_requires_tvg(self):
         ds = make_minimal_sidescan_dataset()  # still "raw"
         ds = compute_geometric_ranges(ds)
-        with pytest.raises(ValueError, match="radiometric"):
+        with pytest.raises(ValueError, match="TVG-corrected"):
             fit_range_correction(ds)
 
     def test_requires_ground_range_m(self):
@@ -100,12 +99,12 @@ class TestFitRangeCorrection:
         table.add_curve(1_495_000, range_m, correction_db, meta)
         corrected = apply_empirical_range_correction(ds, table=table)
 
-        from sidescanpy.analysis.tvg_diagnostics import mean_backscatter_vs_range
+        from sidescanpy.processing.profiles import backscatter_vs_range
 
-        before = mean_backscatter_vs_range(
+        before = backscatter_vs_range(
             ds, "backscatter_intensity", bin_width_m=2.0, exclude_below_db=None
         )
-        after = mean_backscatter_vs_range(
+        after = backscatter_vs_range(
             corrected, "backscatter_intensity", bin_width_m=2.0, exclude_below_db=None
         )
 
@@ -162,15 +161,6 @@ class TestRangeCorrectionTable:
         )
         assert loaded.metadata_for(1_495_000) == {"note": "test"}
 
-    def test_load_default_returns_a_table(self):
-        """The bundled default (range_correction_default.json) may be
-        empty (before scripts/fit_range_correction.py has been run
-        against real data) or populated (after) — either way,
-        load_default() must return a usable RangeCorrectionTable without
-        erroring."""
-        table = RangeCorrectionTable.load_default()
-        assert isinstance(table.frequencies(), list)
-
 
 class TestApplyEmpiricalRangeCorrection:
     def _table_for_freq(self, freq_hz=1_495_000):
@@ -178,9 +168,9 @@ class TestApplyEmpiricalRangeCorrection:
         table.add_curve(freq_hz, [0.0, 100.0], [3.0, 3.0])  # flat +3dB shift
         return table
 
-    def test_requires_radiometric_level(self):
+    def test_requires_tvg(self):
         ds = compute_geometric_ranges(make_minimal_sidescan_dataset())  # still "raw"
-        with pytest.raises(ValueError, match="radiometric"):
+        with pytest.raises(ValueError, match="TVG-corrected"):
             apply_empirical_range_correction(ds, table=self._table_for_freq())
 
     def test_requires_ground_range_m(self):
@@ -255,16 +245,24 @@ class TestApplyEmpiricalRangeCorrection:
         apply_empirical_range_correction(ds, table=self._table_for_freq())
         np.testing.assert_array_equal(ds["backscatter_intensity"].values, original)
 
-    def test_defaults_to_bundled_table_when_none_given(self):
-        """No explicit table argument -> loads RangeCorrectionTable.load_default().
-        Uses a frequency deliberately not among sidescanpy's calibrated
-        set (hz_1495000, hz_547500) so this deterministically exercises
-        the "no calibrated match" skip path regardless of whatever the
-        bundled default currently contains."""
-        ds = _make_radiometric_geometric_dataset(
-            n_pings=2, n_samples=3000, freq_hz_start=999_999_000
-        )
-        result = apply_empirical_range_correction(ds)
+    def test_table_is_required(self):
+        ds = _make_radiometric_geometric_dataset(n_pings=2, n_samples=3000)
+        with pytest.raises(TypeError, match="requires a `table`"):
+            apply_empirical_range_correction(ds)
+        with pytest.raises(TypeError, match="must be a RangeCorrectionTable or a path"):
+            apply_empirical_range_correction(ds, table=42)
+
+    def test_table_accepted_as_path(self, tmp_path):
+        ds = _make_radiometric_geometric_dataset(n_pings=2, n_samples=3000)
+        path = tmp_path / "table.json"
+        self._table_for_freq().save(str(path))
+        via_path = apply_empirical_range_correction(ds, table=path)
+        direct = apply_empirical_range_correction(ds, table=self._table_for_freq())
         np.testing.assert_array_equal(
-            result["backscatter_intensity"].values, ds["backscatter_intensity"].values
+            via_path["backscatter_intensity"].values, direct["backscatter_intensity"].values
         )
+
+    def test_library_ships_no_default_table(self):
+        assert not hasattr(RangeCorrectionTable, "load_default")
+        with pytest.raises(ImportError):
+            __import__("sidescanpy.processing.calibration")

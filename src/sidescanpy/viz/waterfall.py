@@ -9,6 +9,7 @@ modes. Returns the matplotlib Axes for further customization.
 """
 
 import logging
+import warnings
 from typing import Literal
 
 import matplotlib.pyplot as plt
@@ -18,9 +19,26 @@ from matplotlib.axes import Axes
 from matplotlib.colors import Colormap, PowerNorm
 from matplotlib.ticker import FuncFormatter
 
+from sidescanpy.core.history import processing_level
+from sidescanpy.core.units import mask_floor_clip
+from sidescanpy.processing.navigation import along_track_distance_m as _along_track_distance_m
+from sidescanpy.processing.sample_axis import sample_index
 from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
+
+
+def __getattr__(name: str):
+    # Deprecated shim, kept for one release.
+    if name == "along_track_distance_m":
+        warnings.warn(
+            "sidescanpy.viz.waterfall.along_track_distance_m has moved to "
+            "sidescanpy.processing.navigation",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _along_track_distance_m
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 XAxisMode = Literal["sample", "ground_range", "across_track", "slant_range"]
@@ -30,22 +48,6 @@ YAxisMode = Literal["ping", "time", "along_track"]
 _DEFAULT_CMAP = "copper"
 _DEFAULT_VMIN_PCT = 1.0
 _DEFAULT_VMAX_PCT = 99.0
-
-# Deterministic floor-clip artifact values, not real backscatter returns
-# (see sidescanpy/CLAUDE.md Known Issue #5): 0.0 is exact-zero raw linear
-# amplitude (pre-TVG); -120.0 is apply_tvg()'s `20*log10(clip(x, 1e-6))`
-# floor (post-TVG dB). Masked to NaN before color-scaling/plotting so they
-# don't stretch vmin/vmax or render as fake dark pixels.
-_FLOOR_CLIP_VALUES = (0.0, -120.0)
-
-
-def _mask_floor_clip(bs: np.ndarray) -> np.ndarray:
-    """Replace exact floor-clip artifact values with NaN."""
-    mask = np.isin(bs, _FLOOR_CLIP_VALUES)
-    if not mask.any():
-        return bs
-    return np.where(mask, np.nan, bs)
-
 
 def plot_waterfall(
     ds: xr.Dataset,
@@ -75,8 +77,9 @@ def plot_waterfall(
         Validated sidescan dataset.
     value_var : str, default "backscatter_intensity"
         Which backscatter variable to plot -- the TVG-corrected default,
-        or ``"backscatter_raw"`` for an uncorrected view. Always present
-        regardless of what correction stages have run (raw is immutable).
+        or any other per-sample variable (e.g. one holding
+        ``sidescanpy.processing.uncorrected_backscatter(ds)`` for an
+        uncorrected view of a corrected dataset).
     start : int, default 0
         First ping index to include.
     stop : int, optional
@@ -162,7 +165,7 @@ def plot_waterfall(
     n_pings_slice = sliced.sizes["ping"]
     n_samples = sliced.sizes["sample"]
 
-    bs = _mask_floor_clip(sliced[value_var].values)
+    bs = mask_floor_clip(sliced[value_var].values)
 
     # Compute x for the slice
     x_port, x_stbd = _compute_x_values(sliced, x_axis)
@@ -196,7 +199,7 @@ def plot_waterfall(
     else:
         fig = ax.figure
 
-    
+
 
     # Plot port (will be on the left side via negative x or signed values)
     x_port, y_port_clean, c_port = _mask_invalid_coord(x_port, y_port, bs[:, 0, :])
@@ -233,7 +236,7 @@ def plot_waterfall(
 
     # Title
     if title is None:
-        proc_level = ds.attrs.get("processing_level", "raw")
+        proc_level = processing_level(ds)
         title_start = start + ping_offset
         title_stop = (stop if stop is not None else ds.sizes["ping"]) + ping_offset
         title = f"Waterfall  pings {title_start}–{title_stop}  ({proc_level})"
@@ -255,9 +258,7 @@ def resolve_waterfall_axes(steps: frozenset[str], cli_x_axis: str, cli_y_axis: s
     without "geometric" (raw, radiometric), where sample/ping/time are
     the only meaningful choices anyway.
 
-    Promoted from a project-local helper in ``project-a/scripts/
-    visualization_demo.py`` — same name/signature, no behavior change.
-    """
+        """
     if "geometric" in steps:
         return "across_track", "along_track"
     return cli_x_axis, cli_y_axis
@@ -330,7 +331,7 @@ def plot_survey_overview(
     strided = ds.isel(ping=slice(0, None, ping_stride))
 
     if title is None:
-        proc_level = ds.attrs.get("processing_level", "raw")
+        proc_level = processing_level(ds)
         title = f"Survey overview  {n_pings} pings, 1:{ping_stride} compressed  ({proc_level})"
 
     ax = plot_waterfall(
@@ -388,7 +389,7 @@ def _compute_x_values(
 
     if x_axis == "sample":
         # Port: -N to 0, Starboard: 0 to +N. Both broadcast to (pings, samples).
-        sample_idx = np.arange(n_samples, dtype=np.float64)
+        sample_idx = sample_index(ds)
         x_stbd = np.broadcast_to(sample_idx[None, :], (n_pings, n_samples)).copy()
         x_port = -x_stbd
         return x_port, x_stbd
@@ -454,7 +455,7 @@ def _compute_y_values(
         # ping timestamps as datetime64 — matplotlib handles these natively
         y = ds["time"].values.astype("datetime64[ns]")
     elif y_axis == "along_track":
-        y = _along_track_distance(ds)
+        y = _along_track_distance_m(ds)
     else:
         raise ValueError(f"Unknown y_axis: {y_axis}")
 
@@ -469,83 +470,8 @@ def _compute_y_full(ds: xr.Dataset, y_axis: YAxisMode, ping_offset: int = 0) -> 
     if y_axis == "time":
         return ds["time"].values.astype("datetime64[ns]")
     if y_axis == "along_track":
-        return _along_track_distance(ds)
+        return _along_track_distance_m(ds)
     raise ValueError(f"Unknown y_axis: {y_axis}")
-
-def along_track_distance_m(ds: xr.Dataset, *, fill_nav_stalls: bool = False) -> np.ndarray:
-    """Cumulative along-track distance (meters) from per-ping lat/lon.
-
-    Public wrapper around the same computation used internally for
-    ``y_axis="along_track"`` — exposed for callers (e.g. distance-based
-    segmentation) that need the coordinate array without going through
-    ``plot_waterfall``.
-
-    ``fill_nav_stalls``: navigation can stall -- several consecutive
-    pings keep (nearly) the same position while the vessel keeps moving,
-    and it resumes without catching up. The raw distance is then flat
-    across those pings, and geometric resampling stacks their seafloor
-    into a single along-track line (found on survey-a: ~7 pings
-    at each checked target, 42ms apart with distinct data, advanced only
-    ~0.07m in total instead of ~0.5m -- a hard seam through the target
-    at fine resolution). With ``True``, each stalled step is replaced by
-    the local median step (see ``_fill_nav_stalls``). Off by default so
-    gap/stationarity detection still sees the raw navigation.
-    """
-    along = _along_track_distance(ds)
-    return _fill_nav_stalls(along) if fill_nav_stalls else along
-
-
-def _fill_nav_stalls(
-    along: np.ndarray, *, stall_fraction: float = 0.5, max_stall_pings: int = 20, window_pings: int = 25,
-) -> np.ndarray:
-    """Replace short navigation stalls with the local median ping step.
-
-    A step is stalled when it is below ``stall_fraction`` of the median
-    step within ``window_pings`` either side. Only runs of at most
-    ``max_stall_pings`` stalled steps with moving steps on both sides
-    are filled -- a longer run, or one at the window edge, is treated as
-    the vessel really stopping and left as is.
-    """
-    if along.size < 3:
-        return along
-    steps = np.diff(along)
-    n = steps.size
-    local = np.array([np.median(steps[max(0, k - window_pings):k + window_pings + 1]) for k in range(n)])
-    stalled = steps < stall_fraction * local
-    out = steps.copy()
-    k = 0
-    while k < n:
-        if not stalled[k]:
-            k += 1
-            continue
-        end = k
-        while end < n and stalled[end]:
-            end += 1
-        if 0 < k and end < n and end - k <= max_stall_pings:
-            moving = steps[max(0, k - window_pings):min(n, end + window_pings)]
-            moving = moving[moving >= stall_fraction * np.median(moving)]
-            out[k:end] = np.median(moving) if moving.size else steps[k:end]
-        k = end
-    return np.concatenate([[along[0]], along[0] + np.cumsum(out)])
-
-
-def _along_track_distance(ds: xr.Dataset) -> np.ndarray:
-    """Compute cumulative along-track distance from per-ping lat/lon."""
-    import pyproj
-
-    lats = ds["latitude"].values
-    lons = ds["longitude"].values
-    geod = pyproj.Geod(ellps="WGS84")
-
-    if len(lats) < 2:
-        return np.array([0.0])
-
-    # Forward azimuths and distances between consecutive pings
-    _, _, segment_distances = geod.inv(
-        lons[:-1], lats[:-1], lons[1:], lats[1:]
-    )
-    cumulative = np.concatenate([[0.0], np.cumsum(segment_distances)])
-    return cumulative.astype(np.float64)
 
 # ==========================================================
 # Masking

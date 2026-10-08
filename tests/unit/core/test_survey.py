@@ -8,7 +8,6 @@ management (navigation, attitude, dvl, sensors).
 """
 
 import logging
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -18,7 +17,6 @@ from sidescanpy.core.survey import (
     SideScanFrequencyChannel,
     SideScanSurvey,
 )
-
 
 # ============================================================
 # SideScanFrequencyChannel
@@ -44,17 +42,17 @@ class TestFrequencyChannelInit:
         "missing_var",
         ["latitude", "longitude", "heading_deg", "depth_m",
          "roll_deg", "pitch_deg", "heave_m", "altitude_m",
-         "sound_vel_ms", "backscatter_raw", "backscatter_intensity"],
+         "sound_vel_ms", "backscatter_intensity"],
     )
     def test_missing_required_variable_raises(self, sample_dataset, missing_var):
         bad = sample_dataset.drop_vars(missing_var)
-        with pytest.raises(ValueError, match="Missing variables"):
+        with pytest.raises(ValueError, match="Missing (variables|dimensions)"):
             SideScanFrequencyChannel(bad)
 
     @pytest.mark.parametrize(
         "missing_attr",
         ["freq_hz_start", "freq_hz_end", "pulse_length_us",
-         "sample_rate_hz", "processing_level", "processing_history"],
+         "sample_rate_hz"],
     )
     def test_missing_required_attr_raises(self, sample_dataset, missing_attr):
         bad = sample_dataset.copy()
@@ -167,10 +165,10 @@ class TestSurveyFrequencyChannels:
         assert 547_500 in freqs
         assert 1_495_000 in freqs
 
-    def test_add_frequency_overwrite_warns(
+    def test_add_frequency_overwrite_logs(
         self, sample_multi_frequency_survey, sample_dataset, caplog
     ):
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG, logger="sidescanpy"):
             sample_multi_frequency_survey.add_frequency(
                 "hz_1495000", sample_dataset
             )
@@ -213,11 +211,11 @@ class TestSurveyNavigation:
         with pytest.raises(ValueError, match="Navigation"):
             sample_multi_frequency_survey.navigation = bad
 
-    def test_overwrite_navigation_warns(
+    def test_overwrite_navigation_logs(
         self, sample_multi_frequency_survey, sample_navigation, caplog
     ):
         sample_multi_frequency_survey.navigation = sample_navigation
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG, logger="sidescanpy"):
             sample_multi_frequency_survey.navigation = sample_navigation
         assert any("Overwriting" in rec.message for rec in caplog.records)
 
@@ -257,11 +255,11 @@ class TestSurveyAttitude:
         with pytest.raises(ValueError, match="Attitude"):
             sample_multi_frequency_survey.attitude = bad
 
-    def test_overwrite_attitude_warns(
+    def test_overwrite_attitude_logs(
         self, sample_multi_frequency_survey, sample_attitude, caplog
     ):
         sample_multi_frequency_survey.attitude = sample_attitude
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG, logger="sidescanpy"):
             sample_multi_frequency_survey.attitude = sample_attitude
         assert any("Overwriting" in rec.message for rec in caplog.records)
 
@@ -299,11 +297,11 @@ class TestSurveyDVL:
         with pytest.raises(ValueError, match="DVL"):
             sample_multi_frequency_survey.dvl = bad
 
-    def test_overwrite_dvl_warns(
+    def test_overwrite_dvl_logs(
         self, sample_multi_frequency_survey, sample_dvl, caplog
     ):
         sample_multi_frequency_survey.dvl = sample_dvl
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG, logger="sidescanpy"):
             sample_multi_frequency_survey.dvl = sample_dvl
         assert any("Overwriting" in rec.message for rec in caplog.records)
 
@@ -352,11 +350,11 @@ class TestSurveySensors:
         with pytest.raises(ValueError, match="Sensor"):
             sample_multi_frequency_survey.add_sensor("pressure", bad)
 
-    def test_overwrite_sensor_warns(
+    def test_overwrite_sensor_logs(
         self, sample_multi_frequency_survey, sample_sensor, caplog
     ):
         sample_multi_frequency_survey.add_sensor("pressure", sample_sensor)
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG, logger="sidescanpy"):
             sample_multi_frequency_survey.add_sensor("pressure", sample_sensor)
         assert any("Overwriting" in rec.message for rec in caplog.records)
         assert sample_multi_frequency_survey.n_sensors == 1

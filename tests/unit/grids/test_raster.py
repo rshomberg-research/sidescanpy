@@ -4,8 +4,8 @@ Unit tests for SideScanGriddedRaster.
 Tests the xarray-validated wrapper for gridded backscatter data.
 """
 
-import pytest
 import numpy as np
+import pytest
 import xarray as xr
 from pyproj import CRS
 
@@ -24,12 +24,12 @@ class TestSideScanGriddedRasterInstantiation:
         )
         # Create dummy backscatter data matching grid cell count
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,
         )
-        
+
         assert raster.grid_def == grid
         assert raster.backscatter.shape == (grid.num_cells_ns, grid.num_cells_ew)
         assert isinstance(raster.dataset, xr.Dataset)
@@ -41,14 +41,14 @@ class TestSideScanGriddedRasterInstantiation:
             resolution_m=1000.0,
         )
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,
             channel_name="455 kHz",
             processing_level="radiometric",
         )
-        
+
         assert raster.channel_name == "455 kHz"
         assert raster.processing_level == "radiometric"
 
@@ -61,12 +61,12 @@ class TestSideScanGriddedRasterInstantiation:
             crs=utm_crs,
         )
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,
         )
-        
+
         assert raster.crs == utm_crs
 
 
@@ -81,7 +81,7 @@ class TestSideScanGriddedRasterValidation:
         )
         # Wrong shape
         backscatter = np.random.rand(10, 20)
-        
+
         with pytest.raises(ValueError, match="shape|mismatch|cells"):
             SideScanGriddedRaster(
                 grid_def=grid,
@@ -95,7 +95,7 @@ class TestSideScanGriddedRasterValidation:
             resolution_m=1000.0,
         )
         backscatter = np.random.rand(grid.num_cells_ns * grid.num_cells_ew)
-        
+
         with pytest.raises(ValueError, match="2D|dimension"):
             SideScanGriddedRaster(
                 grid_def=grid,
@@ -109,7 +109,7 @@ class TestSideScanGriddedRasterValidation:
             resolution_m=1000.0,
         )
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew, 2)
-        
+
         with pytest.raises(ValueError, match="2D|dimension"):
             SideScanGriddedRaster(
                 grid_def=grid,
@@ -123,7 +123,7 @@ class TestSideScanGriddedRasterValidation:
             resolution_m=1000.0,
         )
         backscatter = np.full((grid.num_cells_ns, grid.num_cells_ew), np.nan)
-        
+
         with pytest.raises(ValueError, match="all NaN|no data"):
             SideScanGriddedRaster(
                 grid_def=grid,
@@ -324,28 +324,13 @@ class TestSideScanGriddedRasterReprojection:
             backscatter=backscatter,
         )
 
-    def test_reproject_to_utm(self, sample_raster):
-        """Reproject raster to UTM (may require resampling)."""
-        # Note: direct reprojection without resampling will have mismatched
-        # cell counts due to extent changes. This is expected.
-        # For now, we test that the operation is attempted; actual resampling
-        # is handled in test_resample.py
-        
-        # Skip this test until resample_channel_to_grid is implemented
-        pytest.skip("Resampling not yet implemented; see test_resample.py")
 
-    def test_reproject_preserves_data(self, sample_raster):
-        """Reprojection preserves backscatter values (no resampling)."""
-        pytest.skip("Resampling not yet implemented; see test_resample.py")
 
-    def test_reproject_updates_coordinates(self, sample_raster):
-        """Coordinates updated to match new CRS."""
-        pytest.skip("Resampling not yet implemented; see test_resample.py")
 
     def test_reproject_same_crs_is_noop(self, sample_raster):
         """Reprojecting to same CRS returns equivalent raster."""
         same_crs_raster = sample_raster.reproject_to(CRS.from_epsg(4326))
-        
+
         assert same_crs_raster.crs == sample_raster.crs
         np.testing.assert_array_equal(
             same_crs_raster.backscatter,
@@ -375,7 +360,7 @@ class TestSideScanGriddedRasterSlicing:
         subset = sample_raster.slice_by_bbox(
             bbox=(39.2, -70.8, 39.8, -70.2)
         )
-        
+
         assert isinstance(subset, SideScanGriddedRaster)
         assert subset.backscatter.shape[0] < sample_raster.backscatter.shape[0]
         assert subset.backscatter.shape[1] < sample_raster.backscatter.shape[1]
@@ -384,10 +369,10 @@ class TestSideScanGriddedRasterSlicing:
         """Subset bbox should match requested bounds."""
         target_bbox = (39.2, -70.8, 39.8, -70.2)
         subset = sample_raster.slice_by_bbox(bbox=target_bbox)
-        
+
         south, west, north, east = subset.bbox
         target_south, target_west, target_north, target_east = target_bbox
-        
+
         # Subset bounds should contain target (due to cell alignment)
         assert south >= target_south - 0.01
         assert west >= target_west - 0.01
@@ -407,7 +392,7 @@ class TestSideScanGriddedRasterSlicing:
             ns_slice=slice(10, 30),
             ew_slice=slice(15, 35),
         )
-        
+
         assert isinstance(subset, SideScanGriddedRaster)
         assert subset.backscatter.shape == (20, 20)
 
@@ -433,7 +418,7 @@ class TestSideScanGriddedRasterSerialization:
     def test_to_dict_metadata(self, sample_raster):
         """Serialize metadata (not data) to dict."""
         d = sample_raster.to_dict(include_data=False)
-        
+
         assert d["grid_def"]["bbox"] == sample_raster.bbox
         assert d["grid_def"]["resolution_m"] == sample_raster.resolution_m
         assert d["channel_name"] == "455 kHz"
@@ -442,7 +427,7 @@ class TestSideScanGriddedRasterSerialization:
     def test_to_dict_with_data(self, sample_raster):
         """Serialize metadata + backscatter data to dict."""
         d = sample_raster.to_dict(include_data=True)
-        
+
         assert "backscatter" in d
         # Should be a list (JSON-serializable)
         assert isinstance(d["backscatter"], (list, dict, np.ndarray))
@@ -458,12 +443,12 @@ class TestSideScanGriddedRasterEdgeCases:
             resolution_m=100_000.0,
         )
         backscatter = np.array([[1.0]])
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,
         )
-        
+
         assert raster.num_cells_total == 1
 
     def test_raster_with_some_nan(self):
@@ -475,12 +460,12 @@ class TestSideScanGriddedRasterEdgeCases:
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
         # Mask out top portion (water column)
         backscatter[:10, :] = np.nan
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,
         )
-        
+
         assert raster.data_coverage < 1.0
         assert raster.data_coverage > 0.5
 
@@ -492,12 +477,12 @@ class TestSideScanGriddedRasterEdgeCases:
         )
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
         backscatter[0, 0] = np.inf
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,
         )
-        
+
         assert np.isinf(raster.backscatter[0, 0])
 
     def test_default_processing_level(self):
@@ -507,7 +492,7 @@ class TestSideScanGriddedRasterEdgeCases:
             resolution_m=1000.0,
         )
         backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
-        
+
         raster = SideScanGriddedRaster(
             grid_def=grid,
             backscatter=backscatter,

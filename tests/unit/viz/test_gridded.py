@@ -5,23 +5,21 @@ Tests matplotlib plotting functions (verify they don't crash and return
 correct types; visual verification is manual).
 """
 
-import pytest
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pytest
 from matplotlib.colors import PowerNorm
 from pyproj import CRS
 
+from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.viz.gridded import (
-    plot_gridded_raster,
-    plot_gridded_with_coverage,
-    plot_gridded_multiple_methods,
-    export_gridded_png,
     _axis_labels,
     _crs_label,
-    _mask_floor_clip,
+    plot_gridded_raster,
 )
+
 
 @pytest.fixture
 def sample_raster():
@@ -31,13 +29,13 @@ def sample_raster():
         resolution_m=5000.0,
     )
     backscatter = np.random.rand(grid.num_cells_ns, grid.num_cells_ew)
-    
+
     raster = SideScanGriddedRaster(
         grid_def=grid,
         backscatter=backscatter,
         channel_name="455 kHz",
     )
-    
+
     # Add n_contributing_samples (as would be done by resample_channel_to_grid)
     n_contrib = np.random.randint(10, 100, size=backscatter.shape)
     n_contrib[np.isnan(backscatter)] = 0
@@ -146,14 +144,14 @@ class TestMaskFloorClip:
 
     def test_zero_and_neg120_masked_to_nan(self):
         bs = np.array([0.0, -120.0, 5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         assert np.isnan(result[0])
         assert np.isnan(result[1])
         np.testing.assert_array_equal(result[[2, 3, 4]], bs[[2, 3, 4]])
 
     def test_no_floor_values_returns_equivalent_array(self):
         bs = np.array([5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         np.testing.assert_array_equal(result, bs)
 
 
@@ -347,148 +345,10 @@ class TestPlotGriddedRasterGamma:
         plt.close(fig)
 
 
-class TestPlotGriddedWithCoverage:
-    """Test plot_gridded_with_coverage()."""
-
-    def test_basic_plot_with_coverage(self, sample_raster):
-        """Create a plot with coverage transparency."""
-        fig, ax = plot_gridded_with_coverage(sample_raster)
-
-        assert fig is not None
-        assert ax is not None
-        plt.close(fig)
-
-    def test_coverage_title_includes_percentage(self, sample_raster):
-        """Title shows data coverage."""
-        fig, ax = plot_gridded_with_coverage(sample_raster)
-
-        title = ax.get_title()
-        assert "cov:" in title or "coverage" in title
-        plt.close(fig)
-
-    def test_coverage_with_sparse_data(self):
-        """Coverage plot with sparse data (many NaN)."""
-        grid = GridDefinition(
-            bbox=(39.0, -71.0, 40.0, -70.0),
-            resolution_m=5000.0,
-        )
-        backscatter = np.full((grid.num_cells_ns, grid.num_cells_ew), np.nan)
-        # Fill only 10% of cells
-        n_fill = (grid.num_cells_ns * grid.num_cells_ew) // 10
-        idx = np.random.choice(
-            grid.num_cells_ns * grid.num_cells_ew, n_fill, replace=False
-        )
-        backscatter.ravel()[idx] = np.random.rand(n_fill)
-
-        raster = SideScanGriddedRaster(
-            grid_def=grid,
-            backscatter=backscatter,
-        )
-
-        fig, ax = plot_gridded_with_coverage(raster)
-        assert fig is not None
-        plt.close(fig)
-
-
-class TestPlotMultipleMethods:
-    """Test plot_gridded_multiple_methods()."""
-
-    def test_multi_method_plot(self, sample_raster):
-        """Plot multiple resampling methods."""
-        rasters = {
-            "mean": sample_raster,
-            "max": sample_raster,
-            "median": sample_raster,
-        }
-
-        fig, axes = plot_gridded_multiple_methods(rasters)
-
-        assert fig is not None
-        assert axes.shape == (1, 3)
-        plt.close(fig)
-
-    def test_multi_method_nan_renders_black(self, sample_raster):
-        rasters = {"mean": sample_raster, "max": sample_raster}
-        fig, axes = plot_gridded_multiple_methods(rasters)
-        mesh = axes[0, 0].collections[-1]
-        np.testing.assert_array_equal(mesh.get_cmap().get_bad(), (0.0, 0.0, 0.0, 1.0))
-        plt.close(fig)
-
-    def test_multi_method_many_subplots(self, sample_raster):
-        """Many resampling methods (>3)."""
-        rasters = {
-            f"method_{i}": sample_raster for i in range(6)
-        }
-
-        fig, axes = plot_gridded_multiple_methods(rasters)
-
-        assert fig is not None
-        assert axes.shape == (2, 3)
-        plt.close(fig)
-
-    def test_multi_method_shared_range(self, sample_raster):
-        """Shared colorbar range across methods."""
-        rasters = {
-            "mean": sample_raster,
-            "max": sample_raster,
-        }
-
-        fig, axes = plot_gridded_multiple_methods(
-            rasters,
-            vmin=0.2,
-            vmax=0.8,
-        )
-
-        assert fig is not None
-        plt.close(fig)
-
-
-class TestExportGriddedPng:
-    """Test export_gridded_png()."""
-
-    def test_export_png(self, sample_raster, tmp_path):
-        """Export raster to PNG."""
-        output_path = tmp_path / "test_raster.png"
-
-        export_gridded_png(sample_raster, str(output_path))
-
-        assert output_path.exists()
-        assert output_path.stat().st_size > 0
-
-    def test_export_png_custom_dpi(self, sample_raster, tmp_path):
-        """Export with custom DPI."""
-        output_path = tmp_path / "test_raster_dpi.png"
-
-        export_gridded_png(sample_raster, str(output_path), dpi=300)
-
-        assert output_path.exists()
-
-    def test_export_png_custom_cmap(self, sample_raster, tmp_path):
-        """Export with custom colormap."""
-        output_path = tmp_path / "test_raster_cmap.png"
-
-        export_gridded_png(
-            sample_raster,
-            str(output_path),
-            cmap="hot",
-        )
-
-        assert output_path.exists()
-
-    def test_export_png_with_gamma(self, sample_raster, tmp_path):
-        """Export with a gamma display curve — should not error."""
-        output_path = tmp_path / "test_raster_gamma.png"
-
-        export_gridded_png(sample_raster, str(output_path), gamma=2.5)
-
-        assert output_path.exists()
-        assert output_path.stat().st_size > 0
-
-
 class TestBasemapIntegration:
     """show_land/show_locator -- see tests/unit/viz/test_basemap.py for
     the basemap module itself; these confirm the wiring into
-    plot_gridded_raster/export_gridded_png specifically."""
+    plot_gridded_raster specifically."""
 
     cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' extra")
 
@@ -508,11 +368,6 @@ class TestBasemapIntegration:
         assert len(ax.child_axes) >= 1
         plt.close(fig)
 
-    def test_export_png_with_land_and_locator(self, sample_raster, tmp_path):
-        output_path = tmp_path / "test_raster_basemap.png"
-        export_gridded_png(sample_raster, str(output_path), show_land=True, show_locator=True)
-        assert output_path.exists()
-        assert output_path.stat().st_size > 0
 
     def test_default_false_adds_no_inset_and_no_land_collection(self, sample_raster):
         fig, ax = plot_gridded_raster(sample_raster)

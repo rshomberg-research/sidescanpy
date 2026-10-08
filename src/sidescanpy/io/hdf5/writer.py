@@ -15,8 +15,11 @@ File layout:
         sensors/                     ← only if survey has at least one sensor
             <sensor_type>/
 
-Compression (gzip level 4) is applied to backscatter_raw and
-backscatter_intensity only. Aux records are stored uncompressed.
+One encoding policy (:func:`_encoding_for`) applies to every frequency
+data variable with ndim >= 2: gzip level 4 + shuffle, chunked along ping.
+float64 variables are stored as float32 except those in
+:data:`FLOAT64_KEEP` (lat/lon need ~1e-7 deg precision). Aux records are
+stored uncompressed.
 
 2026 rshomberg@uri.edu
 """
@@ -26,20 +29,21 @@ import logging
 from pathlib import Path
 
 import h5netcdf
+import numpy as np
 import xarray as xr
 
 from sidescanpy.core.schema import (
+    HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
     HDF5_COMPRESSION_LEVEL,
-    HDF5_CHUNK_PING,
-    HDF5_GROUP_FREQUENCIES,
-    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_ATTITUDE,
     HDF5_GROUP_DVL,
+    HDF5_GROUP_FREQUENCIES,
+    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_SENSORS,
-    make_empty_navigation_record,
     make_empty_attitude_record,
     make_empty_dvl_record,
+    make_empty_navigation_record,
 )
 from sidescanpy.core.survey import SideScanSurvey
 
@@ -47,7 +51,11 @@ logger = logging.getLogger(__name__)
 
 
 _HDF5_ENGINE = "h5netcdf"
-_COMPRESSED_VARS = ("backscatter_raw", "backscatter_intensity")
+FLOAT64_KEEP = frozenset({
+    "latitude", "longitude", "latitude_per_sample", "longitude_per_sample",
+})
+"""float64 variables that must NOT be downcast to float32 on write
+(float32 gives only ~0.4 m at geographic coordinates)."""
 
 
 def write_survey(
@@ -89,11 +97,7 @@ def write_survey(
 
     # 2. Write each frequency channel as a group, with backscatter compression.
     for freq_key, channel in survey.freq_channels.items():
-        encoding = _build_frequency_encoding(
-            n_pings=channel.n_pings,
-            n_channels=channel.n_channels,
-            n_samples=channel.n_samples,
-        )
+        encoding = _build_frequency_encoding(channel.dataset)
         group = f"{HDF5_GROUP_FREQUENCIES}/{freq_key}"
         channel.dataset.to_netcdf(
             path=p,
@@ -140,19 +144,36 @@ def _write_root_attrs(path: Path, survey: SideScanSurvey) -> None:
         )
 
 
-def _build_frequency_encoding(
-    *,
-    n_pings: int,
-    n_channels: int,
-    n_samples: int,
-) -> dict[str, dict]:
-    """Encoding dict for backscatter compression. Aux records get no encoding."""
-    chunk_ping = min(HDF5_CHUNK_PING, n_pings) if n_pings > 0 else 1
+def _encoding_for(var: str, da: xr.DataArray) -> dict | None:
+    """The single write-encoding policy for one data variable.
+
+    Returns ``None`` for variables left at xarray defaults (ndim < 2 or
+    empty). Otherwise gzip + shuffle, chunked along ``ping`` (clipped to
+    the array), float64 downcast to float32 unless listed in
+    :data:`FLOAT64_KEEP`. ``_FillValue`` is left to xarray (NaN for floats).
+    """
+    if da.ndim < 2 or da.size == 0:
+        return None
+    chunks = tuple(
+        min(HDF5_CHUNK_PING, n) if dim == "ping" else n
+        for dim, n in zip(da.dims, da.shape, strict=True)
+    )
+    enc: dict = {
+        "compression":      HDF5_COMPRESSION,
+        "compression_opts": HDF5_COMPRESSION_LEVEL,
+        "shuffle":          True,
+        "chunksizes":       chunks,
+    }
+    if da.dtype == np.float64 and var not in FLOAT64_KEEP:
+        enc["dtype"] = "float32"
+    return enc
+
+
+def _build_frequency_encoding(ds: xr.Dataset) -> dict[str, dict]:
+    """Encoding dict for a frequency-channel dataset (see :func:`_encoding_for`)."""
     encoding: dict[str, dict] = {}
-    for var in _COMPRESSED_VARS:
-        encoding[var] = {
-            "compression":      HDF5_COMPRESSION,
-            "compression_opts": HDF5_COMPRESSION_LEVEL,
-            "chunksizes":       (chunk_ping, n_channels, n_samples),
-        }
+    for name, da in ds.data_vars.items():
+        enc = _encoding_for(str(name), da)
+        if enc is not None:
+            encoding[str(name)] = enc
     return encoding

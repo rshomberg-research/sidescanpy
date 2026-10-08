@@ -4,9 +4,7 @@ EdgeTech Discover SQLite ``.target`` catalog reader.
 Discover writes one SQLite database per target pick (``Target-NNNN.target``),
 holding a raw JSF ping-sample window plus position metadata. Schema
 (``Target``, ``PingChannel``, ``MutableTarget``, ``MutableTag`` tables) was
-reverse-engineered by hand in a prior one-off session and re-verified
-directly against real data (``~/data/sidescan/project-a/unknown/Targets/``)
-before porting here.
+reverse-engineered by hand and verified against real Discover target files.
 
 Known gotchas this reader accounts for:
 
@@ -33,15 +31,15 @@ Known gotchas this reader accounts for:
   this is normal (no classification was ever recorded), not a read failure;
   ``label`` stays ``None`` rather than a placeholder string.
 
-Position formula (validated visually against 6+ real targets in the prior
-session, re-confirmed numerically here): within the ping window sorted by
+Position formula (validated visually against 6+ real targets): within the ping window sorted by
 sequence number, the target's row is the index of its own
 ``PingSequenceNumber``; its column is
 ``round(SlantRangeDistanceMeters / PingMetersPerSample)`` using the
 *target's own ping's* ``PingMetersPerSample`` (not a window-wide constant,
 though it typically doesn't vary within one window).
 
-Decode: ``SampleBytes`` -> ``np.frombuffer(dtype="<i2").astype(float) *
+Decode (:func:`decode_target_window`; raw values, native orientation --
+TVG and display orientation live in ``export.target_window``): ``SampleBytes`` -> ``np.frombuffer(dtype="<i2").astype(float) *
 2 ** (-JsfWeightingFactor)`` — real JSF sample amplitudes, not a rendered
 image. Expect a leading run of exact-zero samples (blanking/ring-down);
 not a bug.
@@ -49,13 +47,15 @@ not a bug.
 2026 rshomberg@uri.edu
 """
 
+import logging
 import sqlite3
 from pathlib import Path
 
 import numpy as np
 
-from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
-from sidescanpy.targets.core import Target, orient_for_display
+from sidescanpy.core.target import Target
+
+logger = logging.getLogger(__name__)
 
 _SOURCE_FORMAT = "jsf_discover"
 
@@ -110,10 +110,6 @@ def read_discover_targets(directory: str | Path) -> list[Target]:
     whole batch (matches the family's "clip/skip rather than error on one
     bad row" convention elsewhere in this library).
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
     targets = []
     for path in sorted(Path(directory).glob("Target-*.target")):
         try:
@@ -215,56 +211,3 @@ def decode_target_window(target: Target) -> np.ndarray:
 
     n_samples = min(len(r) for r in rows)
     return np.stack([r[:n_samples] for r in rows])
-
-
-def decode_and_correct_window(target: Target, *, freq_hz: float) -> tuple[np.ndarray, Target]:
-    """Decode ``target``'s window and run it through the same
-    TVG -> orient-for-display chain used everywhere this project renders
-    a target crop.
-
-    No longer applies ``targets.core.detrend_by_range`` (removed
-    2026-08-13): a diagnostic comparing this survey's actual +/-3m target
-    crops against control windows well away from any target found the
-    per-column median swing detrend subtracts (3-12 dB) is present
-    whether or not a target is there, and is far larger than what the
-    confirmed whole-swath range residual (Known Issue #4, sidescanpy/
-    CLAUDE.md) could produce over a window that narrow (<1.3 dB even at
-    the residual's steepest) — i.e. detrend was mostly flattening real
-    seafloor texture at crop scale, not correcting the residual it was
-    built for. See ``project-a/scripts/debug/
-    tvg_range_residual_diagnostic.py`` for that methodology, kept as a
-    reusable tool independent of this decision — ``detrend_by_range``
-    itself is untouched in ``targets.core`` for any caller that still
-    wants it.
-
-    Kept in this module (not ``targets.core``, despite operating on a
-    ``Target``) because it composes ``decode_target_window``, which is
-    JSF-specific and itself imports from ``targets.core`` — putting this
-    the other way around would be a circular import as well as a
-    layering violation of ``targets.core``'s own "format-agnostic, no
-    format-specific IO" contract.
-
-    Parameters
-    ----------
-    target : Target
-        Must have ``extra_attributes["ping_meters_per_sample"]`` (set by
-        ``read_discover_targets``).
-    freq_hz : float
-        Acquisition frequency for the TVG absorption term — this
-        survey's target catalogs don't record it per-target, so callers
-        pass their own known constant (see ``absorption_for_frequency``).
-
-    Returns
-    -------
-    (window, target)
-        TVG-corrected, display-oriented window, and a copy of ``target``
-        with ``.sample``/``extra_attributes["window_row"]`` remapped to
-        match ``orient_for_display``'s flips (see that function's
-        docstring).
-    """
-    window = decode_target_window(target)
-    window = apply_tvg_to_amplitude(
-        window, target.extra_attributes["ping_meters_per_sample"], freq_hz=freq_hz,
-    )
-    window, target = orient_for_display(window, target)
-    return window, target

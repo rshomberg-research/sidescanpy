@@ -8,13 +8,16 @@ for tracking processing state.
 2026 rshomberg@uri.edu
 """
 
+import json
 import logging
-import json 
-from datetime import datetime, timezone
-from typing import Optional, Any 
+from datetime import UTC, datetime
+from typing import Any
 
-import xarray as xr 
-import numpy as np 
+import numpy as np
+import xarray as xr
+
+from sidescanpy.core.history import PROCESSING_LEVELS
+from sidescanpy.core.history import processing_level as _derived_processing_level
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,6 @@ REQUIRED_COORDS : set = {"ping_number", "time", "channel_id"}
 #       Vertical distance from sea surface to transducer. Independent of
 #       altitude_m and fathometer_reading_m.
 REQUIRED_VARS   : set = {
-    "backscatter_raw",
     "backscatter_intensity",
     "latitude",
     "longitude",
@@ -57,13 +59,12 @@ REQUIRED_ATTRS  : set = {
     "freq_hz_end",
     "pulse_length_us",
     "sample_rate_hz",
-    "processing_level",
-    "processing_history",
 }
-KNOWN_PROCESSING_LEVELS : set = {
-    "raw", 
-    "radiometric", 
-}
+KNOWN_PROCESSING_LEVELS : tuple = PROCESSING_LEVELS
+"""Values :func:`sidescanpy.core.history.processing_level` can return."""
+LEGACY_PROCESSING_LEVEL_VALUES : set = {"raw", "radiometric"}
+"""Values the legacy ``processing_level`` attribute may hold on older files.
+The attribute is no longer written; the level is derived from history."""
 
 
 # CONSTANTS: HDF5 group structure
@@ -84,22 +85,22 @@ HDF5_COMPRESSION_LEVEL  : int = 4
 @xr.register_dataset_accessor("sidescan")
 class SideScanAccessor:
     """
-    xarray.Dataset accessor for sidescan specific validation and utilities 
+    xarray.Dataset accessor for sidescan specific validation and utilities
 
     Provides methods to validate datasets against the SideScanPy schema, track
     processing state, and compute derived quantities like slant range.
 
     Accessed via `ds.sidescan` on any xarray.Dataset
-        
+
     Examples
     --------
     >>> import xarray as xr
     >>> ds = xr.Dataset(...)
     >>> ds.sidescan.validate()  # Raises ValueError if invalid
     >>> ds.sidescan.is_valid()  # Returns bool
-    >>> ds.sidescan.processing_level  # Returns str    
+    >>> ds.sidescan.processing_level  # Returns str
     """
-    
+
     _ds : xr.Dataset
 
     def __init__(self, ds: xr.Dataset) -> None:
@@ -115,7 +116,8 @@ class SideScanAccessor:
         2. All required coordinates present
         3. All required variables present
         4. All required attributes present
-        5. processing_level is one of KNOWN_PROCESSING_LEVELS
+        5. A legacy ``processing_level`` attribute, if present, holds a
+           legacy value (``raw``/``radiometric``)
 
         Raises
         ------
@@ -151,11 +153,12 @@ class SideScanAccessor:
         if missing_attrs:
             raise ValueError(f"Missing attributes: {missing_attrs}")
 
-        # Check processing level
+        # Legacy processing_level attribute (optional; derived from history now)
         level = self._ds.attrs.get("processing_level")
-        if level not in KNOWN_PROCESSING_LEVELS:
+        if level is not None and level not in LEGACY_PROCESSING_LEVEL_VALUES:
             raise ValueError(
-                f"'processing_level' must be one of {KNOWN_PROCESSING_LEVELS}, got '{level}'"
+                f"legacy 'processing_level' attribute must be one of "
+                f"{sorted(LEGACY_PROCESSING_LEVEL_VALUES)}, got '{level}'"
             )
 
     def is_valid(self) -> bool:
@@ -177,25 +180,15 @@ class SideScanAccessor:
             return True
         except ValueError:
             return False
-        
+
     @property
     def processing_level(self) -> str:
         """
-        Get current processing level.
+        Current processing level, derived from ``processing_history``.
 
-        Returns
-        -------
-        str
-            Value of `ds.attrs['processing_level']`, or 'unknown' if missing.
-            One of: 'raw', 'radiometric'.
-
-        Examples
-        --------
-        >>> level = ds.sidescan.processing_level
-        >>> if level == 'raw':
-        ...     apply_corrections(ds)
+        See :func:`sidescanpy.core.history.processing_level`.
         """
-        return self._ds.attrs.get("processing_level", "unknown")
+        return _derived_processing_level(self._ds)
 
     @property
     def processing_history(self) -> list[dict[str, Any]]:
@@ -265,7 +258,7 @@ class SideScanAccessor:
         history = self.processing_history
         history.append({
             "step": step_name,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "params": params,
             "function": function_name,
             "version": version,
@@ -514,7 +507,7 @@ class SensorRecordAccessor:
 
     def is_empty(self) -> bool:
         return self._ds.sizes.get("obs", 0) == 0
-    
+
     # ============================================================
 # EMPTY RECORD BUILDERS
 # ============================================================

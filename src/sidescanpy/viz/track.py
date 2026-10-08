@@ -8,10 +8,8 @@ plot_waterfall (per-ping backscatter imagery) and plot_gridded_raster
 (resampled backscatter raster) — this shows geometry/coverage only, no
 backscatter values.
 
-``build_survey_track`` builds the lat/lon arrays this module's plot
-functions need from a multi-file survey dict — the loading/geometry
-side of a "track" output; pair it with ``plot_track_and_scanlines``/
-``export_track_and_scanlines_png`` above.
+``sidescanpy.processing.build_survey_track`` builds the lat/lon arrays
+this plot needs from a multi-file survey dict.
 
 2026 rshomberg@uri.edu
 """
@@ -21,11 +19,8 @@ from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import xarray as xr
 from matplotlib.collections import LineCollection
 from pyproj import CRS, Transformer
-
-from sidescanpy.processing import apply_correction_steps, interpolate_aux_onto_pings
 
 logger = logging.getLogger(__name__)
 
@@ -173,149 +168,3 @@ def plot_track_and_scanlines(
             add_scale_bar(ax, meters_per_data_unit=1.0)
 
     return fig, ax
-
-
-def export_track_and_scanlines_png(
-    track_lat: np.ndarray,
-    track_lon: np.ndarray,
-    scan_port_lat: np.ndarray,
-    scan_port_lon: np.ndarray,
-    scan_stbd_lat: np.ndarray,
-    scan_stbd_lon: np.ndarray,
-    output_path: str,
-    *,
-    crs: Optional[CRS] = None,
-    dpi: int = 150,
-    show_land: bool = False,
-    show_locator: bool = False,
-    show_scale_bar: bool = True,
-) -> None:
-    """Plot and save a survey track + scan lines PNG. See plot_track_and_scanlines.
-
-    Deliberately saves at the figure's own full, fixed size (no
-    ``bbox_inches="tight"``) -- ``plot_track_and_scanlines`` already
-    creates a fixed-size figure (``figsize=(12, 10)``) with
-    ``ax.set_aspect("equal")`` (correctly preserving real-world
-    geographic proportions -- a long/skinny survey's plotted content is
-    legitimately shrunk to fit, not distorted). ``bbox_inches="tight"``
-    used to crop the *saved* PNG down to just the drawn content's own
-    bounding box, discarding those letterboxed margins -- so a
-    wide/square survey (which already filled the canvas) saved close to
-    the full size while a long/skinny one got cropped down to a thin
-    strip, making saved file dimensions inconsistent across surveys
-    despite the figure itself always being created at one fixed size.
-    Real user report: every saved track.png should be the same
-    dimensions regardless of survey shape, padding is fine.
-    """
-    fig, ax = plot_track_and_scanlines(
-        track_lat, track_lon,
-        scan_port_lat, scan_port_lon,
-        scan_stbd_lat, scan_stbd_lon,
-        crs=crs,
-        show_land=show_land,
-        show_scale_bar=show_scale_bar,
-        show_locator=show_locator,
-    )
-    fig.savefig(output_path, dpi=dpi)
-    logger.info(f"Exported track + scan lines to {output_path}")
-    plt.close(fig)
-
-
-def build_survey_track(
-    surveys: dict,
-    freq_key: str,
-    *,
-    scanline_stride: int,
-) -> Optional[dict]:
-    """Nadir track + strided port/starboard scan-line endpoints for one
-    frequency, across every file that has it, in time order.
-
-    Cheap by design, but *not* by slicing the sample axis down to one
-    sample before georeferencing — that's tempting (we only want the
-    farthest-range sample per ping) but wrong:
-    ``compute_geometric_ranges`` computes each sample's position from
-    ``np.arange(ds.sizes["sample"])``, a *local* index into whatever
-    sample axis it's handed, not the sample's true position in the
-    original ping. Pre-slicing to ``sample=[-1]`` collapses the sample
-    axis to length 1, so the function sees "sample 0" (point-blank
-    range) instead of the true far-range edge — silently producing NaN
-    via the water-column mask instead of a real position.
-
-    The safe optimization instead pre-selects the *strided pings*
-    (slicing the ping axis doesn't touch ``ds.sizes["sample"]``, so it
-    doesn't affect the sample-index math) while keeping each selected
-    ping's full sample axis intact through georeferencing, and only
-    slices to the last sample *afterward*. This still avoids
-    georeferencing every ping — just the ones actually needed for a
-    rung — while staying correct.
-
-    Promoted from a project-local helper in ``project-a/scripts/
-    visualization_demo.py`` — same name/signature, no behavior change.
-
-    Parameters
-    ----------
-    surveys : dict[Path, SideScanSurvey]
-    freq_key : str
-        e.g. ``"hz_1495000"``.
-    scanline_stride : int
-        Draw a scan-line rung every Nth ping.
-
-    Returns
-    -------
-    dict or None
-        None if no file has ``freq_key``. Otherwise
-        ``{"track_lat", "track_lon", "scan_port_lat", "scan_port_lon",
-        "scan_stbd_lat", "scan_stbd_lon"}`` — track arrays cover every
-        ping; scan arrays cover every ``scanline_stride``-th ping.
-    """
-    entries = [(p, s) for p, s in surveys.items() if freq_key in s.frequencies]
-    if not entries:
-        return None
-
-    entries = [(p, interpolate_aux_onto_pings(s)) for p, s in entries]
-    entries.sort(
-        key=lambda item: item[1].get_frequency(freq_key).dataset["time"].values[0]
-    )
-
-    track_lat_parts, track_lon_parts = [], []
-    edge_datasets = []
-    for _p, survey in entries:
-        ds = survey.get_frequency(freq_key).dataset
-        track_lat_parts.append(ds["latitude"].values)
-        track_lon_parts.append(ds["longitude"].values)
-
-        strided_idx = np.arange(0, ds.sizes["ping"], scanline_stride)
-        edge_ds = ds.isel(ping=strided_idx).load()
-        edge_ds = apply_correction_steps(edge_ds, {"geometric", "georef"})
-        # Each file's sample axis may be a different length (e.g. one
-        # file's channel was cropped further than another's by the
-        # far-range noise crop stage), so "sample"'s own index label
-        # for the retained last sample (e.g. 557 vs. 663) differs
-        # across files. Left in place, concatenating along "ping" below
-        # aligns on that mismatched "sample" label and NaNs out
-        # whichever file doesn't have that particular index value —
-        # drop the label since only the value at "the last sample" is
-        # wanted here, not which index it came from.
-        last_sample = edge_ds.isel(sample=[-1])
-        if "sample" in last_sample.coords:
-            last_sample = last_sample.drop_vars("sample")
-        edge_datasets.append(last_sample)
-
-    track_lat = np.concatenate(track_lat_parts)
-    track_lon = np.concatenate(track_lon_parts)
-
-    # Each entry in edge_datasets is already the strided-ping subset for
-    # its file (selected before georeferencing, above) — no further
-    # striding needed here.
-    edge_concat = xr.concat(edge_datasets, dim="ping")
-    lat_edge = edge_concat["latitude_per_sample"].values[:, :, 0]   # (ping, channel)
-    lon_edge = edge_concat["longitude_per_sample"].values[:, :, 0]
-
-    return {
-        "track_lat": track_lat,
-        "track_lon": track_lon,
-        "scan_port_lat": lat_edge[:, 0],
-        "scan_port_lon": lon_edge[:, 0],
-        "scan_stbd_lat": lat_edge[:, 1],
-        "scan_stbd_lon": lon_edge[:, 1],
-    }

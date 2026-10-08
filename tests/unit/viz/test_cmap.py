@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 
-from sidescanpy.viz._cmap import NAN_COLOR, resolve_cmap
+from sidescanpy.viz._cmap import resolve_cmap
 
 
 class TestResolveCmap:

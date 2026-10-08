@@ -1,35 +1,212 @@
 """
-Shared per-file processing loop for the ``sidescan-correct``/
-``sidescan-convert`` in-place ``.ss.h5``-editing CLIs.
-
-Promoted out of the old ``02_crop_farrange.py``/``04_radiometric.py``/
-``06_geometric.py``/``08_georef.py`` pipeline scripts, which each
-duplicated this exact loop (disk-space check, atomic temp-file+rename
-write, per-file skip/success/fail logging, summary) around one
-different one-line body — confirmed byte-identical apart from that body
-across both `project-b` and `project-a`'s own copies.
-
-:func:`process_files_in_place_chunked` is the ping-chunked counterpart,
-for callers needing memory bounded to roughly one chunk's worth of
-derived arrays instead of the whole file — see
-:mod:`sidescanpy.processing.chunked` for the actual per-file mechanics
-and the real memory numbers behind why it exists.
+Shared CLI plumbing: logging flags/setup, the per-subcommand
+``--config``/``--strict-config``/logging options, ``--frequency``
+resolution, ``.ss.h5`` directory listing, JSON/PNG output, and the
+matplotlib (``viz`` extra) check.
 
 2026 rshomberg@uri.edu
 """
 
+import argparse
+import contextlib
+import json
 import logging
-import shutil
-import time
-from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
-import xarray as xr
-
-from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.log import configure_logging
 
 logger = logging.getLogger(__name__)
+
+# WARNINGs raised while parsing arguments, before logging is configured
+# (the package's NullHandler would otherwise swallow them).
+_pending_warnings: list[tuple[logging.Logger, str, tuple]] = []
+
+
+_force_defer = False
+
+
+@contextlib.contextmanager
+def deferred_warnings() -> Iterator[None]:
+    """Queue every :func:`warn_deferred` warning while active, even when
+    logging is already configured (argument parsing may run twice)."""
+    global _force_defer
+    previous, _force_defer = _force_defer, True
+    try:
+        yield
+    finally:
+        _force_defer = previous
+
+
+def pending_warnings_mark() -> int:
+    """Position in the deferred-warning queue (see :func:`discard_pending_warnings`)."""
+    return len(_pending_warnings)
+
+
+def discard_pending_warnings(mark: int) -> None:
+    """Drop warnings queued after ``mark`` (used before a repeated parse)."""
+    del _pending_warnings[mark:]
+
+
+def warn_deferred(log: logging.Logger, msg: str, *args) -> None:
+    """``log.warning(msg, *args)`` now if logging is configured, else held
+    until :func:`setup_logging_from_args` runs."""
+    if logging.getLogger().handlers and not _force_defer:
+        log.warning(msg, *args)
+    else:
+        _pending_warnings.append((log, msg, args))
+
+
+def add_logging_args(parser: argparse.ArgumentParser, *, subcommand: bool = False) -> None:
+    """Add the shared ``-v/--verbose``, ``-q/--quiet`` and ``--log-file`` flags.
+
+    With ``subcommand=True`` the defaults are ``argparse.SUPPRESS`` so a
+    copy on a subparser only adds the ability to pass the flag after the
+    subcommand -- a plain default would silently overwrite a value already
+    set by the top-level parser (e.g. ``sidescan-convert -v survey ...``).
+    """
+    default = {"default": argparse.SUPPRESS} if subcommand else {}
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", **default,
+        help="Show DEBUG-level library detail (parameters used, defaults applied, fallbacks)",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", **default,
+        help="Only show warnings and errors",
+    )
+    parser.add_argument(
+        "--log-file", type=Path, default=argparse.SUPPRESS if subcommand else None,
+        help="Also write log output to this file",
+    )
+
+
+def add_common_args(parser: argparse.ArgumentParser, *, subcommand: bool = True) -> None:
+    """Add ``--config``, ``--strict-config`` and (see :func:`add_logging_args`)
+    the logging flags to a (sub)command parser."""
+    word = "subcommand" if subcommand else "command"
+    parser.add_argument(
+        "--config", type=Path, default=None,
+        help=f"YAML or JSON file seeding this {word}'s defaults -- explicit flags still override",
+    )
+    parser.add_argument(
+        "--strict-config", action="store_true",
+        help=f"Treat config-file keys this {word} does not recognize as an error instead of a warning",
+    )
+    add_logging_args(parser, subcommand=subcommand)
+
+
+def add_plots_arg(parser: argparse.ArgumentParser, *, help: str = "Write the evidence PNG(s) (needs matplotlib, the 'viz' extra)") -> None:
+    """Add ``--plots/--no-plots`` (default on)."""
+    parser.add_argument("--plots", action=argparse.BooleanOptionalAction, default=True, help=help)
+
+
+def uncorrected_alias(*old_names: str):
+    """argparse ``type=`` callable mapping deprecated spellings of the
+    uncorrected-signal choice to ``"uncorrected"`` with a WARNING.
+
+    Kept for one release so existing scripts and configs keep working.
+    """
+    def _convert(value: str) -> str:
+        if value in old_names:
+            warn_deferred(logger, "%r is deprecated; use 'uncorrected'", value)
+            return "uncorrected"
+        return value
+    return _convert
+
+
+class _DeprecatedAlias(argparse.Action):
+    def __init__(self, option_strings, dest, *, replacement: str, **kwargs):
+        self.replacement = replacement
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        warn_deferred(logger, "%s is deprecated; use %s", option_string, self.replacement)
+        setattr(namespace, self.dest, values)
+
+
+def add_deprecated_alias(parser: argparse.ArgumentParser, old_flag: str, new_flag: str, **kwargs) -> None:
+    """Add a hidden ``old_flag`` that sets ``new_flag``'s value with a WARNING.
+
+    ``kwargs`` (``type``, ``choices``) should match ``new_flag``'s. Kept for
+    one release so existing scripts keep working.
+    """
+    dest = new_flag.lstrip("-").replace("-", "_")
+    parser.add_argument(
+        old_flag, dest=dest, action=_DeprecatedAlias, replacement=new_flag,
+        default=argparse.SUPPRESS, help=argparse.SUPPRESS, **kwargs,
+    )
+
+
+def setup_logging_from_args(args: argparse.Namespace) -> None:
+    """Configure logging from the flags added by :func:`add_logging_args`."""
+    verbose = getattr(args, "verbose", False)
+    quiet = getattr(args, "quiet", False)
+    log_file = getattr(args, "log_file", None)
+    if quiet and not verbose:
+        configure_logging("WARNING", log_file=log_file)
+    else:
+        configure_logging("INFO", log_file=log_file, library_level="DEBUG" if verbose else None)
+    flush_pending_warnings()
+
+
+def flush_pending_warnings() -> None:
+    """Log every queued :func:`warn_deferred` warning now."""
+    while _pending_warnings:
+        log, msg, args = _pending_warnings.pop(0)
+        log.warning(msg, *args)
+
+
+VIZ_INSTALL_HINT = "pip install 'sidescanpy[viz]'"
+
+
+def has_matplotlib() -> bool:
+    """True if matplotlib can be imported; also selects the headless Agg
+    backend so later pyplot imports never probe for a GUI."""
+    try:
+        import matplotlib
+    except ImportError:
+        return False
+    matplotlib.use("Agg")
+    return True
+
+
+def require_matplotlib(command: str) -> bool:
+    """:func:`has_matplotlib`, logging a one-line ERROR naming ``command``
+    and the ``viz`` extra when it is missing."""
+    if has_matplotlib():
+        return True
+    logger.error(f"{command} needs matplotlib: {VIZ_INSTALL_HINT}")
+    return False
+
+
+def ss_h5_files(directory: Path) -> list[Path]:
+    """Sorted ``*.ss.h5`` files in ``directory``; logs an ERROR when there are none."""
+    files = sorted(Path(directory).glob("*.ss.h5"))
+    if not files:
+        logger.error(f"No .ss.h5 files found in {directory}")
+    return files
+
+
+def write_json(result: Any, path: Path) -> Path:
+    """Write ``result`` (its ``to_dict()`` if it has one) as indented JSON."""
+    data = result.to_dict() if hasattr(result, "to_dict") else result
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+    return path
+
+
+def save_plot(fig, path: Path, *, dpi: int = 140, tight: bool = False) -> Path:
+    """Save and close ``fig`` (needs matplotlib), logging the path at DEBUG."""
+    from sidescanpy.cli._figures import save_figure
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, path, dpi=dpi, tight=tight)
+    logger.debug(f"wrote {path}")
+    return path
 
 
 def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list[str]:
@@ -39,8 +216,8 @@ def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list
     JSF/SDF's own convention is ``freq_key = f"hz_{freq_hz_start}"`` --
     tried first, so every existing caller passing a bare frequency
     number (e.g. ``--frequency 1495000``) keeps resolving exactly as
-    before. Not every consumer uses that convention (e.g. vendor-format's
-    ``"sensor<N>_data<M>"``), so ``requested`` itself is tried as a
+    before. Not every consumer uses that convention (e.g. a vendor HDF5
+    format using ``"sensor<N>_data<M>"``), so ``requested`` itself is tried as a
     literal freq_key when the ``"hz_"``-prefixed guess isn't a real key,
     rather than assuming every survey names its channels that way.
     """
@@ -50,297 +227,3 @@ def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list
     if candidate in available:
         return [candidate]
     return [requested]
-
-
-def concat_survey_frequency(files: list[Path], freq_key: str, chunks: dict) -> tuple["xr.Dataset | None", dict]:
-    """Lazily concatenate ``freq_key``'s channel across every file in
-    ``files`` (sorted, so typically time order) into one dask-backed
-    dataset spanning the whole survey -- no per-file restart.
-
-    Promoted here from ``cli/export.py`` (2026-09-27, unchanged body) so
-    ``cli/analyze.py``'s subcommands can accept a multi-file
-    ``--input``/``--ss-h5`` directory the same way ``sidescan-export``'s
-    ``--ss-h5-dir`` already does -- see :func:`load_channel_dataset`/
-    :func:`available_frequencies` below, which are the actual entry
-    points most callers want.
-
-    Returns ``(concatenated_ds, file_start_ping)`` where
-    ``file_start_ping[path]`` is that file's own first ping's position in
-    the concatenated dataset's global ping axis (0 for the first file).
-    ``concatenated_ds`` is ``None`` if no file has this frequency at all.
-    """
-    datasets = []
-    file_start_ping: dict[Path, int] = {}
-    cumulative = 0
-    for path in files:
-        survey = read_survey(path, chunks=chunks)
-        if freq_key not in survey.frequencies:
-            continue
-        ds = survey.get_frequency(freq_key).dataset
-        file_start_ping[path] = cumulative
-        cumulative += ds.sizes["ping"]
-        datasets.append(ds)
-    if not datasets:
-        return None, {}
-    return xr.concat(datasets, dim="ping"), file_start_ping
-
-
-def available_frequencies(input_path: Path, chunks: dict) -> set[str]:
-    """Every frequency key present at ``input_path`` -- a single
-    ``.ss.h5`` file (its own ``.frequencies``) or a directory of them
-    (the union across every file -- not every file need carry every key,
-    same as :func:`concat_survey_frequency`'s own per-file tolerance).
-
-    Raises ``FileNotFoundError`` if ``input_path`` is a directory with no
-    ``.ss.h5`` files in it.
-    """
-    if input_path.is_dir():
-        files = sorted(input_path.glob("*.ss.h5"))
-        if not files:
-            raise FileNotFoundError(f"No .ss.h5 files found in {input_path}")
-        keys: set[str] = set()
-        for p in files:
-            keys |= set(read_survey(p, chunks=chunks).frequencies)
-        return keys
-    return set(read_survey(input_path, chunks=chunks).frequencies)
-
-
-def load_channel_dataset(input_path: Path, freq_key: str, chunks: dict) -> "xr.Dataset":
-    """One frequency channel's dataset from ``input_path``.
-
-    ``input_path`` may be a single ``.ss.h5`` file (original behavior,
-    byte-identical -- calls ``read_survey`` exactly as every caller
-    already did directly) or a directory of them, lazily dask-concatenated
-    in filename/acquisition order via :func:`concat_survey_frequency` --
-    the same multi-file convention ``sidescan-export``'s own
-    ``--ss-h5-dir`` already uses. Added 2026-09-27 so a real mission that
-    was never concatenated into one file at conversion time (a genuine
-    memory-safety need on a constrained container -- see
-    ``downstream-project``'s own docs) can still be analyzed as one logical survey.
-
-    Raises ``FileNotFoundError``/``ValueError`` if ``freq_key`` isn't
-    present anywhere at ``input_path`` -- never returns ``None``, unlike
-    :func:`concat_survey_frequency` itself, so every caller here can
-    treat this as a normal "the dataset I asked for" return.
-    """
-    if input_path.is_dir():
-        files = sorted(input_path.glob("*.ss.h5"))
-        if not files:
-            raise FileNotFoundError(f"No .ss.h5 files found in {input_path}")
-        ds, _file_start_ping = concat_survey_frequency(files, freq_key, chunks)
-        if ds is None:
-            raise ValueError(f"{freq_key!r}: no file in {input_path} has this frequency channel")
-        return ds
-    survey = read_survey(input_path, chunks=chunks)
-    if freq_key not in survey.frequencies:
-        raise ValueError(f"{freq_key!r}: not present in {input_path} (available: {sorted(survey.frequencies)})")
-    return survey.get_frequency(freq_key).dataset
-
-
-def process_files_in_place_chunked(
-    files: list[Path],
-    steps: frozenset[str] | set[str] | tuple[str, ...],
-    step_params: dict[str, dict] | None,
-    ping_chunk_size: int,
-    disk_multiplier: float,
-    stage_label: str,
-) -> int:
-    """Ping-chunked counterpart to :func:`process_files_in_place`, for
-    callers that need memory bounded to roughly one chunk's worth of
-    derived arrays instead of the whole file — see
-    :mod:`sidescanpy.processing.chunked`'s own module docstring for why
-    this exists and the real memory numbers behind it. Same disk-space
-    guard, same per-file success/skipped/failed accounting and log
-    shape as :func:`process_files_in_place`, so a caller switching
-    between the two sees consistent output either way.
-
-    Unlike the non-chunked path, ``step_fn``/``already_done_fn``
-    aren't caller-supplied here — chunking only makes sense for the
-    fixed, per-ping-independent step set
-    :func:`sidescanpy.processing.chunked.correct_file_chunked` already
-    knows how to check/apply per chunk (``crop_farrange`` is rejected
-    there, not accepted and silently mishandled here).
-    """
-    from sidescanpy.processing.chunked import correct_file_chunked
-
-    if not files:
-        logger.error("No .ss.h5 files found")
-        return 1
-
-    logger.info(f"Found {len(files)} .ss.h5 file(s)")
-    start_time = time.time()
-    results = []
-    for i, path in enumerate(files, 1):
-        elapsed = time.time() - start_time
-        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s, chunk={ping_chunk_size} pings)")
-        result = {"path": path, "status": "", "error": ""}
-
-        if not check_disk_space(path, disk_multiplier):
-            result["status"] = "failed_disk_space"
-            result["error"] = (
-                f"Insufficient free space to safely process {path.name} "
-                f"(need ~{disk_multiplier:.1f}x its current size)"
-            )
-            results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
-            continue
-
-        try:
-            applied = correct_file_chunked(path, steps, step_params=step_params, ping_chunk_size=ping_chunk_size)
-        except Exception as e:
-            result["status"] = "failed_process"
-            result["error"] = f"{type(e).__name__}: {e}"
-            results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
-            continue
-
-        if applied:
-            result["status"] = "success"
-            logger.debug(f"    ✓ {stage_label} applied in place (chunked)")
-        else:
-            result["status"] = "skipped"
-            logger.debug("    ⤤ skipped (already done)")
-        results.append(result)
-
-    total_elapsed = time.time() - start_time
-    n_success = sum(1 for r in results if r["status"] == "success")
-    n_skipped = sum(1 for r in results if r["status"] == "skipped")
-    n_failed = sum(1 for r in results if r["status"].startswith("failed"))
-
-    logger.info("=" * 60)
-    logger.info(f"{stage_label} complete in {total_elapsed:.0f}s")
-    logger.info(f"  Success: {n_success}/{len(files)}")
-    logger.info(f"  Skipped: {n_skipped}")
-    logger.info(f"  Failed:  {n_failed}")
-
-    if n_failed > 0:
-        logger.warning("Failures:")
-        for r in results:
-            if r["status"].startswith("failed"):
-                logger.warning(f"  {r['path'].name}: {r['error']}")
-        return 2
-
-    return 0
-
-
-def check_disk_space(path: Path, multiplier: float) -> bool:
-    """True if there's plausibly enough free space to safely rewrite
-    ``path`` in place (conservative flat multiplier)."""
-    required = path.stat().st_size * multiplier
-    free = shutil.disk_usage(path.parent).free
-    return free > required
-
-
-def atomic_write_survey(survey: SideScanSurvey, path: Path) -> None:
-    """Write to a temp file, then replace ``path`` only on full success."""
-    tmp_path = path.with_name(path.name + ".tmp")
-    if tmp_path.exists():
-        tmp_path.unlink()
-    write_survey(survey, tmp_path, overwrite=False)
-    tmp_path.replace(path)
-
-
-def process_files_in_place(
-    files: list[Path],
-    step_fn: Callable[[SideScanSurvey], SideScanSurvey],
-    already_done_fn: Callable[[SideScanSurvey], bool],
-    disk_multiplier: float,
-    stage_label: str,
-) -> int:
-    """Read, conditionally process, and atomically rewrite each of
-    ``files`` in place.
-
-    Parameters
-    ----------
-    files : list[Path]
-        ``.ss.h5`` files to process, in order.
-    step_fn : callable
-        ``survey -> survey``. Only called for a file where
-        ``already_done_fn(survey)`` is False. May itself apply only a
-        subset of requested work if part of it is already done (see
-        callers in ``convert.py``/``correct.py``) — this loop doesn't
-        care, it just reads once, calls this once, and writes once.
-    already_done_fn : callable
-        ``survey -> bool``. True skips the file entirely (no write).
-    disk_multiplier : float
-        Conservative flat multiplier on the file's current size used as
-        the required-free-space check before reading/processing.
-    stage_label : str
-        Used only in log messages.
-
-    Returns
-    -------
-    int
-        0 if every file succeeded or was skipped, 1 if ``files`` was
-        empty, 2 if any file failed.
-    """
-    if not files:
-        logger.error("No .ss.h5 files found")
-        return 1
-
-    logger.info(f"Found {len(files)} .ss.h5 file(s)")
-    start_time = time.time()
-    results = []
-    for i, path in enumerate(files, 1):
-        elapsed = time.time() - start_time
-        logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {elapsed:.0f}s)")
-        result = {"path": path, "status": "", "error": ""}
-
-        if not check_disk_space(path, disk_multiplier):
-            result["status"] = "failed_disk_space"
-            result["error"] = (
-                f"Insufficient free space to safely process {path.name} "
-                f"(need ~{disk_multiplier:.1f}x its current size)"
-            )
-            results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
-            continue
-
-        try:
-            survey = read_survey(path)
-        except Exception as e:
-            result["status"] = "failed_read"
-            result["error"] = f"{type(e).__name__}: {e}"
-            results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
-            continue
-
-        if already_done_fn(survey):
-            result["status"] = "skipped"
-            results.append(result)
-            logger.debug("    ⤤ skipped (already done)")
-            continue
-
-        try:
-            survey = step_fn(survey)
-            atomic_write_survey(survey, path)
-        except Exception as e:
-            result["status"] = "failed_process"
-            result["error"] = f"{type(e).__name__}: {e}"
-            results.append(result)
-            logger.error(f"    ✗ {result['status']}: {result['error']}")
-            continue
-
-        result["status"] = "success"
-        results.append(result)
-        logger.debug(f"    ✓ {stage_label} applied in place")
-
-    total_elapsed = time.time() - start_time
-    n_success = sum(1 for r in results if r["status"] == "success")
-    n_skipped = sum(1 for r in results if r["status"] == "skipped")
-    n_failed = sum(1 for r in results if r["status"].startswith("failed"))
-
-    logger.info("=" * 60)
-    logger.info(f"{stage_label} complete in {total_elapsed:.0f}s")
-    logger.info(f"  Success: {n_success}/{len(files)}")
-    logger.info(f"  Skipped: {n_skipped}")
-    logger.info(f"  Failed:  {n_failed}")
-
-    if n_failed > 0:
-        logger.warning("Failures:")
-        for r in results:
-            if r["status"].startswith("failed"):
-                logger.warning(f"  {r['path'].name}: {r['error']}")
-        return 2
-
-    return 0

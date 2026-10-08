@@ -10,22 +10,19 @@ Round-trip identity is tested separately in test_round_trip.py.
 """
 
 import json
-from pathlib import Path
 
 import h5netcdf
-import numpy as np
 import pytest
 
 from sidescanpy.core.schema import (
-    HDF5_GROUP_AUX_STREAMS,
-    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_ATTITUDE,
+    HDF5_GROUP_AUX_STREAMS,
     HDF5_GROUP_DVL,
-    HDF5_GROUP_SENSORS,
     HDF5_GROUP_FREQUENCIES,
+    HDF5_GROUP_NAVIGATION,
+    HDF5_GROUP_SENSORS,
 )
 from sidescanpy.io.hdf5.writer import write_survey
-
 
 # ============================================================
 # FILE CREATION
@@ -190,7 +187,7 @@ class TestWriteCompression:
         with h5netcdf.File(str(p), "r") as f:
             for fk in sample_full_survey.frequencies:
                 grp = f[f"{HDF5_GROUP_FREQUENCIES}/{fk}"]
-                for var in ("backscatter_raw", "backscatter_intensity"):
+                for var in ("backscatter_intensity",):
                     assert grp[var].compression == "gzip", (
                         f"{fk}/{var} should be gzip-compressed"
                     )
@@ -216,3 +213,36 @@ class TestWriteCompression:
             for var in ("roll_deg", "pitch_deg", "heave_m"):
                 assert f[HDF5_GROUP_ATTITUDE][var].compression is None
             assert f[HDF5_GROUP_DVL]["altitude_m"].compression is None
+
+
+# ============================================================
+# ENCODING POLICY FOR PER-SAMPLE GEOMETRY
+# ============================================================
+
+@pytest.mark.unit
+class TestGeometryEncodingPolicy:
+    def test_geometry_vars_compressed_chunked_float32(self, sample_survey_channel, tmp_path):
+        from sidescanpy.core.survey import SideScanSurvey
+        from sidescanpy.processing.geometric import compute_geometric_ranges
+        from sidescanpy.processing.georeferencing import compute_georeferencing
+
+        ds = compute_georeferencing(compute_geometric_ranges(sample_survey_channel.dataset))
+        # Force a float64 geometry var to prove the downcast.
+        ds["across_track_m"] = ds["across_track_m"].astype("float64")
+        survey = SideScanSurvey(source_files=[], source_format="test", survey_name="s")
+        survey.add_frequency("hz_1", ds)
+        p = tmp_path / "s.ss.h5"
+        write_survey(survey, p)
+
+        with h5netcdf.File(str(p), "r") as f:
+            grp = f[f"{HDF5_GROUP_FREQUENCIES}/hz_1"]
+            for var in ("across_track_m", "along_track_m", "ground_range_m",
+                        "slant_range_m", "vertical_offset_m", "depth_per_sample_m"):
+                v = grp[var]
+                assert v.compression == "gzip", var
+                assert v.shuffle, var
+                assert v.chunks is not None, var
+                assert v.dtype == "float32", var
+            assert grp["latitude_per_sample"].dtype == "float64"
+            assert grp["longitude_per_sample"].dtype == "float64"
+            assert grp["latitude_per_sample"].compression == "gzip"

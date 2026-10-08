@@ -1,17 +1,14 @@
 """
 Survey track + scan-lines with target catalog positions overlaid.
 
-Builds on ``viz/track.py``'s ``plot_track_and_scanlines``/
-``build_survey_track``, adding a scatter of target positions (a list of
-``sidescanpy.targets.core.Target``) projected into the same CRS as the
+Builds on ``viz/track.py``'s ``plot_track_and_scanlines`` (with the
+track from ``sidescanpy.processing.build_survey_track``), adding a scatter of target positions (a list of
+``sidescanpy.core.target.Target``) projected into the same CRS as the
 track. Kept in its own module rather than folded into ``viz/track.py``
-because it needs ``targets.core.Target`` — matches the existing
+because it needs ``core.target.Target`` — matches the existing
 ``viz/contact_sheet.py`` precedent of keeping that dependency isolated
 from the modules that don't need it.
 
-Promoted from a project-local script (``project-a/scripts/
-plot_track_with_targets.py``'s ``main()`` body) — same projection/scatter
-logic, no behavior change.
 
 2026 rshomberg@uri.edu
 """
@@ -23,7 +20,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pyproj import CRS, Transformer
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
+from sidescanpy.processing.track import SurveyTrack
 from sidescanpy.viz.track import plot_track_and_scanlines
 
 logger = logging.getLogger(__name__)
@@ -48,7 +46,7 @@ def plot_target_position_scatter(targets: list[Target], *, title: Optional[str] 
     ``None`` if no target has both ``latitude``/``longitude`` set.
 
     Promoted from the near-identical scatter block duplicated in both
-    format's own target-catalog-reading pipeline stage (JSF's Discover
+    format's own target-catalog-reading step (JSF's Discover
     catalog already carries position; Klein's ``.tgt`` needs it resolved
     externally first — see ``sidescanpy.io.sdf.targets``).
     """
@@ -69,21 +67,8 @@ def plot_target_position_scatter(targets: list[Target], *, title: Optional[str] 
     return fig
 
 
-def export_target_position_scatter_png(targets: list[Target], output_path: str, *, title: Optional[str] = None, dpi: int = 150) -> bool:
-    """Plot and save :func:`plot_target_position_scatter`'s output.
-    Returns False (no file written) if no target had a resolvable
-    position, True otherwise."""
-    fig = plot_target_position_scatter(targets, title=title)
-    if fig is None:
-        return False
-    fig.savefig(output_path, dpi=dpi)
-    plt.close(fig)
-    logger.info(f"Exported target position scatter to {output_path}")
-    return True
-
-
 def plot_track_with_targets(
-    track: dict,
+    track: SurveyTrack,
     targets: list[Target],
     *,
     crs: Optional[CRS] = None,
@@ -98,8 +83,8 @@ def plot_track_with_targets(
 
     Parameters
     ----------
-    track : dict
-        As returned by ``sidescanpy.viz.track.build_survey_track``.
+    track : SurveyTrack
+        As returned by ``sidescanpy.processing.build_survey_track``.
     targets : list[Target]
         Targets with ``.latitude``/``.longitude`` set; targets missing
         either are silently excluded from the scatter (matches the
@@ -125,13 +110,13 @@ def plot_track_with_targets(
     if crs is None:
         from sidescanpy.grids.definition import utm_crs_for_lonlat
         crs = utm_crs_for_lonlat(
-            float(np.mean(track["track_lon"])), float(np.mean(track["track_lat"]))
+            float(np.mean(track.track_lon)), float(np.mean(track.track_lat))
         )
 
     fig, ax = plot_track_and_scanlines(
-        track["track_lat"], track["track_lon"],
-        track["scan_port_lat"], track["scan_port_lon"],
-        track["scan_stbd_lat"], track["scan_stbd_lon"],
+        track.track_lat, track.track_lon,
+        track.scan_port_lat, track.scan_port_lon,
+        track.scan_stbd_lat, track.scan_stbd_lon,
         crs=crs, fig=fig, ax=ax,
         show_land=show_land, show_locator=show_locator,
     )
@@ -151,31 +136,3 @@ def plot_track_with_targets(
     ax.set_title(ax.get_title() + "\nwith target catalog overlay")
 
     return fig, ax
-
-
-def export_track_with_targets_png(
-    track: dict,
-    targets: list[Target],
-    output_path: str,
-    *,
-    crs: Optional[CRS] = None,
-    dpi: int = 150,
-    show_land: bool = False,
-    show_locator: bool = False,
-) -> None:
-    """Plot and save a survey track + scan-lines + target overlay PNG.
-    See ``plot_track_with_targets``.
-
-    Saves at the figure's own full, fixed size, no ``bbox_inches="tight"``
-    -- see ``export_track_and_scanlines_png``'s docstring (``viz/track.py``)
-    for why: that flag crops the saved PNG to the drawn content's own
-    bounding box, making saved dimensions vary with a survey's real
-    aspect ratio despite the figure always being created at one fixed
-    size. This is the function `sidescan-export track` actually calls
-    whenever `--targets-json` is given -- i.e. every real mission with
-    an `targets.csv` -- so it needed the identical fix.
-    """
-    fig, _ax = plot_track_with_targets(track, targets, crs=crs, show_land=show_land, show_locator=show_locator)
-    fig.savefig(output_path, dpi=dpi)
-    logger.info(f"Exported track + targets to {output_path}")
-    plt.close(fig)

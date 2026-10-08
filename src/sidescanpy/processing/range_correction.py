@@ -3,30 +3,24 @@ Empirical range correction for the residual TVG range-dependence.
 
 `processing/radiometric.py`'s `apply_tvg()` implements the physically-
 grounded spreading+absorption TVG model. Even after that model is applied
-(and after the 2026-07-16 sound-velocity-zero-bug fix), real data shows a
-remaining, altitude-invariant, non-monotonic range-dependent residual
-(CLAUDE.md Known Issue #4; see
-`docs/planning/handoff-tvg-residual-post-fix-findings.md` for the
-investigation and `docs/planning/v0.9.0-empirical-range-correction.md` for
-the design proposal this module implements). The investigation ruled out
-both original candidates (mistuned absorption coefficient; missing
-grazing-angle/beam-pattern correction) — this module does not attempt to
-model the physical cause. Instead it fits and removes whatever
+real data can show a
+remaining, altitude-invariant, non-monotonic range-dependent residual.
+This module does not attempt to model the physical cause (it is not a
+mistuned absorption coefficient or a missing grazing-angle/beam-pattern
+correction). Instead it fits and removes whatever
 range-dependent shape is actually observed in TVG-corrected data, per
 frequency.
 
-**Known limitation, deliberately not hidden:** the bundled default
-calibration table (`load_default()`) is fit from one real survey and
-validated only against a held-out ping range of that *same* survey — not
-genuine cross-survey validation. Revisit once a second independent real
-survey is available. See `project-a/scripts/fit_range_correction.py`
-for the fitting/validation workflow that produced it.
+The library ships no calibration table: a table is fit from a specific
+survey and instrument, so it belongs with the project that fitted it. Fit
+one with :func:`fit_range_correction`, store it with
+:meth:`RangeCorrectionTable.save`, and pass it (or its path) as the
+``table`` argument of :func:`apply_empirical_range_correction` /
+the ``"range_correction"`` step.
 
-This is a separate, optional pipeline step from `apply_tvg()` — it is
-*not* added to `pipeline.py`'s default correction ladder, so existing
-consumers see no behavior change unless they explicitly opt in via
-`run_correction_steps`/`apply_correction_steps` with `"range_correction"`
-in the requested step set.
+This is a separate, optional correction step (``"range_correction"``)
+from `apply_tvg()` — not in ``sidescanpy.processing.DEFAULT_STEPS``; opt in
+by listing it in the steps passed to ``sidescanpy.processing.correct``.
 
 2026 rshomberg@uri.edu
 """
@@ -34,19 +28,19 @@ in the requested step set.
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from importlib.resources import files
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import xarray as xr
 
+from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_RANGE_CORRECTION, STEP_TVG, append_history, has_step
+from sidescanpy.processing.profiles import backscatter_vs_range
+
 logger = logging.getLogger(__name__)
 
-STEP_NAME = "empirical_range_correction"
-
-_DEFAULT_CALIBRATION_PACKAGE = "sidescanpy.processing.calibration"
-_DEFAULT_CALIBRATION_RESOURCE = "range_correction_default.json"
+STEP_NAME = STEP_RANGE_CORRECTION
 
 # Frequency matching tolerance (Hz) — real freq_hz_start values are exact
 # per-instrument constants, not estimated, so an exact-ish match is
@@ -181,16 +175,6 @@ class RangeCorrectionTable:
     def load(cls, path: str) -> "RangeCorrectionTable":
         return cls.from_dict(json.loads(Path(path).read_text()))
 
-    @classmethod
-    def load_default(cls) -> "RangeCorrectionTable":
-        """Load the calibration table bundled with the installed package."""
-        text = (
-            files(_DEFAULT_CALIBRATION_PACKAGE)
-            .joinpath(_DEFAULT_CALIBRATION_RESOURCE)
-            .read_text()
-        )
-        return cls.from_dict(json.loads(text))
-
 
 def fit_range_correction(
     ds: xr.Dataset,
@@ -203,13 +187,12 @@ def fit_range_correction(
     Parameters
     ----------
     ds : xr.Dataset
-        Must have `processing_level == "radiometric"` and a
-        `ground_range_m` variable — i.e. already run through
-        `{"tvg", "geometric"}` (see `processing.pipeline`).
+        Must be TVG-corrected and have a `ground_range_m` variable — i.e.
+        already run through the `"tvg"` and `"geometric"` steps.
     bin_width_m : float, default 5.0
-        Passed through to `analysis.tvg_diagnostics.mean_backscatter_vs_range`.
+        Passed through to `processing.profiles.backscatter_vs_range`.
     exclude_below_db : float, optional, default -110.0
-        Passed through as `exclude_below_db` to exclude Known Issue #5's
+        Passed through as `exclude_below_db` to exclude the
         floor-clipped samples (~-120 dB exact-zero-amplitude floor) from
         biasing the fit. `None` disables filtering.
 
@@ -230,26 +213,15 @@ def fit_range_correction(
         If `ds` isn't TVG+geometric corrected, or no samples survive
         filtering.
     """
-    # Lazy import: analysis.tvg_diagnostics imports processing.pipeline,
-    # which imports this module for apply_empirical_range_correction —
-    # a top-level import here would be circular. apply_empirical_range_correction
-    # (the function pipeline.py actually needs) doesn't need tvg_diagnostics
-    # at all, so only fit_range_correction (not on pipeline.py's import
-    # path) needs this dependency, deferred to call time.
-    from sidescanpy.analysis.tvg_diagnostics import mean_backscatter_vs_range
-
-    if ds.attrs.get("processing_level") != "radiometric":
-        raise ValueError(
-            "fit_range_correction expects processing_level 'radiometric', "
-            f"got '{ds.attrs.get('processing_level')}'. Run apply_tvg() first."
-        )
+    if not has_step(ds, STEP_TVG):
+        raise ValueError("fit_range_correction expects TVG-corrected data. Run apply_tvg() first.")
     if "ground_range_m" not in ds:
         raise ValueError(
             "fit_range_correction requires 'ground_range_m' "
             "(run compute_geometric_ranges() first)."
         )
 
-    df = mean_backscatter_vs_range(
+    df = backscatter_vs_range(
         ds,
         value_var="backscatter_intensity",
         range_var="ground_range_m",
@@ -276,13 +248,13 @@ def fit_range_correction(
         "target_level_db": target_level_db,
         "n_bins": int(len(df)),
         "n_samples_total": int(counts.sum()),
-        "fitted_at_utc": datetime.now(timezone.utc).isoformat(),
+        "fitted_at_utc": datetime.now(UTC).isoformat(),
     }
     return range_centers.tolist(), correction_db.tolist(), fit_metadata
 
 
 def apply_empirical_range_correction(
-    ds: xr.Dataset, table: RangeCorrectionTable | None = None
+    ds: xr.Dataset, table: "RangeCorrectionTable | str | Path | None" = None
 ) -> xr.Dataset:
     """
     Apply a previously-fit empirical range correction to TVG-corrected
@@ -291,67 +263,64 @@ def apply_empirical_range_correction(
     Parameters
     ----------
     ds : xr.Dataset
-        Must have `processing_level == "radiometric"` and a
-        `ground_range_m` variable — i.e. already run through
-        `{"tvg", "geometric"}`.
-    table : RangeCorrectionTable, optional
-        Defaults to `RangeCorrectionTable.load_default()` (the bundled
-        calibration).
+        TVG-corrected (``"tvg"`` in processing_history) with a
+        ``ground_range_m`` variable — i.e. already run through the
+        ``"tvg"`` and ``"geometric"`` steps.
+    table : RangeCorrectionTable or path
+        Required. The calibration to apply, or the path of a JSON file
+        written by :meth:`RangeCorrectionTable.save`. The library has no
+        built-in default table.
 
     Returns
     -------
     xr.Dataset
-        New dataset with `backscatter_intensity` shifted by the fitted
-        curve, and `processing_history` appended with an
-        `"empirical_range_correction"` step. `processing_level` is left
-        as `"radiometric"` unchanged — this step, like `apply_tvg`, only
-        modifies backscatter values, and `processing_level` per this
-        project's convention tracks *that* state, not every step applied
-        to it (double-application is guarded via `processing_history`
-        instead — see Raises below).
+        New dataset with ``backscatter_intensity`` shifted by the fitted
+        curve and a ``"range_correction"`` history record holding the
+        curve actually applied (so it can be inverted without the table).
 
-        Samples with non-finite `ground_range_m` (masked water-column
-        samples — see `processing/geometric.py`) receive a **zero**
-        correction rather than propagating NaN into previously-finite
-        backscatter values.
+        Samples with non-finite ``ground_range_m`` (masked water-column
+        samples) receive a **zero** correction rather than propagating NaN
+        into previously-finite backscatter values.
 
-        If no calibrated curve matches this dataset's `freq_hz_start`,
-        logs a warning and returns `ds` unchanged — never guesses at an
-        uncalibrated frequency (current calibration scope: `hz_1495000`,
-        `hz_547500` only).
+        If no calibrated curve matches this dataset's ``freq_hz_start``,
+        logs a warning and returns ``ds`` unchanged (no history record) —
+        never guesses at an uncalibrated frequency.
 
     Raises
     ------
+    TypeError
+        If ``table`` is missing or not a table / path.
     ValueError
-        If `ds` isn't TVG+geometric corrected, or if
-        `"empirical_range_correction"` is already present in
-        `processing_history` (refuses to double-apply).
+        If ``ds`` isn't TVG+geometric corrected, or the range correction is
+        already recorded in processing_history (refuses to double-apply).
     """
-    if ds.attrs.get("processing_level") != "radiometric":
+    if table is None:
+        raise TypeError(
+            "the range_correction step requires a `table` (a RangeCorrectionTable or the path "
+            "of a saved one); the library has no built-in default table"
+        )
+    if isinstance(table, (str, Path)):
+        table = RangeCorrectionTable.load(str(table))
+    elif not isinstance(table, RangeCorrectionTable):
+        raise TypeError(f"`table` must be a RangeCorrectionTable or a path, got {type(table).__name__}")
+    if not has_step(ds, STEP_TVG):
         raise ValueError(
-            "apply_empirical_range_correction expects processing_level "
-            f"'radiometric', got '{ds.attrs.get('processing_level')}'. "
-            "Run apply_tvg() first."
+            "apply_empirical_range_correction expects TVG-corrected data. Run apply_tvg() first."
         )
     if "ground_range_m" not in ds:
         raise ValueError(
             "apply_empirical_range_correction requires 'ground_range_m' "
             "(run compute_geometric_ranges() first)."
         )
-
-    history = json.loads(ds.attrs.get("processing_history", "[]"))
-    if any(h.get("step") == STEP_NAME for h in history):
+    if has_step(ds, STEP_RANGE_CORRECTION):
         raise ValueError(
-            f"'{STEP_NAME}' already applied to this dataset "
+            "range correction already applied to this dataset "
             "(found in processing_history). Refusing to double-apply."
         )
 
-    if table is None:
-        table = RangeCorrectionTable.load_default()
-
     freq_hz = ds.attrs["freq_hz_start"]
-    correction = table.correction_db_at(freq_hz, ds["ground_range_m"].values)
-    if correction is None:
+    matched = table.matched_frequency(freq_hz)
+    if matched is None:
         logger.warning(
             "No calibrated range-correction curve for freq_hz_start=%s "
             "(calibrated: %s); skipping empirical range correction, "
@@ -361,37 +330,41 @@ def apply_empirical_range_correction(
         )
         return ds
 
-    correction = np.nan_to_num(correction, nan=0.0)
-    correction_da = xr.DataArray(
-        correction,
-        dims=ds["ground_range_m"].dims,
-        coords=ds["ground_range_m"].coords,
-    )
+    curve = table._curves[matched]
+    correction_da = range_correction_db(ds, curve.range_m, curve.correction_db)
 
     ds_out = ds.copy(deep=False)
-    ds_out.attrs = dict(ds.attrs)
     ds_out = ds_out.assign(
-        backscatter_intensity=ds["backscatter_intensity"] + correction_da,
+        backscatter_intensity=(ds["backscatter_intensity"] + correction_da).astype(ds["backscatter_intensity"].dtype),
     )
-
-    history.append(
+    logger.debug(
+        "Empirical range correction applied for freq_hz_start=%s (matched calibrated freq=%s).",
+        freq_hz, matched,
+    )
+    return append_history(
+        ds_out,
+        STEP_RANGE_CORRECTION,
         {
-            "step": STEP_NAME,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "params": {
-                "freq_hz_matched": table.matched_frequency(freq_hz),
-                "fit_metadata": table.metadata_for(freq_hz),
-            },
-            "function": "sidescanpy.processing.range_correction.apply_empirical_range_correction",
-        }
-    )
-    ds_out.attrs["processing_history"] = json.dumps(history)
-
-    logger.info(
-        "Empirical range correction applied for freq_hz_start=%s "
-        "(matched calibrated freq=%s).",
-        freq_hz,
-        table.matched_frequency(freq_hz),
+            "freq_hz_matched": matched,
+            "range_m": list(curve.range_m),
+            "correction_db": list(curve.correction_db),
+            "fit_metadata": dict(curve.fit_metadata),
+        },
+        function="sidescanpy.processing.range_correction.apply_empirical_range_correction",
+        version=__version__,
     )
 
-    return ds_out
+
+def range_correction_db(ds: xr.Dataset, range_m, correction_db) -> xr.DataArray:
+    """Correction (dB) of a piecewise-linear curve evaluated at ``ds["ground_range_m"]``.
+
+    Clamped outside the curve's span; non-finite ground range gets 0 dB.
+    Shared by the forward step and its inversion.
+    """
+    range_m = np.asarray(range_m, dtype=np.float64)
+    correction_db = np.asarray(correction_db, dtype=np.float64)
+
+    def _eval(gr: np.ndarray) -> np.ndarray:
+        return np.nan_to_num(np.interp(gr.astype(np.float64), range_m, correction_db), nan=0.0)
+
+    return xr.apply_ufunc(_eval, ds["ground_range_m"], dask="parallelized", output_dtypes=[np.float64])

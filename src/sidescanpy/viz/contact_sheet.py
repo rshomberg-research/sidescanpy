@@ -1,9 +1,7 @@
 """
 Thumbnail grid and boxed-context QA rendering for sonar targets.
 
-Per ``docs/planning/v0.10.0-target-catalog-and-coco-export.md`` Phase 3 —
-confirmed nothing reusable existed anywhere in the family for either of
-these before this module. Uses the same percentile-based amplitude
+Uses the same percentile-based amplitude
 auto-scaling convention as ``viz/waterfall.py`` (default 1st/99th
 percentile) so target imagery reads consistently with other sidescanpy
 figures.
@@ -11,13 +9,17 @@ figures.
 2026 rshomberg@uri.edu
 """
 
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from sidescanpy.targets.core import Target, bbox_from_center
+from sidescanpy.core.target import Target, bbox_from_center
 from sidescanpy.viz._cmap import resolve_cmap
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CMAP = "copper"
 _DEFAULT_VMIN_PCT = 1.0

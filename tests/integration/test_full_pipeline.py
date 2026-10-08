@@ -24,17 +24,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sidescanpy.io.jsf import read_jsf, convert
 from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.io.jsf import convert, read_jsf
 from sidescanpy.processing import (
     apply_tvg,
-    interpolate_aux_onto_pings,
     compute_geometric_ranges,
     compute_georeferencing,
+    interpolate_aux_onto_pings,
 )
 
-
-SAMPLE_JSF = Path("tests/data/jsf/sample.jsf")
+SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 
 
 # ============================================================
@@ -99,20 +98,20 @@ class TestPipelineCompletion:
 
     def test_processing_history_records_all_steps(self, processed_survey):
         """Each channel should record TVG, geometric, georef steps."""
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             history = json.loads(channel.dataset.attrs["processing_history"])
             steps = [entry["step"] for entry in history]
-            assert "tvg_correction" in steps
-            assert "compute_geometric_ranges" in steps
-            assert "compute_georeferencing" in steps
+            assert "tvg" in steps
+            assert "geometric" in steps
+            assert "georef" in steps
 
-    def test_processing_level_radiometric(self, processed_survey):
-        """After TVG, processing_level should be 'radiometric'."""
-        for fk, channel in processed_survey.freq_channels.items():
-            assert channel.dataset.attrs["processing_level"] == "radiometric"
+    def test_processing_level_derived(self, processed_survey):
+        """processing_level is derived from history: tvg+geometric+georef -> georef."""
+        for _fk, channel in processed_survey.freq_channels.items():
+            assert channel.dataset.sidescan.processing_level == "georef"
 
     def test_each_channel_validates(self, processed_survey):
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             channel.dataset.sidescan.validate()
 
 
@@ -131,12 +130,14 @@ class TestRadiometricOutput:
             assert finite.min() > -200, f"{fk}: min too low ({finite.min()})"
             assert finite.max() < 100,  f"{fk}: max too high ({finite.max()})"
 
-    def test_backscatter_raw_unchanged(self, real_survey, processed_survey):
-        """The pipeline must preserve backscatter_raw across TVG."""
+    def test_tvg_inverts_to_original(self, real_survey, processed_survey):
+        """No raw copy is kept: inverting the recorded TVG recovers the input."""
+        from sidescanpy.processing import uncorrected_backscatter
+
         for fk in real_survey.frequencies:
-            raw_orig = real_survey.get_frequency(fk).dataset["backscatter_raw"].values
-            raw_processed = processed_survey.get_frequency(fk).dataset["backscatter_raw"].values
-            np.testing.assert_array_equal(raw_processed, raw_orig)
+            orig = real_survey.get_frequency(fk).dataset["backscatter_intensity"].values
+            back = uncorrected_backscatter(processed_survey.get_frequency(fk).dataset).values
+            np.testing.assert_allclose(back, orig, rtol=1e-5, atol=1e-6)
 
 
 # ============================================================
@@ -198,7 +199,7 @@ class TestGeoreferencingOutput:
             assert np.all(finite <= 90),  f"{fk}: lat above 90"
 
     def test_lon_per_sample_in_valid_range(self, processed_survey):
-        for fk, channel in processed_survey.freq_channels.items():
+        for _fk, channel in processed_survey.freq_channels.items():
             lon = channel.dataset["longitude_per_sample"].values
             finite = lon[np.isfinite(lon)]
             assert finite.size > 0
@@ -320,7 +321,7 @@ def test_print_pipeline_summary(processed_survey, capsys):
         ds = ch.dataset
         print(f"\n--- {fk} ---")
         print(f"Pings × Channels × Samples: {ds.sizes}")
-        print(f"Processing level: {ds.attrs['processing_level']}")
+        print(f"Processing level: {ds.sidescan.processing_level}")
 
         # Backscatter sanity
         bs = ds["backscatter_intensity"].values

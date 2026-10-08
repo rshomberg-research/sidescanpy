@@ -12,6 +12,7 @@ specified ellipsoid).
 """
 
 import json
+
 import numpy as np
 import pandas as pd
 import pyproj
@@ -20,7 +21,6 @@ import xarray as xr
 
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
-
 
 # ============================================================
 # HELPERS
@@ -393,11 +393,10 @@ class TestOutputVariables:
 
 @pytest.mark.unit
 class TestProcessingMetadata:
-    def test_processing_level_unchanged(self):
+    def test_processing_level_derived(self):
         ds = _make_test_dataset_with_geometry(altitude_m=10.0)
-        original_level = ds.attrs["processing_level"]
         result = compute_georeferencing(ds)
-        assert result.attrs["processing_level"] == original_level
+        assert result.sidescan.processing_level == "georef"
 
     def test_history_entry_added(self):
         ds = _make_test_dataset_with_geometry(altitude_m=10.0)
@@ -406,7 +405,7 @@ class TestProcessingMetadata:
         # compute_geometric_ranges added one entry; we add another
         assert len(history) >= 2
         last = history[-1]
-        assert last["step"] == "compute_georeferencing"
+        assert last["step"] == "georef"
 
     def test_history_records_ellipsoid(self):
         ds = _make_test_dataset_with_geometry(altitude_m=10.0)

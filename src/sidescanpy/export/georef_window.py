@@ -6,25 +6,24 @@ Resamples a bounded square region directly at an explicit
 builds on the survey-wide georeferencing/gridding path already in
 ``sidescanpy.grids``. Produces a ``SideScanGriddedRaster`` (an in-memory
 xarray-backed raster with northing/easting coordinates and CRS
-metadata), not a GeoTIFF file directly — writing an actual GeoTIFF needs
-``rasterio``, a dependency this library hasn't taken on yet (see
-``docs/planning/v0.7.0-geotiff-and-cropping.md``); a caller needing a
-real GeoTIFF file wraps this raster's own data with an optional,
-guarded ``rasterio`` import at the call site, the same pattern already
-used for this elsewhere.
+metadata), not a file; :func:`sidescanpy.grids.to_geotiff` writes it as
+a GeoTIFF (needs the ``geo`` extra).
 
 2026 rshomberg@uri.edu
 """
 
 from __future__ import annotations
 
-import numpy as np
+import logging
+
 import pyproj
 import xarray as xr
 
 from sidescanpy.grids.definition import GridDefinition, utm_crs_for_lonlat
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.grids.resample import ResamplingMethod, resample_channel_to_grid
+
+logger = logging.getLogger(__name__)
 
 
 def extract_georef_window(
@@ -114,6 +113,9 @@ def locate_point(lat: float, lon: float, meta: dict) -> tuple[float, float]:
     ``meta`` — for marking a *different* point than the one the window
     was centered on.
     """
+    # TODO(lib): this is the inverse of the window's affine transform --
+    # rasterio.transform.rowcol / ~affine.Affine on a transform carried in
+    # meta; parity test: identical fractional (row, col).
     transformer = pyproj.Transformer.from_crs("EPSG:4326", meta["crs"], always_xy=True)
     easting, northing = transformer.transform(lon, lat)
     return (

@@ -16,6 +16,9 @@ from sidescanpy.grids.definition import GridDefinition
 logger = logging.getLogger(__name__)
 
 
+# TODO(lib): this wrapper could become a plain xr.Dataset with a rioxarray
+# .rio CRS/transform (see to_dataset()); needs viz.gridded / cli / export
+# callers ported and a parity test on their outputs (PNG hashes, chips).
 class SideScanGriddedRaster:
     """
     Georeferenced gridded backscatter data.
@@ -32,7 +35,7 @@ class SideScanGriddedRaster:
     channel_name : str
         Frequency/channel identifier (e.g., "455 kHz").
     processing_level : str
-        Processing stage: "raw", "radiometric", etc.
+        Processing level: "raw", "radiometric", etc.
     dataset : xr.Dataset
         Validated xarray Dataset with backscatter, lat/lon, metadata.
     """
@@ -57,7 +60,7 @@ class SideScanGriddedRaster:
         channel_name : str, optional
             Channel/frequency name (e.g., "455 kHz").
         processing_level : str, default "raw"
-            Processing stage ("raw", "radiometric", etc.).
+            Processing level ("raw", "radiometric", etc.).
         units : str, default "linear"
             Units of the backscatter values ("linear" or "dB"). Callers
             resampling TVG-corrected data (dB) must pass units="dB" —
@@ -275,6 +278,50 @@ class SideScanGriddedRaster:
 
         return ds
 
+    def to_dataset(self) -> xr.Dataset:
+        """This raster as a plain ``xr.Dataset`` on 1-D cell-center axes.
+
+        Dims ``("y", "x")`` with 1-D ``y``/``x`` coordinates (northing/
+        easting in metres for a projected CRS, latitude/longitude in
+        degrees for a geographic one), in this raster's own row order
+        (south to north). Every data variable of :attr:`dataset`
+        (``backscatter``, plus ``n_contributing_samples`` when present) is
+        carried over with its attrs, and the CRS is stored CF-style in a
+        scalar ``spatial_ref`` coordinate (``crs_wkt`` / ``spatial_ref``
+        attrs, referenced from each variable's ``grid_mapping``), which
+        rioxarray, GDAL and most CF readers recognize. Needs no optional
+        dependency.
+
+        The grid's cell centers are evenly spaced but, because
+        ``GridDefinition`` stretches ``ceil(extent / resolution_m)`` cells
+        across the bbox, the spacing is only approximately
+        ``resolution_m``; ``x``/``y`` hold the real centers.
+        """
+        src = self.dataset
+        ys = src[self.y_coord_name].values[:, 0]
+        xs = src[self.x_coord_name].values[0, :]
+        data_vars = {}
+        for name, var in src.data_vars.items():
+            da = xr.DataArray(var.values, dims=("y", "x"), attrs=dict(var.attrs))
+            da.attrs["grid_mapping"] = "spatial_ref"
+            data_vars[name] = da
+        y_attrs = dict(src[self.y_coord_name].attrs)
+        x_attrs = dict(src[self.x_coord_name].attrs)
+        y_attrs["standard_name"] = "latitude" if self.is_geographic else "projection_y_coordinate"
+        x_attrs["standard_name"] = "longitude" if self.is_geographic else "projection_x_coordinate"
+        cf = self.crs.to_cf()
+        cf["spatial_ref"] = cf.get("crs_wkt", self.crs.to_wkt())
+        ds = xr.Dataset(
+            data_vars,
+            coords={
+                "y": ("y", ys, y_attrs),
+                "x": ("x", xs, x_attrs),
+                "spatial_ref": ((), np.int64(0), cf),
+            },
+            attrs=dict(src.attrs),
+        )
+        return ds
+
     def reproject_to(self, target_crs: CRS) -> "SideScanGriddedRaster":
         """
         Reproject raster to a different CRS.
@@ -297,6 +344,9 @@ class SideScanGriddedRaster:
         Grid cell count may change slightly due to extent changes;
         backscatter shape is preserved.
         """
+        # TODO(lib): rioxarray .rio.reproject would actually resample the
+        # values into the target CRS (this only relabels the bbox); a
+        # behavior change, not a swap -- needs a decision first.
         if self.crs == target_crs:
             return SideScanGriddedRaster(
                 grid_def=self.grid_def,
@@ -356,7 +406,11 @@ class SideScanGriddedRaster:
             )
 
         # Find indices within target bounds
-        # Use small tolerance for floating-point comparison
+        # Use small tolerance for floating-point comparison -- in CRS units,
+        # so ~111 m for a geographic raster but 1 mm for a projected one.
+        # TODO(lib): xarray .sel(y=slice(...), x=slice(...)) on to_dataset()
+        # (or rioxarray .rio.clip_box) replaces this mask-and-rebuild; needs
+        # a parity test on the returned subset and its bbox.
         tol = 0.001
         ns_mask = (lats >= target_south - tol) & (lats <= target_north + tol)
         ew_mask = (lons >= target_west - tol) & (lons <= target_east + tol)

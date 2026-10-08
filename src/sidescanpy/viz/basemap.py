@@ -32,7 +32,6 @@ from importlib.resources import files
 from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import PathPatch, Rectangle
 from pyproj import CRS, Transformer

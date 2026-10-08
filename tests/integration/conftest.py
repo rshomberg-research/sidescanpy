@@ -1,9 +1,10 @@
 """Fixtures for integration tests"""
 
+from pathlib import Path
+
 import pytest
 
-from pathlib import Path 
 
 @pytest.fixture
 def small_jsf_file():
-    return Path('tests/data/jsf/sample.jsf')
+    return Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"

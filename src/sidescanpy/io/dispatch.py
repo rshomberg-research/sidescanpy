@@ -6,6 +6,12 @@ by extension and produce a validated SideScanSurvey. Used by any script
 or caller that wants "just give me a survey from these files" without
 hand-rolling the .jsf/.sdf branch itself.
 
+- :func:`detect_format`, :func:`read_and_convert` -- raw ``.jsf``/``.sdf``.
+- :func:`find_sonar_files` -- the raw files in a directory.
+- :func:`load_survey` -- a ``.ss.h5`` or a raw file, whichever it is.
+- :func:`detect_catalog_format`, :func:`read_target_catalog` -- target
+  catalogs, dispatched on the catalog directory's own contents.
+
 2026 rshomberg@uri.edu
 """
 
@@ -13,10 +19,14 @@ import logging
 from pathlib import Path
 
 from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.core.target import Target
+from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.io.jsf import convert as jsf_convert
 from sidescanpy.io.jsf import read_jsf
+from sidescanpy.io.jsf.targets import read_discover_targets
 from sidescanpy.io.sdf import convert as sdf_convert
 from sidescanpy.io.sdf import read_sdf
+from sidescanpy.io.sdf.targets import read_klein_targets
 
 logger = logging.getLogger(__name__)
 
@@ -104,3 +114,92 @@ def read_and_convert(
         )
 
     raise ValueError(f"Unknown format: {fmt}")
+
+
+SONAR_FORMATS: tuple[str, ...] = ("jsf", "sdf")
+"""Raw formats :func:`read_and_convert` reads."""
+
+CATALOG_JSF_DISCOVER = "jsf_discover"
+CATALOG_SDF_KLEIN = "sdf_klein"
+
+_HDF5_SUFFIXES = (".h5", ".hdf5")
+
+
+def find_sonar_files(input_dir: Path | str, input_format: str = "auto") -> list[Path]:
+    """Raw sonar files directly in ``input_dir`` (not recursive), sorted.
+
+    Parameters
+    ----------
+    input_dir : path
+        Directory to search.
+    input_format : {"auto", "jsf", "sdf"}, default "auto"
+        ``"auto"`` returns both ``*.jsf`` and ``*.sdf`` files.
+
+    Raises
+    ------
+    ValueError
+        Unknown ``input_format``.
+    """
+    input_dir = Path(input_dir)
+    if input_format == "auto":
+        return sorted(list(input_dir.glob("*.jsf")) + list(input_dir.glob("*.sdf")))
+    if input_format in SONAR_FORMATS:
+        return sorted(input_dir.glob(f"*.{input_format}"))
+    raise ValueError(f"Unknown input_format: {input_format}")
+
+
+def load_survey(path: Path | str, *, chunks: dict | None = None) -> SideScanSurvey:
+    """Read ``path`` as a survey, whatever it is.
+
+    A ``.ss.h5`` (or ``.h5``/``.hdf5``) file is read with
+    :func:`~sidescanpy.io.hdf5.read_survey` (``chunks`` passed through);
+    a raw ``.jsf``/``.sdf`` file is converted in memory with
+    :func:`read_and_convert` (``chunks`` ignored).
+    """
+    path = Path(path)
+    if path.suffix.lower() in _HDF5_SUFFIXES or path.name.endswith(".ss.h5"):
+        return read_survey(path, chunks=chunks)
+    return read_and_convert([path], detect_format([path]))
+
+
+def detect_catalog_format(source: Path | str) -> str:
+    """Target-catalog format of the directory ``source``, from its own contents.
+
+    Dispatches on the catalog files present, not on the paired survey's
+    format (a JSF survey can be labelled in SonarWiz and vice versa).
+
+    Returns
+    -------
+    str
+        :data:`CATALOG_SDF_KLEIN` (``Target_*.tgt``) or
+        :data:`CATALOG_JSF_DISCOVER` (``*.target``).
+
+    Raises
+    ------
+    ValueError
+        Both kinds present (ambiguous), or neither.
+    """
+    source = Path(source)
+    has_klein = any(source.glob("Target_*.tgt"))
+    has_jsf = any(source.glob("*.target"))
+    if has_klein and has_jsf:
+        raise ValueError(f"{source} contains both Klein (Target_*.tgt) and JSF (*.target) catalog files -- ambiguous")
+    if has_klein:
+        return CATALOG_SDF_KLEIN
+    if has_jsf:
+        return CATALOG_JSF_DISCOVER
+    raise ValueError(f"No target catalog files found in {source} (expected *.target or Target_*.tgt)")
+
+
+def read_target_catalog(source: Path | str) -> tuple[str, list[Target]]:
+    """Read the target catalog in directory ``source``.
+
+    Returns ``(format, targets)`` with ``format`` from
+    :func:`detect_catalog_format`. Klein targets come back without a
+    resolved position; see :mod:`sidescanpy.targets.correlate` for
+    resolving them against ``.ss.h5`` files.
+    """
+    fmt = detect_catalog_format(source)
+    if fmt == CATALOG_JSF_DISCOVER:
+        return fmt, read_discover_targets(source)
+    return fmt, read_klein_targets(source)

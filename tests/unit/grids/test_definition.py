@@ -4,8 +4,8 @@ Unit tests for GridDefinition.
 Tests the contract: bounding box + resolution + projection → grid metadata.
 """
 
-import pytest
 import numpy as np
+import pytest
 from pyproj import CRS
 
 # Import will fail until sidescanpy/grids/definition.py exists.
@@ -16,6 +16,7 @@ from sidescanpy.grids.definition import (
     utm_crs_for_lonlat,
     utm_grid_from_wgs84_bbox,
 )
+
 
 @pytest.mark.unit
 class TestGridDefinitionInstantiation:
@@ -332,8 +333,7 @@ class TestUtmCrsForLonlat:
     """Auto-UTM zone selection."""
 
     def test_maine_coast_is_zone_19n(self):
-        # site-b area (~ -68.8, 44.1) — matches the survey names
-        # already used throughout this project's docs/fixtures.
+        # Fixture survey area (~ -68.8, 44.1).
         crs = utm_crs_for_lonlat(-68.8, 44.1)
         assert crs.to_epsg() == 32619
 

@@ -4,8 +4,8 @@ Integration tests for the gridding pipeline.
 Tests the full workflow: channel → grid definition → resampling → raster.
 """
 
-import pytest
 import numpy as np
+import pytest
 import xarray as xr
 from pyproj import CRS
 
@@ -80,7 +80,7 @@ def _make_realistic_channel(
 
     ds = xr.Dataset(
         {
-            "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+            "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
             "latitude_per_sample": (["ping", "channel", "sample"], lat_per_sample),
             "longitude_per_sample": (["ping", "channel", "sample"], lon_per_sample),
             "ping": (["ping"], pings),
@@ -88,7 +88,7 @@ def _make_realistic_channel(
             "sample": (["sample"], samples),
         },
         attrs={
-            "frequency_hz": freq_hz,
+            "freq_hz_start": freq_hz,
             "processing_level": "raw",
         },
     )
@@ -271,9 +271,9 @@ class TestGriddingPipelineQuality:
 
     def test_gridded_data_preserves_range(self, channel, grid):
         """Gridded values within input data range."""
-        backscatter_raw = channel["backscatter_raw"].values
-        min_raw = np.nanmin(backscatter_raw)
-        max_raw = np.nanmax(backscatter_raw)
+        backscatter_intensity = channel["backscatter_intensity"].values
+        min_raw = np.nanmin(backscatter_intensity)
+        max_raw = np.nanmax(backscatter_intensity)
 
         raster = resample_channel_to_grid(
             channel,
@@ -283,7 +283,7 @@ class TestGriddingPipelineQuality:
 
         backscatter_grid = raster.backscatter
         finite_mask = np.isfinite(backscatter_grid)
-        
+
         if np.any(finite_mask):
             min_grid = np.min(backscatter_grid[finite_mask])
             max_grid = np.max(backscatter_grid[finite_mask])
@@ -299,7 +299,7 @@ class TestGriddingPipelineQuality:
         )
 
         backscatter_grid = raster.backscatter
-        
+
         # Max aggregation should produce some high values
         finite_vals = backscatter_grid[np.isfinite(backscatter_grid)]
         if len(finite_vals) > 0:
@@ -313,17 +313,17 @@ class TestGriddingPipelineQuality:
             grid_def=grid,
             method=ResamplingMethod.MEAN,
         )
-        
+
         raster_median = resample_channel_to_grid(
             channel,
             grid_def=grid,
             method=ResamplingMethod.MEDIAN,
         )
-        
+
         # Correlation between mean and median should be high
         mean_vals = raster_mean.backscatter[np.isfinite(raster_mean.backscatter)]
         median_vals = raster_median.backscatter[np.isfinite(raster_median.backscatter)]
-        
+
         if len(mean_vals) > 10 and len(median_vals) > 10:
             # Get overlapping cells
             finite_both = (
@@ -376,7 +376,7 @@ class TestGriddingPipelineEdgeCases:
     def test_grid_partially_outside_channel(self):
         """Grid partially outside survey area."""
         channel = _make_realistic_channel(num_pings=100, samples_per_ping=256)
-        
+
         # Grid extends beyond channel bounds
         grid = GridDefinition(
             bbox=(38.0, -73.0, 42.0, -69.0),  # Larger than channel
@@ -419,9 +419,3 @@ class TestGriddingPipelineReprojection:
 
         assert raster.crs == CRS.from_epsg(4326)
         assert np.any(np.isfinite(raster.backscatter))
-
-    def test_resample_to_utm(self, channel):
-        """Resample to UTM (requires channel coordinate conversion)."""
-        # For now, channels are always in WGS84, so direct UTM resampling
-        # would need upstream coordinate transformation
-        pytest.skip("Channel UTM conversion not yet implemented")

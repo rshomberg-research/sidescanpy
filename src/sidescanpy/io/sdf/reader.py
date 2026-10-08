@@ -44,7 +44,6 @@ from sidescanpy.io.sdf.pages import (
     SDFUnknownPage,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -150,7 +149,7 @@ def read_sdf_iter(path: Path | str) -> Iterator[SDFPage]:
         raise FileNotFoundError(f"SDF file not found: {path}")
 
     file_size = path.stat().st_size
-    logger.info(f"Reading SDF file: {path} ({file_size:,} bytes)")
+    logger.debug(f"Reading SDF file: {path} ({file_size:,} bytes)")
 
     n_total = 0
     n_sonar = 0
@@ -261,7 +260,7 @@ def read_sdf_iter(path: Path | str) -> Iterator[SDFPage]:
                 n_unknown += 1
                 yield page
 
-    logger.info(
+    logger.debug(
         f"Read SDF: {n_sonar} sonar, {n_unknown} unknown, "
         f"{n_total} total, {n_recovered} marker recoveries"
     )

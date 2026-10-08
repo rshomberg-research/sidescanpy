@@ -3,7 +3,7 @@
 ## Setup
 
 ### Prerequisites
-- Python 3.14+
+- Python 3.12+
 - `uv` for package management (recommended) or `pip`
 - Git
 

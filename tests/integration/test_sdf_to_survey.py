@@ -4,13 +4,12 @@ Integration test for SDF reader + converter on real Klein survey data.
 Skipped if the fixture file is not present. To enable:
     Place a Klein SDF file at tests/data/sdf/sample.sdf
 
-The fixture used during development was a site-b sidescan
+The fixture used during development was a mid-latitude (~44°N) coastal sidescan
 survey (Klein 4900, dual-frequency 455/900 kHz).
 
 2026 rshomberg@uri.edu
 """
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -25,8 +24,7 @@ from sidescanpy.processing import (
     interpolate_aux_onto_pings,
 )
 
-
-SAMPLE_SDF = Path("tests/data/sdf/sample.sdf")
+SAMPLE_SDF = Path(__file__).resolve().parents[1] / "data" / "sdf" / "sample.sdf"
 
 
 # ============================================================
@@ -99,7 +97,7 @@ class TestDualFrequency:
 @pytest.mark.integration
 class TestPerPingNavigation:
     def test_latitude_in_maine_range(self, real_survey):
-        """Sample fixture is from site-b (~44°N)."""
+        """Sample fixture is from ~44°N."""
         for fk in real_survey.frequencies:
             ch = real_survey.get_frequency(fk)
             lats = ch.dataset["latitude"].values
@@ -186,14 +184,10 @@ class TestBackscatter:
             if finite.size > 0:
                 assert finite.min() >= 0
 
-    def test_backscatter_raw_equals_intensity(self, real_survey):
-        """Raw and intensity start identical (pre-radiometric)."""
+    def test_no_raw_copy(self, real_survey):
+        """Converters no longer write a backscatter_raw copy."""
         for fk in real_survey.frequencies:
-            ch = real_survey.get_frequency(fk)
-            np.testing.assert_array_equal(
-                ch.dataset["backscatter_raw"].values,
-                ch.dataset["backscatter_intensity"].values,
-            )
+            assert "backscatter_raw" not in real_survey.get_frequency(fk).dataset
 
     def test_backscatter_dtype_float32(self, real_survey):
         for fk in real_survey.frequencies:
@@ -265,7 +259,7 @@ class TestPipeline:
         assert np.all(np.isfinite(slant))
 
     def test_georeferencing_produces_valid_coords(self, real_survey):
-        """Per-sample lat/lon should be in Maine range after pipeline."""
+        """Per-sample lat/lon should be in the fixture's expected range after pipeline."""
         survey = interpolate_aux_onto_pings(real_survey)
 
         for fk, channel in list(survey.freq_channels.items()):
@@ -342,7 +336,7 @@ def test_print_pipeline_summary(real_survey, capsys):
         print(f"\n--- {fk} ---")
         print(f"  Pings × Channels × Samples: {dict(ds.sizes)}")
         print(f"  Sample rate: {ds.attrs.get('sample_rate_hz', 'unknown')} Hz")
-        print(f"  Processing level: {ds.attrs.get('processing_level', 'unknown')}")
+        print(f"  Processing level: {ds.sidescan.processing_level}")
 
         bs = ds["backscatter_intensity"].values
         finite = bs[np.isfinite(bs)]

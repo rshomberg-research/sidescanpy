@@ -4,8 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sidescanpy"
-version = "0.4.59"
-description = "..."
+version = "0.6.0"
+description = "Read, correct, grid and export sidescan sonar data"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["sidescan", "sonar", "bathymetry", "geophysics", "marine"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
 authors = [{name = "Russ Shomberg"}]
 requires-python = ">=3.12"
 dependencies = [
@@ -14,13 +26,18 @@ dependencies = [
     "h5netcdf>=1.0",
     "numpy>=1.20",
     "pandas>=1.0",
-    "matplotlib>=3.0",
     "dask",
     "pyproj>=3.6",
     "scipy>=1.10",
     "pynmea2>=1.18",
     "pyyaml>=6.0.3",
+    # Single-channel 8/16-bit grayscale PNG writing for dataset export
+    # (chips, windows); independent of matplotlib, so it stays core.
+    "pillow>=9.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/rshomberg-uri/sidescanpy"
 
 [project.scripts]
 sidescan-convert = "sidescanpy.cli.convert:main"
@@ -30,10 +47,20 @@ sidescan-analyze = "sidescanpy.cli.analyze:main"
 
 [project.optional-dependencies]
 dev = [
+    # viz tests must run, not skip, in the dev environment.
+    "matplotlib>=3.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
     "pytest-xdist>=3.0",
+    "ruff>=0.6",
+]
+viz = [
+    # sidescanpy.viz plotting helpers and the sidescan-export /
+    # sidescan-analyze figure output. Everything else (io, processing,
+    # analysis, grids, targets, export, sidescan-convert,
+    # sidescan-correct) imports and runs without it.
+    "matplotlib>=3.0",
 ]
 maps = [
     # Used by viz/basemap.py to draw land/water context behind a
@@ -41,15 +68,55 @@ maps = [
     # thumbnail. Vendored Natural Earth data (assets/natural_earth/,
     # public domain) ships with the package regardless of whether this
     # extra is installed -- only the cartopy import itself is optional,
-    # gated at each basemap function's own call site.
+    # gated at each basemap function's own call site. Basemaps draw on
+    # matplotlib axes, so this extra implies viz.
+    "matplotlib>=3.0",
     "cartopy>=0.24",
+]
+geo = [
+    # GeoTIFF output for gridded rasters (sidescanpy.grids.to_geotiff).
+    # rioxarray writes an xarray grid with its CRS, affine transform and
+    # nodata through rasterio/GDAL -- the established way to do this,
+    # instead of hand-building GeoTIFF tags. Only to_geotiff imports it,
+    # lazily; everything else in grids runs without it.
+    "rioxarray>=0.15",
+]
+docs = [
+    # The documentation site (mkdocs.yml): guide pages in docs/ plus API
+    # reference generated from the numpydoc docstrings. Build-time only.
+    # mkdocs<2: MkDocs 2.0 drops the plugin system mkdocstrings needs.
+    # gen-files + literate-nav generate one API page per module
+    # (docs/gen_ref_pages.py); they pull in properdocs, the MkDocs 1.x
+    # continuation by its maintainers.
+    "mkdocs>=1.6,<2",
+    "mkdocs-gen-files>=0.5",
+    "mkdocs-literate-nav>=0.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+    # mkdocstrings formats the rendered signatures with ruff when present.
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # line length is not enforced yet
+    "E741",  # ambiguous variable names (l, I) are common in numeric code
+    "B008",
+    "B905",  # zip() without strict=
+    "UP006", "UP007", "UP035", "UP045",  # typing.List/Optional style, migrate later
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-sidescanpy = ["processing/calibration/*.json", "assets/natural_earth/**/*"]
+sidescanpy = ["assets/natural_earth/**/*"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

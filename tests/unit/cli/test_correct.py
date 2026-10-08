@@ -11,12 +11,13 @@ import json
 import pytest
 
 from sidescanpy.cli import correct
+from sidescanpy.core.history import has_step
 from sidescanpy.io.hdf5 import read_survey, write_survey
-from sidescanpy.processing import run_correction_steps
+from sidescanpy.processing import correct_survey
 
 
-def _levels(survey):
-    return {fk: ch.dataset.attrs["processing_level"] for fk, ch in survey.freq_channels.items()}
+def _all_tvg(survey):
+    return all(has_step(ch.dataset, "tvg") for ch in survey.freq_channels.values())
 
 
 def _has_var(survey, var):
@@ -26,7 +27,7 @@ def _has_var(survey, var):
 def _crop_history_present(survey):
     for ch in survey.freq_channels.values():
         history = json.loads(ch.dataset.attrs.get("processing_history", "[]"))
-        if not any(h.get("step") == "crop_far_range_noise" for h in history):
+        if not any(h.get("step") == "crop_farrange" for h in history):
             return False
     return True
 
@@ -67,13 +68,13 @@ class TestArgValidation:
         monkeypatch.setattr("sys.argv", ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--tvg"])
         assert correct.main() == 1
 
-    def test_ping_chunk_size_rejects_crop_farrange(self, tmp_path, monkeypatch):
+    def test_ping_chunk_size_accepts_crop_farrange(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
             "sys.argv",
-            ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--crop-farrange", "--ping-chunk-size", "4"],
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--crop-farrange", "--ping-chunk-size", "4"],
         )
-        with pytest.raises(SystemExit):
-            correct.main()
+        assert correct.main() == 0
+        assert _crop_history_present(read_survey(ss_h5_path))
 
     def test_ping_chunk_size_rejects_non_positive(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
@@ -85,10 +86,9 @@ class TestArgValidation:
 
 
 class TestPingChunkSize:
-    """--ping-chunk-size routes through
-    sidescanpy.processing.chunked.correct_file_chunked instead of the
-    eager path -- see that module's own tests for the numerical-
-    equivalence proof; these just confirm the CLI wiring itself."""
+    """--ping-chunk-size routes through correct_file(chunk_pings=...) --
+    the numerical-equivalence proof is in tests/unit/processing/test_correct.py;
+    these confirm the CLI wiring."""
 
     def test_tvg_only_chunked(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
@@ -98,7 +98,7 @@ class TestPingChunkSize:
         assert correct.main() == 0
 
         result = read_survey(ss_h5_path)
-        assert set(_levels(result).values()) == {"radiometric"}
+        assert _all_tvg(result)
 
     def test_all_steps_chunked(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
@@ -128,7 +128,7 @@ class TestSingleStep:
         assert correct.main() == 0
 
         result = read_survey(ss_h5_path)
-        assert set(_levels(result).values()) == {"radiometric"}
+        assert _all_tvg(result)
         assert not _has_var(result, "ground_range_m")
 
     def test_georef_alone(self, tmp_path, sample_multi_frequency_survey, monkeypatch):
@@ -136,7 +136,7 @@ class TestSingleStep:
         step still works exactly like before, not just combined runs.
         Requires geometric to already have run (needs across_track_m/
         along_track_m), same precondition the old 08_georef.py documented."""
-        pre_geometric = run_correction_steps(sample_multi_frequency_survey, {"geometric"})
+        pre_geometric = correct_survey(sample_multi_frequency_survey, ["interpolate_aux", "geometric"])
         path = tmp_path / "survey_geo.ss.h5"
         write_survey(pre_geometric, path)
 
@@ -145,6 +145,58 @@ class TestSingleStep:
 
         result = read_survey(path)
         assert _has_var(result, "latitude_per_sample")
+
+
+def _range_table(path):
+    """Write a small synthetic range-correction table covering both test frequencies."""
+    from sidescanpy.processing.range_correction import RangeCorrectionTable
+
+    table = RangeCorrectionTable()
+    for f in (1_495_000, 547_500):
+        table.add_curve(f, [0.0, 10.0, 50.0], [1.0, 2.0, 3.0])
+    table.save(str(path))
+    return path
+
+
+class TestRangeCorrectionTableFlag:
+    def test_range_correction_requires_table(self, ss_h5_path, monkeypatch, capsys):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction"],
+        )
+        with pytest.raises(SystemExit) as exc:
+            correct.main()
+        assert exc.value.code == 2
+        assert "--range-correction-table" in capsys.readouterr().err
+
+    def test_table_without_flag_is_an_error(self, ss_h5_path, monkeypatch, tmp_path, capsys):
+        table_path = _range_table(tmp_path / "t.json")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--range-correction-table", str(table_path)],
+        )
+        with pytest.raises(SystemExit):
+            correct.main()
+        assert "requires --range-correction" in capsys.readouterr().err
+
+    def test_water_conditions_passed_to_tvg(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv",
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg",
+             "--temperature-c", "15", "--salinity-psu", "32", "--depth-m", "30", "--ph", "7.9"],
+        )
+        assert correct.main() == 0
+        for ch in read_survey(ss_h5_path).freq_channels.values():
+            tvg = [h for h in json.loads(ch.dataset.attrs["processing_history"]) if h["step"] == "tvg"][0]
+            assert (tvg["params"]["temperature_c"], tvg["params"]["salinity_psu"],
+                    tvg["params"]["depth_m"], tvg["params"]["ph"]) == (15.0, 32.0, 30.0, 7.9)
+
+    def test_water_conditions_require_tvg(self, ss_h5_path, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv", ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--geometric", "--temperature-c", "15"],
+        )
+        with pytest.raises(SystemExit):
+            correct.main()
 
 
 class TestCombinedSteps:
@@ -159,19 +211,18 @@ class TestCombinedSteps:
         assert correct.main() == 0
 
         result = read_survey(ss_h5_path)
-        assert set(_levels(result).values()) == {"radiometric"}
+        assert _all_tvg(result)
         assert _has_var(result, "ground_range_m")
         assert _has_var(result, "latitude_per_sample")
         assert _crop_history_present(result)
 
     def test_range_correction_included_in_one_pass(self, ss_h5_path, monkeypatch):
-        # sample_multi_frequency_survey's two channels (hz_1495000/hz_547500)
-        # are exactly the bundled default calibration's own scope.
+        table_path = _range_table(ss_h5_path.parent.parent / "rc_table.json")
         monkeypatch.setattr(
             "sys.argv",
             [
                 "sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent),
-                "--tvg", "--geometric", "--range-correction",
+                "--tvg", "--geometric", "--range-correction", "--range-correction-table", str(table_path),
             ],
         )
         assert correct.main() == 0
@@ -179,7 +230,7 @@ class TestCombinedSteps:
         result = read_survey(ss_h5_path)
         for ch in result.freq_channels.values():
             history = json.loads(ch.dataset.attrs["processing_history"])
-            assert any(h.get("step") == "empirical_range_correction" for h in history)
+            assert any(h.get("step") == "range_correction" for h in history)
 
     def test_tvg_override_applied(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
@@ -187,12 +238,12 @@ class TestCombinedSteps:
             ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--no-spreading", "--no-absorption"],
         )
         assert correct.main() == 0
-        # Zero-gain TVG should leave backscatter_intensity's dB conversion
-        # identical to the un-gained conversion -- just confirm it ran
-        # without raising and advanced processing_level, the override
-        # math itself is covered by processing.radiometric's own tests.
         result = read_survey(ss_h5_path)
-        assert set(_levels(result).values()) == {"radiometric"}
+        assert _all_tvg(result)
+        for ch in result.freq_channels.values():
+            tvg = [h for h in json.loads(ch.dataset.attrs["processing_history"]) if h["step"] == "tvg"][0]
+            assert tvg["params"]["spreading_loss_db"] == 0.0
+            assert tvg["params"]["absorption_db_per_m"] == 0.0
 
 
 class TestConfigFile:
@@ -207,7 +258,7 @@ class TestConfigFile:
         )
         assert correct.main() == 0
         result = read_survey(ss_h5_path)
-        assert set(_levels(result).values()) == {"radiometric"}
+        assert _all_tvg(result)
 
     def test_config_can_seed_a_step_flag_not_typed_on_the_command_line(self, ss_h5_path, tmp_path, monkeypatch):
         import json
@@ -232,7 +283,8 @@ class TestIdempotency:
     def test_range_correction_rerun_skips_completed_step(self, ss_h5_path, monkeypatch):
         monkeypatch.setattr(
             "sys.argv",
-            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction"],
+            ["sidescan-correct", "--ss-h5-dir", str(ss_h5_path.parent), "--tvg", "--geometric", "--range-correction",
+             "--range-correction-table", str(_range_table(ss_h5_path.parent.parent / "rc_table.json"))],
         )
         assert correct.main() == 0
         assert correct.main() == 0  # would raise inside apply_empirical_range_correction if double-applied
@@ -242,14 +294,16 @@ class TestIdempotency:
         already applied in an earlier, separate sidescan-correct run --
         idempotency here is judged from the file's own recorded state,
         not from which flags happen to be typed on this invocation."""
-        pre_corrected = run_correction_steps(sample_multi_frequency_survey, {"tvg", "geometric"})
+        pre_corrected = correct_survey(sample_multi_frequency_survey, ["interpolate_aux", "tvg", "geometric"])
         path = tmp_path / "survey_d.ss.h5"
         write_survey(pre_corrected, path)
 
         import sys
         old_argv = sys.argv
         try:
-            sys.argv = ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--range-correction"]
+            table_path = _range_table(tmp_path.parent / (tmp_path.name + "_rc_table.json"))
+            sys.argv = ["sidescan-correct", "--ss-h5-dir", str(tmp_path), "--range-correction",
+                        "--range-correction-table", str(table_path)]
             assert correct.main() == 0
         finally:
             sys.argv = old_argv
@@ -257,13 +311,13 @@ class TestIdempotency:
         result = read_survey(path)
         for ch in result.freq_channels.values():
             history = json.loads(ch.dataset.attrs["processing_history"])
-            assert any(h.get("step") == "empirical_range_correction" for h in history)
+            assert any(h.get("step") == "range_correction" for h in history)
 
     def test_pending_subset_only_applies_missing_step(self, tmp_path, sample_multi_frequency_survey):
         """A file already through --tvg, then run with --tvg --geometric,
         must only apply geometric -- re-running tvg on an already-radiometric
         survey raises by design (prevents double-TVG)."""
-        pre_corrected = run_correction_steps(sample_multi_frequency_survey, {"tvg"})
+        pre_corrected = correct_survey(sample_multi_frequency_survey, ["interpolate_aux", "tvg"])
         path = tmp_path / "survey_b.ss.h5"
         write_survey(pre_corrected, path)
 
@@ -276,11 +330,11 @@ class TestIdempotency:
             sys.argv = old_argv
 
         result = read_survey(path)
-        assert set(_levels(result).values()) == {"radiometric"}
+        assert _all_tvg(result)
         assert _has_var(result, "ground_range_m")
 
     def test_all_steps_already_done_is_skipped(self, tmp_path, sample_multi_frequency_survey):
-        pre_corrected = run_correction_steps(sample_multi_frequency_survey, {"tvg", "geometric"})
+        pre_corrected = correct_survey(sample_multi_frequency_survey, ["interpolate_aux", "tvg", "geometric"])
         path = tmp_path / "survey_c.ss.h5"
         write_survey(pre_corrected, path)
         mtime_before = path.stat().st_mtime_ns

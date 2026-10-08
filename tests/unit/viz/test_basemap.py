@@ -9,6 +9,7 @@ gated tests.
 """
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -19,7 +20,7 @@ cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' ex
 
 from sidescanpy.viz import basemap  # noqa: E402
 
-# A real coastline area (Rhode Island Sound, near project-a's own
+# A real coastline area (Rhode Island Sound, near a real
 # survey) -- deliberately not open ocean, so land is actually expected
 # to render, not just "no crash."
 _LON, _LAT = -71.41, 41.57
@@ -38,8 +39,9 @@ class TestAddLandBackground:
         plt.close(fig)
 
     def test_utm_projected_crs_also_draws_without_error(self):
-        from sidescanpy.grids.definition import utm_crs_for_lonlat
         from pyproj import Transformer
+
+        from sidescanpy.grids.definition import utm_crs_for_lonlat
 
         crs = utm_crs_for_lonlat(_LON, _LAT)
         t = Transformer.from_crs(CRS.from_epsg(4326), crs, always_xy=True)

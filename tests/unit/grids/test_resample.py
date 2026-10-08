@@ -4,18 +4,17 @@ Unit tests for resampling channel data to grids.
 Tests the resample_channel_to_grid() pipeline and aggregation methods.
 """
 
-import pytest
 import numpy as np
+import pytest
 import xarray as xr
 from pyproj import CRS
 
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.grids.resample import (
-    resample_channel_to_grid,
     ResamplingMethod,
+    resample_channel_to_grid,
 )
-
 
 # Helpers to create test channel data
 
@@ -28,7 +27,7 @@ def _make_test_channel(
     Create a minimal SideScanFrequencyChannel-like dataset.
 
     Returns an xarray Dataset with:
-    - backscatter_raw (ping, channel, sample)
+    - backscatter_intensity (ping, channel, sample)
     - latitude_per_sample, longitude_per_sample (ping, channel, sample)
     - Other required fields
 
@@ -59,7 +58,7 @@ def _make_test_channel(
 
     ds = xr.Dataset(
         {
-            "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+            "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
             "latitude_per_sample": (["ping", "channel", "sample"], lat_per_sample),
             "longitude_per_sample": (["ping", "channel", "sample"], lon_per_sample),
             "ping": (["ping"], pings),
@@ -67,7 +66,7 @@ def _make_test_channel(
             "sample": (["sample"], samples),
         },
         attrs={
-            "frequency_hz": freq_hz,
+            "freq_hz_start": freq_hz,
             "processing_level": "raw",
         },
     )
@@ -175,7 +174,8 @@ class TestResampleChannelToGridBasic:
         )
 
         assert raster.channel_name == "455 kHz"
-        assert raster.processing_level == "raw"
+        # Derived from the data: per-sample lat/lon present -> georef.
+        assert raster.processing_level == "georef"
 
 
 class TestResampleChannelToGridNContributing:
@@ -267,9 +267,9 @@ class TestResampleChannelToGridQuality:
 
     def test_mean_is_within_input_range(self, channel, grid):
         """Mean resampling produces values in input range."""
-        backscatter_raw = channel["backscatter_raw"].values
-        min_input = np.nanmin(backscatter_raw)
-        max_input = np.nanmax(backscatter_raw)
+        backscatter_intensity = channel["backscatter_intensity"].values
+        min_input = np.nanmin(backscatter_intensity)
+        max_input = np.nanmax(backscatter_intensity)
 
         raster = resample_channel_to_grid(
             channel,
@@ -279,7 +279,7 @@ class TestResampleChannelToGridQuality:
 
         backscatter_resampled = raster.backscatter
         finite_mask = np.isfinite(backscatter_resampled)
-        
+
         if np.any(finite_mask):
             assert np.nanmin(backscatter_resampled) >= min_input - 1e-6
             assert np.nanmax(backscatter_resampled) <= max_input + 1e-6
@@ -312,7 +312,7 @@ class TestResampleChannelToGridQuality:
 
     def test_median_between_min_max(self, channel, grid):
         """Median aggregation is between min and max."""
-        raster_min = resample_channel_to_grid(
+        _raster_min = resample_channel_to_grid(
             channel,
             grid_def=grid,
             method=ResamplingMethod.NEAREST,  # Proxy for min
@@ -342,7 +342,7 @@ class TestResampleChannelToGridNaN:
         """Resampling handles cells with some NaN samples."""
         channel = _make_test_channel(num_pings=50, samples_per_ping=128)
         # Mask out some samples as NaN
-        channel["backscatter_raw"].values[0:10, :, 0:20] = np.nan
+        channel["backscatter_intensity"].values[0:10, :, 0:20] = np.nan
 
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
@@ -363,7 +363,7 @@ class TestResampleChannelToGridNaN:
         """Channel with all NaN samples raises error (no data to resample)."""
         channel = _make_test_channel(num_pings=5, samples_per_ping=10)
         # Make the channel mostly NaN
-        channel["backscatter_raw"].values[:, :] = np.nan
+        channel["backscatter_intensity"].values[:, :] = np.nan
 
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
@@ -381,7 +381,7 @@ class TestResampleChannelToGridNaN:
     def test_resample_handles_inf(self):
         """Resampling handles inf values gracefully."""
         channel = _make_test_channel(num_pings=50, samples_per_ping=128)
-        channel["backscatter_raw"].values[10, 0, 50] = np.inf
+        channel["backscatter_intensity"].values[10, 0, 50] = np.inf
 
         grid = GridDefinition(
             bbox=(39.0, -71.0, 40.0, -70.0),
@@ -450,7 +450,7 @@ class TestResampleChannelToGridUTM:
         """A physically-invalid latitude (>90, e.g. a corrupted
         georeferencing result or sensor glitch -- not something a
         healthy WGS84 fix ever produces, but not NaN either) can project
-        to a non-finite UTM coordinate. Found via a synthetic vendor-format
+        to a non-finite UTM coordinate. Found via a synthetic
         mission whose fabricated vessel position wandered close enough
         to a pole that its per-sample georeferencing math produced a few
         out-of-range (>90 deg) latitudes. Previously crashed inside
@@ -584,16 +584,6 @@ class TestResampleChannelToGridPerSide:
         """Create a test channel with a real port/starboard channel dimension."""
         return _make_test_channel(num_pings=50, samples_per_ping=128)
 
-    def test_resample_with_port_starboard_separation(self, channel):
-        """Resample can optionally separate port and starboard."""
-        grid = GridDefinition(
-            bbox=(39.0, -71.0, 40.0, -70.0),
-            resolution_m=5000.0,
-        )
-
-        # Per-side separation not yet implemented
-        pytest.skip("Per-side separation deferred to v0.7.0")
-
     def test_resample_default_merges_sides(self, channel):
         """Default resample merges port and starboard."""
         grid = GridDefinition(
@@ -641,14 +631,14 @@ class TestResampleChannelToGridMetadata:
         assert raster.dataset.attrs["resampling_method"] == "mean"
 
     def test_raster_backscatter_has_processing_level(self, channel, grid):
-        """Backscatter variable preserves processing_level."""
+        """The raster carries the channel's derived processing level."""
         raster = resample_channel_to_grid(
             channel,
             grid_def=grid,
             method=ResamplingMethod.MEAN,
         )
 
-        assert raster.processing_level == "raw"
+        assert raster.processing_level == "georef"
 
     def test_raster_dataset_has_source_info(self, channel, grid):
         """Dataset includes source channel frequency."""
@@ -658,7 +648,8 @@ class TestResampleChannelToGridMetadata:
             method=ResamplingMethod.MEAN,
         )
 
-        assert "frequency_hz" in raster.dataset.attrs or raster.channel_name == "455 kHz"
+        assert raster.dataset.attrs["frequency_hz"] == 455_000
+        assert raster.channel_name == "455 kHz"
 
 
 class TestResampleChannelToGrid3DValidation:
@@ -691,21 +682,21 @@ class TestResampleChannelToGrid3DValidation:
         """2D (ping, sample) input raises a clear ValueError, not a silent misread."""
         ds_2d = xr.Dataset(
             {
-                "backscatter_raw": (["ping", "sample"], np.random.rand(20, 32)),
+                "backscatter_intensity": (["ping", "sample"], np.random.rand(20, 32)),
                 "latitude_per_sample": (["ping", "sample"], np.full((20, 32), 39.5)),
                 "longitude_per_sample": (["ping", "sample"], np.full((20, 32), -70.5)),
             },
-            attrs={"frequency_hz": 455_000, "processing_level": "raw"},
+            attrs={"freq_hz_start": 455_000, "processing_level": "raw"},
         )
 
         with pytest.raises(ValueError, match="3D"):
             resample_channel_to_grid(ds_2d, grid_def=grid, method=ResamplingMethod.MEAN)
 
     def test_rejects_mismatched_coordinate_shape(self, channel_3d, grid):
-        """latitude_per_sample shape diverging from backscatter_raw raises ValueError."""
+        """latitude_per_sample shape diverging from backscatter_intensity raises ValueError."""
         bad = channel_3d.copy(deep=True)
         # Collapse the channel dimension on latitude only, producing a
-        # (ping, sample) array against a (ping, channel, sample) backscatter_raw.
+        # (ping, sample) array against a (ping, channel, sample) backscatter_intensity.
         bad["latitude_per_sample"] = bad["latitude_per_sample"].isel(channel=0)
 
         with pytest.raises(ValueError, match="shape"):
@@ -714,8 +705,8 @@ class TestResampleChannelToGrid3DValidation:
     def test_preserves_port_starboard_spatial_distinction(self):
         """
         Port and starboard samples resample into their own distinct grid
-        cells, not a blended average. Regression test for the historical
-        bug described in docs/planning/v0.6.0-gridding-refactor.md.
+        cells, not a blended average. Regression test for an early bug
+        where callers pre-flattened the channel axis before gridding.
         """
         num_pings, num_samples = 30, 20
         lat_track = np.linspace(39.0, 39.01, num_pings)
@@ -732,11 +723,11 @@ class TestResampleChannelToGrid3DValidation:
 
         channel = xr.Dataset(
             {
-                "backscatter_raw": (["ping", "channel", "sample"], backscatter),
+                "backscatter_intensity": (["ping", "channel", "sample"], backscatter),
                 "latitude_per_sample": (["ping", "channel", "sample"], lat3d),
                 "longitude_per_sample": (["ping", "channel", "sample"], lon3d),
             },
-            attrs={"frequency_hz": 455_000, "processing_level": "raw"},
+            attrs={"freq_hz_start": 455_000, "processing_level": "raw"},
         )
 
         grid = GridDefinition(
@@ -765,61 +756,120 @@ class TestResampleChannelToGrid3DValidation:
         assert raster.backscatter.shape == (grid.num_cells_ns, grid.num_cells_ew)
 
     def test_backscatter_var_selects_alternate_variable(self, channel_3d, grid):
-        """
-        backscatter_var lets callers grid a variable other than
-        backscatter_raw (e.g. TVG-corrected backscatter_intensity, which
-        apply_tvg() writes separately, leaving backscatter_raw untouched).
-        """
+        """backscatter_var lets callers grid a variable other than the
+        default backscatter_intensity (e.g. a derived uncorrected copy)."""
         channel = channel_3d.copy(deep=True)
-        # A variable with values clearly distinct from backscatter_raw's
-        # [0, 1) random range, mimicking corrected dB-range data.
-        channel["backscatter_intensity"] = channel["backscatter_raw"] - 100.0
+        channel["backscatter_alt"] = channel["backscatter_intensity"] - 100.0
 
         raster = resample_channel_to_grid(
             channel,
             grid_def=grid,
             method=ResamplingMethod.MEAN,
-            backscatter_var="backscatter_intensity",
+            backscatter_var="backscatter_alt",
         )
 
         finite_values = raster.backscatter[np.isfinite(raster.backscatter)]
         assert np.all(finite_values < -90.0)
-        assert raster.dataset.attrs["backscatter_variable"] == "backscatter_intensity"
+        assert raster.dataset.attrs["backscatter_variable"] == "backscatter_alt"
 
     def test_backscatter_var_missing_raises_clear_error(self, channel_3d, grid):
         """Requesting a backscatter_var absent from the channel raises ValueError."""
-        with pytest.raises(ValueError, match="backscatter_intensity"):
+        with pytest.raises(ValueError, match="backscatter_missing"):
             resample_channel_to_grid(
                 channel_3d,
                 grid_def=grid,
                 method=ResamplingMethod.MEAN,
-                backscatter_var="backscatter_intensity",
+                backscatter_var="backscatter_missing",
             )
 
-    def test_default_var_produces_linear_units(self, channel_3d, grid):
-        """Default backscatter_raw is recorded as linear units."""
+    def test_default_var_without_tvg_produces_linear_units(self, channel_3d, grid):
+        """backscatter_intensity before TVG is recorded as linear units."""
         raster = resample_channel_to_grid(channel_3d, grid_def=grid, method=ResamplingMethod.MEAN)
 
         assert raster.units == "linear"
         assert raster.dataset["backscatter"].attrs["units"] == "linear"
 
-    def test_backscatter_intensity_produces_db_units(self, channel_3d, grid):
-        """
-        backscatter_var="backscatter_intensity" is recorded as dB units,
-        matching apply_tvg()'s documented output convention
-        (processing/radiometric.py). Regression test for a bug where the
-        gridded raster and its colorbar silently claimed "linear" for
-        TVG-corrected dB data.
-        """
-        channel = channel_3d.copy(deep=True)
-        channel["backscatter_intensity"] = channel["backscatter_raw"] - 100.0
+    def test_backscatter_intensity_after_tvg_produces_db_units(self, channel_3d, grid):
+        """backscatter_intensity with a recorded tvg step is recorded as dB
+        units (regression: the raster used to claim "linear" for TVG dB data)."""
+        import json
 
-        raster = resample_channel_to_grid(
-            channel,
-            grid_def=grid,
-            method=ResamplingMethod.MEAN,
-            backscatter_var="backscatter_intensity",
-        )
+        channel = channel_3d.copy(deep=True)
+        channel["backscatter_intensity"] = channel["backscatter_intensity"] - 100.0
+        channel.attrs["processing_history"] = json.dumps([{"step": "tvg", "params": {}}])
+
+        raster = resample_channel_to_grid(channel, grid_def=grid, method=ResamplingMethod.MEAN)
 
         assert raster.units == "dB"
         assert raster.dataset["backscatter"].attrs["units"] == "dB"
+        assert raster.processing_level == "georef"
+
+
+class TestResampleChannelNameFromConverterAttrs:
+    """The raster's channel label comes from ``freq_hz_start`` -- the
+    attribute the JSF/SDF converters actually write -- not a
+    ``frequency_hz`` attribute nothing produces."""
+
+    @pytest.mark.parametrize("freq_start, freq_end, expected", [
+        (455_000, 455_000, "455 kHz"),
+        (1_495_000, 1_495_000, "1495 kHz"),
+        (540_000, 560_000, "540 kHz"),  # chirp: freq_hz_start labels it, as freq_key does
+    ])
+    def test_channel_name_from_converter_built_dataset(self, freq_start, freq_end, expected):
+        from sidescanpy.grids import bbox_from_channel_dataset, utm_grid_from_wgs84_bbox
+        from sidescanpy.processing import correct
+        from tests.conftest import make_minimal_sidescan_dataset
+
+        ds = make_minimal_sidescan_dataset(n_pings=20, n_samples=60, freq_hz_start=freq_start, freq_hz_end=freq_end)
+        ds.attrs["sample_rate_hz"] = 10_000  # 7.5 cm/sample -> 4.5 m slant range
+        ds["altitude_m"] = ("ping", np.full(20, 1.0, dtype=np.float32))
+        ds = correct(ds, ["geometric", "georef"])
+        grid = utm_grid_from_wgs84_bbox(bbox_from_channel_dataset(ds), resolution_m=200.0)
+
+        raster = resample_channel_to_grid(ds, grid)
+
+        assert "frequency_hz" not in ds.attrs
+        assert raster.channel_name == expected
+        assert raster.dataset.attrs["channel_name"] == expected
+        assert raster.dataset.attrs["frequency_hz"] == freq_start
+
+
+class TestGridChannel:
+    """grid_channel: bbox -> auto UTM grid -> resample, as one call."""
+
+    def _small(self):
+        ds = _make_test_channel(num_pings=30, samples_per_ping=40)
+        # ~100 m extent so a 5 m grid stays small
+        ds["latitude_per_sample"] = 39.0 + (ds["latitude_per_sample"] - 39.0) * 1e-3
+        ds["longitude_per_sample"] = -71.0 + (ds["longitude_per_sample"] + 71.0) * 1e-3
+        return ds
+
+    def test_matches_manual_chain(self):
+        from sidescanpy.grids import (
+            bbox_from_channel_dataset,
+            grid_channel,
+            utm_grid_from_wgs84_bbox,
+        )
+
+        ds = self._small()
+        manual = resample_channel_to_grid(
+            ds, utm_grid_from_wgs84_bbox(bbox_from_channel_dataset(ds), resolution_m=5.0), method=ResamplingMethod.MEDIAN,
+        )
+        raster = grid_channel(ds, 5.0, "median")
+        np.testing.assert_array_equal(raster.dataset["backscatter"].values, manual.dataset["backscatter"].values)
+        assert raster.grid_def.crs.is_projected
+
+    def test_backscatter_var_selects_variable(self):
+        from sidescanpy.grids import grid_channel
+
+        ds = self._small()
+        ds["other"] = ds["backscatter_intensity"] * 0 + 7.0
+        raster = grid_channel(ds, 5.0, backscatter_var="other")
+        vals = raster.dataset["backscatter"].values
+        assert np.nanmax(vals) == pytest.approx(7.0) and np.nanmin(vals) == pytest.approx(7.0)
+
+    def test_unknown_method_raises(self):
+        from sidescanpy.grids import grid_channel
+
+        with pytest.raises(ValueError):
+            grid_channel(self._small(), 5.0, "bilinear")

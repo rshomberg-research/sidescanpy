@@ -17,12 +17,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.io.jsf import read_jsf
 from sidescanpy.io.jsf.converter import convert
-from sidescanpy.io.hdf5 import read_survey, write_survey
 
-
-SAMPLE_JSF = Path("tests/data/jsf/sample.jsf")
+SAMPLE_JSF = Path(__file__).resolve().parents[1] / "data" / "jsf" / "sample.jsf"
 
 
 # ============================================================
@@ -122,7 +121,7 @@ class TestRoundTripLazy:
     def test_chunks_param_returns_dask_arrays(self, written_path):
         loaded = read_survey(written_path, chunks={"ping": 256})
         for fk in loaded.frequencies:
-            backscatter = loaded.get_frequency(fk).dataset["backscatter_raw"].variable.data
+            backscatter = loaded.get_frequency(fk).dataset["backscatter_intensity"].variable.data
             assert isinstance(backscatter, da.Array), (
                 f"Frequency {fk} backscatter should be dask-backed under chunks"
             )
@@ -133,8 +132,8 @@ class TestRoundTripLazy:
 
         for fk in real_survey.frequencies:
             np.testing.assert_array_equal(
-                lazy.get_frequency(fk).dataset["backscatter_raw"].values,   # forces compute
-                eager.get_frequency(fk).dataset["backscatter_raw"].values,
+                lazy.get_frequency(fk).dataset["backscatter_intensity"].values,   # forces compute
+                eager.get_frequency(fk).dataset["backscatter_intensity"].values,
             )
 
     def test_aux_records_loaded_eagerly_under_chunks(self, written_path):

@@ -30,8 +30,8 @@ Klein-specific design decisions:
 - pulse_length_us is 0.0 (not provided by Klein).
 - freq_hz_start == freq_hz_end == center_freq_hz.
 - Pages with different num_samples are padded to max with NaN, logged as
-  a warning when it happens (was previously silent). Each ping's true
-  recorded sample count survives padding via the new
+  a warning when it happens. Each ping's true
+  recorded sample count survives padding via the
   `valid_samples` (ping, channel) variable, so downstream code (e.g.
   `processing/farrange.py`) can distinguish real short pings from
   padded filler rather than treating the padded array shape as if every
@@ -65,7 +65,7 @@ from sidescanpy.core.schema import (
     make_empty_navigation_record,
 )
 from sidescanpy.core.survey import SideScanSurvey
-from sidescanpy.io.sdf.pages import SDFSonarPage, SDFUnknownPage
+from sidescanpy.io.sdf.pages import SDFSonarPage
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def convert(
     """Convert SDF pages into a validated SideScanSurvey.
 
     Pages can include both SDFSonarPage and SDFUnknownPage (as yielded
-    by read_sdf). Non-sonar pages are filtered out with an info log.
+    by read_sdf). Non-sonar pages are filtered out with a debug log.
 
     Parameters
     ----------
@@ -112,7 +112,7 @@ def convert(
     n_unknown = len(pages_list) - len(sonar_pages)
 
     if n_unknown > 0:
-        logger.info(
+        logger.debug(
             f"Filtered {n_unknown} non-sonar pages from input "
             f"(kept {len(sonar_pages)} sonar pages)"
         )
@@ -128,7 +128,7 @@ def convert(
     elif survey_name is None:
         survey_name = "untitled_survey"
 
-    logger.info(
+    logger.debug(
         f"Converting {len(sonar_pages)} SDF sonar pages → SideScanSurvey "
         f"(name={survey_name!r})"
     )
@@ -142,7 +142,7 @@ def convert(
     for freq_hz in freq_groups:
         freq_groups[freq_hz].sort(key=lambda p: p.ping_number)
 
-    logger.info(f"  {len(freq_groups)} frequency channel(s)")
+    logger.debug(f"  {len(freq_groups)} frequency channel(s)")
 
     # Build a frequency channel per group
     survey = SideScanSurvey(
@@ -156,7 +156,7 @@ def convert(
         ds = _build_channel_dataset(freq_hz, group_pages)
         survey.add_frequency(freq_key, ds)
         ch = survey.get_frequency(freq_key)
-        logger.info(
+        logger.debug(
             f"  {freq_key}: {ch.n_pings} pings × 2 channels × "
             f"{ch.n_samples} samples"
         )
@@ -254,7 +254,6 @@ def _build_channel_dataset(
         "freq_hz_end": int(freq_hz),
         "sample_rate_hz": float(sample_rate_hz),
         "pulse_length_us": 0.0,
-        "processing_level": "raw",
         "processing_history": json.dumps([]),
     }
 
@@ -268,8 +267,7 @@ def _build_channel_dataset(
     }
 
     data_vars = {
-        "backscatter_intensity": (["ping", "channel", "sample"], bs.copy()),
-        "backscatter_raw": (["ping", "channel", "sample"], bs.copy()),
+        "backscatter_intensity": (["ping", "channel", "sample"], bs),
         "valid_samples": (["ping", "channel"], valid_samples),
         "latitude": (["ping"], latitudes),
         "longitude": (["ping"], longitudes),
@@ -378,4 +376,4 @@ def _build_attitude_record(pages: list[SDFSonarPage]) -> xr.Dataset:
         },
         coords={"time": (("obs",), times)},
         attrs={"source": "extracted_from_sdf_pages"},
-    )        
+    )

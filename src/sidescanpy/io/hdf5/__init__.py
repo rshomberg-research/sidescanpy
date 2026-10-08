@@ -17,6 +17,12 @@ Public entry points
 - :func:`write_survey` — write a survey to disk with grouped layout
   and per-variable encoding.
 
+- :func:`read_survey_dir`, :func:`load_channel_dataset`,
+  :func:`available_frequencies`, :func:`concat_survey_frequency` —
+  multi-file directory reading (see ``survey_dir``).
+- :func:`check_disk_space`, :func:`atomic_write_survey` — in-place
+  rewrite support.
+
 File layout
 -----------
 ::
@@ -51,6 +57,25 @@ See ``docs/io_hdf5.md`` for full reference.
 """
 
 from sidescanpy.io.hdf5.reader import read_survey
+from sidescanpy.io.hdf5.survey_dir import (
+    atomic_write_survey,
+    available_frequencies,
+    check_disk_space,
+    concat_survey_frequency,
+    load_channel_dataset,
+    read_survey_dir,
+    read_survey_pings,
+)
 from sidescanpy.io.hdf5.writer import write_survey
 
-__all__ = ["read_survey", "write_survey"]
+__all__ = [
+    "read_survey",
+    "write_survey",
+    "read_survey_dir",
+    "read_survey_pings",
+    "concat_survey_frequency",
+    "available_frequencies",
+    "load_channel_dataset",
+    "check_disk_space",
+    "atomic_write_survey",
+]

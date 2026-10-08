@@ -16,10 +16,10 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.core.schema import (
-    HDF5_GROUP_FREQUENCIES,
-    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_ATTITUDE,
     HDF5_GROUP_DVL,
+    HDF5_GROUP_FREQUENCIES,
+    HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_SENSORS,
 )
 from sidescanpy.core.survey import SideScanSurvey
@@ -38,7 +38,7 @@ def read_survey(
     """
     Read a .ss.h5 file back into a SideScanSurvey.
 
-Parameters
+    Parameters
     ----------
     path : Path or str
         Source file path.

@@ -8,7 +8,6 @@ survive serialization. This is the load-bearing guarantee of the HDF5 module.
 2026 rshomberg@uri.edu
 """
 
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,7 +15,6 @@ import xarray as xr
 
 from sidescanpy.io.hdf5.reader import read_survey
 from sidescanpy.io.hdf5.writer import write_survey
-
 
 # ============================================================
 # FULL SURVEY ROUND-TRIP
@@ -267,7 +265,7 @@ class TestRoundTripAttrs:
             for key in (
                 "freq_hz_start", "freq_hz_end",
                 "pulse_length_us", "sample_rate_hz",
-                "processing_level", "processing_history",
+                "processing_history",
             ):
                 assert new[key] == orig[key]
 

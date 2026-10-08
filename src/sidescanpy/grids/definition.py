@@ -7,7 +7,7 @@ No data — just the schema/contract.
 """
 
 import logging
-from typing import NamedTuple, Tuple
+from typing import Tuple
 
 import numpy as np
 from pyproj import CRS, Geod, Transformer
@@ -104,11 +104,9 @@ class GridDefinition:
         Euclidean distance. Web Mercator's vertical scale is
         1/cos(latitude), so a Euclidean distance in its projected meters
         overstates true ground distance away from the equator (e.g.
-        ~39% too large at 44°N) — this silently made extent_m_ns/
+        ~39% too large at 44°N) — that would make extent_m_ns/
         extent_m_ew, and therefore num_cells_ns/num_cells_ew, wrong for
-        any WGS84 grid away from the equator. Fixed 2026-07-02; found
-        while investigating why gridded output looked noisier than
-        expected relative to the requested resolution_m.
+        any WGS84 grid away from the equator.
         """
         if self.crs.to_epsg() != 4326:
             raise RuntimeError(
@@ -195,6 +193,16 @@ class GridDefinition:
         """
         south, west, north, east = self.bbox
 
+        # Note: ceil(extent / resolution_m) centers are *stretched* across
+        # the bbox, so the real center spacing is (extent - res) / (n - 1),
+        # not resolution_m (e.g. extent 100.5 m at 1 m -> 101 cells 0.995 m
+        # apart). The 111000 m/deg constants below only set the half-cell
+        # inset at the bbox edges (<0.6% of half a cell vs. the ellipsoid),
+        # so they are not an accuracy issue.
+        # TODO(lib): affine.Affine origin + n * resolution_m (rioxarray
+        # coords from a transform) would give pixel-exact spacing; changes
+        # every grid by up to one cell's stretch, so needs a parity test
+        # bounding the center shift (<= resolution_m / 2) and a decision.
         if self.crs.to_epsg() == 4326:
             # Geographic; generate lat/lon grid
             # For latitude, step linearly (acceptable small error)
@@ -259,6 +267,10 @@ class GridDefinition:
                 crs=target_crs,
             )
 
+        # TODO(lib): pyproj Transformer.transform_bounds(..., densify_pts=n)
+        # replaces the hand-rolled corner + 10-point edge densification
+        # below; needs a parity test on the resulting bbox (equal to
+        # float tolerance at densify_pts=9, same 11 points per edge).
         transformer = Transformer.from_crs(self.crs, target_crs, always_xy=True)
 
         south, west, north, east = self.bbox
@@ -274,15 +286,15 @@ class GridDefinition:
             ]
             # Sample edges densely to capture distortion
             n_edge_samples = 10
-            south_edge = [(west + i * (east - west) / n_edge_samples, south) 
+            south_edge = [(west + i * (east - west) / n_edge_samples, south)
                           for i in range(n_edge_samples + 1)]
-            north_edge = [(west + i * (east - west) / n_edge_samples, north) 
+            north_edge = [(west + i * (east - west) / n_edge_samples, north)
                           for i in range(n_edge_samples + 1)]
-            west_edge = [(west, south + i * (north - south) / n_edge_samples) 
+            west_edge = [(west, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            east_edge = [(east, south + i * (north - south) / n_edge_samples) 
+            east_edge = [(east, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            
+
             points_to_transform = corners + south_edge + north_edge + west_edge + east_edge
         else:
             # (x, y) order for projected
@@ -293,15 +305,15 @@ class GridDefinition:
                 (east, south),
             ]
             n_edge_samples = 10
-            south_edge = [(west + i * (east - west) / n_edge_samples, south) 
+            south_edge = [(west + i * (east - west) / n_edge_samples, south)
                           for i in range(n_edge_samples + 1)]
-            north_edge = [(west + i * (east - west) / n_edge_samples, north) 
+            north_edge = [(west + i * (east - west) / n_edge_samples, north)
                           for i in range(n_edge_samples + 1)]
-            west_edge = [(west, south + i * (north - south) / n_edge_samples) 
+            west_edge = [(west, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            east_edge = [(east, south + i * (north - south) / n_edge_samples) 
+            east_edge = [(east, south + i * (north - south) / n_edge_samples)
                          for i in range(n_edge_samples + 1)]
-            
+
             points_to_transform = corners + south_edge + north_edge + west_edge + east_edge
 
         transformed_points = [transformer.transform(x, y) for x, y in points_to_transform]
@@ -376,6 +388,9 @@ def utm_crs_for_lonlat(lon: float, lat: float) -> CRS:
     pyproj.CRS
         WGS84 / UTM zone CRS (EPSG 32601-32660 or 32701-32760).
     """
+    # TODO(lib): pyproj.database.query_utm_crs_info(area_of_interest=...)
+    # does this lookup (incl. the Norway/Svalbard zone exceptions); needs
+    # a parity test over a lon/lat sweep (differs only in those zones).
     zone = int((lon + 180) // 6) + 1
     zone = min(max(zone, 1), 60)
     epsg = 32600 + zone if lat >= 0 else 32700 + zone
@@ -421,10 +436,7 @@ def bbox_from_channel_dataset(
     per-sample lat/lon extent, with a small margin so edge cells aren't
     clipped.
 
-    Promoted from a project-local helper (``auto_grid_bbox`` in
-    ``project-a/scripts/visualization_demo.py``) — same logic, renamed
-    to fit this module's existing ``utm_crs_for_lonlat``/
-    ``utm_grid_from_wgs84_bbox`` naming. Typically the first step before
+    Typically the first step before
     ``utm_grid_from_wgs84_bbox`` when auto-fitting a grid to a segment.
 
     Parameters
@@ -449,8 +461,8 @@ def bbox_from_channel_dataset(
     lats = ds["latitude_per_sample"].values
     lons = ds["longitude_per_sample"].values
     # Finite alone isn't enough -- a physically-invalid-but-finite value
-    # (e.g. lat=103 deg, found via a synthetic-data exercise tracing to a
-    # corrupted compute_georeferencing() result) can blow up this bbox's
+    # (e.g. lat=103 deg from a corrupted
+    # compute_georeferencing() result) can blow up this bbox's
     # extent, which then blows up an auto-selected UTM grid's cell count
     # downstream (OverflowError converting an infinite cell count to
     # int). One bad sample in an otherwise-good survey shouldn't be able

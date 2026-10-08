@@ -16,7 +16,7 @@ class TestResolveFreqKeys:
 
     def test_falls_back_to_literal_freq_key_for_non_hz_naming(self):
         """Not every consumer uses JSF/SDF's "hz_<freq>" convention (e.g.
-        vendor-format's "sensor1_data1") -- a request that doesn't match any
+        a vendor HDF5 format's "sensor1_data1") -- a request that doesn't match any
         "hz_"-prefixed key should resolve to itself, not silently produce
         a freq_key that doesn't exist anywhere."""
         assert resolve_freq_keys(["sensor1_data1", "sensor1_data2"], "sensor1_data1") == ["sensor1_data1"]

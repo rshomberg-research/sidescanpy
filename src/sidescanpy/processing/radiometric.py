@@ -14,21 +14,37 @@ TVG correction adds these losses back, so equal backscatter at different ranges
 produces equal corrected values. This is essential for radiometric calibration
 and mosaic generation.
 
-Raw backscatter from this sonar is in LINEAR AMPLITUDE (0-81 range, float32).
-This module converts to dB, applies TVG, and outputs in dB.
+The default absorption coefficient comes from the Francois-Garrison seawater
+absorption model (:func:`francois_garrison_absorption_db_per_m`):
+
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part I: Pure water and magnesium sulfate contributions," J. Acoust. Soc. Am. 72(3), 896-907 (1982).
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part II: Boric acid contribution and equation for total absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982).
+
+Input backscatter is assumed to be linear amplitude; this module converts to
+dB, applies TVG, and outputs dB. The step is recorded in ``processing_history``
+with its resolved parameters so it can be inverted exactly.
 
 2026 rshomberg@uri.edu
 """
 
-import json
 import logging
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
 
 import numpy as np
 import xarray as xr
 
+from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_TVG, append_history, has_step
+from sidescanpy.core.units import linear_to_db
+from sidescanpy.processing.sample_axis import DEFAULT_SOUND_VEL_MS, sample_index
+
 logger = logging.getLogger(__name__)
+
+# "Typical coastal" water used when the caller gives no conditions.
+DEFAULT_TEMPERATURE_C = 10.0
+DEFAULT_SALINITY_PSU = 35.0
+DEFAULT_DEPTH_M = 10.0
+DEFAULT_PH = 8.0
 
 
 @dataclass
@@ -43,60 +59,123 @@ class TVGParams:
         Standard value is 20.0 for spherical spreading in 3D.
     absorption_db_per_m : float, optional
         Absorption coefficient (dB per meter).
-        If None, uses frequency-dependent default from absorption_for_frequency().
+        If None, derived from the channel frequency with
+        :func:`francois_garrison_absorption_db_per_m` (Francois & Garrison,
+        J. Acoust. Soc. Am. 72(3) 896-907 and 72(6) 1879-1890, 1982) and the
+        four water parameters below (typical-coastal defaults where None).
     min_range_m : float, default=0.5
         Minimum range threshold (meters).
         Ranges below this are clipped to avoid log(0) singularity.
         Typical value 0.5 m accounts for transducer blanking.
+    sound_velocity_ms : float, optional
+        Sound velocity (m/s) used to turn sample index into slant range.
+        If None, the mean of the dataset's per-ping ``sound_vel_ms``.
+    temperature_c, salinity_psu, depth_m, ph : float, optional
+        Water conditions for the Francois-Garrison absorption; used only
+        when ``absorption_db_per_m`` is None (defaults 10 C, 35 psu, 10 m,
+        pH 8 -- pass real values when known).
     """
 
     spreading_loss_db: float = 20.0
-    absorption_db_per_m: float = None
+    absorption_db_per_m: float | None = None
     min_range_m: float = 0.5
+    sound_velocity_ms: float | None = None
+    temperature_c: float | None = None
+    salinity_psu: float | None = None
+    depth_m: float | None = None
+    ph: float | None = None
 
 
-def absorption_for_frequency(freq_hz: float) -> float:
+def francois_garrison_absorption_db_per_m(
+    frequency_hz,
+    *,
+    temperature_c: float = DEFAULT_TEMPERATURE_C,
+    salinity_psu: float = DEFAULT_SALINITY_PSU,
+    depth_m: float = DEFAULT_DEPTH_M,
+    ph: float = DEFAULT_PH,
+    sound_velocity_ms: float | None = None,
+):
     """
-    Return a reasonable default absorption coefficient (dB/m) by frequency.
+    Seawater sound absorption (dB/m, one-way) after Francois & Garrison (1982).
 
-    Uses simplified Francois-Garrison values for typical coastal seawater
-    (T=10°C, S=35 ppt, pH=8, D=10 m). For precise values, compute using
-    the full Francois-Garrison formula with CTD data.
+    Sum of three relaxation / viscosity terms (``f`` in kHz, result in dB/km
+    before conversion)::
+
+        alpha = A1 P1 f1 f^2 / (f1^2 + f^2)      boric acid
+              + A2 P2 f2 f^2 / (f2^2 + f^2)      magnesium sulfate
+              + A3 P3 f^2                        pure water (viscosity)
+
+    with the paper's coefficients: ``f1 = 2.8 sqrt(S/35) 10^(4 - 1245/(T+273))``,
+    ``f2 = 8.17 10^(8 - 1990/(T+273)) / (1 + 0.0018 (S - 35))``, ``A3`` having
+    separate polynomial branches for ``T <= 20 C`` and ``T > 20 C``, and
+    depth factors ``P2``, ``P3``. Valid roughly 0.4 - 1000 kHz, -1.8 to 30 C,
+    S 30-35 psu, depth 0 - 6 km.
+
+    References
+    ----------
+    .. [1] R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part I: Pure water and magnesium sulfate contributions," J. Acoust. Soc. Am. 72(3), 896-907 (1982)
+           (pure water and magnesium sulfate terms).
+    .. [2] R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part II: Boric acid contribution and equation for total absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982)
+           (boric acid term and the equation for total absorption).
+
+    The defaults are "typical coastal" values (10 C, 35 psu, 10 m, pH 8),
+    not a measurement: callers with real conditions should pass their own.
 
     Parameters
     ----------
-    freq_hz : float
-        Sonar transmit frequency (Hz).
+    frequency_hz : float or array_like
+        Frequency (Hz). Vectorised.
+    temperature_c, salinity_psu, depth_m, ph : float
+        Water conditions (degrees C, practical salinity units, metres, pH).
+    sound_velocity_ms : float, optional
+        Sound speed (m/s) in the relaxation-amplitude terms. Default: the
+        paper's own ``c = 1412 + 3.21 T + 1.19 S + 0.0167 D``.
 
     Returns
     -------
-    float
-        Absorption coefficient (dB/m).
-
-    Notes
-    -----
-    Francois-Garrison formula is implemented as:
-        alpha = A1*P1*f1*f^2/(f1^2 + f^2) + A2*P2*f2*f^2/(f2^2 + f^2) + A3*P3*f^2
-    Where:
-        - First term: boric acid relaxation (~1 kHz)
-        - Second term: MgSO4 relaxation (~100 kHz, dominant for 500-1500 kHz)
-        - Third term: pure water viscosity
-
-    Reference values (typical coastal seawater):
-        - 100 kHz: ~0.01 dB/m
-        - 547.5 kHz: ~0.10 dB/m
-        - 1495 kHz: ~0.20 dB/m
+    float or np.ndarray
+        Absorption coefficient in dB per metre (the paper's dB/km / 1000),
+        a float for scalar input.
     """
-    # TODO: replace with more accurate function
-    if freq_hz >= 1_000_000:
-        # ~1.5 MHz and above
-        return 0.20
-    elif freq_hz >= 400_000:
-        # ~547.5 kHz
-        return 0.10
+    f_khz = np.asarray(frequency_hz, dtype=np.float64) / 1000.0
+    t, s, d = float(temperature_c), float(salinity_psu), float(depth_m)
+    c = 1412.0 + 3.21 * t + 1.19 * s + 0.0167 * d if sound_velocity_ms is None else float(sound_velocity_ms)
+    kelvin = t + 273.0
+
+    # Boric acid term: Part II (JASA 72(6), 1879-1890), eqs. for A1, P1 (=1), f1
+    a1 = 8.86 / c * 10.0 ** (0.78 * ph - 5.0)
+    f1 = 2.8 * np.sqrt(s / 35.0) * 10.0 ** (4.0 - 1245.0 / kelvin)
+    # Magnesium sulfate term: Part I (JASA 72(3), 896-907), eqs. for A2, P2, f2
+    a2 = 21.44 * s / c * (1.0 + 0.025 * t)
+    p2 = 1.0 - 1.37e-4 * d + 6.2e-9 * d * d
+    f2 = 8.17 * 10.0 ** (8.0 - 1990.0 / kelvin) / (1.0 + 0.0018 * (s - 35.0))
+    # Pure-water term: Part I (JASA 72(3), 896-907), eqs. for A3 (two T branches at 20 C), P3
+    if t <= 20.0:
+        a3 = 4.937e-4 - 2.59e-5 * t + 9.11e-7 * t**2 - 1.50e-8 * t**3
     else:
-        # Lower frequencies
-        return 0.05
+        a3 = 3.964e-4 - 1.146e-5 * t + 1.45e-7 * t**2 - 6.5e-10 * t**3
+    p3 = 1.0 - 3.83e-5 * d + 4.9e-10 * d * d
+
+    f2_sq = f_khz * f_khz
+    # Total absorption: Part II (JASA 72(6)), sum of the three terms
+    alpha_db_per_km = (
+        a1 * f1 * f2_sq / (f1 * f1 + f2_sq)
+        + a2 * p2 * f2 * f2_sq / (f2 * f2 + f2_sq)
+        + a3 * p3 * f2_sq
+    )
+    alpha_db_per_m = alpha_db_per_km / 1000.0
+    return float(alpha_db_per_m) if alpha_db_per_m.ndim == 0 else alpha_db_per_m
+
+
+def absorption_for_frequency(frequency_hz, **env):
+    """
+    Default absorption coefficient (dB/m, one-way) for a sonar frequency.
+
+    Thin wrapper over :func:`francois_garrison_absorption_db_per_m`; ``env``
+    (``temperature_c, salinity_psu, depth_m, ph, sound_velocity_ms``) is
+    passed through, defaulting to its typical-coastal-water values.
+    """
+    return francois_garrison_absorption_db_per_m(frequency_hz, **env)
 
 
 def tvg_gain_db(range_m: np.ndarray, params: TVGParams) -> np.ndarray:
@@ -126,6 +205,7 @@ def apply_tvg_to_amplitude(
     *,
     params: TVGParams | None = None,
     freq_hz: float | None = None,
+    sample_idx: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Apply TVG correction to a plain linear-amplitude array — no xarray
@@ -155,6 +235,10 @@ def apply_tvg_to_amplitude(
         Used only when ``params`` is ``None`` (or has no
         ``absorption_db_per_m`` set), to derive a default via
         ``absorption_for_frequency()``.
+    sample_idx : np.ndarray, optional
+        Absolute sample index of each position on the last axis. Defaults
+        to ``arange(n_samples)`` (the array starts at the ping's first
+        recorded sample); pass it when leading samples were cropped off.
 
     Returns
     -------
@@ -181,8 +265,10 @@ def apply_tvg_to_amplitude(
         )
 
     n_samples = amplitude.shape[-1]
-    amplitude_db = 20.0 * np.log10(np.clip(amplitude, 1e-6, None))
-    range_m = np.arange(n_samples, dtype=np.float64) * meters_per_sample
+    amplitude_db = linear_to_db(amplitude)
+    idx = np.arange(n_samples, dtype=np.float64) if sample_idx is None \
+        else np.asarray(sample_idx, dtype=np.float64)
+    range_m = idx * meters_per_sample
     range_m = np.clip(range_m, params.min_range_m, None)
     gain_db = tvg_gain_db(range_m, params)
     return amplitude_db + gain_db
@@ -190,230 +276,139 @@ def apply_tvg_to_amplitude(
 
 def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     """
-    Apply time-varying gain (TVG) correction to raw backscatter_intensity.
+    Apply time-varying gain (TVG) correction to ``backscatter_intensity``.
 
     Compensates for geometric spreading and acoustic absorption losses.
-    Converts raw linear amplitude to dB, applies TVG gain, and returns
-    corrected dB values.
+    Converts linear amplitude to dB (``20*log10(clip(x, 1e-6))``, see
+    :mod:`sidescanpy.core.units`), adds the TVG gain for each sample's slant
+    range, and returns corrected dB values in place of the input.
 
-    **IMPORTANT**: Raw backscatter_intensity is assumed to be in LINEAR AMPLITUDE
-    (0-81 range, float32). This function converts to dB internally.
+    Input ``backscatter_intensity`` is assumed to be linear amplitude; the
+    library does not check this (what units the input data is in is the
+    caller's knowledge). Exact-zero amplitude maps to the -120 dB floor.
 
-    Conversion: 20 * log10(clip(linear_value, 1e-6))
-    - Values < 1e-6 are clipped to prevent log(0)
-    - Maps to approximately -120 dB (well below noise floor)
-    - Preserves zero values appropriately (water column)
-
-    **KNOWN ISSUE (unconfirmed root cause, under investigation as of
-    2026-07-02):** the "water column" assumption above for the clipped-
-    to-floor population is not yet confirmed. On real data, ~1% of
-    samples hit this exact floor, clustered in a fixed leading run of
-    ~50-60 samples at the *start* of every ping (not scattered through
-    the range, not correlated with `altitude_m`), and — critically —
-    `ground_range_m` at those samples does *not* collapse toward zero
-    the way genuine water-column returns should (see
-    `processing/geometric.py`'s `compute_geometric_ranges` masking).
-    Whatever these samples are, the existing water-column mask isn't
-    catching them, so they pass `resample_channel_to_grid()`'s
-    finite-coordinate filter and get included in gridding — see
-    `docs/planning/handoff-tvg-range-residual.md` and `CLAUDE.md` Known
-    Issues #4-#5 for the full evidence and a related, separately
-    confirmed ~37 dB range-dependent TVG residual found in the same
-    investigation.
+    The step is recorded in ``processing_history`` as ``"tvg"`` with the
+    parameters actually used (defaults resolved), which is what
+    :func:`sidescanpy.processing.correct.invert` reads to undo it.
 
     Parameters
     ----------
     ds : xr.Dataset
-        Valid frequency channel dataset with processing_level == "raw".
-        Must have:
-        - backscatter_intensity (ping, channel, sample) in linear amplitude
-        - sound_vel_ms (ping) - sound velocity per ping
-        - altitude_m (ping) - altitude above bottom
-        Attributes must include:
-        - freq_hz_start, sample_rate_hz (from schema)
-        - processing_level == "raw"
-        - processing_history (JSON string)
-
+        Frequency channel dataset; needs ``backscatter_intensity``,
+        ``sound_vel_ms`` and the ``freq_hz_start``/``sample_rate_hz`` attrs.
     params : TVGParams, optional
-        TVG parameters. If None, uses frequency-appropriate defaults.
-        If params.absorption_db_per_m is None, derives from freq_hz_start.
+        If None, defaults with ``absorption_db_per_m`` derived from
+        ``freq_hz_start`` and ``sound_velocity_ms`` from the mean per-ping
+        ``sound_vel_ms``. The caller's object is never modified.
 
     Returns
     -------
     xr.Dataset
-        New dataset with:
-        - backscatter_intensity: TVG-corrected dB values
-        - backscatter_raw: original linear values (for reference)
-        - processing_level: "radiometric"
-        - processing_history: appended with TVG step
+        New dataset with TVG-corrected dB ``backscatter_intensity`` and the
+        ``"tvg"`` history record appended.
 
     Raises
     ------
     ValueError
-        If processing_level is not "raw" (prevents double-application).
-
-    Examples
-    --------
-    >>> import xarray as xr
-    >>> from sidescanpy.processing.radiometric import apply_tvg, TVGParams
-    >>>
-    >>> # Load raw data
-    >>> ds_raw = xr.open_dataset("survey.ss.h5", group="frequencies/hz_1495000",
-    ...                           engine="h5netcdf")
-    >>>
-    >>> # Apply TVG with defaults
-    >>> ds_tvg = apply_tvg(ds_raw)
-    >>>
-    >>> # Or specify custom absorption
-    >>> params = TVGParams(absorption_db_per_m=0.25)
-    >>> ds_tvg = apply_tvg(ds_raw, params)
-    >>>
-    >>> # Save corrected data
-    >>> ds_tvg.to_netcdf("survey.radiometric.nc")
+        If TVG has already been applied (prevents double application).
     """
-    # Validate input dataset
     ds.sidescan.validate()
+    if has_step(ds, STEP_TVG):
+        raise ValueError("TVG has already been applied to this dataset (found in processing_history).")
 
-    # Check processing level
-    if ds.attrs["processing_level"] != "raw":
-        raise ValueError(
-            f"TVG expects processing_level 'raw', got '{ds.attrs['processing_level']}'. "
-            "Has TVG already been applied?"
-        )
-
-    # Set default parameters if needed
-    if params is None:
-        freq_hz = ds.attrs["freq_hz_start"]
-        alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(absorption_db_per_m=alpha)
-    elif params.absorption_db_per_m is None:
-        params.absorption_db_per_m = absorption_for_frequency(
-            ds.attrs["freq_hz_start"]
-        )
-
+    params = resolve_tvg_params(ds, params)
     logger.debug(
-        "Applying TVG: freq=%s Hz, spreading=%.1f dB/dec, absorption=%.4f dB/m",
-        ds.attrs["freq_hz_start"],
-        params.spreading_loss_db,
-        params.absorption_db_per_m,
+        "Applying TVG: freq=%s Hz, spreading=%.1f dB/dec, absorption=%.4f dB/m, "
+        "min_range=%.2f m, sound_velocity=%.1f m/s",
+        ds.attrs["freq_hz_start"], params.spreading_loss_db, params.absorption_db_per_m,
+        params.min_range_m, params.sound_velocity_ms,
     )
 
-    # ========================================================================
-    # Step 1: Convert raw linear amplitude to dB
-    # ========================================================================
-    # Raw values are in range 0-81 (float32)
-    # Convert to dB: 20*log10(linear_value)
-    # Clip minimum value to avoid log(0): values < 1e-6 map to ~-120 dB
-    raw_linear = ds["backscatter_intensity"]
-    raw_clipped = raw_linear.clip(min=1e-6)
-    backscatter_db = 20.0 * np.log10(raw_clipped)
-
-    logger.debug(
-        "Linear→dB conversion: min=%.2f dB, max=%.2f dB, mean=%.2f dB",
-        float(backscatter_db.min()),
-        float(backscatter_db.max()),
-        float(backscatter_db.mean()),
-    )
-
-    # ========================================================================
-    # Step 2: Compute slant range array for each sample
-    # ========================================================================
-    # Range for sample i: R[i] = i * (sound_velocity / (2 * sample_rate))
-    sample_rate = ds.attrs["sample_rate_hz"]
-    n_samples = ds.sizes["sample"]
-    sound_velocity = ds["sound_vel_ms"].mean().item()  # scalar, m/s
-    # FIXME: sound_velocity should change at each ping
-    # 2026-07-16: widened to also catch exactly-zero (not just NaN) —
-    # confirmed on real JSF data that sound_vel_ms is exactly 0.0 for 100%
-    # of pings in at least one survey, which silently pinned every
-    # sample's slant range at min_range_m (see
-    # docs/planning/handoff-tvg-sound-velocity-zero-bug.md). Matches
-    # geometric.py's already-correct `invalid_sv` check.
-    if np.isnan(sound_velocity) or sound_velocity <= 0:
-        sound_velocity = 1500.0
-
-    sample_interval_m = sound_velocity / (2.0 * sample_rate)
-    slant_range = np.arange(n_samples, dtype=np.float32) * sample_interval_m
-    slant_range = np.clip(slant_range, params.min_range_m, None)
-
-    logger.debug(
-        "Slant range: sample_interval=%.4f m, max_range=%.1f m",
-        sample_interval_m,
-        float(slant_range[-1]),
-    )
-
-    # ========================================================================
-    # Step 3: Compute TVG gain (dB) for each sample
-    # ========================================================================
-    # TVG = spreading_loss + absorption_loss — see tvg_gain_db() docstring
-    tvg_db = tvg_gain_db(slant_range, params)
-
-    logger.debug(
-        "TVG gains: min=%.2f dB, max=%.2f dB (at %.1f m)",
-        float(tvg_db[0]),
-        float(tvg_db[-1]),
-        float(slant_range[-1]),
-    )
-
-    # FIXME: I am not 100% sure that the backscatter values are in intensity.
-    # They could be in -db. The range is about 0-80, while db expectations would
-    # be -80 to 0
-
-    # ========================================================================
-    # Step 4: Apply TVG correction
-    # ========================================================================
-    # corrected = backscatter_db + tvg_db
-    # tvg_db has shape (n_samples,) and broadcasts over (ping, channel, sample)
+    backscatter_db = linear_to_db(ds["backscatter_intensity"])
+    # Keep the input dtype (float32): never upcast the big array.
+    tvg_db = tvg_gain_for_dataset(ds, params).astype(backscatter_db.dtype)
     corrected_db = backscatter_db + xr.DataArray(tvg_db, dims=["sample"])
-    # corrected_db = np.clip(corrected_db, 0, None)   # FIXME: fix the clipping
 
-    logger.debug(
-        "After TVG: min=%.2f dB, max=%.2f dB, mean=%.2f dB",
-        float(corrected_db.min()),
-        float(corrected_db.max()),
-        float(corrected_db.mean()),
+    ds_out = ds.copy(deep=False)
+    ds_out = ds_out.assign(backscatter_intensity=corrected_db)
+    return append_history(
+        ds_out, STEP_TVG, tvg_params_record(params),
+        function="sidescanpy.processing.radiometric.apply_tvg", version=__version__,
     )
 
-    # ========================================================================
-    # Step 5: Build output dataset
-    # ========================================================================
-    ds_out = ds.copy(deep=False)             # shallow — share refs
-    ds_out.attrs = dict(ds.attrs)             # shallow but with our own attrs dict
-    ds_out = ds_out.assign(
-        backscatter_intensity=corrected_db,    # replaces ref to old array
-    )    
-    # ds_out["backscatter_intensity"] = corrected_db
-    # ds_out["backscatter_raw"] = backscatter_db  # Store dB version for reference
 
-    # ========================================================================
-    # Step 6: Update processing provenance
-    # ========================================================================
-    history = json.loads(ds.attrs["processing_history"])
-    history.append(
-        {
-            "step": "tvg_correction",
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "params": {
-                "spreading_loss_db": params.spreading_loss_db,
-                "absorption_db_per_m": params.absorption_db_per_m,
-                "min_range_m": params.min_range_m,
-                "sound_velocity_source": "mean_of_per_ping_values",
-                "sound_velocity_used_ms": float(sound_velocity),
-            },
-            "unit_conversion": {
-                "raw_format": "linear_amplitude (0-81)",
-                "conversion": "20*log10(clip(value, 1e-6))",
-                "output_format": "dB",
-            },
-            "function": "sidescanpy.processing.radiometric.apply_tvg",
-        }
+def resolve_tvg_params(ds: xr.Dataset, params: TVGParams | None) -> TVGParams:
+    """Fill a TVGParams' unset fields from ``ds`` (new object; input untouched).
+
+    ``absorption_db_per_m=None`` -> :func:`absorption_for_frequency` of
+    ``freq_hz_start``; ``sound_velocity_ms=None`` -> mean of the per-ping
+    ``sound_vel_ms`` (NaN or non-positive mean falls back to 1500 m/s).
+    """
+    params = TVGParams() if params is None else replace(params)
+    if params.absorption_db_per_m is None:
+        params.temperature_c = DEFAULT_TEMPERATURE_C if params.temperature_c is None else params.temperature_c
+        params.salinity_psu = DEFAULT_SALINITY_PSU if params.salinity_psu is None else params.salinity_psu
+        params.depth_m = DEFAULT_DEPTH_M if params.depth_m is None else params.depth_m
+        params.ph = DEFAULT_PH if params.ph is None else params.ph
+        params.absorption_db_per_m = francois_garrison_absorption_db_per_m(
+            ds.attrs["freq_hz_start"], temperature_c=params.temperature_c, salinity_psu=params.salinity_psu,
+            depth_m=params.depth_m, ph=params.ph,
+        )
+        logger.debug(
+            "TVG absorption (Francois-Garrison, T=%.1f C, S=%.1f psu, D=%.1f m, pH=%.2f) for %s Hz: %.5f dB/m",
+            params.temperature_c, params.salinity_psu, params.depth_m, params.ph,
+            ds.attrs["freq_hz_start"], params.absorption_db_per_m,
+        )
+    elif any(v is not None for v in (params.temperature_c, params.salinity_psu, params.depth_m, params.ph)):
+        logger.debug("TVG: absorption_db_per_m given explicitly; ignoring water-condition parameters")
+        params.temperature_c = params.salinity_psu = params.depth_m = params.ph = None
+    if params.sound_velocity_ms is None:
+        # TODO: per-ping sound velocity instead of one mean per channel.
+        sv = float(ds["sound_vel_ms"].mean().item())
+        if np.isnan(sv) or sv <= 0:
+            logger.debug("TVG: mean sound_vel_ms is %s; using %s m/s", sv, DEFAULT_SOUND_VEL_MS)
+            sv = DEFAULT_SOUND_VEL_MS
+        params.sound_velocity_ms = sv
+    return params
+
+
+def tvg_gain_for_dataset(ds: xr.Dataset, params: TVGParams) -> np.ndarray:
+    """Per-sample TVG gain (dB, float64, shape ``(n_samples,)``) for ``ds``.
+
+    Slant range of each sample is ``sample_index * c / (2 * fs)`` (absolute
+    sample index, so cropped datasets get the same gain per sample), clipped
+    to ``params.min_range_m``. ``params`` must be fully resolved
+    (see :func:`resolve_tvg_params`).
+    """
+    interval_m = params.sound_velocity_ms / (2.0 * float(ds.attrs["sample_rate_hz"]))
+    slant_range = np.clip(sample_index(ds) * interval_m, params.min_range_m, None)
+    return tvg_gain_db(slant_range, params)
+
+
+def tvg_params_record(params: TVGParams) -> dict:
+    """History-record params for a resolved TVGParams."""
+    record = {
+        "spreading_loss_db": float(params.spreading_loss_db),
+        "absorption_db_per_m": float(params.absorption_db_per_m),
+        "min_range_m": float(params.min_range_m),
+        "sound_velocity_ms": float(params.sound_velocity_ms),
+    }
+    # Water conditions behind a derived absorption (absent when it was given explicitly).
+    for key in ("temperature_c", "salinity_psu", "depth_m", "ph"):
+        value = getattr(params, key)
+        if value is not None:
+            record[key] = float(value)
+    return record
+
+
+def tvg_params_from_record(record_params: dict) -> TVGParams:
+    """TVGParams from a ``"tvg"`` history record (current or legacy key names)."""
+    sv = record_params.get("sound_velocity_ms", record_params.get("sound_velocity_used_ms"))
+    if sv is None:
+        raise ValueError(f"TVG history record has no sound velocity: {record_params}")
+    return TVGParams(
+        spreading_loss_db=float(record_params["spreading_loss_db"]),
+        absorption_db_per_m=float(record_params["absorption_db_per_m"]),
+        min_range_m=float(record_params.get("min_range_m", 0.5)),
+        sound_velocity_ms=float(sv),
     )
-    ds_out.attrs["processing_level"] = "radiometric"
-    ds_out.attrs["processing_history"] = json.dumps(history)
-
-    logger.debug(
-        "TVG applied successfully. Output: processing_level='radiometric', "
-        "processing_history appended with step 'tvg_correction'."
-    )
-
-    return ds_out

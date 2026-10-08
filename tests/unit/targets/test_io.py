@@ -2,7 +2,7 @@
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
 from sidescanpy.targets.io import (
     read_targets_csv,
     read_targets_json,

@@ -11,10 +11,13 @@ expanded, since its shape is format-specific and not fixed across rows.
 
 import csv
 import json
+import logging
 from dataclasses import asdict
 from pathlib import Path
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
+
+logger = logging.getLogger(__name__)
 
 
 def write_targets_json(targets: list[Target], path: str | Path) -> None:

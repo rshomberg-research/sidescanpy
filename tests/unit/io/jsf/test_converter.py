@@ -10,39 +10,37 @@ Real binary parsing is tested separately against actual JSF byte fixtures.
 2026 rshomberg@uri.edu
 """
 
-import pytest
-from unittest.mock import Mock
-
 import logging
 from pathlib import Path
 
 import numpy as np
+import pytest
 import xarray as xr
 
-from sidescanpy.core.survey import SideScanSurvey, SideScanFrequencyChannel
+from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.jsf.converter import (
-    convert,
-    _build_frequency_channel,
-    _build_navigation_record,
     _build_attitude_record,
     _build_dvl_record,
+    _build_frequency_channel,
+    _build_navigation_record,
     _build_sensor_record,
+    convert,
 )
 
 # ============================================================
 # CONVERT — top-level API
 # ============================================================
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertEmpty:
     def test_empty_message_list_raises(self):
         with pytest.raises(ValueError, match="empty"):
             convert([], source_files=[Path("dummy.jsf")])
 
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConversionSingleFrequency:
-    
+
     def test_returns_sidescan_survey(self, paired_sonar_msgs):
         result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
         assert isinstance(result, SideScanSurvey)
@@ -58,9 +56,9 @@ class TestConversionSingleFrequency:
 
     def test_aux_records_empty_when_no_aux_messages(self, paired_sonar_msgs):
         result = convert(paired_sonar_msgs, source_files=[Path("test.jsf")])
-        assert result.has_navigation    is False 
-        assert result.has_attitude      is False 
-        assert result.has_dvl           is False 
+        assert result.has_navigation    is False
+        assert result.has_attitude      is False
+        assert result.has_dvl           is False
         assert result.n_sensors         == 0
 
 
@@ -103,7 +101,7 @@ class TestConvertMultiFrequency:
                     transmit_freq_end=547_500,
                 )
             )
-        
+
         result = convert(msgs, source_files=[Path("test.jsf")])
         assert result.n_frequencies == 2
         assert 547_500      in result.frequency_hz_list
@@ -115,7 +113,7 @@ class TestConvertMultiFrequency:
 # CONVERT — auxiliary streams
 # ============================================================
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertWithNavigation:
 
     def test_navigation_populated_from_nmea(self, paired_sonar_msgs, nmea_rmc_msgs):
@@ -175,7 +173,7 @@ class TestConvertWithSensor:
 # CONVERT — repair modes
 # ============================================================
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertRepairDrop:
     def test_orphan_port_dropped(self, make_sonar_msg, paired_sonar_msgs, caplog):
         # Add one extra port record with no matching starboard
@@ -193,7 +191,7 @@ class TestConvertRepairDrop:
         assert ch.n_pings == 5
 
 
-@pytest.mark.unit 
+@pytest.mark.unit
 class TestConvertRepairNanPad:
     def test_orphan_port_nan_padded(self, make_sonar_msg, paired_sonar_msgs):
         msgs = paired_sonar_msgs + [
@@ -415,16 +413,16 @@ class TestBuildFrequencyChannel:
             ds2["backscatter_intensity"].values,
         )
 
-    def test_backscatter_raw_equals_intensity_at_raw_level(self, paired_sonar_msgs):
+    def test_no_raw_copy_written(self, paired_sonar_msgs):
         ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
-        np.testing.assert_array_equal(
-            ds["backscatter_raw"].values,
-            ds["backscatter_intensity"].values,
-        )
+        assert "backscatter_raw" not in ds
+        assert "backscatter_intensity" in ds
 
     def test_processing_level_is_raw(self, paired_sonar_msgs):
+        from sidescanpy.core.history import processing_level
         ds = _build_frequency_channel(paired_sonar_msgs, repair_mode="nan_pad")
-        assert ds.attrs["processing_level"] == "raw"
+        assert "processing_level" not in ds.attrs
+        assert processing_level(ds) == "raw"
 
     def test_processing_history_is_empty_json_list(self, paired_sonar_msgs):
         import json

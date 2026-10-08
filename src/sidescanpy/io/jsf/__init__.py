@@ -23,24 +23,27 @@ See ``docs/io_jsf.md`` for full reference and known issues.
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.io.jsf.reader import read_jsf, read_jsf_iter
 from sidescanpy.io.jsf.converter import convert
-from sidescanpy.io.jsf.targets import decode_and_correct_window, decode_target_window, read_discover_targets
 from sidescanpy.io.jsf.messages import (
+    DopplerVelocityLogDataMessage,
     JSFMessage,
     JSFMessageHeader,
-    SonarDataMessage,
-    PitchRollDataMessage,
-    DopplerVelocityLogDataMessage,
-    PressureSensorReadingMessage,
-    NMEAStringMessage,
-    NMEARMCMessage,
-    NMEAGLLMessage,
-    NMEAGGAMessage,
-    NMEAVTGMessage,
-    NMEAZDAMessage,
     NMEADBTMessage,
     NMEADPTMessage,
+    NMEAGGAMessage,
+    NMEAGLLMessage,
+    NMEARMCMessage,
+    NMEAStringMessage,
+    NMEAVTGMessage,
+    NMEAZDAMessage,
+    PitchRollDataMessage,
+    PressureSensorReadingMessage,
+    SonarDataMessage,
+)
+from sidescanpy.io.jsf.reader import read_jsf, read_jsf_iter
+from sidescanpy.io.jsf.targets import (
+    decode_target_window,
+    read_discover_targets,
 )
 
 __all__ = [
@@ -49,7 +52,6 @@ __all__ = [
     "convert",
     "read_discover_targets",
     "decode_target_window",
-    "decode_and_correct_window",
     "JSFMessage",
     "JSFMessageHeader",
     "SonarDataMessage",

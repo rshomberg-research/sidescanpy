@@ -12,9 +12,9 @@ import numpy as np
 import pytest
 from matplotlib.colors import PowerNorm
 
+from sidescanpy.core.units import mask_floor_clip
 from sidescanpy.viz.waterfall import (
     _compute_y_full,
-    _mask_floor_clip,
     plot_survey_overview,
     plot_waterfall,
     resolve_waterfall_axes,
@@ -91,19 +91,19 @@ class TestMaskFloorClip:
 
     def test_zero_and_neg120_masked_to_nan(self):
         bs = np.array([0.0, -120.0, 5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         assert np.isnan(result[0])
         assert np.isnan(result[1])
         np.testing.assert_array_equal(result[[2, 3, 4]], bs[[2, 3, 4]])
 
     def test_no_floor_values_returns_equivalent_array(self):
         bs = np.array([5.3, -40.0, 0.1])
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         np.testing.assert_array_equal(result, bs)
 
     def test_all_nan_input_stays_nan(self):
         bs = np.full(4, np.nan)
-        result = _mask_floor_clip(bs)
+        result = mask_floor_clip(bs)
         assert np.all(np.isnan(result))
 
 
@@ -367,39 +367,12 @@ class TestPlotWaterfallSlantRangeAxis:
         np.testing.assert_allclose(x_stbd, sr[:, 1, :])
 
 
-class TestFillNavStalls:
-    """Navigation that stalls for a few pings while the vessel keeps
-    moving; geometric resampling needs those pings at their true
-    spacing, not stacked at one along-track point."""
+def test_along_track_shim_warns():
+    import sidescanpy.viz
+    import sidescanpy.viz.waterfall as wf
+    from sidescanpy.processing.navigation import along_track_distance_m
 
-    def test_short_stall_gets_local_step(self):
-        from sidescanpy.viz.waterfall import _fill_nav_stalls
-
-        steps = np.array([0.07] * 30 + [0.011, 0, 0, 0, 0, 0, 0] + [0.07] * 30)
-        along = np.concatenate([[0.0], np.cumsum(steps)])
-        out = _fill_nav_stalls(along)
-        np.testing.assert_allclose(np.diff(out), 0.07)
-
-    def test_no_stall_is_unchanged(self):
-        from sidescanpy.viz.waterfall import _fill_nav_stalls
-
-        along = np.cumsum(np.full(40, 0.07))
-        np.testing.assert_allclose(_fill_nav_stalls(along), along)
-
-    def test_long_stop_is_left_alone(self):
-        from sidescanpy.viz.waterfall import _fill_nav_stalls
-
-        steps = np.array([0.07] * 30 + [0.0] * 40 + [0.07] * 30)
-        along = np.concatenate([[0.0], np.cumsum(steps)])
-        np.testing.assert_allclose(_fill_nav_stalls(along), along)
-
-    def test_flag_is_opt_in(self):
-        import xarray as xr
-        from sidescanpy.viz.waterfall import along_track_distance_m
-
-        lat = 40.0 + np.concatenate([np.arange(30), np.full(5, 29.0), 29 + np.arange(1, 31)]) * 1e-6
-        ds = xr.Dataset({"latitude": ("ping", lat), "longitude": ("ping", np.full(lat.size, -70.0))})
-        raw = along_track_distance_m(ds)
-        filled = along_track_distance_m(ds, fill_nav_stalls=True)
-        assert np.diff(raw)[30] == 0
-        assert np.diff(filled).min() > 0
+    with pytest.warns(DeprecationWarning, match="processing.navigation"):
+        assert wf.along_track_distance_m is along_track_distance_m
+    with pytest.warns(DeprecationWarning, match="processing.navigation"):
+        assert sidescanpy.viz.along_track_distance_m is along_track_distance_m
