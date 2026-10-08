@@ -1,192 +1,158 @@
-## File 6 — `docs/processing.md`
-
-```markdown
 # Processing
 
-Processing functions transform validated datasets through the pipeline:
+`sidescanpy.processing` corrects, slices and measures frequency-channel
+datasets. Every function takes and returns an `xr.Dataset`; the input is
+never modified.
 
-```
-raw → radiometric → geometric → georeferenced
-```
+## Corrections
 
-Each function asserts its expected input `processing_level` and updates
-the attribute on output. `processing_history` is appended on every
-transform. See [`docs/core.md`](core.md) for the schema conventions.
+One API applies an ordered list of steps:
 
-## Functions
-
-| Function | Purpose | Input → Output level |
-|---|---|---|
-| `interpolate_aux_onto_pings` | Replace per-ping fields with interpolated aux values | (any) → (unchanged) |
-| `interpolate_onto_channel` | Lower-level: interpolate any external dataset onto pings | (any) → (unchanged) |
-| `apply_tvg` | Time-varying gain correction | raw → radiometric |
-| `compute_geometric_ranges` | Compute per-sample slant_range_m and ground_range_m | (any) → (unchanged) |
-
-`interpolate_*` functions don't change `processing_level` because
-interpolation is metadata enrichment, not a processing step in the
-radiometric/geometric sense.
-
-## `interpolate_aux_onto_pings`
-
-Replaces per-ping fields (latitude, longitude, heading, roll, pitch,
-heave) with values interpolated from the survey's aux records onto each
-ping's timestamp.
-
-The default field-source mapping is in `DEFAULT_FIELD_SOURCES`:
-
-| Per-ping field | Default source |
+| Function | Applies steps to |
 |---|---|
-| `latitude` | `navigation.latitude` |
-| `longitude` | `navigation.longitude` |
-| `heading_deg` | `attitude.heading_deg` |
-| `roll_deg` | `attitude.roll_deg` |
-| `pitch_deg` | `attitude.pitch_deg` |
-| `heave_m` | `attitude.heave_m` |
-
-`altitude_m`, `depth_m`, `sound_vel_ms`, `water_temp_C` are *not*
-interpolated by default — these are live sensor readings on
-SonarDataMessage, not mirrors of an aux stream. See
-[`docs/jsf_aux_source_selection.md`](jsf_aux_source_selection.md) for
-the analysis behind these decisions.
-
-### Key parameters
-
-- `fields={...}` — override the default mapping.
-- `method` — `"linear"` (default), `"nearest"`, etc.
-- `extrapolation` — `"clamp"` (default, holds boundary values),
-  `"linear"`, or `"nan"`.
-- `drop_invalid` — drop NaN values from the source before interpolating
-  (default `True`).
-- `force` — interpolate even when the source aux is empty (default
-  `False`; the field is left unchanged with a warning otherwise).
-- `in_place` — mutate the survey in place (default `False`).
-
-### External-source variant
-
-Users with an externally captured GPS log (or any `xr.Dataset` with a
-`time` coord) can use `interpolate_onto_channel` directly:
+| `correct(ds, steps, params, aux=None, force=False)` | one frequency channel |
+| `correct_survey(survey, steps, params, force=False)` | every channel of a survey (feeds the survey's navigation/attitude records to `interpolate_aux`) |
+| `correct_file(path, steps, params, out_path=None, chunk_pings=None)` | a `.ss.h5` file, written atomically (in place by default), optionally in ping chunks to bound memory |
 
 ```python
-my_external_nav = xr.open_dataset("external_nav.nc")
-new_channel = interpolate_onto_channel(
-    survey.get_frequency("hz_1495000"),
-    source=my_external_nav,
-    field_map={"latitude": "lat", "longitude": "lon"},
-)
+from sidescanpy.processing import correct
+
+ds = correct(ds, ["tvg", "geometric"], params={"tvg": {"spreading_loss_db": 30.0}})
 ```
 
-This bypasses the survey's aux records entirely.
+### Built-in steps
 
-## `apply_tvg`
+In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric → georef`.
 
-Applies time-varying gain to compensate for two propagation losses:
+| Step | Function | Parameters |
+|---|---|---|
+| `crop_farrange` | `crop_far_range` | `cutoff_sample`, `n_bins`, `min_valid_fraction`, `rise_threshold_db`, `margin_bins` |
+| `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid` |
+| `tvg` | `apply_tvg` | `spreading_loss_db`, `absorption_db_per_m`, `min_range_m`, `sound_velocity_ms`, `temperature_c`, `salinity_psu`, `depth_m`, `ph` |
+| `geometric` | `compute_geometric_ranges` | `expose_unmasked_z` |
+| `range_correction` | `apply_empirical_range_correction` | `table` (required) |
+| `georef` | `compute_georeferencing` | `ellipsoid` |
 
-1. **Spreading loss.** Sound spreads in 3D, losing energy with range (in dB: `20
-   * log10(R)`).
-2. **Absorption.** Water absorbs acoustic energy along the path (in dB: `2 *
-   alpha * R` for two-way).
+Steps run in the order given; respecting dependencies is the caller's job
+(`georef` and `range_correction` need `geometric`).
 
-Raw backscatter is converted from linear amplitude (typically 0-100ish) to dB:
-`20 * log10(clip(value, 1e-6))`. The 1e-6 floor prevents `log(0)` and maps zeros
-to ~-120 dB. TVG gain is then added.
+### Rules
 
-Output is in dB with no upper or lower clipping. Water column samples typically
-land in the -100 to -50 dB range; strong returns near nadir in the +20 to +40 dB
-range.
+- **Skip** a step by leaving it out. `params` may only name steps that
+  are in `steps`; a typo raises `ValueError`, and an unknown parameter
+  raises `TypeError`. Both are checked before anything runs.
+- **Custom steps.** Any callable `fn(ds, **params) -> ds`, or
+  `Step(name, fn)`, can be a step. It is recorded in history like a
+  built-in. Give each one a distinct name; lambdas are rejected.
+- **Idempotent.** A step already recorded in `processing_history` is
+  skipped, so re-running is a no-op. `force=True` re-applies it; a
+  radiometric step is inverted first, so new parameters replace the old
+  ones instead of stacking.
+- **History.** Each applied step appends
+  `{"step", "params", "function", "version", "timestamp_utc"}` with the
+  parameters actually used.
+- **No raw copy.** Corrections modify `backscatter_intensity` in place.
+  `invert(ds)` undoes recorded steps, and `uncorrected_backscatter(ds)`
+  returns the signal with every radiometric step undone.
+  `processing_level(ds)` reports the latest applied level (`raw`, `tvg`,
+  `geometric`, `range_correction`, `georef`).
 
-`backscatter_raw` is preserved unchanged across the call. Only
-`backscatter_intensity` is updated.
+### TVG
 
-### `TVGParams`
+`apply_tvg` adds the two-way propagation loss back:
 
-```python
-@dataclass
-class TVGParams:
-    spreading_loss_db: float = 20.0
-    absorption_db_per_m: float | None = None  # Francois-Garrison default if None
-    min_range_m: float = 0.5  # range clip for sample 0
-```
+- **Spreading:** `spreading_loss_db * log10(R)` (20 for spherical
+  spreading).
+- **Absorption:** `2 * alpha * R`. When `absorption_db_per_m` is not given,
+  alpha comes from the Francois-Garrison model for the channel's
+  frequency (`francois_garrison_absorption_db_per_m`), using
+  `temperature_c`, `salinity_psu`, `depth_m` and `ph` (defaults 10 °C,
+  35 psu, 10 m, pH 8). The resolved value is recorded in history.
 
-### `francois_garrison_absorption_db_per_m` / `absorption_for_frequency`
-
-One-way seawater absorption (dB/m) from the Francois-Garrison model: boric
-acid + magnesium sulfate relaxation + pure-water viscosity. Vectorised over
-frequency; inputs `temperature_c`, `salinity_psu`, `depth_m`, `ph` (and an
-optional `sound_velocity_ms`). Defaults are typical coastal water (10 C,
-35 psu, 10 m, pH 8) -- pass your own conditions when known.
-`absorption_for_frequency(f, **env)` is a thin wrapper. When a `tvg` step has
-no `absorption_db_per_m`, it is derived this way (the step accepts
-`temperature_c`, `salinity_psu`, `depth_m`, `ph`; `sidescan-correct` has
-`--temperature-c --salinity-psu --depth-m --ph`) and the resolved absorption
-and water conditions are recorded in `processing_history`.
+Linear amplitude is converted to dB as `20 * log10(clip(x, 1e-6))` first,
+so exact zeros map to about -120 dB. A zero or missing sound velocity
+falls back to 1500 m/s. Setting a term to 0 turns it off, which is how to
+avoid correcting a loss the hardware already compensated.
 
 References:
 
-- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part I: Pure water and magnesium sulfate contributions," J. Acoust. Soc. Am. 72(3), 896-907 (1982).
-- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean measurements: Part II: Boric acid contribution and equation for total absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982).
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean
+  measurements: Part I: Pure water and magnesium sulfate contributions,"
+  J. Acoust. Soc. Am. 72(3), 896-907 (1982).
+- R. E. Francois and G. R. Garrison, "Sound absorption based on ocean
+  measurements: Part II: Boric acid contribution and equation for total
+  absorption," J. Acoust. Soc. Am. 72(6), 1879-1890 (1982).
 
-## `compute_geometric_ranges`
+### Geometric ranges
 
-Attaches per-sample `slant_range_m` and `ground_range_m` data variables
-to the dataset. Lossless: backscatter is preserved at original sample
-positions. Resampling onto a regular grid for plotting or mosaicking is
-left to downstream tools (`xarray.interp`, `rioxarray`, etc.) on demand.
+`compute_geometric_ranges` adds per-sample `slant_range_m`,
+`ground_range_m`, `across_track_m` (port negative, starboard positive,
+pitch-corrected) and related variables:
 
-### Math
+- Slant range: `sample * sound_vel / (2 * sample_rate)`, from the absolute
+  `sample` coordinate, so a dataset trimmed of leading samples keeps its
+  true ranges.
+- Ground range (flat bottom): `sqrt(slant² - altitude²)` where
+  `slant > altitude`, NaN in the water column.
 
-Slant range: `R_slant[ping, channel, sample] = sample_idx * sound_vel[ping] / (2 * sample_rate)`
+### Georeferencing
 
-Ground range (flat-bottom assumption):
+`compute_georeferencing` adds `latitude_per_sample` and
+`longitude_per_sample` from the per-ping position, heading and across-track
+offset on the WGS84 ellipsoid.
 
+### Navigation interpolation
 
-$R_ground = sqrt(R_slant^2 - altitude^2)$   when R_slant > altitude
- = NaN                              when R_slant <= altitude
+`interpolate_aux_onto_pings` (and the `interpolate_aux` step) replaces
+per-ping latitude, longitude, heading, roll, pitch and heave with values
+interpolated from the survey's navigation and attitude records
+(`DEFAULT_FIELD_SOURCES`). Altitude, depth and sound velocity are live
+sensor readings and are not interpolated by default; see
+[JSF aux source selection](jsf_aux_source_selection.md).
+`interpolate_onto_channel` takes any external `xr.Dataset` with a `time`
+coordinate, such as a separate GPS log.
 
-The water-column samples (where slant ≤ altitude — sound hasn't
-reached the bottom yet) are NaN. This is the standard nadir gap.
+## Slicing
 
-### NaN handling
-
-- NaN `altitude_m` for a ping → all `ground_range_m` for that ping is NaN.
-- NaN `sound_vel_ms` for a ping → falls back to 1500 m/s with a warning.
-
-### Notes
-
-- Both port and starboard channels share the same per-ping altitude
-  (one transducer assembly).
-- Sound velocity is per-ping. Per-sample variation through the water
-  column is not modeled.
-- `processing_level` is not modified — the operation is additive.
-
-## `slice_by_*` (slicing module)
-
-Slicing operations on `SideScanFrequencyChannel` for extracting subsets
-of a survey. All return validated channels.
-
-| Function | Slices by |
+| Function | Keeps |
 |---|---|
-| `slice_by_pings` | Ping index range |
-| `slice_by_samples` | Sample index range |
-| `slice_by_time` | Ping timestamp (str or datetime64) |
-| `slice_by_bbox` | Lat/lon bounding box (per-ping by default; `use_per_sample=True` opt-in) |
-| `slice_by_ground_range` | Maximum ground range (requires `compute_geometric_ranges`) |
+| `slice_by_pings(ds, start=, stop=)` | a ping index range |
+| `slice_by_samples(ds, start=, stop=)` | a range of the absolute `sample` coordinate |
+| `slice_by_range(ds, min_m, max_m)` | samples within a slant-range window |
+| `slice_by_ground_range(ds, range_max_m=)` | samples within a ground range (needs `geometric`) |
+| `slice_by_time(ds, start=, stop=)` | a time window |
+| `slice_by_bbox(ds, lat_min=, lat_max=, lon_min=, lon_max=)` | pings (or, with `use_per_sample=True`, samples) inside a lat/lon box |
+| `slice_survey(survey, fn, **kwargs)` | applies any slicer to every frequency of a survey |
 
-All are pure functions returning new channels; the input is unchanged.
-Slicing is structural — `processing_level` and `processing_history` are
-preserved.
+Slicing keeps `processing_history`.
 
-## Future work
+## Bottom, nadir and noise
 
-- **Geometric correction.** Slant-range to ground-range calculation using per-ping
-  altitude. The next major processing step. Will land as
-  `processing/geometric.py::calculate_slant_to_ground_range`.
-- **Per-ping sound velocity in TVG.** Currently `apply_tvg` uses the mean across
-  all pings for the slant-range calculation. Per-ping is more accurate when
-  crossing thermoclines. Defer until geometric correction needs the same
-  per-ping range logic.
-- **Linear-vs-dB confirmation for TVG input.** The current implementation
-  assumes raw backscatter is in linear amplitude. A calibration test against
-  known-good data would close this assumption.
-- **Lazy/dask-backed processing.** Verify `apply_tvg` and
-  `interpolate_aux_onto_pings` operate correctly on dask-backed inputs. The math
-  is dask-friendly; needs explicit integration testing.
+| Function | What it does |
+|---|---|
+| `detect_first_bottom_return` | per-(ping, channel) sample where the bottom echo starts |
+| `mask_nadir_gap` | NaN everything before the first bottom return |
+| `detect_nadir_noise_extent`, `blank_nadir_noise` | find and zero an electronic noise burst at nadir |
+| `smooth_boundary_across_pings` | rolling median of a per-ping boundary |
+| `crop_far_range`, `detect_far_range_cutoff_sample` | find and crop far-range noise that rises above the floor |
+| `reject_range_outliers` | per-range-bin median/MAD outlier rejection |
+| `mask_bright_ping_rows` | mask pings much brighter than their neighbours |
+
+## Segments
+
+`find_segments` splits a file into contiguous segments and labels each one
+clean or excluded, from gaps in time or position (`detect_gaps`), hardware
+setting changes (`detect_setting_changes`), dropout or garbage runs
+(`detect_garbage_runs`) and attitude instability (`detect_unstable_spans`).
+`split_by_segments` returns one sub-survey per clean segment, and
+`write_segments` writes each clean segment to its own `<label>.ss.h5`.
+
+## Profiles and tracks
+
+- `backscatter_vs_range` / `backscatter_vs_sample`: per-bin mean, median,
+  std, percentiles and count.
+- `along_track_distance_m(ds, fill_nav_stalls=False)`: cumulative
+  geodesic distance along the track; `fill_nav_stalls` spreads pings that
+  repeat a navigation fix.
+- `build_survey_track(surveys, freq_key, scanline_stride=)`: nadir track
+  and strided scan-line endpoints as a `SurveyTrack`.

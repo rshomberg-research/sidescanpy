@@ -36,17 +36,19 @@ Every dataset is validated by an xarray accessor on construction or
 assignment. A dataset that doesn't conform raises `ValueError` with a
 message naming the missing piece.
 
-| Accessor               | Used on                  | Required vars                                                                                                                                                   |
-| ---------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ds.sidescan`          | Single-frequency channel | `backscatter_raw`, `backscatter_intensity`, `latitude`, `longitude`, `heading_deg`, `depth_m`, `roll_deg`, `pitch_deg`, `heave_m`, `altitude_m`, `sound_vel_ms` |
-| `ds.navigation_record` | Navigation aux           | `latitude`, `longitude`                                                                                                                                         |
-| `ds.attitude_record`   | Attitude aux             | `roll_deg`, `pitch_deg`, `heave_m`                                                                                                                              |
-| `ds.dvl_record`        | DVL aux                  | `altitude_m`                                                                                                                                                    |
-| `ds.sensor_record`     | Generic sensor aux       | (none — sensor-dependent)                                                                                                                                       |
+| Accessor | Used on | Required vars |
+|---|---|---|
+| `ds.sidescan` | Single-frequency channel | `backscatter_intensity`, `latitude`, `longitude`, `heading_deg`, `depth_m`, `roll_deg`, `pitch_deg`, `heave_m`, `altitude_m`, `sound_vel_ms`, `fathometer_reading_m` |
+| `ds.navigation_record` | Navigation aux | `latitude`, `longitude` |
+| `ds.attitude_record` | Attitude aux | `roll_deg`, `pitch_deg`, `heave_m` |
+| `ds.dvl_record` | DVL aux | `altitude_m` |
+| `ds.sensor_record` | Generic sensor aux | (none, sensor-dependent) |
 
 Required dims, coords, and attrs are listed in `schema.py`. The
-sidescan schema enforces `channel` size 2 (port + starboard) and a
-known `processing_level` value (`raw`, `radiometric`).
+sidescan schema enforces `channel` size 2 (port + starboard). The
+processing level (`raw`, `tvg`,
+`geometric`, `range_correction`, `georef`) is derived from the recorded
+steps by `core.history.processing_level()`, not stored separately.
 
 ### Validation is eager
 

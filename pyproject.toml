@@ -81,6 +81,14 @@ geo = [
     # lazily; everything else in grids runs without it.
     "rioxarray>=0.15",
 ]
+docs = [
+    # The documentation site (mkdocs.yml): guide pages in docs/ plus API
+    # reference generated from the numpydoc docstrings. Build-time only.
+    # mkdocs<2: MkDocs 2.0 drops the plugin system mkdocstrings needs.
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+]
 
 [tool.ruff]
 line-length = 100

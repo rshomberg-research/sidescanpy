@@ -38,7 +38,7 @@ def read_survey(
     """
     Read a .ss.h5 file back into a SideScanSurvey.
 
-Parameters
+    Parameters
     ----------
     path : Path or str
         Source file path.

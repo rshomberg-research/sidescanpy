@@ -18,9 +18,10 @@ For full multi-frequency surveys with auxiliary records, see
 ## Conventions
 
 - **Engine.** `h5netcdf`. Standardized across the project.
-- **Compression.** Gzip level 4 on `backscatter_raw` and
-  `backscatter_intensity`. Per-ping scalars (lat, lon, heading, etc.) are
-  uncompressed — overhead exceeds savings on small arrays.
+- **Encoding.** The same policy as `.ss.h5` (see [HDF5 IO](io_hdf5.md)):
+  gzip 4 + shuffle on every variable with two or more dimensions, float64
+  stored as float32 except latitude/longitude, per-ping fields
+  uncompressed.
 - **Chunking on disk.** `(chunk_ping=256, n_channels=2, n_samples=full)`
   by default. Aligns with the dominant access pattern (per-ping reads).
 - **Chunking on read.** Pass `chunks={"ping": N}` to return dask-backed
@@ -34,7 +35,9 @@ For full multi-frequency surveys with auxiliary records, see
 After `write_frequency_channel(ch, path); read_frequency_channel(path)`,
 the loaded dataset is `xr.testing.assert_identical` to the original:
 
-- All data values exact (including NaN preservation)
+- All data values exact (including NaN preservation), except float64
+  variables other than latitude/longitude, which round-trip at float32
+  precision
 - All coords with original dtype
 - All attrs including `processing_history`
 - Per-ping fields and dimensions preserved

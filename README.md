@@ -148,6 +148,7 @@ Call `sidescanpy.log.configure_logging("INFO")` in a script, or pass
 uv sync --all-extras
 make test   # unit tests (clears PYTHONPATH)
 make lint   # ruff
+make docs   # documentation site (needs the docs extra: uv sync --extra docs)
 ```
 
 Integration tests under `tests/integration/` need real survey files and

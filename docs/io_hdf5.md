@@ -49,8 +49,12 @@ and used uniformly by reader and writer.
 - **Sensors group is conditional.** If a survey has zero sensors, the
   `aux_streams/sensors/` parent group is omitted entirely. The reader
   handles its absence.
-- **Compression.** Gzip level 4 on `backscatter_raw` and
-  `backscatter_intensity` only.
+- **Encoding.** Every frequency-channel variable with two or more
+  dimensions is written with gzip level 4 + shuffle, chunked along
+  `ping`. float64 variables are stored as float32, except latitude and
+  longitude (float32 resolves only ~0.4 m there). Per-ping 1-D fields are
+  uncompressed. Files from 0.5.0 that also carry `backscatter_raw` still
+  read; `correct_file` drops that variable on rewrite.
 - **Chunking on disk.** `HDF5_CHUNK_PING = 256` along the ping axis for
   frequency channel data.
 - **Lazy loading.** `chunks={"ping": N}` on read returns dask-backed
