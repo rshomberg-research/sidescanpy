@@ -64,14 +64,15 @@ ALL_PARAMS = _params(DATA_FILES[:N_FAST]) + (
 
 
 def _read_with_anomaly(path: Path, caplog) -> tuple[XtfPingData, bool]:
-    """Read a file; also return whether the reader reported packets with
-    fewer channel blocks than declared."""
+    """Read a file; also return whether the reader found packets with
+    fewer channel blocks than declared (it then warns exactly once)."""
     caplog.clear()
     with caplog.at_level("WARNING", logger="sidescanpy.io.xtf.reader"):
         data = read_xtf_pings(path)
     reports = [r for r in caplog.records if "fewer channel blocks" in r.getMessage()]
-    assert len(reports) <= 1, "the anomaly is reported once per file"
-    return data, bool(reports)
+    fewer = data.block_stats.fewer_channels > 0
+    assert len(reports) == int(fewer)
+    return data, fewer
 
 
 PING_FIELDS = [

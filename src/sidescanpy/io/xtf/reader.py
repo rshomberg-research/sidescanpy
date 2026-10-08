@@ -3,8 +3,8 @@ Low-level XTF (eXtended Triton Format) reader.
 
 Reads the file header, frames packets, and parses sonar packets into
 per-ping header records and per-channel sample arrays. The converter to
-the standard survey model is a separate step; ``read_xtf`` is still a
-placeholder.
+the standard survey model is ``sidescanpy.io.xtf.converter``;
+``read_xtf`` is the per-file entry point that feeds it.
 
 File layout
 -----------
@@ -488,6 +488,37 @@ class XtfFrequencyGroup:
 
 
 @dataclass
+class ChannelBlockStats:
+    """Mismatches between sonar packets' declared and actual channel blocks.
+
+    Attributes
+    ----------
+    fewer_channels : int
+        Sonar packets holding fewer complete channel blocks than their
+        ``NumChansToFollow``.
+    declared, found : collections.Counter
+        For those packets: declared channel counts, and the number of
+        blocks actually found.
+    clipped : int
+        Channel blocks declaring more samples than fit in their packet
+        (clipped to what fits).
+    no_chan_info : int
+        Channel blocks with no usable ``ChanInfo`` entry (rest of the
+        packet skipped).
+    legacy_count : int
+        Channel blocks whose sample count came from ``ChanInfo`` because
+        ``NumSamples`` was 0 (pre-X41 files).
+    """
+
+    fewer_channels: int = 0
+    declared: Counter = field(default_factory=Counter)
+    found: Counter = field(default_factory=Counter)
+    clipped: int = 0
+    no_chan_info: int = 0
+    legacy_count: int = 0
+
+
+@dataclass
 class XtfPingData:
     """Sonar pings of one XTF file, as recorded.
 
@@ -508,6 +539,8 @@ class XtfPingData:
         (unknown frequencies last).
     stats : PacketStats
         Packet counts from the read.
+    block_stats : ChannelBlockStats
+        Channel-block mismatches found while parsing sonar packets.
     """
 
     path: Path
@@ -517,6 +550,7 @@ class XtfPingData:
     channels: dict[int, XtfChannel]
     frequency_groups: list[XtfFrequencyGroup]
     stats: PacketStats
+    block_stats: ChannelBlockStats = field(default_factory=ChannelBlockStats)
 
     @property
     def n_pings(self) -> int:
@@ -565,21 +599,11 @@ def ping_times(ping_headers: np.ndarray) -> np.ndarray:
     return out
 
 
-@dataclass
-class _Mismatches:
-    fewer_channels: int = 0
-    declared: Counter = field(default_factory=Counter)
-    found: Counter = field(default_factory=Counter)
-    clipped: int = 0
-    no_chan_info: int = 0
-    legacy_count: int = 0
-
-
 def _parse_layout(
     data: bytes,
     chan_info: np.ndarray,
     dtypes: list[np.dtype | None],
-    mm: _Mismatches,
+    mm: ChannelBlockStats,
 ) -> list[tuple[int, int, int, int]]:
     """Locate channel blocks in one sonar packet.
 
@@ -619,7 +643,7 @@ def _parse_layout(
     return out
 
 
-def _report_mismatches(path: Path, mm: _Mismatches, n_sonar: int) -> None:
+def _report_mismatches(path: Path, mm: ChannelBlockStats, n_sonar: int) -> None:
     if mm.fewer_channels:
         logger.warning(
             "%s: %d of %d sonar packets hold fewer channel blocks than NumChansToFollow "
@@ -713,7 +737,7 @@ def read_xtf_pings(path: str | Path) -> XtfPingData:
             dtypes.append(None)
 
     stats = PacketStats()
-    mm = _Mismatches()
+    mm = ChannelBlockStats()
     ping_buf = bytearray()
     chan_buf = bytearray()
     offsets = array("q")
@@ -807,25 +831,28 @@ def read_xtf_pings(path: str | Path) -> XtfPingData:
         channels=channels,
         frequency_groups=groups,
         stats=stats,
+        block_stats=mm,
     )
 
 
 # ============================================================
-# SURVEY ENTRY POINT (placeholder)
+# DISPATCH ENTRY POINT
 # ============================================================
 
-def read_xtf(path: str | Path):
-    """Read an XTF file into a survey (not yet implemented).
+def read_xtf(path: str | Path) -> XtfPingData:
+    """Read one XTF file for conversion.
 
-    The low-level readers (:func:`read_xtf_header`, :func:`iter_packets`,
-    :func:`read_xtf_pings`) exist; the conversion to a survey does not.
+    The XTF counterpart of ``read_jsf`` / ``read_sdf``: returns what
+    :func:`sidescanpy.io.xtf.convert` takes. Equivalent to
+    :func:`read_xtf_pings`.
 
-    Raises
-    ------
-    NotImplementedError
-        Always.
+    Parameters
+    ----------
+    path : str or Path
+        XTF file.
+
+    Returns
+    -------
+    XtfPingData
     """
-    raise NotImplementedError(
-        "XTF conversion to a survey is not implemented yet; "
-        "use read_xtf_pings() for the recorded pings."
-    )
+    return read_xtf_pings(path)

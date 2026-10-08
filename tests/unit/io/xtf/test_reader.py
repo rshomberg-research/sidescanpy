@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from sidescanpy.io.xtf import (
+    XtfPingData,
     count_packets,
     iter_packets,
     ping_times,
@@ -263,6 +264,7 @@ class TestReadPings:
         warns = [r for r in caplog.records if "fewer channel blocks" in r.getMessage()]
         assert len(warns) == 1
         assert "3 of 6" in warns[0].getMessage()
+        assert data.block_stats.fewer_channels == 3
         assert data.n_pings == 6
         for c in (0, 1):
             assert data.channels[c].present.all()
@@ -359,6 +361,8 @@ class TestPyxtfOracleOnSynthetic:
         )
 
 
-def test_read_xtf_not_implemented(dual_file):
-    with pytest.raises(NotImplementedError):
-        read_xtf(dual_file)
+def test_read_xtf_returns_ping_data(dual_file):
+    data = read_xtf(dual_file)
+    assert isinstance(data, XtfPingData)
+    assert data.n_pings == 5
+    assert data.block_stats.fewer_channels == 0
