@@ -13,6 +13,8 @@ converted surveys, and projection of a target onto another frequency channel.
 
 import logging
 import re
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -366,13 +368,14 @@ class PositionMatch(NamedTuple):
     dist_m: float
 
 
-def build_position_index(ss_h5_dir: str | Path) -> dict[Path, dict]:
+def build_position_index(ss_h5_dir: str | Path | Sequence[str | Path]) -> dict[Path, dict]:
     """Cache per-ping positions of every ``.ss.h5`` in ``ss_h5_dir``.
 
     Parameters
     ----------
-    ss_h5_dir : str or Path
-        Directory searched (non-recursively) for ``*.ss.h5``.
+    ss_h5_dir : str, Path, or sequence of them
+        Directory searched (non-recursively) for ``*.ss.h5``, or an
+        explicit list of ``.ss.h5`` files (indexed in sorted order).
 
     Returns
     -------
@@ -385,8 +388,12 @@ def build_position_index(ss_h5_dir: str | Path) -> dict[Path, dict]:
         global numbering). Surveys are read lazily so only the small
         position arrays are loaded.
     """
+    if isinstance(ss_h5_dir, str | Path):
+        paths = sorted(Path(ss_h5_dir).glob("*.ss.h5"))
+    else:
+        paths = sorted(Path(p) for p in ss_h5_dir)
     index = {}
-    for path in sorted(Path(ss_h5_dir).glob("*.ss.h5")):
+    for path in paths:
         survey = read_survey(path, chunks={"ping": 512})
         channels = {}
         for freq_key, ch in survey.freq_channels.items():
@@ -472,3 +479,86 @@ def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float)
             return candidates[0]
 
     return None
+
+
+class CatalogPlacement(NamedTuple):
+    """A correlated target and its position on every frequency of its file.
+
+    Attributes
+    ----------
+    target : Target
+    match : PositionMatch
+        Where :func:`correlate_target` placed it (its native frequency).
+    on_frequency : dict
+        ``{freq_key: Target}`` -- the target itself on its native
+        frequency, and a :func:`project_target_to_frequency` copy on every
+        other frequency of the file whose recorded range contains it.
+    """
+
+    target: Target
+    match: PositionMatch
+    on_frequency: dict[str, Target]
+
+
+def correlate_catalog(
+    targets: Sequence[Target], index: Mapping[Path, Mapping[str, Mapping]], max_dist_m: float,
+) -> list[CatalogPlacement]:
+    """:func:`correlate_target` every target, projected onto every frequency of its file.
+
+    Uncorrelated targets are omitted. Order follows ``targets``.
+
+    Parameters
+    ----------
+    targets : sequence of Target
+    index : dict
+        From :func:`build_position_index`.
+    max_dist_m : float
+        Maximum distance for a position match.
+
+    Returns
+    -------
+    list of CatalogPlacement
+    """
+    placements = []
+    for t in targets:
+        match = correlate_target(t, index, max_dist_m)
+        if match is None:
+            continue
+        channels = index[match.path]
+        on_frequency = {}
+        for freq_key, info in channels.items():
+            if freq_key == match.freq_key:
+                on_frequency[freq_key] = t
+                continue
+            projected = project_target_to_frequency(
+                t, source_mps=channels[match.freq_key]["sample_interval_m"],
+                target_mps=info["sample_interval_m"], n_samples=info["n_samples"],
+            )
+            if projected is not None:
+                on_frequency[freq_key] = projected
+        placements.append(CatalogPlacement(t, match, on_frequency))
+    logger.debug(f"correlated {len(placements)}/{len(targets)} target(s) to a ping")
+    return placements
+
+
+def place_catalog(
+    catalog: Sequence[Target], index: Mapping[Path, Mapping[str, Mapping]], max_dist_m: float,
+) -> dict[tuple[Path, str], dict[int, list[tuple[Target, int]]]]:
+    """Group :func:`correlate_catalog` placements by file, frequency and channel.
+
+    Targets without a ``sample`` are left out (they can't be placed in a
+    window).
+
+    Returns
+    -------
+    dict
+        ``{(path, freq_key): {channel: [(target, file_ping_idx), ...]}}``.
+    """
+    placed: dict[tuple[Path, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
+    for placement in correlate_catalog(catalog, index, max_dist_m):
+        if placement.target.sample is None:
+            continue
+        channel = placement.target.channel if placement.target.channel is not None else 0
+        for freq_key, t in placement.on_frequency.items():
+            placed[(placement.match.path, freq_key)][channel].append((t, placement.match.ping_idx))
+    return placed

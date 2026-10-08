@@ -20,13 +20,12 @@ from sidescanpy.export.windows import (
     BackgroundCandidate,
     WindowSpec,
     nan_fraction,
-    place_catalog,
     sample_background_candidates,
     sample_background_windows,
 )
 from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.processing import correct_survey
-from sidescanpy.targets.correlate import build_position_index
+from sidescanpy.targets.correlate import build_position_index, place_catalog
 from tests.conftest import make_minimal_sidescan_dataset
 
 N_PINGS, N_SAMPLES = 600, 100

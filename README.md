@@ -46,8 +46,10 @@ uv pip install -e ".[viz,maps]"  # + land/locator basemaps (cartopy)
 ```
 
 `sidescan-convert` and `sidescan-correct` work without the `viz` extra;
-`sidescan-export` (except `progression`) and `sidescan-analyze` (except
-`recommend-config`) exit with a one-line error asking for it.
+`sidescan-export` and `sidescan-analyze` (except `recommend-config`) exit
+with a one-line error asking for it. The dataset builder behind
+`sidescan-export chip` (`sidescanpy.export.ml.build_target_dataset`) runs
+without it; only its contact sheets and context views need plotting.
 
 ### Development Install
 

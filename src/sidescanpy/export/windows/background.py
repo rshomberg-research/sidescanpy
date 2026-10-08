@@ -11,7 +11,8 @@ only windows that
 1. contain no cataloged target within the window plus ``margin_m``. Every
    catalog target (any confidence) is correlated to its ping with
    :func:`~sidescanpy.targets.correlate.correlate_target`, projected onto
-   every frequency of its file, and located in the rendered window with
+   every frequency of its file (:func:`~sidescanpy.targets.correlate.place_catalog`),
+   and located in the rendered window with
    the same lookup target windows use for co-located targets. A
    conservative geographic guard additionally rejects a window whose
    reach from nadir (plus margin) covers any target's recorded lat/lon --
@@ -64,7 +65,7 @@ from sidescanpy.export.windows.pixel import (
 )
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.navigation import along_track_distance_m
-from sidescanpy.targets.correlate import correlate_target, project_target_to_frequency
+from sidescanpy.targets.correlate import place_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -216,46 +217,6 @@ def sample_background_candidates(
         sample = int(rng.integers(0, n_samples))
         out.append(BackgroundCandidate(path, freq_key, ping, channel, sample))
     return out
-
-
-def place_catalog(
-    catalog: Sequence[Target], index: Mapping[Path, Mapping[str, Mapping]], max_match_dist_m: float,
-) -> dict[tuple[Path, str], dict[int, list[tuple[Target, int]]]]:
-    """Correlate every catalog target to a ping, on every frequency of its file.
-
-    Each target is matched with
-    :func:`~sidescanpy.targets.correlate.correlate_target` and projected
-    onto the file's other frequencies with
-    :func:`~sidescanpy.targets.correlate.project_target_to_frequency`
-    (skipped where it falls outside that frequency's recorded range).
-
-    Returns
-    -------
-    dict
-        ``{(path, freq_key): {channel: [(target, file_ping_idx), ...]}}``.
-    """
-    placed: dict[tuple[Path, str], dict[int, list]] = defaultdict(lambda: defaultdict(list))
-    n_unmatched = 0
-    for t in catalog:
-        match = correlate_target(t, index, max_match_dist_m)
-        if match is None or t.sample is None:
-            n_unmatched += 1
-            continue
-        channel = t.channel if t.channel is not None else 0
-        for freq_key, info in index[match.path].items():
-            if freq_key == match.freq_key:
-                projected = t
-            else:
-                projected = project_target_to_frequency(
-                    t, source_mps=index[match.path][match.freq_key]["sample_interval_m"],
-                    target_mps=info["sample_interval_m"], n_samples=info["n_samples"],
-                )
-                if projected is None:
-                    continue
-            placed[(match.path, freq_key)][channel].append((projected, match.ping_idx))
-    if n_unmatched:
-        logger.debug(f"{n_unmatched} catalog target(s) not correlated to a ping; only the geographic guard covers them")
-    return placed
 
 
 def _guard_hits(nadir_lat: float, nadir_lon: float, reach_m: float, catalog_latlon: np.ndarray) -> int:
@@ -426,7 +387,7 @@ def sample_background_windows(
         Extra clearance around the window, meters.
     max_nan_frac : float, default 0.3
     max_match_dist_m : float, default 25.0
-        Catalog correlation distance (see :func:`place_catalog`).
+        Catalog correlation distance (see :func:`~sidescanpy.targets.correlate.place_catalog`).
     n_draws : int, default 1
     max_attempts : int, optional
         Candidates to try before giving up (default ``50 * n``).

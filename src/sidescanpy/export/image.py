@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -211,3 +213,36 @@ def from_uint8(img_8bit: np.ndarray, metadata: ReversalMetadata) -> np.ndarray:
     if metadata.kind == "uint16":
         return np.clip(reversed_data, 0, 65535).astype(np.uint16)
     return reversed_data.astype(np.float32)
+
+
+NORMALIZATION_SCOPES = ("image", "shared")
+"""``"image"``: each image stretched on its own percentiles; ``"shared"``: one stretch for a whole set."""
+
+
+def reference_stats_for_scope(
+    scope: str, arrays: list[np.ndarray], pct_low: float, pct_high: float,
+) -> ReferenceStats | None:
+    """Shared stretch for ``arrays`` under ``"shared"`` scope; ``None`` under ``"image"``.
+
+    Raises
+    ------
+    ValueError
+        Unknown ``scope``.
+    """
+    if scope == "image":
+        return None
+    if scope == "shared":
+        return compute_reference_stats(*arrays, pct_low=pct_low, pct_high=pct_high)
+    raise ValueError(f"unknown normalization scope: {scope!r}")
+
+
+def save_grayscale_png(image: np.ndarray, path: str | Path) -> None:
+    """Write a single-channel grayscale PNG: 8-bit (``"L"``) or, for ``uint16`` input, 16-bit.
+
+    Unlike ``matplotlib.pyplot.imsave`` (which always writes RGB(A)), the
+    file holds exactly one channel.
+    """
+    if image.dtype == np.uint16:
+        Image.fromarray(image).save(path)  # PIL mode "I;16"
+        return
+    Image.fromarray(image, mode="L").save(path)

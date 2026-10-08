@@ -152,6 +152,51 @@ def test_figure_recipes_run(tmp_path, script, png):
     assert (out / png).stat().st_size > 0
 
 
+def test_build_yolo_dataset_writes_ultralytics_layout(tmp_path):
+    proc = _run_example("build_yolo_dataset.py", "--output-dir", tmp_path)
+    dataset = tmp_path / "dataset"
+    manifest = json.loads((dataset / "manifest.json").read_text())
+    assert set(manifest["outputs"]) == {"chip", "dual-swath"}
+    for style, counts in manifest["outputs"].items():
+        assert counts["target_images"] > 0 and counts["background_images"] > 0
+        data = (dataset / style / "data.yaml").read_text()
+        assert "train: images/train" in data
+        labels = list((dataset / style / "labels").rglob("bg_*.txt"))
+        assert labels and all(p.read_text() == "" for p in labels)
+    assert "dataset/chip/images/train/" in proc.stdout
+
+
+def test_correction_progression_figure(tmp_path):
+    from sidescanpy.core.target import Target
+    from sidescanpy.processing import correct_survey
+    from sidescanpy.targets.io import write_targets_json
+    from tests.unit.export.surveys import swath_friendly_survey
+
+    ss_dir = tmp_path / "ss_h5"
+    ss_dir.mkdir()
+    write_survey(correct_survey(swath_friendly_survey()), ss_dir / "a.ss.h5")
+    lat, lon = np.linspace(40.0, 40.001, 300), np.linspace(-70.0, -70.001, 300)
+    targets = [
+        Target(target_id=str(i), source_format="x", catalog_source="x", latitude=float(lat[p]), longitude=float(lon[p]),
+               channel=i % 2, sample=15, position_confidence="verified")
+        for i, p in enumerate((100, 200))
+    ]
+    write_targets_json(targets, tmp_path / "targets.json")
+    out = tmp_path / "out"
+    _run_example("figures/correction_progression.py", ss_dir, tmp_path / "targets.json", "--output-dir", out,
+                 "--chip-size-px", "16", "--geo-size-px", "16")
+    assert Image.open(out / "correction_progression.png").size[1] > 200
+
+
+def test_plot_progression_blank_cells():
+    module = _load_example("figures/correction_progression.py")
+    image = np.arange(64.0).reshape(8, 8)
+    fig, axes = module.plot_progression([("a", {"uncorrected": (image, (2.0, 3.0)), "geometric": (None, None)})])
+    assert axes.shape == (1, 5)
+    assert len(axes[0, 0].images) == 1 and len(axes[0, 3].images) == 0
+    plt.close(fig)
+
+
 @pytest.fixture
 def sample_raster():
     grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=5000.0)

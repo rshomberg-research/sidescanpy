@@ -30,6 +30,8 @@ def write_yolo(
     box_size: tuple[float, float] = (40.0, 40.0),
     min_confidence: str = "verified",
     categories: list[str] | None = None,
+    labels_dir: str | Path | None = None,
+    data_yaml: bool = True,
 ) -> dict:
     """Write ``entries`` to ``output_dir`` as a YOLO-format label set.
 
@@ -46,6 +48,10 @@ def write_yolo(
     ``bbox_size`` (if set) is used for its box, else the shared
     ``box_size``. An entry with ``target=None`` contributes an image with
     an empty label file (a background image).
+
+    ``labels_dir`` overrides where label files go (default
+    ``output_dir/labels``); ``data_yaml=False`` skips ``data.yaml`` (for
+    callers that write their own dataset file, e.g. per split).
 
     Returns a dict of what was written (``{"names": [...], "images": [...]}``,
     one entry per included image with its label path), for inline
@@ -68,7 +74,7 @@ def write_yolo(
     names = resolve_categories(included, category_name, categories)
     class_ids = {n: i for i, n in enumerate(names)}
 
-    labels_dir = Path(output_dir) / "labels"
+    labels_dir = Path(output_dir) / "labels" if labels_dir is None else Path(labels_dir)
     labels_dir.mkdir(parents=True, exist_ok=True)
 
     lines_by_file: dict[str, list[str]] = {}
@@ -107,8 +113,8 @@ def write_yolo(
         label_path.write_text("".join(lines_by_file[file_name]))
         written_images.append({"file_name": file_name, "label_file": str(label_path)})
 
-    data_yaml_path = Path(output_dir) / "data.yaml"
-    names_block = "".join(f"  {i}: {n}\n" for i, n in enumerate(names))
-    data_yaml_path.write_text(f"names:\n{names_block}nc: {len(names)}\n")
+    if data_yaml:
+        names_block = "".join(f"  {i}: {n}\n" for i, n in enumerate(names))
+        (Path(output_dir) / "data.yaml").write_text(f"names:\n{names_block}nc: {len(names)}\n")
 
     return {"names": names, "images": written_images}

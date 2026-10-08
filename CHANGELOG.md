@@ -9,6 +9,31 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `sidescanpy.export.ml.build_target_dataset(sources, targets, spec,
+  out_dir, *, contact_sheet=None, context=None) -> DatasetResult`: the
+  whole `sidescan-export chip` workflow as a library call, configured by
+  a `DatasetSpec` (`from_dict`/`from_yaml`, unknown keys rejected). It
+  writes the same files as before plus a top-level `manifest.json`, and
+  returns a typed summary (images per style, skipped targets with
+  reasons). Plotting is injected as optional callables, so the builder
+  needs no matplotlib. New options: several `resolution_m` values (one
+  dataset per `res_<m>m/`), a train/val split (`val_fraction`, off by
+  default: targets by id hash, backgrounds by file/ping-block hash) and
+  `layout="ultralytics"` (`images/{train,val}`, `labels/{train,val}`,
+  `data.yaml`). CLI: `--val-fraction`, `--split-block-pings`, `--layout`,
+  and `--resolution-m` now takes several values.
+- `sidescanpy.targets.waterfall`: target boxes in waterfall coordinates
+  (`waterfall_boxes`, `target_waterfall_position`), and
+  `targets.correlate.correlate_catalog`/`place_catalog` (a catalog
+  correlated and projected onto every frequency of its file).
+- `export.image.save_grayscale_png` and `reference_stats_for_scope`;
+  `write_yolo(..., labels_dir=, data_yaml=)`; `build_position_index`
+  accepts a list of files.
+- Examples: `examples/build_yolo_dataset.py` (synthetic survey and
+  catalog to an Ultralytics dataset with backgrounds) and
+  `examples/figures/correction_progression.py` (the per-target
+  correction-step QA figure, now built from the export extractors).
+
 - Multi-category COCO/YOLO annotations, additive (uncategorized input
   produces byte-identical output):
   - New optional `Target.category`, read/written in targets JSON (key
@@ -61,6 +86,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Changed
 
+- **Breaking:** `sidescan-export chip` is a thin wrapper over
+  `build_target_dataset`; chip output is byte-identical (plus
+  `manifest.json`).
 - **Breaking:** the chip/window machinery moved out of `cli/export.py`
   into the library as public functions: `sidescanpy.export.windows`
   (now a package: `pixel`, `levels`, `neighborhood`, `geo`, `background`),
@@ -73,6 +101,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   WARNING naming the subcommand, instead of being silently ignored.
 - Geometric level no longer loads per-sample latitude/longitude into the
   target neighborhood (only georef reads them).
+
+### Removed
+
+- **Breaking:** `sidescan-export survey-window` (superseded by
+  `sidescan-export chip --n-background`, which screens windows against
+  the target catalog) and `sidescan-export progression` (now
+  `examples/figures/correction_progression.py`).
 
 ### Known
 

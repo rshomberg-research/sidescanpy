@@ -21,7 +21,6 @@ from sidescanpy.export.windows.background import (
     BackgroundWindow,
     WindowFootprint,
     nan_fraction,
-    place_catalog,
     sample_background_candidates,
     sample_background_windows,
 )
@@ -74,7 +73,6 @@ __all__ = [
     "BackgroundWindow",
     "WindowFootprint",
     "nan_fraction",
-    "place_catalog",
     "sample_background_candidates",
     "sample_background_windows",
     "RESAMPLE_METHODS",
