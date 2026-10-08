@@ -116,3 +116,17 @@ def test_conflicting_dims_for_same_file_name_raises(tmp_path):
     out_dir = tmp_path / "yolo"
     with pytest.raises(ValueError):
         write_yolo(entries, out_dir)
+
+
+def test_image_without_annotations_gets_empty_label_file(tmp_path):
+    entries = [_entry("1", "verified"), CocoImageEntry(target=None, file_name="bg_0.png", width=120, height=100)]
+    written = write_yolo(entries, tmp_path)
+    assert [im["file_name"] for im in written["images"]] == ["target_1.png", "bg_0.png"]
+    assert (tmp_path / "labels" / "bg_0.txt").read_text() == ""
+    assert (tmp_path / "labels" / "target_1.txt").read_text().count("\n") == 1
+
+
+def test_image_without_annotations_ignores_min_confidence_and_categories(tmp_path):
+    written = write_yolo([CocoImageEntry(target=None, file_name="bg_0.png", width=8, height=8)], tmp_path, min_confidence="verified")
+    assert written["names"] == ["target"]
+    assert (tmp_path / "labels" / "bg_0.txt").exists()

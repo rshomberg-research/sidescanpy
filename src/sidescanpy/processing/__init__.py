@@ -37,6 +37,7 @@ Public entry points
   :func:`blank_nadir_noise`, :func:`mask_nadir_gap`,
   :func:`uniform_exclusion_boundary` and helpers.
 - :func:`reject_range_outliers` — per-range-bin MAD outlier rejection.
+- :func:`mask_bright_ping_rows` — mask whole outlier-bright ping rows.
 - Segments (:mod:`~sidescanpy.processing.segments`): :func:`find_segments`,
   :func:`split_by_segments`, :class:`Segment` and the individual detectors.
 - :func:`backscatter_vs_range` / :func:`backscatter_vs_sample` — binned
@@ -110,7 +111,7 @@ from sidescanpy.processing.navigation import (
     along_track_distance_m,
     fill_nav_stalls,
 )
-from sidescanpy.processing.outliers import reject_range_outliers
+from sidescanpy.processing.outliers import mask_bright_ping_rows, reject_range_outliers
 from sidescanpy.processing.profiles import backscatter_vs_range, backscatter_vs_sample
 from sidescanpy.processing.radiometric import (
     TVGParams,
@@ -198,6 +199,7 @@ __all__ = [
     "mask_nadir_gap",
     # outliers
     "reject_range_outliers",
+    "mask_bright_ping_rows",
     # segments
     "Segment",
     "detect_gaps",

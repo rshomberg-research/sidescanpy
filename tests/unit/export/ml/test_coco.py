@@ -105,3 +105,19 @@ def test_conflicting_dims_for_same_file_name_raises(tmp_path):
     out = tmp_path / "targets.coco.json"
     with pytest.raises(ValueError):
         write_coco(entries, out)
+
+
+def test_image_without_annotations_is_an_image_record_only(tmp_path):
+    entries = [_entry("1", "verified"), CocoImageEntry(target=None, file_name="bg_0.png", width=64, height=32)]
+    coco = write_coco(entries, tmp_path / "c.json")
+    assert [im["file_name"] for im in coco["images"]] == ["target_1.png", "bg_0.png"]
+    assert coco["images"][1] == {"id": 2, "file_name": "bg_0.png", "width": 64, "height": 32}
+    assert len(coco["annotations"]) == 1
+    assert coco["annotations"][0]["image_id"] == 1
+    assert json.loads((tmp_path / "c.json").read_text()) == coco
+
+
+def test_only_annotation_free_images_keep_default_category(tmp_path):
+    coco = write_coco([CocoImageEntry(target=None, file_name="bg_0.png", width=8, height=8)], tmp_path / "c.json")
+    assert coco["categories"] == [{"id": 1, "name": "target"}]
+    assert coco["annotations"] == []

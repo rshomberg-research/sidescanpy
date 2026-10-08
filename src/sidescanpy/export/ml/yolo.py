@@ -16,8 +16,8 @@ much beyond "filter, then compute a box".
 import logging
 from pathlib import Path
 
-from sidescanpy.core.target import CONFIDENCE_RANK, bbox_from_center, clip_bbox
-from sidescanpy.export.ml.coco import CocoImageEntry, resolve_categories
+from sidescanpy.core.target import bbox_from_center, clip_bbox
+from sidescanpy.export.ml.coco import CocoImageEntry, _filter_by_confidence, resolve_categories
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,8 @@ def write_yolo(
     image's own width/height (the YOLO convention) — plus a
     ``output_dir/data.yaml`` naming the single class. Each entry's own
     ``bbox_size`` (if set) is used for its box, else the shared
-    ``box_size``.
+    ``box_size``. An entry with ``target=None`` contributes an image with
+    an empty label file (a background image).
 
     Returns a dict of what was written (``{"names": [...], "images": [...]}``,
     one entry per included image with its label path), for inline
@@ -62,8 +63,7 @@ def write_yolo(
         If two entries share a ``file_name`` but disagree on
         ``width``/``height``.
     """
-    min_rank = CONFIDENCE_RANK[min_confidence]
-    included = [e for e in entries if CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
+    included = _filter_by_confidence(entries, min_confidence)
 
     names = resolve_categories(included, category_name, categories)
     class_ids = {n: i for i, n in enumerate(names)}
@@ -87,6 +87,8 @@ def write_yolo(
             )
 
         t = entry.target
+        if t is None:
+            continue
         row = t.extra_attributes.get("window_row")
         col = t.sample
         entry_box_size = entry.bbox_size if entry.bbox_size is not None else box_size

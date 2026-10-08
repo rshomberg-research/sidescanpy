@@ -45,8 +45,29 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - Under `--normalization-scope image` (default) each image is written as
   soon as it is extracted instead of holding every float window until the
   end; contact sheets show the first draw per target only.
+- Background (no-target) dataset images:
+  `sidescanpy.export.windows.sample_background_windows` samples window
+  centers uniformly by ping (optionally within per-file ping ranges),
+  renders them through the same extractors as target windows, and rejects
+  any window with a cataloged target (any confidence) inside it plus a
+  margin, or with too many NaN cells. `sidescan-export chip
+  --n-background N` (default 0) writes `<style>/bg_<n>.png` with empty
+  YOLO labels and annotation-free COCO image records
+  (`--background-margin-m`, `--background-max-nan-frac`,
+  `--background-ping-ranges`). `CocoImageEntry(target=None, ...)` records
+  an image with no annotations in `write_coco`/`write_yolo`.
+- `sidescanpy.processing.mask_bright_ping_rows` (whole-ping MAD outlier
+  masking, from the CLI's progression grid).
 
 ### Changed
+
+- **Breaking:** the chip/window machinery moved out of `cli/export.py`
+  into the library as public functions: `sidescanpy.export.windows`
+  (now a package: `pixel`, `levels`, `neighborhood`, `geo`, `background`),
+  `sidescanpy.export.orientation` (with `orient_for_display` and
+  `detrend_by_range`, formerly `sidescanpy.targets.display`, removed) and
+  `sidescanpy.export.augment`. `sidescanpy.targets.window` moved to
+  `sidescanpy.export.target_window`. Chip output is byte-identical.
 
 - `--config` keys that match no option of any subcommand now log a
   WARNING naming the subcommand, instead of being silently ignored.

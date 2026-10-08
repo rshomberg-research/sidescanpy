@@ -39,7 +39,7 @@ sequence number, the target's row is the index of its own
 though it typically doesn't vary within one window).
 
 Decode (:func:`decode_target_window`; raw values, native orientation --
-TVG and display orientation live in ``targets.window``): ``SampleBytes`` -> ``np.frombuffer(dtype="<i2").astype(float) *
+TVG and display orientation live in ``export.target_window``): ``SampleBytes`` -> ``np.frombuffer(dtype="<i2").astype(float) *
 2 ** (-JsfWeightingFactor)`` — real JSF sample amplitudes, not a rendered
 image. Expect a leading run of exact-zero samples (blanking/ring-down);
 not a bug.

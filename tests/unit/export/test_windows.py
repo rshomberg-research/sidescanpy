@@ -4,16 +4,23 @@
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from sidescanpy.core.target import Target
 from sidescanpy.export.windows import (
     WindowExtent,
+    combine_channels_mirrored,
     extract_chip,
     extract_full_channel,
+    extract_pixel_style_window,
+    place_targets_in_file,
     rescale_target_position,
+    rescale_targets,
     resize_to,
     sample_negative_window,
+    target_combined_col,
     targets_within_window,
+    with_bbox_size_px,
 )
 
 
@@ -156,3 +163,99 @@ class TestRescaleTargetPosition:
         row, col = rescale_target_position(50, 100, native_shape=(200, 200), output_shape=(50, 50))
         assert row == pytest.approx(12.5)
         assert col == pytest.approx(25.0)
+
+
+class TestCombinedChannels:
+    def test_port_mirrored_then_starboard(self):
+        port = np.array([[1, 2, 3]])
+        stbd = np.array([[4, 5, 6]])
+        np.testing.assert_array_equal(combine_channels_mirrored(port, stbd), [[3, 2, 1, 4, 5, 6]])
+
+    @pytest.mark.parametrize("channel, sample", [(0, 0), (0, 2), (1, 0), (1, 2)])
+    def test_target_combined_col_points_at_the_same_value(self, channel, sample):
+        port = np.array([[10, 11, 12]])
+        stbd = np.array([[20, 21, 22]])
+        combined = combine_channels_mirrored(port, stbd)
+        col = target_combined_col(sample, 3, channel)
+        assert combined[0, col] == (port if channel == 0 else stbd)[0, sample]
+
+    def test_place_targets_in_file(self):
+        t0 = Target(target_id="a", source_format="x", catalog_source="x", channel=0, sample=1)
+        t1 = Target(target_id="b", source_format="x", catalog_source="x", channel=1, sample=2)
+        by_channel, combined = place_targets_in_file({0: [(t0, 7)], 1: [(t1, 9)]}, n_samples_single=5)
+        assert by_channel[0][0].extra_attributes["window_row"] == 7
+        assert by_channel[1][0].sample == 2
+        assert {(c.target_id, c.sample, c.extra_attributes["window_row"]) for c in combined} == {("a", 3, 7), ("b", 7, 9)}
+
+
+class TestTargetAnnotationHelpers:
+    def test_with_bbox_size_px_scales_measured_extent(self):
+        t = Target(target_id="a", source_format="x", catalog_source="x", bbox=(0.0, 0.0, 4.0, 10.0))
+        assert with_bbox_size_px(t, 2.0, 0.5).extra_attributes["bbox_size_px"] == (8.0, 5.0)
+
+    def test_with_bbox_size_px_no_bbox_is_unchanged(self):
+        t = Target(target_id="a", source_format="x", catalog_source="x")
+        assert with_bbox_size_px(t, 2.0, 2.0) is t
+
+    def test_rescale_targets(self):
+        t = _target("a", row=10, col=20)
+        (out,) = rescale_targets([t], (100, 200), (50, 50))
+        assert (out.extra_attributes["window_row"], out.sample) == (5.0, 5.0)
+
+
+def _neighborhood(n_pings=60, n_samples=20):
+    values = np.zeros((n_pings, 2, n_samples))
+    values[:, 0, :] = np.arange(n_samples)  # port value = sample index
+    values[:, 1, :] = 100 + np.arange(n_samples)  # starboard = 100 + sample index
+    return xr.Dataset({"backscatter_intensity": (("ping", "channel", "sample"), values)})
+
+
+class TestExtractPixelStyleWindow:
+    def _call(self, style, *, channel=1, sample=5, placed=None, require=True, size_px=8):
+        masked = _neighborhood()
+        placed = placed or {}
+        by_channel, combined = place_targets_in_file(placed, masked.sizes["sample"])
+        return extract_pixel_style_window(
+            masked, center_sample=sample, channel_idx=channel, local_ping=30, ping_offset=100, style=style,
+            level="radiometric", size_px=size_px, jitter_px=0, rng=np.random.default_rng(0),
+            placed_by_channel=by_channel, placed_combined=combined, require_targets=require,
+        )
+
+    def test_requires_a_target_by_default(self):
+        assert self._call("chip") is None
+
+    def test_background_window_has_no_targets_and_a_file_extent(self):
+        out = self._call("chip", require=False)
+        assert out.targets == []
+        assert out.extent == WindowExtent(row_start=126, col_start=1, n_rows=8, n_cols=8)
+        assert out.image.shape == (8, 8)
+
+    def test_chip_keeps_target_and_orients(self):
+        t = Target(target_id="t", source_format="x", catalog_source="x", channel=1, sample=5)
+        out = self._call("chip", placed={1: [(t, 130)]})
+        (ct,) = out.targets
+        # row 130 - 126 = 4, flipped vertically in an 8-row window -> 3
+        assert (ct.sample, ct.extra_attributes["window_row"]) == (4, 3)
+        assert out.image[3, 4] == 105
+
+    def test_port_chip_is_mirrored(self):
+        t = Target(target_id="t", source_format="x", catalog_source="x", channel=0, sample=5)
+        out = self._call("chip", channel=0, placed={0: [(t, 130)]})
+        (ct,) = out.targets
+        assert out.image[int(ct.extra_attributes["window_row"]), int(ct.sample)] == 5
+
+    def test_dual_swath_is_square_resized_and_spans_both_channels(self):
+        t = Target(target_id="t", source_format="x", catalog_source="x", channel=1, sample=5)
+        out = self._call("dual-swath", placed={1: [(t, 130)]}, size_px=16)
+        assert out.image.shape == (16, 16)
+        assert out.extent.n_cols == 40 and out.extent.n_rows == 40
+        assert out.image[:, 0].mean() < 50 < out.image[:, -1].mean()
+
+    def test_missing_level_variable_returns_none(self):
+        masked = _neighborhood()
+        out = extract_pixel_style_window(
+            masked, center_sample=5, channel_idx=1, local_ping=30, ping_offset=0, style="chip", level="db",
+            size_px=8, jitter_px=0, rng=np.random.default_rng(0), placed_by_channel={}, placed_combined=[],
+            require_targets=False,
+        )
+        assert out is None

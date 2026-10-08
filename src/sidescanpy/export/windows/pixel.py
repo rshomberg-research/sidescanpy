@@ -1,11 +1,14 @@
 """
-Window extraction for dataset-export images: chips, full-channel views,
-and no-target negative sampling.
+Sample/ping pixel-space windows: chips, full-channel views, co-located
+targets, and the per-style window used by the ``uncorrected``/``db``/
+``radiometric`` render levels.
 
-Operates on plain 2D ``(n_pings, n_samples)`` arrays — a caller has
-already selected which channel/backscatter variable to read from a
-corrected survey (e.g. ``ds["backscatter_intensity"].isel(channel=0).values``).
+The low-level functions operate on plain 2D ``(n_pings, n_samples)``
+arrays -- a caller has already selected the channel and backscatter
+variable (e.g. ``ds["backscatter_intensity"].isel(channel=0).values``).
 Row = ping index, column = sample index throughout.
+:func:`extract_pixel_style_window` works on a loaded, nadir-masked ping
+neighborhood and handles all three styles.
 
 2026 rshomberg@uri.edu
 """
@@ -13,12 +16,15 @@ Row = ping index, column = sample index throughout.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
+import xarray as xr
 from scipy.ndimage import zoom
 
 from sidescanpy.core.target import Target
+from sidescanpy.export.orientation import orient_pixel_window
+from sidescanpy.export.windows.levels import LEVEL_VARS
 
 logger = logging.getLogger(__name__)
 
@@ -244,3 +250,216 @@ def rescale_target_position(
     row_scale = output_shape[0] / native_shape[0]
     col_scale = output_shape[1] / native_shape[1]
     return row * row_scale, col * col_scale
+
+
+@dataclass
+class RenderedWindow:
+    """One rendered export window, before the 8/16-bit display transform.
+
+    Attributes
+    ----------
+    image : np.ndarray
+        Display-oriented float window at its output size.
+    targets : list of Target
+        Targets inside the window, in ``image``'s pixel coordinates
+        (``sample`` = column, ``extra_attributes["window_row"]`` = row).
+    extent : WindowExtent or None
+        Pixel levels: the window's placement in the file's ping axis and
+        the style's column space (single-channel samples, or the combined
+        columns of :func:`combine_channels_mirrored`), before orientation.
+    meta : dict or None
+        Geometric/georef levels: the extractor's ``meta`` (grid origin and
+        resolution) for locating further points in the window.
+    grid_shape : tuple of int or None
+        Geometric/georef levels: ``(n_rows, n_cols)`` of the resampled grid.
+    resolution_m : float or None
+        Geometric/georef levels: meters per output pixel.
+    """
+
+    image: np.ndarray
+    targets: list[Target] = field(default_factory=list)
+    extent: WindowExtent | None = None
+    meta: dict | None = None
+    grid_shape: tuple[int, int] | None = None
+    resolution_m: float | None = None
+
+
+def combine_channels_mirrored(port_2d: np.ndarray, starboard_2d: np.ndarray) -> np.ndarray:
+    """Port (sample axis reversed) and starboard side by side, nadir in the middle.
+
+    A plain concatenation of the two pixel arrays, not a resample into a
+    shared real-world frame (that is what the geometric/georef levels do).
+    """
+    return np.concatenate([port_2d[:, ::-1], starboard_2d], axis=1)
+
+
+def target_combined_col(sample: int, n_samples_single: int, channel_idx: int) -> int:
+    """Column of a single-channel ``sample`` in :func:`combine_channels_mirrored`'s output."""
+    if channel_idx == 0:
+        return n_samples_single - 1 - sample
+    return n_samples_single + sample
+
+
+def rescale_targets(targets: list[Target], native_shape: tuple[int, int], output_shape: tuple[int, int]) -> list[Target]:
+    """Move every target's ``(row, col)`` from a native window into its resized output.
+
+    Matches :func:`resize_to`'s transform; see :func:`rescale_target_position`.
+    """
+    rescaled = []
+    for ct in targets:
+        row, col = rescale_target_position(ct.extra_attributes["window_row"], ct.sample, native_shape, output_shape)
+        rescaled.append(replace(ct, sample=col, extra_attributes={**ct.extra_attributes, "window_row": row}))
+    return rescaled
+
+
+def with_bbox_size_px(target: Target, scale_x: float, scale_y: float) -> Target:
+    """Record ``target.bbox``'s measured ``(w, h)`` in this window's output pixels.
+
+    ``scale_x``/``scale_y`` convert from the bbox's native units (source
+    sample/ping pixels) into output pixels -- 1:1 for an unresized pixel
+    window; meters-per-sample (or per ping) over ``resolution_m`` for a
+    geometric/georef window. The result goes in
+    ``extra_attributes["bbox_size_px"]``, which COCO/YOLO writers use
+    instead of the shared placeholder box size.
+
+    Returns ``target`` unchanged when it has no ``bbox`` (a center-only
+    pick keeps the placeholder).
+    """
+    if target.bbox is None:
+        return target
+    _x, _y, w, h = target.bbox
+    return replace(target, extra_attributes={**target.extra_attributes, "bbox_size_px": (float(w) * scale_x, float(h) * scale_y)})
+
+
+def place_targets_in_file(
+    items_by_channel: dict[int, list[tuple[Target, int]]], n_samples_single: int,
+) -> tuple[dict[int, list[Target]], list[Target]]:
+    """File-coordinate target lists for :func:`extract_pixel_style_window`'s co-target lookup.
+
+    Parameters
+    ----------
+    items_by_channel : dict
+        ``{channel_idx: [(target, file_ping_idx), ...]}``.
+    n_samples_single : int
+        Samples per channel.
+
+    Returns
+    -------
+    (placed_by_channel, placed_combined)
+        Per channel, each target with ``extra_attributes["window_row"]`` =
+        its file ping (column = its own sample); and one list over both
+        channels in :func:`combine_channels_mirrored`'s column space.
+    """
+    placed_by_channel = {
+        ch: [replace(t, extra_attributes={**t.extra_attributes, "window_row": ping_idx}) for t, ping_idx in its]
+        for ch, its in items_by_channel.items()
+    }
+    placed_combined = [
+        replace(t, sample=target_combined_col(t.sample, n_samples_single, ch), extra_attributes={**t.extra_attributes, "window_row": ping_idx})
+        for ch, its in items_by_channel.items()
+        for t, ping_idx in its
+    ]
+    return placed_by_channel, placed_combined
+
+
+def extract_pixel_style_window(
+    masked: xr.Dataset,
+    *,
+    center_sample: int,
+    channel_idx: int,
+    local_ping: int,
+    ping_offset: int,
+    style: str,
+    level: str,
+    size_px: int,
+    jitter_px: int,
+    rng: np.random.Generator,
+    placed_by_channel: dict[int, list[Target]],
+    placed_combined: list[Target],
+    require_targets: bool = True,
+) -> RenderedWindow | None:
+    """Sample/ping-space window for one style, with the targets inside it.
+
+    ``chip`` crops ``size_px`` square around ``(local_ping, center_sample)``
+    on ``channel_idx``; ``single-swath`` takes that channel's full sample
+    axis over a square native ping span; ``dual-swath`` does the same on
+    both channels combined (:func:`combine_channels_mirrored`). The window
+    is oriented (:func:`~sidescanpy.export.orientation.orient_pixel_window`)
+    and resized to ``size_px`` square if needed, with every co-located
+    target moved to match and its measured bbox recorded
+    (:func:`with_bbox_size_px`).
+
+    Parameters
+    ----------
+    masked : xr.Dataset
+        Nadir-masked ping neighborhood (see
+        :func:`~sidescanpy.export.windows.levels.mask_nadir_gap_with_uncorrected`).
+    center_sample : int
+        Window center on ``channel_idx``'s own sample axis.
+    channel_idx : int
+        Channel of the window (and of ``center_sample``).
+    local_ping : int
+        Center ping, indexed into ``masked``.
+    ping_offset : int
+        File ping index of ``masked``'s first ping (placed targets carry
+        file ping indices).
+    style, level : str
+        See :mod:`sidescanpy.export.windows.levels`.
+    size_px : int
+        Output size (both axes).
+    jitter_px : int
+        Uniform center jitter, drawn from ``rng``.
+    rng : np.random.Generator
+    placed_by_channel, placed_combined
+        From :func:`place_targets_in_file`.
+    require_targets : bool, default True
+        Return ``None`` when no target falls in the window. ``False`` for
+        background windows.
+
+    Returns
+    -------
+    RenderedWindow or None
+        ``None`` when ``level``'s variable is absent from ``masked``, the
+        neighborhood is too short for a full-swath style's square native
+        window, or (``require_targets``) no target is inside.
+    """
+    value_var = LEVEL_VARS[level]
+    if value_var not in masked:
+        return None
+    n_samples_single = masked.sizes["sample"]
+
+    if style == "dual-swath":
+        port_2d = masked[value_var].isel(channel=0).values
+        stbd_2d = masked[value_var].isel(channel=1).values
+        arr_2d = combine_channels_mirrored(port_2d, stbd_2d)
+        center_col = target_combined_col(center_sample, n_samples_single, channel_idx)
+        co_source = placed_combined
+    else:
+        arr_2d = masked[value_var].isel(channel=channel_idx).values
+        center_col = center_sample
+        co_source = placed_by_channel.get(channel_idx, [])
+
+    try:
+        if style == "chip":
+            window, extent = extract_chip(arr_2d, center_row=local_ping, center_col=center_col, size_px=size_px, jitter_px=jitter_px, rng=rng)
+        else:
+            window, extent = extract_full_channel(arr_2d, center_ping=float(local_ping), jitter_px=jitter_px, rng=rng)
+    except ValueError:
+        return None
+
+    extent_file = WindowExtent(row_start=extent.row_start + ping_offset, col_start=extent.col_start, n_rows=extent.n_rows, n_cols=extent.n_cols)
+    co_targets = targets_within_window(co_source, extent_file)
+    if require_targets and not co_targets:
+        return None
+    window, co_targets = orient_pixel_window(window, co_targets, channel_idx, style)
+
+    native_shape = window.shape
+    # The window is a crop of source pixels, so t.bbox's sample/ping units
+    # map 1:1 until the resize below.
+    row_scale, col_scale = 1.0, 1.0
+    if native_shape != (size_px, size_px):
+        row_scale, col_scale = size_px / native_shape[0], size_px / native_shape[1]
+        co_targets = rescale_targets(co_targets, native_shape, (size_px, size_px))
+        window = resize_to(window, size_px)
+    co_targets = [with_bbox_size_px(ct, scale_x=col_scale, scale_y=row_scale) for ct in co_targets]
+    return RenderedWindow(image=window, targets=co_targets, extent=extent_file)

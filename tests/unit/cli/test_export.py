@@ -25,40 +25,16 @@ from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.processing import correct_survey
-from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.targets.io import write_targets_json
 from tests.conftest import make_minimal_sidescan_dataset
+from tests.unit.export.surveys import geo_friendly_survey, swath_friendly_survey
 
 # The module, not the same-named function viz/__init__ re-exports; run_chip
 # imports its plotting helpers from here at call time, so spies go here.
 viz_contact_sheet = importlib.import_module("sidescanpy.viz.contact_sheet")
-
-
-def _geo_friendly_survey():
-    """A survey where slant range genuinely exceeds altitude (unlike the
-    default 10-ping/100-sample fixture, whose max slant range is a few
-    cm -- well inside the water column at the default 5m altitude,
-    which leaves every ground_range_m/latitude_per_sample NaN and
-    breaks grid/ground-waterfall, which both need real coverage).
-
-    Also overrides latitude/longitude to a tight, realistic ~100m
-    survey-track span -- ``make_minimal_sidescan_dataset``'s own default
-    (``np.linspace(40.0, 40.5, n_pings)``, a 0.5-degree/~55km spread) is
-    harmless for correction-step tests but pathological for
-    ``resample_channel_to_grid``'s plain nested Python loop over grid
-    cells: a 55km bbox at 1m resolution is tens of thousands of rows,
-    each doing a KDTree query -- reproduced directly as a many-minute
-    hang before this override was added, not a bug in the CLI code
-    being tested here.
-    """
-    survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="survey_a")
-    for freq_key, freq_hz in (("hz_1495000", 1_495_000), ("hz_547500", 547_500)):
-        ds = make_minimal_sidescan_dataset(n_pings=20, n_samples=2000, freq_hz_start=freq_hz)
-        ds["altitude_m"] = ("ping", np.full(20, 0.5, dtype=np.float32))
-        ds["latitude"] = ("ping", np.linspace(40.0000, 40.0010, 20))
-        ds["longitude"] = ("ping", np.linspace(-70.0000, -70.0010, 20))
-        survey.add_frequency(freq_key, ds)
-    return survey
+# Window extraction lives in the library; spy on the module that calls the resamplers.
+geo_windows = importlib.import_module("sidescanpy.export.windows.geo")
+neighborhood = importlib.import_module("sidescanpy.export.windows.neighborhood")
 
 
 @pytest.fixture
@@ -73,7 +49,7 @@ def ss_h5_dir(tmp_path, sample_multi_frequency_survey):
 def georef_ss_h5_dir(tmp_path):
     d = tmp_path / "ss_h5"
     d.mkdir()
-    corrected = correct_survey(_geo_friendly_survey())
+    corrected = correct_survey(geo_friendly_survey())
     write_survey(corrected, d / "survey_a.ss.h5")
     return d
 
@@ -85,38 +61,16 @@ def two_file_ss_h5_dir(tmp_path):
     whole survey without restarting at each file boundary."""
     d = tmp_path / "ss_h5"
     d.mkdir()
-    write_survey(correct_survey(_geo_friendly_survey()), d / "survey_a.ss.h5")
-    write_survey(correct_survey(_geo_friendly_survey()), d / "survey_b.ss.h5")
+    write_survey(correct_survey(geo_friendly_survey()), d / "survey_a.ss.h5")
+    write_survey(correct_survey(geo_friendly_survey()), d / "survey_b.ss.h5")
     return d
-
-
-def _swath_friendly_survey(n_pings=300, n_samples=30):
-    """Unlike ``_geo_friendly_survey`` (20 pings x 2000 samples, built for
-    geometric/georef range coverage), single-swath/dual-swath's native
-    square window needs ``n_samples``/``2*n_samples`` *pings* to fit
-    inside the survey (see ``extract_full_channel``'s own docstring) --
-    many more pings than samples, the opposite proportion.
-    """
-    survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="survey_a")
-    ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples, freq_hz_start=1_495_000)
-    # max slant range at the default 1500m/s, 400kHz fixture sample rate is
-    # n_samples * 0.001875m (~0.056m here) -- altitude must be well under
-    # that or every sample stays inside the water column (ground_range_m/
-    # across_track_m all NaN, exactly _geo_friendly_survey's own docstring
-    # warning about its default fixture, scaled down for this one's much
-    # smaller n_samples).
-    ds["altitude_m"] = ("ping", np.full(n_pings, 0.01, dtype=np.float32))
-    ds["latitude"] = ("ping", np.linspace(40.0000, 40.0010, n_pings))
-    ds["longitude"] = ("ping", np.linspace(-70.0000, -70.0010, n_pings))
-    survey.add_frequency("hz_1495000", ds)
-    return survey
 
 
 @pytest.fixture
 def swath_ss_h5_dir(tmp_path):
     d = tmp_path / "ss_h5"
     d.mkdir()
-    corrected = correct_survey(_swath_friendly_survey())
+    corrected = correct_survey(swath_friendly_survey())
     write_survey(corrected, d / "survey_a.ss.h5")
     return d
 
@@ -184,7 +138,7 @@ class TestRunWaterfall:
         assert spy.spy_return is not None
 
     def test_matched_target_gets_a_box_drawn(self, tmp_path, georef_ss_h5_dir, caplog):
-        # ping 10's exact lat/lon from _geo_friendly_survey()'s own
+        # ping 10's exact lat/lon from geo_friendly_survey()'s own
         # np.linspace(...) -- guarantees a real, non-ambiguous match.
         lat = float(np.linspace(40.0000, 40.0010, 20)[10])
         lon = float(np.linspace(-70.0000, -70.0010, 20)[10])
@@ -402,275 +356,6 @@ class TestRunTrack:
         empty = tmp_path / "empty"
         empty.mkdir()
         assert export.run_track(self._args(tmp_path, empty)) == 1
-
-
-class TestOrientPixelWindow:
-    """Real-data bug: chip/context exports never matched EdgeTech
-    Discover's own target thumbnails -- ``orient_for_display`` existed and
-    was validated for this, but was never called from the chip export
-    path. ``_orient_pixel_window`` is the adapted equivalent (handles
-    every co-located target sharing one window, not just a single
-    primary target)."""
-
-    def _co_target(self, sample, window_row):
-        return Target(target_id="1", source_format="x", catalog_source="x", sample=sample, extra_attributes={"window_row": window_row})
-
-    def test_vertical_flip_always_applies(self):
-        window = np.array([[1, 2], [3, 4], [5, 6]])  # 3 rows, 2 cols
-        ct = self._co_target(sample=0, window_row=0)
-        flipped, (out,) = export._orient_pixel_window(window, [ct], channel_idx=1, style="single-swath")
-        np.testing.assert_array_equal(flipped, window[::-1, :])
-        assert out.extra_attributes["window_row"] == 2
-
-    def test_port_channel_flips_horizontally_for_single_channel_style(self):
-        window = np.array([[1, 2, 3], [4, 5, 6]])  # 2 rows, 3 cols
-        ct = self._co_target(sample=0, window_row=0)
-        _, (out,) = export._orient_pixel_window(window, [ct], channel_idx=0, style="chip")
-        assert out.sample == 2
-
-    def test_starboard_channel_does_not_flip_horizontally(self):
-        window = np.array([[1, 2, 3], [4, 5, 6]])
-        ct = self._co_target(sample=0, window_row=0)
-        flipped, (out,) = export._orient_pixel_window(window, [ct], channel_idx=1, style="chip")
-        assert out.sample == 0
-        np.testing.assert_array_equal(flipped, window[::-1, :])
-
-    def test_dual_swath_never_flips_horizontally_even_for_channel_0(self):
-        """dual-swath windows are already port-mirrored by
-        _combine_channels_mirrored at combination time -- flipping again
-        here would un-mirror them."""
-        window = np.array([[1, 2, 3], [4, 5, 6]])
-        ct = self._co_target(sample=0, window_row=0)
-        _, (out,) = export._orient_pixel_window(window, [ct], channel_idx=0, style="dual-swath")
-        assert out.sample == 0
-
-    def test_multiple_co_targets_all_remapped(self):
-        window = np.zeros((4, 5))
-        cts = [self._co_target(sample=1, window_row=0), self._co_target(sample=4, window_row=3)]
-        _, out = export._orient_pixel_window(window, cts, channel_idx=0, style="chip")
-        assert {(o.sample, o.extra_attributes["window_row"]) for o in out} == {(3, 3), (0, 0)}
-
-
-def _geo_channel_ds():
-    """A single-channel dataset with real across_track_m/along-track
-    geometry, for _geo_targets_within_window/_flip_geo_vertical tests --
-    mirrors _geo_friendly_survey's altitude/lat/lon overrides but returns
-    a bare per-channel Dataset (geometric ranges already computed)."""
-    ds = make_minimal_sidescan_dataset(n_pings=20, n_samples=2000, freq_hz_start=1_495_000)
-    ds["altitude_m"] = ("ping", np.full(20, 0.5, dtype=np.float32))
-    ds["latitude"] = ("ping", np.linspace(40.0000, 40.0010, 20))
-    ds["longitude"] = ("ping", np.linspace(-70.0000, -70.0010, 20))
-    return compute_geometric_ranges(ds)
-
-
-class TestGeoTargetsWithinWindow:
-    def test_finds_a_co_located_target_and_places_it_locally(self):
-        from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
-        from sidescanpy.processing.navigation import along_track_distance_m
-
-        ds = _geo_channel_ds()
-        along = along_track_distance_m(ds)
-        across = ds["across_track_m"].isel(channel=0).values
-        finite = np.isfinite(across)
-        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
-
-        grid, meta = extract_geometric_window(
-            ds, 16, resolution_m=0.5, center_along_m=float(along[ping_idx]),
-            center_across_m=float(across[ping_idx, sample_idx]), channel_idx=0,
-        )
-        co_target = Target(target_id="co", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
-        candidates = [(co_target, int(ping_idx))]
-        found = export._geo_targets_within_window(candidates, ds, 0, along, 16, meta, locate_point)
-        assert len(found) == 1
-        assert found[0].target_id == "co"
-        assert 0 <= found[0].sample < 16
-        assert 0 <= found[0].extra_attributes["window_row"] < 16
-
-    def test_target_outside_window_is_excluded(self):
-        from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
-        from sidescanpy.processing.navigation import along_track_distance_m
-
-        ds = _geo_channel_ds()
-        along = along_track_distance_m(ds)
-        across = ds["across_track_m"].isel(channel=0).values
-        finite = np.isfinite(across)
-        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
-
-        grid, meta = extract_geometric_window(
-            ds, 16, resolution_m=0.5, center_along_m=float(along[ping_idx]),
-            center_across_m=float(across[ping_idx, sample_idx]), channel_idx=0,
-        )
-        # a target at ping 0 -- far outside a tight 16*0.5m=8m window centered mid-survey
-        far_target = Target(target_id="far", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
-        found = export._geo_targets_within_window([(far_target, 0)], ds, 0, along, 16, meta, locate_point)
-        assert found == []
-
-    def test_out_of_range_ping_idx_skipped_not_crashed(self):
-        from sidescanpy.export.geometric_window import extract_geometric_window, locate_point
-        from sidescanpy.processing.navigation import along_track_distance_m
-
-        ds = _geo_channel_ds()
-        along = along_track_distance_m(ds)
-        across = ds["across_track_m"].isel(channel=0).values
-        finite = np.isfinite(across)
-        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
-        grid, meta = extract_geometric_window(
-            ds, 16, resolution_m=0.5, center_along_m=float(along[ping_idx]),
-            center_across_m=float(across[ping_idx, sample_idx]), channel_idx=0,
-        )
-        bogus = Target(target_id="bogus", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
-        # ping_idx way outside this masked slice's own ping axis (lo=0, n_pings=20)
-        found = export._geo_targets_within_window([(bogus, 9999)], ds, 0, along, 16, meta, locate_point)
-        assert found == []
-
-    def test_along_size_px_bounds_row_independent_of_size_px(self):
-        # Real bug regression, 2026-09-29: the row bound used to reuse
-        # size_px (the column count) for both axes -- a co-target whose
-        # locate_fn-reported row falls inside size_px but outside a
-        # smaller real along_size_px must now be excluded. A stub
-        # locate_fn pins the row deterministically (row=8), avoiding any
-        # dependence on this fixture's own real geometry.
-        from sidescanpy.processing.navigation import along_track_distance_m
-
-        ds = _geo_channel_ds()
-        along = along_track_distance_m(ds)
-        across = ds["across_track_m"].isel(channel=0).values
-        finite = np.isfinite(across)
-        ping_idx, sample_idx = np.argwhere(finite)[len(np.argwhere(finite)) // 2]
-
-        def stub_locate(*_args, **_kwargs):
-            return 8, 2  # row=8: inside size_px=16, outside along_size_px=4
-
-        co_target = Target(target_id="co", source_format="x", catalog_source="x", channel=0, sample=int(sample_idx))
-        candidates = [(co_target, int(ping_idx))]
-        found_no_limit = export._geo_targets_within_window(candidates, ds, 0, along, 16, {}, stub_locate)
-        found_with_limit = export._geo_targets_within_window(candidates, ds, 0, along, 16, {}, stub_locate, along_size_px=4)
-        assert len(found_no_limit) == 1  # demonstrates the stale size_px bound over-accepts
-        assert found_with_limit == []
-
-
-class TestFlipGeoVertical:
-    def _co_target(self, sample, window_row):
-        return Target(target_id="1", source_format="x", catalog_source="x", sample=sample, extra_attributes={"window_row": window_row})
-
-    def test_flips_grid_vertically(self):
-        grid = np.array([[1, 2], [3, 4], [5, 6]])
-        flipped, _ = export._flip_geo_vertical(grid, [], along_size_px=3)
-        np.testing.assert_array_equal(flipped, grid[::-1, :])
-
-    def test_remaps_every_target_window_row(self):
-        grid = np.zeros((10, 10))
-        targets = [self._co_target(sample=1, window_row=0), self._co_target(sample=4, window_row=9)]
-        _, out = export._flip_geo_vertical(grid, targets, along_size_px=10)
-        assert {t.extra_attributes["window_row"] for t in out} == {10, 1}
-
-    def test_uses_along_size_px_not_column_count_when_non_square(self):
-        # Real bug regression, 2026-09-29: along-track pixel resolution
-        # can now differ from across-track, so a grid's row count and
-        # column count can genuinely differ -- the flip must mirror
-        # against the actual ROW count, not whatever size_px happens to
-        # be passed for the (unrelated) column axis.
-        grid = np.arange(12).reshape(4, 3)  # 4 rows, 3 cols -- non-square
-        targets = [self._co_target(sample=1, window_row=0), self._co_target(sample=1, window_row=4)]
-        flipped, out = export._flip_geo_vertical(grid, targets, along_size_px=4)
-        np.testing.assert_array_equal(flipped, grid[::-1, :])
-        assert {t.extra_attributes["window_row"] for t in out} == {4, 0}
-
-
-class TestOrientGeoWindow:
-    """Real, confirmed finding (2026-09-29): extract_geometric_window's
-    ascending-across_track_m column order puts near-range on the RIGHT
-    for a port window (negative across_track_m) but on the LEFT for a
-    starboard window (positive) -- port and starboard windows were
-    genuine mirror images of each other with no correction applied
-    anywhere in this codebase, confirmed via real target coordinates
-    (0001 port: across_min=-16.28m; 0002 starboard: across_min=+15.55m).
-    """
-
-    def _co_target(self, sample, window_row):
-        return Target(target_id="1", source_format="x", catalog_source="x", sample=sample, extra_attributes={"window_row": window_row})
-
-    def test_port_gets_horizontal_flip_on_top_of_vertical(self):
-        grid = np.array([[1, 2, 3], [4, 5, 6]])
-        oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=False, channel_idx=0)
-        # vertical flip first (rows reversed), then horizontal (cols reversed)
-        expected = grid[::-1, :][:, ::-1]
-        np.testing.assert_array_equal(oriented, expected)
-
-    def test_starboard_gets_only_vertical_flip(self):
-        grid = np.array([[1, 2, 3], [4, 5, 6]])
-        oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=False, channel_idx=1)
-        np.testing.assert_array_equal(oriented, grid[::-1, :])
-
-    def test_uses_along_size_px_for_vertical_flip_when_non_square(self):
-        # Real bug regression, 2026-09-29: a non-square grid (anisotropic
-        # along-track pixel resolution) must flip against its own real
-        # row count, not size_px (the across-track/column count).
-        grid = np.arange(12).reshape(4, 3)  # 4 rows, 3 cols
-        targets = [self._co_target(sample=1, window_row=0)]
-        oriented, out = export._orient_geo_window(grid, targets, size_px=3, combine=False, channel_idx=1, along_size_px=4)
-        np.testing.assert_array_equal(oriented, grid[::-1, :])
-        assert out[0].extra_attributes["window_row"] == 4
-
-    def test_dual_swath_never_gets_horizontal_flip_even_with_channel_idx_zero(self):
-        # combine=True always passes channel_idx=None in the real caller
-        # (_extract_geo_style_window's geom_channel_idx), but this
-        # function is tested directly against combine as the deciding
-        # flag, not channel_idx alone -- confirms combine wins.
-        grid = np.array([[1, 2, 3], [4, 5, 6]])
-        oriented, _ = export._orient_geo_window(grid, [], size_px=2, combine=True, channel_idx=None)
-        np.testing.assert_array_equal(oriented, grid[::-1, :])
-
-    def test_port_flip_remaps_target_column(self):
-        grid = np.zeros((4, 5))
-        targets = [self._co_target(sample=0, window_row=0), self._co_target(sample=4, window_row=3)]
-        _, out = export._orient_geo_window(grid, targets, size_px=4, combine=False, channel_idx=0)
-        assert {o.sample for o in out} == {4, 0}
-
-    def test_starboard_does_not_remap_target_column(self):
-        grid = np.zeros((4, 5))
-        targets = [self._co_target(sample=0, window_row=0), self._co_target(sample=4, window_row=3)]
-        _, out = export._orient_geo_window(grid, targets, size_px=4, combine=False, channel_idx=1)
-        assert {o.sample for o in out} == {0, 4}
-
-    def test_port_near_range_moves_to_column_zero_after_orientation(self):
-        """The actual point of this fix, verified directly from real
-        window geometry (not just the flip mechanics tested above): a
-        real port window's near-range (nadir-ward) edge is at the LAST
-        column before orientation (ascending across_track_m puts port's
-        least-negative/nearest-zero value last) and must be at column 0
-        after -- matching starboard's own, already-correct column-0-is-
-        near-range convention (starboard's smallest/nearest-zero value
-        is ascending-order-first already, so it needs no flip)."""
-        from sidescanpy.export.geometric_window import extract_geometric_window
-        from sidescanpy.processing.navigation import along_track_distance_m
-
-        ds = _geo_channel_ds()
-        along = along_track_distance_m(ds)
-        across_port = ds["across_track_m"].isel(channel=0).values
-        finite_port = np.isfinite(across_port)
-        p_ping, p_sample = np.argwhere(finite_port)[len(np.argwhere(finite_port)) // 2]
-        port_across_m = float(across_port[p_ping, p_sample])
-        size_px = 16
-        resolution_m = 0.5
-        grid_port, meta_port = extract_geometric_window(
-            ds, size_px, resolution_m=resolution_m, center_along_m=float(along[p_ping]),
-            center_across_m=port_across_m, channel_idx=0,
-        )
-        # Pre-flip: column 0's real across_track_m is meta["across_min"]
-        # (most negative = far-range for port); the last column is
-        # across_min + (size_px-1)*resolution_m (least negative = near-range).
-        across_min = meta_port["across_min"]
-        pre_flip_col0_across_m = across_min
-        pre_flip_last_col_across_m = across_min + (size_px - 1) * resolution_m
-        assert abs(pre_flip_last_col_across_m) < abs(pre_flip_col0_across_m), (
-            "test setup assumption broken: expected port's near-range (closer to 0) "
-            "to be the LAST column before orientation"
-        )
-
-        oriented, _ = export._orient_geo_window(grid_port, [], size_px=size_px, combine=False, channel_idx=0)
-        # After the horizontal flip, oriented column 0 == pre-flip (vertically-flipped) last column.
-        np.testing.assert_array_equal(oriented[:, 0], grid_port[::-1, :][:, -1])
 
 
 class TestRunChip:
@@ -899,7 +584,7 @@ class TestRunChip:
         # --resample-method (see cli/export.py's own comment at the call
         # site and TestRunChipResampleMethod below for the dispatch
         # coverage across all three options).
-        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        spy = mocker.spy(geo_windows, "extract_geometric_window_griddata")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -915,7 +600,7 @@ class TestRunChip:
     def test_geometric_context_reuses_dual_swath_window(self, tmp_path, swath_ss_h5_dir, mocker):
         """--with-context used to run a second, identical dual-swath
         griddata pass per target (~11s each on real data)."""
-        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        spy = mocker.spy(geo_windows, "extract_geometric_window_griddata")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -935,7 +620,7 @@ class TestRunChip:
         for a target sitting in a locally slow/dense-ping region. --resolution-m
         lets the operator set a known-good value directly, bypassing that
         auto-calculation entirely for every style."""
-        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        spy = mocker.spy(geo_windows, "extract_geometric_window_griddata")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -951,7 +636,7 @@ class TestRunChip:
 
 
     def test_resolution_m_override_reaches_georef_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
-        spy = mocker.spy(export, "extract_georef_window")
+        spy = mocker.spy(geo_windows, "extract_georef_window")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -976,7 +661,7 @@ class TestRunChip:
         assert any("has no effect" in r.message for r in caplog.records)
 
     def test_georef_render_level_calls_georef_extraction(self, tmp_path, swath_ss_h5_dir, mocker):
-        spy = mocker.spy(export, "extract_georef_window")
+        spy = mocker.spy(geo_windows, "extract_georef_window")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -1298,7 +983,7 @@ class TestRunChipResampleMethod:
         ],
     )
     def test_each_option_calls_its_own_function(self, tmp_path, swath_ss_h5_dir, mocker, resample_method, spied_fn):
-        spy = mocker.spy(export, spied_fn)
+        spy = mocker.spy(geo_windows, spied_fn)
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._target()], targets_json)
         args = self._args(tmp_path, swath_ss_h5_dir, targets_json, resample_method=resample_method)
@@ -1306,7 +991,7 @@ class TestRunChipResampleMethod:
         assert spy.call_count == 1
 
     def test_omitting_resample_method_defaults_to_griddata(self, tmp_path, swath_ss_h5_dir, mocker):
-        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        spy = mocker.spy(geo_windows, "extract_geometric_window_griddata")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._target()], targets_json)
         # No resample_method key at all -- matches an argparse.Namespace
@@ -1368,43 +1053,14 @@ class TestPingChunksAlignment:
 
 
 class TestSwathPreResampleDownsample:
-    """Geometric/georef single-swath/dual-swath block-average the source
-    neighborhood before resampling (_load_swath_neighborhood) -- the
-    fix for ~3GB-per-target loads plus the resample's own working set
-    on real data."""
-
-    def test_factors_keep_two_cells_per_output_pixel(self, georef_ss_h5_dir):
-        ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset
-        mps = export._sample_interval_m(ds)
-        half_span, fp, fs = export._geo_decimation(ds, 10, "dual-swath", size_px=64, jitter_px=0, resolution_m=0.1)
-        assert fs == int(0.1 / (export._SWATH_OVERSAMPLE * mps))
-        assert fs > 1
-        assert fp >= 1
-
-    def test_neighborhood_covers_the_window_in_meters(self, georef_ss_h5_dir):
-        """Sized from size_px * resolution_m along-track, not from
-        size_px pings -- a pings-sized neighborhood left real geometric
-        chips short of data at top/bottom (griddata nearest-fill streaks)."""
-        ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset
-        spacing = export._neighborhood_ping_spacing_m(ds, 0, ds.sizes["ping"])
-        half_span, _fp, _fs = export._geo_decimation(ds, 10, "chip", size_px=100, jitter_px=10, resolution_m=spacing)
-        assert half_span * spacing >= (100 / 2 + 10) * spacing
-
-    def test_loaded_neighborhood_is_averaged_and_rescaled(self, georef_ss_h5_dir):
-        ds = read_survey(next(georef_ss_h5_dir.glob("*.ss.h5"))).get_frequency("hz_1495000").dataset
-        out = export._load_swath_neighborhood(ds, 0, ds.sizes["ping"], 1, 10, with_db=True)
-        assert out.sizes["sample"] == ds.sizes["sample"] // 10
-        assert out.sizes["ping"] == ds.sizes["ping"]
-        assert "backscatter_db" in out
-        assert "slant_range_m" not in out
-        assert export._sample_interval_m(out) == pytest.approx(10 * export._sample_interval_m(ds))
+    """Block-averaging the neighborhood before resampling must not move annotations."""
 
     def test_annotation_matches_full_resolution_resample(self, tmp_path, georef_ss_h5_dir, monkeypatch):
         targets_json = tmp_path / "targets.json"
         write_targets_json([TestRunChip()._matched_target()], targets_json)
 
         def run(out, oversample):
-            monkeypatch.setattr(export, "_SWATH_OVERSAMPLE", oversample)
+            monkeypatch.setattr(neighborhood, "SWATH_OVERSAMPLE", oversample)
             args = TestRunChip()._args(
                 tmp_path, georef_ss_h5_dir, targets_json, render_level="geometric",
                 styles=["single-swath", "dual-swath"], swath_size_px=64, output=out,
@@ -1499,42 +1155,12 @@ class TestRunChipAugmentation:
             assert fx == pytest.approx(1 - cx if e["flip_h"] else cx, abs=1e-5)
             assert fy == pytest.approx(1 - cy if e["flip_v"] else cy, abs=1e-5)
 
-    def test_slant_across_axis_neighborhood_uses_signed_slant_range(self, tmp_path, swath_ss_h5_dir):
-        """--across-axis slant swaps the loaded neighborhood's across_track_m
-        for +/-slant_range_m (port negative), which every downstream
-        geometric extraction/co-target lookup reads -- and keeps the
-        water-column samples ground projection drops."""
-        survey = read_survey(next(swath_ss_h5_dir.glob("*.ss.h5")))
-        ds_full = survey.get_frequency("hz_1495000").dataset
-        t = self._target()
-        views = {
-            axis: export._load_geo_neighborhood(
-                ds_full, t, 150, {1: [(t, 150)]}, ["chip"], size_px=64, jitter_px=0,
-                resolution_m=0.002, with_db=False, across_axis=axis,
-            )
-            for axis in ("ground", "slant")
-        }
-        slant = views["slant"].ds
-        np.testing.assert_allclose(slant["across_track_m"].isel(channel=1).values, slant["slant_range_m"].isel(channel=1).values)
-        np.testing.assert_allclose(slant["across_track_m"].isel(channel=0).values, -slant["slant_range_m"].isel(channel=0).values)
-        ground_across = views["ground"].ds["across_track_m"].values
-        assert np.isnan(ground_across).any() and np.isfinite(slant["across_track_m"].values).all()
-        finite = np.isfinite(ground_across)
-        assert (np.abs(slant["across_track_m"].values[finite]) >= np.abs(ground_across[finite]) - 1e-9).all()
-
     def test_slant_across_axis_runs_end_to_end(self, tmp_path, swath_ss_h5_dir):
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._target()], targets_json)
         args = self._args(tmp_path, swath_ss_h5_dir, targets_json, across_axis="slant", resolution_m=0.002, n_augment=2, random_flip=True)
         assert export.run_chip(args) == 0
         assert len(list((tmp_path / "out" / "chip").glob("target_7_a*.png"))) == 2
-
-    def test_across_values_slant_signs_port_negative(self):
-        ds = xr.Dataset({"slant_range_m": (("ping", "channel", "sample"), np.ones((2, 2, 3)))})
-        v = export._across_values(ds, "slant").values
-        assert (v[:, 0] < 0).all() and (v[:, 1] > 0).all()
-        with pytest.raises(ValueError):
-            export._across_values(ds, "sideways")
 
     def test_box_size_m_scales_with_resolution(self, tmp_path, swath_ss_h5_dir):
         targets_json = tmp_path / "targets.json"
@@ -1550,44 +1176,81 @@ class TestRunChipAugmentation:
         assert widths[0.1] == pytest.approx(10.0, abs=0.5)
 
 
+class TestRunChipBackground:
+    """--n-background: no-target images rendered through the chip path."""
+
+    def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
+        defaults = dict(
+            targets_json=targets_json, ss_h5_dir=ss_h5_dir, max_match_dist_m=25.0,
+            output=tmp_path / "out", styles=["chip", "dual-swath"], render_level="geometric",
+            size_px=16, swath_size_px=16, box_size=4.0, with_context=False,
+            jitter_px=0, gamma=1.0, pct_low=1.0, pct_high=99.0,
+            normalization_scope="image", min_confidence="verified", seed=0,
+            resolution_m=None, background_max_nan_frac=1.0,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def _write_targets(self, tmp_path):
+        targets_json = tmp_path / "targets.json"
+        write_targets_json([TestRunChipAugmentation()._target()], targets_json)
+        return targets_json
+
+    @pytest.mark.parametrize("render_level", ["radiometric", "geometric"])
+    def test_background_images_have_empty_labels(self, tmp_path, swath_ss_h5_dir, render_level):
+        targets_json = self._write_targets(tmp_path)
+        args = self._args(tmp_path, swath_ss_h5_dir, targets_json, n_background=2, render_level=render_level)
+        assert export.run_chip(args) == 0
+        for style in ("chip", "dual-swath"):
+            style_dir = tmp_path / "out" / style
+            assert sorted(p.name for p in style_dir.glob("bg_*.png")) == ["bg_0.png", "bg_1.png"]
+            labels = style_dir / "targets.yolo" / "labels"
+            assert (labels / "bg_0.txt").read_text() == "" and (labels / "bg_1.txt").read_text() == ""
+            assert (labels / "target_7.txt").read_text().strip()
+            coco = json.loads((style_dir / "targets.coco.json").read_text())
+            bg_ids = {im["id"] for im in coco["images"] if im["file_name"].startswith("bg_")}
+            assert len(bg_ids) == 2
+            assert not any(a["image_id"] in bg_ids for a in coco["annotations"])
+            log = json.loads((style_dir / "augmentations.json").read_text())
+            bg_log = [e for e in log if e["target_id"] is None]
+            assert [e["background"] for e in bg_log] == [0, 1]
+            assert all(e["n_targets"] == 0 and abs(e["ping"] - 150) > 10 for e in bg_log)
+
+    def test_targets_unchanged_by_backgrounds(self, tmp_path, swath_ss_h5_dir):
+        targets_json = self._write_targets(tmp_path)
+        plain = self._args(tmp_path, swath_ss_h5_dir, targets_json, output=tmp_path / "plain", jitter_px=3)
+        with_bg = self._args(tmp_path, swath_ss_h5_dir, targets_json, output=tmp_path / "bg", jitter_px=3, n_background=1)
+        assert export.run_chip(plain) == 0
+        assert export.run_chip(with_bg) == 0
+        for style in ("chip", "dual-swath"):
+            a = (tmp_path / "plain" / style / "target_7.png").read_bytes()
+            assert a == (tmp_path / "bg" / style / "target_7.png").read_bytes()
+        assert not list((tmp_path / "plain" / "chip").glob("bg_*"))
+
+    def test_augmented_background_naming_and_ping_ranges(self, tmp_path, swath_ss_h5_dir):
+        targets_json = self._write_targets(tmp_path)
+        args = self._args(
+            tmp_path, swath_ss_h5_dir, targets_json, styles=["chip"], n_background=1, n_augment=2, random_flip=True,
+            jitter_px=2, background_ping_ranges='{"survey_a.ss.h5": [[0, 60]]}',
+        )
+        assert export.run_chip(args) == 0
+        chip_dir = tmp_path / "out" / "chip"
+        assert sorted(p.name for p in chip_dir.glob("bg_*.png")) == ["bg_0_a0.png", "bg_0_a1.png"]
+        log = [e for e in json.loads((chip_dir / "augmentations.json").read_text()) if e["target_id"] is None]
+        assert all(0 <= e["ping"] < 60 for e in log)
+        assert {"flip_h", "flip_v", "nan_fraction", "source_file", "freq_key"} <= set(log[0])
+
+    def test_ping_ranges_from_file(self, tmp_path):
+        ranges = tmp_path / "ranges.json"
+        ranges.write_text(json.dumps({"a.ss.h5": [[1, 5], [9, 12]]}))
+        assert export._load_ping_ranges(ranges) == {"a.ss.h5": [(1, 5), (9, 12)]}
+        assert export._load_ping_ranges(str(ranges)) == {"a.ss.h5": [(1, 5), (9, 12)]}
+        assert export._load_ping_ranges({"b": [[0, 1]]}) == {"b": [(0, 1)]}
+        assert export._load_ping_ranges(None) is None
+
+
 class TestSwathFill:
-    """--swath-fill: swath frame sized to where the data is, square pixels."""
-
-    def _arrays(self, n_pings=50, n_samples=100, port_reach=40.0, stbd_reach=60.0, near=2.0):
-        # across: port negative, starboard positive; reach in meters
-        frac = np.linspace(0.0, 1.0, n_samples)
-        across = np.empty((n_pings, 2, n_samples))
-        across[:, 0, :] = -(near + frac * (port_reach - near))
-        across[:, 1, :] = near + frac * (stbd_reach - near)
-        values = np.ones_like(across)
-        return across, values
-
-    def test_dual_swath_spans_port_far_to_starboard_far(self):
-        across, values = self._arrays()
-        lo, hi = export._swath_fill_extent(across, values, combine=True, channel_idx=None)
-        assert lo == pytest.approx(-40.0) and hi == pytest.approx(60.0)
-
-    def test_short_pings_crop_long_ones_not_pad(self):
-        across, values = self._arrays()
-        values[:45, 1, 80:] = np.nan  # 90% of pings stop short on starboard
-        _lo, hi = export._swath_fill_extent(across, values, combine=True, channel_idx=None)
-        assert hi < 60.0 * 0.82
-
-    def test_one_sided_recording_mirrors_other_side(self):
-        across, values = self._arrays()
-        values[:, 0, :] = np.nan
-        lo, hi = export._swath_fill_extent(across, values, combine=True, channel_idx=None)
-        assert (lo, hi) == pytest.approx((-60.0, 60.0))
-
-    def test_single_swath_near_to_far_per_channel(self):
-        across, values = self._arrays()
-        assert export._swath_fill_extent(across, values, combine=False, channel_idx=1) == pytest.approx((2.0, 60.0))
-        assert export._swath_fill_extent(across, values, combine=False, channel_idx=0) == pytest.approx((-40.0, -2.0))
-
-    def test_no_data_returns_none(self):
-        across, values = self._arrays()
-        values[:] = np.nan
-        assert export._swath_fill_extent(across, values, combine=True, channel_idx=None) is None
+    """--swath-fill end to end (unit tests: tests/unit/export/test_windows_geo.py)."""
 
     def test_fill_resolution_is_not_floored_at_ping_spacing(self, tmp_path, swath_ss_h5_dir, mocker):
         """Fixture swath (~0.1 m) is far narrower than ping spacing
@@ -1599,7 +1262,7 @@ class TestSwathFill:
                    channel=1, sample=15, position_confidence="verified")
         targets_json = tmp_path / "targets.json"
         write_targets_json([t], targets_json)
-        spy = mocker.spy(export, "extract_geometric_window_griddata")
+        spy = mocker.spy(geo_windows, "extract_geometric_window_griddata")
         res = {}
         for fill in (False, True):
             spy.reset_mock()

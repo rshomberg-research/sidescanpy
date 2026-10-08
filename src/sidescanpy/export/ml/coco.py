@@ -39,13 +39,23 @@ class CocoImageEntry:
     ``bbox_size``, if given, overrides ``write_coco``/``write_yolo``'s
     global ``box_size`` for this entry only — for a real, measured target
     extent instead of the shared placeholder.
+
+    ``target=None`` records an image with no annotations (a background
+    image): COCO gets the image record alone, YOLO an empty label file.
+    Such entries bypass the confidence filter.
     """
 
-    target: Target
+    target: Target | None
     file_name: str
     width: int
     height: int
     bbox_size: tuple[float, float] | None = None
+
+
+def _filter_by_confidence(entries: list[CocoImageEntry], min_confidence: str) -> list[CocoImageEntry]:
+    """Entries at or above ``min_confidence``, plus every annotation-free (``target=None``) entry."""
+    min_rank = CONFIDENCE_RANK[min_confidence]
+    return [e for e in entries if e.target is None or CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
 
 
 def resolve_categories(
@@ -67,7 +77,9 @@ def resolve_categories(
     ValueError
         If ``categories`` has duplicates, or a target's category is not in it.
     """
-    present = {e.target.category if e.target.category is not None else category_name for e in entries}
+    present = {
+        e.target.category if e.target.category is not None else category_name for e in entries if e.target is not None
+    }
     if categories is None:
         return sorted(present) if present else [category_name]
     names = list(categories)
@@ -108,7 +120,8 @@ def write_coco(
     Entries sharing a ``file_name`` become one image with multiple
     annotations (see ``CocoImageEntry``'s own docstring) — each entry's
     own ``bbox_size`` (if set) is used for its box, else the shared
-    ``box_size``.
+    ``box_size``. An entry with ``target=None`` adds its image with no
+    annotation.
 
     Returns the dict that was written, for inline inspection/testing.
 
@@ -118,8 +131,7 @@ def write_coco(
         If two entries share a ``file_name`` but disagree on
         ``width``/``height``.
     """
-    min_rank = CONFIDENCE_RANK[min_confidence]
-    included = [e for e in entries if CONFIDENCE_RANK[e.target.position_confidence] >= min_rank]
+    included = _filter_by_confidence(entries, min_confidence)
 
     names = resolve_categories(included, category_name, categories)
     cat_ids = {n: i + 1 for i, n in enumerate(names)}
@@ -146,6 +158,8 @@ def write_coco(
                 )
 
         t = entry.target
+        if t is None:
+            continue
         row = t.extra_attributes.get("window_row")
         col = t.sample
         entry_box_size = entry.bbox_size if entry.bbox_size is not None else box_size

@@ -6,7 +6,7 @@ Small synthetic fixtures with known, hand-constructed signal shapes.
 
 import numpy as np
 
-from sidescanpy.processing.outliers import reject_range_outliers
+from sidescanpy.processing.outliers import mask_bright_ping_rows, reject_range_outliers
 
 
 class TestRejectRangeOutliers:
@@ -50,3 +50,35 @@ class TestRejectRangeOutliers:
         ranges = rng.uniform(0, 60, size=(4, 2, 50))
         cleaned = reject_range_outliers(values, ranges, bin_width_m=5.0)
         assert cleaned.shape == values.shape
+
+
+class TestMaskBrightPingRows:
+    def _array(self):
+        rng = np.random.default_rng(0)
+        return 10.0 + rng.normal(0, 0.5, size=(40, 30))
+
+    def test_masks_a_gain_jump_row_only(self):
+        a = self._array()
+        a[17] *= 5.0
+        out = mask_bright_ping_rows(a)
+        assert np.isnan(out[17]).all()
+        assert np.isfinite(np.delete(out, 17, axis=0)).all()
+        assert np.isfinite(a).all()  # input untouched
+
+    def test_returns_input_when_nothing_to_mask(self):
+        a = self._array()
+        assert mask_bright_ping_rows(a) is a
+
+    def test_too_few_rows_or_zero_mad_is_a_no_op(self):
+        few = self._array()[:4]
+        few[0] *= 10
+        assert mask_bright_ping_rows(few) is few
+        flat = np.ones((20, 5))
+        flat[3] = 100.0
+        assert mask_bright_ping_rows(flat) is flat
+
+    def test_lower_threshold_masks_more(self):
+        a = self._array()
+        a[5] += 0.8  # modified z-score of row 5's median is ~7
+        assert not np.isnan(mask_bright_ping_rows(a, mad_k=20.0)[5]).any()
+        assert np.isnan(mask_bright_ping_rows(a, mad_k=3.0)[5]).all()
