@@ -144,6 +144,18 @@ def uncorrected_backscatter(ds: xr.Dataset) -> xr.DataArray:
     return _undo_radiometric(ds, records)
 
 
+def with_uncorrected_var(ds: xr.Dataset) -> xr.Dataset:
+    """Add the ``uncorrected`` variable unless ``ds`` already has it.
+
+    ``uncorrected`` is :func:`uncorrected_backscatter` (``backscatter_intensity``
+    with every recorded radiometric step undone); lazy on dask-backed data.
+    Returns a new dataset; ``ds`` is not modified.
+    """
+    if UNCORRECTED_VAR in ds:
+        return ds
+    return ds.assign({UNCORRECTED_VAR: uncorrected_backscatter(ds)})
+
+
 def invert(ds: xr.Dataset, steps: Iterable[str] | None = None) -> xr.Dataset:
     """Undo recorded correction steps.
 

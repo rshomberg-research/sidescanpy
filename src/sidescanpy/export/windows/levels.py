@@ -24,7 +24,7 @@ import xarray as xr
 
 from sidescanpy.core.units import linear_to_db
 from sidescanpy.processing.bottom import mask_nadir_gap
-from sidescanpy.processing.inversion import UNCORRECTED_VAR, uncorrected_backscatter
+from sidescanpy.processing.inversion import UNCORRECTED_VAR, with_uncorrected_var
 from sidescanpy.processing.sample_axis import (
     invalid_sound_vel_warning_suppressed,
     sample_interval_m,
@@ -43,19 +43,6 @@ PIXEL_LEVELS = ("uncorrected", "db", "radiometric")
 
 LEVEL_VARS = {"uncorrected": UNCORRECTED_VAR, "db": "backscatter_db", "radiometric": "backscatter_intensity"}
 """Value name (pixel render level, or geometric/georef ``value_var``) -> backscatter variable."""
-
-
-def with_uncorrected_var(ds: xr.Dataset) -> xr.Dataset:
-    """Add the ``uncorrected`` variable unless ``ds`` already has it.
-
-    ``uncorrected`` is ``backscatter_intensity`` with every recorded
-    radiometric step undone (see
-    :func:`~sidescanpy.processing.inversion.uncorrected_backscatter`); lazy
-    on dask-backed data.
-    """
-    if UNCORRECTED_VAR in ds:
-        return ds
-    return ds.assign({UNCORRECTED_VAR: uncorrected_backscatter(ds)})
 
 
 def mask_nadir_gap_with_uncorrected(ds: xr.Dataset) -> xr.Dataset:

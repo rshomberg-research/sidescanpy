@@ -446,3 +446,28 @@ class TestAbsoluteSampleSlicing:
         survey.add_frequency("hz_1495000", _make_channel(n_pings=10))
         out = slice_survey(survey, slice_by_pings, start=2, stop=5)
         assert out.get_frequency("hz_1495000").n_pings == 3
+
+
+class TestPingWindows:
+    def test_non_overlapping_tiles_with_short_tail(self):
+        from sidescanpy.processing import ping_windows
+
+        assert ping_windows(10, 4) == [(0, 4), (4, 8), (8, 10)]
+
+    def test_overlap_stops_at_end(self):
+        from sidescanpy.processing import ping_windows
+
+        assert ping_windows(10, 4, 2) == [(0, 4), (2, 6), (4, 8), (6, 10)]
+
+    def test_window_larger_than_axis_and_empty_axis(self):
+        from sidescanpy.processing import ping_windows
+
+        assert ping_windows(3, 10) == [(0, 3)]
+        assert ping_windows(0, 10) == []
+
+    @pytest.mark.parametrize("window, overlap", [(0, 0), (4, 4), (4, -1)])
+    def test_invalid_raises(self, window, overlap):
+        from sidescanpy.processing import ping_windows
+
+        with pytest.raises(ValueError):
+            ping_windows(10, window, overlap)

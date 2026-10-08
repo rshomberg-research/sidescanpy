@@ -13,6 +13,8 @@ processing_history are preserved. No values are modified.
 Available slicing functions:
 
 - ``slice_by_pings`` — by ping index range
+- ``ping_windows`` — ``(start, stop)`` ranges tiling a ping axis, for
+  windowed reads
 - ``slice_by_samples`` — by absolute ``sample`` coordinate range
 - ``slice_by_range`` — by slant range in metres
 - ``slice_by_time`` — by ping timestamp range (supports str or datetime64)
@@ -71,6 +73,31 @@ def slice_by_pings(
 
     new_ds = ds.isel(ping=slice(start, stop))
     return new_ds
+
+
+def ping_windows(n_pings: int, window_pings: int, overlap_pings: int = 0) -> list[tuple[int, int]]:
+    """``[start, stop)`` windows of ``window_pings`` covering ``0..n_pings``.
+
+    Consecutive windows share ``overlap_pings`` pings; the last window ends
+    at ``n_pings`` (and may be shorter). No windows for ``n_pings == 0``.
+
+    Raises
+    ------
+    ValueError
+        ``window_pings < 1``, or ``overlap_pings`` not in ``[0, window_pings)``.
+    """
+    if window_pings < 1:
+        raise ValueError(f"window_pings must be >= 1, got {window_pings}")
+    if not 0 <= overlap_pings < window_pings:
+        raise ValueError(f"overlap_pings ({overlap_pings}) must be >= 0 and smaller than window_pings ({window_pings})")
+    stride = window_pings - overlap_pings
+    windows = []
+    for start in range(0, n_pings, stride):
+        stop = min(start + window_pings, n_pings)
+        windows.append((start, stop))
+        if stop == n_pings:
+            break
+    return windows
 
 
 # ============================================================

@@ -454,3 +454,28 @@ def test_preparation_steps_are_not_levels():
     assert "crop_farrange" not in PROCESSING_LEVELS
     assert "interpolate_aux" not in PROCESSING_LEVELS
     assert PROCESSING_LEVELS[0] == "raw"
+
+
+class TestCorrectionSteps:
+    def test_canonical_order_and_aux(self):
+        from sidescanpy.processing import correction_steps
+
+        assert correction_steps(["georef", "tvg"]) == ["interpolate_aux", "tvg", "georef"]
+
+    def test_crop_alone_needs_no_aux(self):
+        from sidescanpy.processing import correction_steps
+
+        assert correction_steps({"crop_farrange"}) == ["crop_farrange"]
+
+    def test_every_step(self):
+        from sidescanpy.core.history import BUILTIN_STEPS
+        from sidescanpy.processing import correction_steps
+
+        assert correction_steps(reversed(BUILTIN_STEPS)) == list(BUILTIN_STEPS)
+
+    def test_empty_and_unknown(self):
+        from sidescanpy.processing import correction_steps
+
+        assert correction_steps([]) == []
+        with pytest.raises(ValueError, match="unknown correction step"):
+            correction_steps(["tvgg"])

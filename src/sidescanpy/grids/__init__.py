@@ -8,7 +8,7 @@ from sidescanpy.grids.definition import (
 )
 from sidescanpy.grids.geotiff import to_geotiff
 from sidescanpy.grids.raster import SideScanGriddedRaster
-from sidescanpy.grids.resample import ResamplingMethod, resample_channel_to_grid
+from sidescanpy.grids.resample import ResamplingMethod, grid_channel, resample_channel_to_grid
 from sidescanpy.grids.resolution import recommend_resolution
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "SideScanGriddedRaster",
     "ResamplingMethod",
     "resample_channel_to_grid",
+    "grid_channel",
     "recommend_resolution",
     "to_geotiff",
 ]

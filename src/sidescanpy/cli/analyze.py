@@ -16,7 +16,7 @@
   are its analysis parameters, ``--config``-seedable like every other
   subcommand here.
 
-- ``nav-attitude`` — plots heading/pitch/roll/altitude/depth/heave and
+- ``nav-attitude`` (alias ``nav-summary``) — plots heading/pitch/roll/altitude/depth/heave and
   the lon/lat position track for one ping range
   (``sidescanpy.analysis.navigation``), independent of backscatter
   entirely. Flags a heading/yaw value that falls outside both the
@@ -53,6 +53,12 @@
   misconfigured reference/window is visible rather than silently
   cropped out of frame).
 
+Every subcommand writes its result as JSON (``metrics.json`` from the
+result's ``to_dict()``; ``segment`` writes ``segments.json``,
+``investigate`` ``summary.json`` plus ``<freq>/metrics.json``,
+``recommend-config`` its YAML) and, unless ``--no-plots``, the evidence
+PNG(s) via :mod:`sidescanpy.viz.analysis` (needs the ``viz`` extra).
+
 Usage:
     sidescan-analyze segment --input ss_h5/mission.ss.h5 --output-dir exports/segments/
 
@@ -66,39 +72,44 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import xarray as xr
 
 from sidescanpy.analysis.beam import estimate_beam_geometry
 from sidescanpy.analysis.characterize import characterize_values, infer_units
-from sidescanpy.analysis.geometry import measure_ping_geometry
 from sidescanpy.analysis.nadir import analyze_nadir
 from sidescanpy.analysis.navigation import summarize_navigation
 from sidescanpy.analysis.tvg import fit_range_decay
 from sidescanpy.analysis.usable_range import estimate_usable_range
 from sidescanpy.cli._common import (
+    add_common_args,
     add_deprecated_alias,
     add_logging_args,
+    add_plots_arg,
     require_matplotlib,
     resolve_freq_keys,
+    save_plot,
     setup_logging_from_args,
     uncorrected_alias,
+    write_json,
 )
-from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
-from sidescanpy.cli._recommend import render_recommended_config
-from sidescanpy.cli._segments import write_segments, write_segments_report
+from sidescanpy.cli._config import CLIParser, parse_args
+from sidescanpy.cli._recommend import render_recommended_config, run_analyses
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.history import STEP_TVG, has_step
-from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
-from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey
-from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.inversion import UNCORRECTED_VAR, invert, uncorrected_backscatter
-from sidescanpy.processing.segments import find_segments
-from sidescanpy.processing.slicing import slice_by_pings
+from sidescanpy.io.hdf5 import available_frequencies, load_channel_dataset, read_survey_pings
+from sidescanpy.processing import (
+    UNCORRECTED_VAR,
+    compute_geometric_ranges,
+    find_segments,
+    invert,
+    with_uncorrected_var,
+    write_segments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,15 +121,8 @@ _RENAMED_OPTIONS = {
     "stage4_fit_value_col": "decay_fit_value_col",
 }
 
-# Real bug, found from a real user report (2026-09-28): every lazy read
-# below used to hardcode chunks={"ping": 500} -- not a multiple of
-# HDF5_CHUNK_PING (the on-disk chunk size write_survey() actually
-# stores, 256), so xr.open_dataset had to split real HDF5 chunks to
-# match the requested virtual chunking, both degrading read performance
-# and (xarray's own diagnostic) printing a UserWarning on every call.
-# An exact multiple of HDF5_CHUNK_PING never splits a real chunk --
-# 512 = 2x256, matching cli/export.py's own long-standing (if
-# coincidental) convention for the same read pattern.
+# A multiple of HDF5_CHUNK_PING (the on-disk chunk size) so lazy reads never
+# split a real HDF5 chunk.
 _PING_CHUNKS = {"ping": HDF5_CHUNK_PING * 2}
 
 
@@ -129,35 +133,8 @@ def _parse_ping_range(spec: str) -> tuple[int, int | None]:
     return (int(start_s) if start_s else 0), (int(stop_s) if stop_s else None)
 
 
-def _resolve_and_load(input_path: Path, requested_frequency: str | None, chunks: dict) -> tuple[str, xr.Dataset]:
-    """``freq_key`` + its dataset from ``input_path``, which may be a
-    single ``.ss.h5`` file (original behavior, byte-identical) or a
-    directory of them (lazily dask-concatenated in acquisition/filename
-    order, added 2026-09-27 -- see ``io.hdf5.load_channel_dataset``'s
-    own docstring for why: a real mission too large to convert into one
-    file at once on a memory-constrained container can be analyzed as
-    several files without losing this pipeline's cross-file gap/
-    instability detection).
-    """
-    available = available_frequencies(input_path, chunks)
-    freq_key = resolve_freq_keys(available, requested_frequency)[0] if requested_frequency else sorted(available)[0]
-    return freq_key, load_channel_dataset(input_path, freq_key, chunks)
-
-
-def _ensure_value_vars(ds: xr.Dataset, args: argparse.Namespace) -> xr.Dataset:
-    """Provide ``uncorrected`` (the uncorrected signal, inverted from
-    ``processing_history``) when a ``--value-var`` asks for it (files store no
-    raw copy)."""
-    wanted = {getattr(args, "value_var", None), getattr(args, "garbage_value_var", None)}
-    if UNCORRECTED_VAR in wanted and UNCORRECTED_VAR not in ds:
-        ds = ds.assign({UNCORRECTED_VAR: uncorrected_backscatter(ds)})
-    return ds
-
-
 def _parse_numeric_or_literal(value: str | None) -> float | str | None:
-    """--r-ref-m/--r-fit-min-m accept a literal string ('auto'/'mid_swath',
-    passed through to fit_range_decay's own resolution logic) or a plain
-    number."""
+    """A number, or a literal ('auto'/'mid_swath') for fit_range_decay to resolve."""
     if value is None:
         return None
     try:
@@ -166,57 +143,74 @@ def _parse_numeric_or_literal(value: str | None) -> float | str | None:
         return value
 
 
+def _load(args: argparse.Namespace, *, path: Path | None = None, geometry_var: str | None = None) -> tuple[str, xr.Dataset]:
+    """``(freq_key, ds)`` for ``--frequency`` (default: first sorted) at
+    ``--input`` (a ``.ss.h5`` or a directory of them), cut to ``--pings`` and
+    loaded; adds ``uncorrected`` when a ``--value-var`` asks for it, and
+    geometric ranges when ``geometry_var`` is missing."""
+    path = path if path is not None else args.input
+    available = available_frequencies(path, _PING_CHUNKS)
+    freq_key = resolve_freq_keys(available, args.frequency)[0] if args.frequency else sorted(available)[0]
+    start, stop = args.pings
+    ds = load_channel_dataset(path, freq_key, _PING_CHUNKS).isel(ping=slice(start, stop)).load()
+    if UNCORRECTED_VAR in {getattr(args, "value_var", None), getattr(args, "garbage_value_var", None)}:
+        ds = with_uncorrected_var(ds)
+    if geometry_var is not None and geometry_var not in ds:
+        ds = compute_geometric_ranges(ds)
+    return freq_key, ds
+
+
+def _finish(args: argparse.Namespace, freq_key: str, result: Any, summary: str, fields=()) -> Path:
+    """Log the one-line result (INFO) and its details (DEBUG); write ``metrics.json``."""
+    logger.info(f"{args.input.name} / {freq_key}: {summary}")
+    for key in fields:
+        if getattr(result, key) is not None:
+            logger.debug(f"  {key}: {getattr(result, key):.2f}")
+    for note in result.notes:
+        logger.debug(f"  note: {note}")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    return write_json(result, args.output_dir / "metrics.json")
+
+
+def _png(args: argparse.Namespace, freq_key: str, name: str) -> Path:
+    return args.output_dir / f"{args.input.stem}_{freq_key}_{name}.png"
+
+
 # ============================================================
 # investigate
 # ============================================================
 
 def run_investigate(args: argparse.Namespace) -> int:
+    """Every analysis in one pass, per frequency (see ``cli/_investigate.py``)."""
     from sidescanpy.cli import _investigate
 
     if not args.input.is_file():
         logger.error(f"Input file not found: {args.input}")
         return 1
-
-    if args.frequency:
-        freq_keys = [args.frequency]
-    else:
-        freq_keys = _investigate.list_frequencies(args.input)
-        if not args.all_frequencies and len(freq_keys) > 1:
-            logger.error(f"Multiple frequencies available ({freq_keys}) -- pass --frequency or --all-frequencies.")
-            return 1
-
-    channel = getattr(args, "channel", None)
-    if channel is not None and channel.isdigit():
-        channel = int(channel)
+    freq_keys = [args.frequency] if args.frequency else _investigate.list_frequencies(args.input)
+    if len(freq_keys) > 1 and not args.all_frequencies:
+        logger.error(f"Multiple frequencies available ({freq_keys}) -- pass --frequency or --all-frequencies.")
+        return 1
+    channel = int(args.channel) if args.channel is not None and args.channel.isdigit() else args.channel
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    summary_rows = []
+    rows = []
     for freq_key in freq_keys:
-        logger.info(f"Investigating {args.input.name} / {freq_key} ({args.value_var})")
         row = _investigate.run(
-            args.input, freq_key, args.output_dir / freq_key,
-            value_var=args.value_var,
-            ping_range=_parse_ping_range(args.pings),
-            channel=channel,
-            nadir_n_samples=args.nadir_n_samples,
-            usable_range_bin_width_m=args.usable_range_bin_width_m,
-            snr_threshold=args.snr_threshold,
-            decay_bin_width_m=args.decay_bin_width_m,
+            args.input, freq_key, args.output_dir / freq_key, plots=getattr(args, "plots", True),
+            value_var=args.value_var, ping_range=_parse_ping_range(args.pings), channel=channel,
+            nadir_n_samples=args.nadir_n_samples, usable_range_bin_width_m=args.usable_range_bin_width_m,
+            snr_threshold=args.snr_threshold, decay_bin_width_m=args.decay_bin_width_m,
             decay_db_reference_percentile=args.decay_db_reference_percentile,
             decay_fit_value_col=args.decay_fit_value_col,
-            reject_outliers=args.reject_outliers,
-            outlier_mad_k=args.outlier_mad_k,
+            reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
         )
         logger.info(
-            f"  {freq_key}: units={row['units']} nadir={row['nadir']} "
+            f"{args.input.name} / {freq_key}: units={row['units']} nadir={row['nadir']} "
             f"usable_range_m={row['usable_range_m']} tvg_status={row['tvg_status']}"
         )
-        summary_rows.append(row)
-
-    with open(args.output_dir / "summary.json", "w") as f:
-        json.dump(summary_rows, f, indent=2, default=str)
-
-    logger.info(f"Done. Artifacts written to {args.output_dir}")
+        rows.append(row)
+    write_json(rows, args.output_dir / "summary.json")
     return 0
 
 
@@ -225,82 +219,52 @@ def run_investigate(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_tvg_fit(args: argparse.Namespace) -> int:
+    """Range-decay fit (``fit_range_decay``, auto window + reference) on the
+    uncorrected signal; writes ``metrics.json`` and the fit + residuals PNG."""
     args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    freq_key, ds = _resolve_and_load(args.ss_h5, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-
+    freq_key, ds = _load(args, path=args.ss_h5)
     if args.reconstruct_raw:
-        ds_raw = invert(ds)
-    else:
-        if has_step(ds, STEP_TVG):
-            logger.error(
-                f"{args.ss_h5} is already TVG-corrected -- pass --reconstruct-raw to invert "
-                "the recorded corrections first."
-            )
-            return 1
-        ds_raw = ds
+        ds = invert(ds)
+    elif has_step(ds, STEP_TVG):
+        logger.error(f"{args.ss_h5} is already TVG-corrected -- pass --reconstruct-raw to invert the recorded corrections first.")
+        return 1
+    ds = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
 
-    ds_geo = ds_raw if "ground_range_m" in ds_raw else compute_geometric_ranges(ds_raw)
-
-    if args.usable_range_m is not None:
-        # Usable-range auto-detection fails on some Klein SDF data: hardware
-        # AGC flattens backscatter so SNR never crosses the threshold.
-        # --usable-range-m bypasses it for exactly this case.
-        usable_range_m = args.usable_range_m
-        logger.info(f"Using manually-supplied usable_range_m={usable_range_m:.2f} (auto-detection skipped)")
-    else:
-        usable_range = estimate_usable_range(ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m)
-        usable_range_m = usable_range.usable_range_m
+    usable_range_m = args.usable_range_m
+    if usable_range_m is None:
+        usable_range_m = estimate_usable_range(ds, range_var=args.range_var, bin_width_m=args.bin_width_m).usable_range_m
         if usable_range_m is None:
             logger.error(
                 "Could not determine usable_range_m for this survey/ping range -- a known failure mode "
                 "on AGC-flattened data, not necessarily bad data. Pass --usable-range-m explicitly."
             )
             return 1
-
     decay = fit_range_decay(
-        ds_geo, range_var=args.range_var, bin_width_m=args.bin_width_m,
+        ds, range_var=args.range_var, bin_width_m=args.bin_width_m,
         usable_range_m=usable_range_m, r_ref_m=args.r_ref_m, r_fit_min_m=args.r_fit_min_m,
     )
-
     if decay.fit is None:
-        logger.error(
-            f"{args.ss_h5.name} {freq_key}: no decay model could be fit "
-            f"(classification={decay.tvg_status}): {'; '.join(decay.notes) or 'no detail'}"
-        )
+        logger.error(f"{args.ss_h5.name} {freq_key}: no decay model could be fit "
+                     f"(classification={decay.tvg_status}): {'; '.join(decay.notes) or 'no detail'}")
         return 1
 
-    logger.info(
-        f"{args.ss_h5.name} {freq_key}: tvg-fit classification={decay.tvg_status} "
-        f"best_candidate={decay.best_candidate} rmse={decay.best_rmse_db:.2f}dB",
-    )
-    logger.debug("=" * 70)
-    logger.debug(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
-    logger.debug(f"  range_var:        {args.range_var}")
-    logger.debug(f"  usable_range_m:   {usable_range_m:.2f}")
-    logger.debug(f"  r_ref_m:          {decay.r_ref_m:.2f}")
-    logger.debug(f"  fit window:       [{decay.r_fit_min_m:.2f}, {decay.r_fit_max_m:.2f}]")
-    logger.debug(f"  classification:   {decay.tvg_status}")
-    logger.debug(f"  best_candidate:   {decay.best_candidate}")
-    logger.debug(f"  best_rmse_db:     {decay.best_rmse_db:.3f}  (fixed-scale)")
-    logger.debug(f"  n_bins_used:      {decay.n_bins_used}")
-    for note in decay.notes:
-        logger.debug(f"  note: {note}")
-    logger.debug("=" * 70)
+    start, stop = args.pings
+    logger.info(f"{args.ss_h5.name} {freq_key}: tvg-fit classification={decay.tvg_status} "
+                f"best_candidate={decay.best_candidate} rmse={decay.best_rmse_db:.2f}dB")
+    logger.debug(f"  usable_range_m={usable_range_m:.2f} r_ref_m={decay.r_ref_m:.2f} fit window="
+                 f"[{decay.r_fit_min_m:.2f}, {decay.r_fit_max_m:.2f}] n_bins_used={decay.n_bins_used}")
+    write_json(decay, args.output_dir / "metrics.json")
+    if args.plots:
+        from sidescanpy.cli import _figures
 
-    from sidescanpy.cli import _figures
-
-    out_path = args.output_dir / f"{args.ss_h5.stem}_{freq_key}_tvg_fit.png"
-    _figures.save_tvg_fit_png(
-        decay, out_path,
-        suptitle=f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}",
-        residual_xlabel="Slant range (m)" if args.range_var == "slant_range_m" else f"{args.range_var} (m)",
-        dpi=140,
-    )
-    logger.info(f"wrote {out_path}")
-
+        out_path = args.output_dir / f"{args.ss_h5.stem}_{freq_key}_tvg_fit.png"
+        _figures.save_tvg_fit_png(
+            decay, out_path,
+            suptitle=f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}",
+            residual_xlabel="Slant range (m)" if args.range_var == "slant_range_m" else f"{args.range_var} (m)",
+            dpi=140,
+        )
+        logger.debug(f"wrote {out_path}")
     return 0
 
 
@@ -309,357 +273,150 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_segment(args: argparse.Namespace) -> int:
-    """Every detector in ``find_segments`` needs the full ping axis's
-    arrays materialized at once (there's no per-chunk scanning logic --
-    a real, separate piece of work if a survey turns out to need it,
-    matching ``sidescan-correct --ping-chunk-size``'s own precedent).
-    ``--pings`` bounds *which* slice gets materialized, the same
-    memory-safety escape hatch every other narrow subcommand here
-    already has -- default (0, 8000) matches ``investigate``'s own
-    default, not "the whole file," since a real production `.ss.h5` can
-    be many GB.
-    """
-    from sidescanpy.cli import _figures
-    from sidescanpy.viz.analysis import plot_segments_overview
-
+    """``find_segments`` on one channel; writes each clean segment (every
+    frequency) as ``<label>.ss.h5`` plus ``segments.json``. Every detector
+    needs the whole ``--pings`` window in memory, so bound it on a big file."""
     if not (args.input.is_file() or args.input.is_dir()):
         logger.error(f"Input not found: {args.input}")
         return 1
-
-    all_freq_keys = available_frequencies(args.input, _PING_CHUNKS)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-
+    freq_key, ds = _load(args)
     segments = find_segments(
-        ds,
-        gap_factor=args.gap_factor,
-        time_gap_factor=args.time_gap_factor,
-        sound_vel_rel_tol=args.sound_vel_rel_tol,
-        garbage_value_var=args.garbage_value_var,
-        garbage_min_run_pings=args.garbage_min_run_pings,
-        garbage_degenerate_frac=args.garbage_degenerate_frac,
-        stability_window_pings=args.stability_window_pings,
-        stability_threshold=args.stability_threshold,
-        stability_min_run_pings=args.stability_min_run_pings,
-        min_segment_pings=args.min_segment_pings,
+        ds, gap_factor=args.gap_factor, time_gap_factor=args.time_gap_factor,
+        sound_vel_rel_tol=args.sound_vel_rel_tol, garbage_value_var=args.garbage_value_var,
+        garbage_min_run_pings=args.garbage_min_run_pings, garbage_degenerate_frac=args.garbage_degenerate_frac,
+        stability_window_pings=args.stability_window_pings, stability_threshold=args.stability_threshold,
+        stability_min_run_pings=args.stability_min_run_pings, min_segment_pings=args.min_segment_pings,
     )
-
-    # write_segments() needs every frequency channel sliced to the exact
-    # same [start:stop] window find_segments' own (0-indexed-from-start)
-    # ping numbers are relative to -- passing the original, full-range
-    # dataset here would silently write the wrong pings whenever
-    # `start != 0`. Works identically whether args.input is a single file
-    # (source_files/source_format/survey_name taken from it directly) or
-    # a directory (every *.ss.h5 in it, "ss_h5" as a reasonable
-    # source_format label -- see io.hdf5.load_channel_dataset).
-    if args.input.is_dir():
-        source_files = sorted(args.input.glob("*.ss.h5"))
-        source_format, survey_name = "ss_h5", args.input.name
-    else:
-        _meta_survey = read_survey(args.input, chunks=_PING_CHUNKS)
-        source_files = _meta_survey.source_files
-        source_format, survey_name = _meta_survey.source_format, _meta_survey.survey_name
-    sliced_survey = SideScanSurvey(source_files=source_files, source_format=source_format, survey_name=survey_name)
-    for fk in all_freq_keys:
-        channel_ds = load_channel_dataset(args.input, fk, _PING_CHUNKS)
-        channel = SideScanFrequencyChannel(channel_ds, freq_key=fk)
-        sliced = slice_by_pings(channel_ds, start=start, stop=stop if stop is not None else channel.n_pings)
-        sliced_survey.add_frequency(fk, sliced.load())
-
+    # Segment ping numbers are relative to --pings' start: cut every channel the same way.
+    survey = read_survey_pings(args.input, *args.pings, chunks=_PING_CHUNKS)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    write_segments_report(segments, args.output_dir / "segments.json")
-    written = write_segments(sliced_survey, segments, args.output_dir)
-
-    logger.info(f"{args.input.name} / {freq_key}: {ds.sizes['ping']} pings -> {len(segments)} segment(s)")
+    write_json({"segments": [s.to_dict() for s in segments]}, args.output_dir / "segments.json")
+    written = write_segments(survey, segments, args.output_dir)
     for seg in segments:
         logger.debug(f"  {seg.label}: [{seg.start}:{seg.stop}] {seg.status} ({', '.join(seg.reasons)})")
-    logger.info(f"Wrote {len(written)} clean segment .ss.h5 file(s) + segments.json to {args.output_dir}")
+    logger.info(f"{args.input.name} / {freq_key}: {ds.sizes['ping']} pings -> {len(segments)} segment(s), "
+                f"{len(written)} clean .ss.h5 written to {args.output_dir}")
+    if args.plots:
+        from sidescanpy.viz.analysis import plot_segments_overview
 
-    fig, _ = plot_segments_overview(ds, segments)
-    overview_path = args.output_dir / "overview.png"
-    _figures.save_figure(fig, overview_path, dpi=120)
-    logger.debug(f"wrote {overview_path}")
-
+        save_plot(plot_segments_overview(ds, segments)[0], args.output_dir / "overview.png", dpi=120)
     return 0
 
 
 # ============================================================
-# nadir
+# single analyses
 # ============================================================
 
 def run_nadir(args: argparse.Namespace) -> int:
-    """Classify + locate nadir, writing only the
-    zoomed boundary-detection plot by default (the direct evidence for
-    the classification) -- ``--verbose-diagnostics`` also writes the
-    full-survey waterfall boundary overlay.
-    """
-    from sidescanpy.cli import _figures
-    from sidescanpy.viz.analysis import plot_nadir_waterfall, plot_nadir_zoom
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-    ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
-
+    """Classify + locate nadir; plots the zoomed boundary detection
+    (``--verbose-diagnostics`` adds the full waterfall overlay)."""
+    freq_key, ds = _load(args, geometry_var="ground_range_m")
     nadir = analyze_nadir(
-        ds_geo, value_var=args.value_var,
-        nadir_n_samples=args.nadir_n_samples,
+        ds, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples,
         strong_return_min_sample_buffer=args.strong_return_min_sample_buffer,
         strong_return_peak_percentile=args.strong_return_peak_percentile,
         min_first_bottom_return_sample=args.min_first_bottom_return_sample,
         boundary_smoothing_window=args.boundary_smoothing_window,
     )
+    _finish(args, freq_key, nadir, f"nadir = {nadir.nadir_type}",
+            ("altitude_sample_median", "first_bottom_return_sample_median", "altitude_to_bottom_gap_sample_median"))
+    if args.plots:
+        from sidescanpy.viz.analysis import plot_nadir_waterfall, plot_nadir_zoom
 
-    logger.info(f"{args.input.name} / {freq_key}: nadir = {nadir.nadir_type}")
-    for key in ("altitude_sample_median", "first_bottom_return_sample_median", "altitude_to_bottom_gap_sample_median"):
-        if getattr(nadir, key) is not None:
-            logger.debug(f"  {key}: {getattr(nadir, key):.2f}")
-    for note in nadir.notes:
-        logger.debug(f"  note: {note}")
-
-    with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(nadir.to_dict(), f, indent=2, default=str)
-
-    fig, _ = plot_nadir_zoom(ds_geo, args.value_var, nadir=nadir, nadir_n_samples=args.nadir_n_samples)
-    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_zoom.png"
-    _figures.save_figure(fig, out_path, dpi=140)
-    logger.debug(f"wrote {out_path}")
-
-    if args.verbose_diagnostics:
-        fig, _ = plot_nadir_waterfall(ds_geo, args.value_var, nadir=nadir)
-        wf_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_waterfall.png"
-        _figures.save_figure(fig, wf_path, dpi=140)
-        logger.debug(f"wrote {wf_path}")
-
+        fig, _ = plot_nadir_zoom(ds, args.value_var, nadir=nadir, nadir_n_samples=args.nadir_n_samples)
+        save_plot(fig, _png(args, freq_key, "nadir_zoom"))
+        if args.verbose_diagnostics:
+            save_plot(plot_nadir_waterfall(ds, args.value_var, nadir=nadir)[0], _png(args, freq_key, "nadir_waterfall"))
     return 0
 
-
-# ============================================================
-# beam-geometry
-# ============================================================
 
 def run_beam_geometry(args: argparse.Namespace) -> int:
-    """Triangulate the beam's near/far edges from the nadir boundary and
-    the usable range (both run here as prerequisites -- use the
-    ``nadir``/``usable-range`` subcommands to tune either). Writes only
-    the beam-geometry diagram, the direct evidence for the result.
-    """
-    from sidescanpy.cli import _figures
-    from sidescanpy.viz.analysis import plot_beam_geometry
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-    ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
-
-    nadir = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
+    """Beam near/far edges from the nadir boundary and usable range (both
+    computed here with defaults; tune them with ``nadir``/``usable-range``)."""
+    freq_key, ds = _load(args, geometry_var="ground_range_m")
+    nadir = analyze_nadir(ds, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
     usable_range = estimate_usable_range(
-        ds_geo, value_var=args.value_var, bin_width_m=args.usable_range_bin_width_m, snr_threshold=args.snr_threshold,
+        ds, value_var=args.value_var, bin_width_m=args.usable_range_bin_width_m, snr_threshold=args.snr_threshold,
     )
     beam = estimate_beam_geometry(
-        ds_geo, nadir.first_bottom_return_sample, usable_range.usable_range_m,
+        ds, nadir.first_bottom_return_sample, usable_range.usable_range_m,
         near_angle_max_std_deg=args.near_angle_max_std_deg, min_valid_fraction=args.min_valid_fraction,
     )
+    _finish(args, freq_key, beam, f"beam_geometry = {beam.confidence}",
+            ("near_angle_deg_median", "far_angle_deg", "beam_center_angle_deg", "beam_width_deg"))
+    if args.plots:
+        from sidescanpy.viz.analysis import plot_beam_geometry
 
-    logger.info(f"{args.input.name} / {freq_key}: beam_geometry = {beam.confidence}")
-    for key in ("near_angle_deg_median", "far_angle_deg", "beam_center_angle_deg", "beam_width_deg"):
-        if getattr(beam, key) is not None:
-            logger.debug(f"  {key}: {getattr(beam, key):.2f}")
-    for note in beam.notes:
-        logger.debug(f"  note: {note}")
-
-    with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(beam.to_dict(), f, indent=2, default=str)
-
-    fig, _ = plot_beam_geometry(ds_geo, beam, value_var=args.value_var)
-    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_beam_geometry.png"
-    _figures.save_figure(fig, out_path, dpi=140)
-    logger.debug(f"wrote {out_path}")
-
+        save_plot(plot_beam_geometry(ds, beam, value_var=args.value_var)[0], _png(args, freq_key, "beam_geometry"))
     return 0
 
-
-# ============================================================
-# usable-range
-# ============================================================
 
 def run_usable_range(args: argparse.Namespace) -> int:
-    """Bin backscatter by range, find the usable-range boundary, and write
-    only the median/std-vs-range plot -- the direct evidence for the number.
-    """
-    from sidescanpy.cli import _figures
-    from sidescanpy.viz.analysis import plot_usable_range
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-    ds_geo = ds if args.range_var in ds else compute_geometric_ranges(ds)
-
+    """Usable-range boundary from binned backscatter vs. range."""
+    freq_key, ds = _load(args, geometry_var=args.range_var)
     usable_range = estimate_usable_range(
-        ds_geo, value_var=args.value_var, range_var=args.range_var, bin_width_m=args.bin_width_m,
+        ds, value_var=args.value_var, range_var=args.range_var, bin_width_m=args.bin_width_m,
         snr_threshold=args.snr_threshold, reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
     )
+    _finish(args, freq_key, usable_range, f"usable_range_m = {usable_range.usable_range_m}")
+    if args.plots:
+        from sidescanpy.viz.analysis import plot_usable_range
 
-    usable_range_m = usable_range.usable_range_m
-    logger.info(f"{args.input.name} / {freq_key}: usable_range_m = {usable_range_m}")
-    for note in usable_range.notes:
-        logger.debug(f"  note: {note}")
-
-    with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(usable_range.to_dict(), f, indent=2, default=str)
-
-    fig, _ = plot_usable_range(usable_range)
-    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_usable_range.png"
-    _figures.save_figure(fig, out_path, dpi=140)
-    logger.debug(f"wrote {out_path}")
-
+        save_plot(plot_usable_range(usable_range)[0], _png(args, freq_key, "usable_range"))
     return 0
 
-
-# ============================================================
-# units
-# ============================================================
 
 def run_units(args: argparse.Namespace) -> int:
-    """Classify units from the raw value-range signature and write only
-    the distribution histogram -- the direct evidence for the call.
-    Doesn't cross-check against a range-decay fit (``investigate`` does)
-    -- run ``tvg-fit`` separately if that matters for a source.
-    """
-    from sidescanpy.cli import _figures
-    from sidescanpy.viz.analysis import plot_units_distribution
+    """Units from the value-range signature alone (``investigate`` also
+    cross-checks against a range-decay fit)."""
+    freq_key, ds = _load(args)
+    units = infer_units(characterize_values(ds, value_var=args.value_var))
+    _finish(args, freq_key, units, f"units = {units.units}")
+    if args.plots:
+        from sidescanpy.viz.analysis import plot_units_distribution
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-
-    values = characterize_values(ds, value_var=args.value_var)
-    units = infer_units(values)
-
-    logger.info(f"{args.input.name} / {freq_key}: units = {units.units}")
-    for note in units.notes:
-        logger.debug(f"  note: {note}")
-
-    with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(units.to_dict(), f, indent=2, default=str)
-
-    fig, _ = plot_units_distribution(ds, args.value_var)
-    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_units.png"
-    _figures.save_figure(fig, out_path, dpi=140)
-    logger.debug(f"wrote {out_path}")
-
+        save_plot(plot_units_distribution(ds, args.value_var)[0], _png(args, freq_key, "units"))
     return 0
 
-
-# ============================================================
-# nav-attitude
-# ============================================================
 
 def run_nav_attitude(args: argparse.Namespace) -> int:
-    """Navigation/attitude diagnostic (heading/pitch/roll/altitude/
-    depth/heave/position) for one ping range -- independent of
-    backscatter entirely, so unlike the other single-analysis subcommands
-    above it needs neither ``--value-var`` nor geometric ranges. Point
-    it at the specific ping range a heading/attitude anomaly was
-    reported in and look at the trace directly.
-    """
-    from sidescanpy.cli import _figures
-    from sidescanpy.viz.analysis import plot_navigation_summary
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-
+    """Navigation/attitude summary (``summarize_navigation``) for one ping range."""
+    freq_key, ds = _load(args)
     result = summarize_navigation(ds, heading_var=args.heading_var)
+    _finish(args, freq_key, result, f"{args.heading_var} classification = {result.heading_convention}")
+    if args.plots:
+        from sidescanpy.viz.analysis import plot_navigation_summary
 
-    logger.info(f"{args.input.name} / {freq_key}: {args.heading_var} classification = {result.heading_convention}")
-    for note in result.notes:
-        logger.debug(f"  note: {note}")
-
-    with open(args.output_dir / "metrics.json", "w") as f:
-        json.dump(result.to_dict(), f, indent=2, default=str)
-
-    fig, _ = plot_navigation_summary(ds, ping_offset=start, result=result)
-    out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nav_attitude.png"
-    _figures.save_figure(fig, out_path, dpi=140)
-    logger.debug(f"wrote {out_path}")
-
+        fig, _ = plot_navigation_summary(ds, ping_offset=args.pings[0], result=result)
+        save_plot(fig, _png(args, freq_key, "nav_attitude"))
     return 0
 
 
-# ============================================================
-# recommend-config
-# ============================================================
-
 def run_recommend_config(args: argparse.Namespace) -> int:
-    """Run every analysis that has a real downstream config consumer today
-    (the range-decay fit's TVG term selection, plus the ping-geometry
-    measurement behind ``resolution_m``) against one clean section, plus
-    the informational-only analyses (nadir/beam-geometry/usable-range/units)
-    for evidence -- and write one heavily-commented recommended config
-    YAML (``cli._recommend.render_recommended_config``). Meant to
-    run against an already-segmented, clean ``sectionN.ss.h5`` (see
-    ``segment``) -- running it against a raw, unsegmented mission mixes
-    whatever heterogeneity that file has into every number below.
-    """
+    """Evidence-commented recommended config YAML for one clean section
+    (``cli/_recommend.py``); meant for a ``segment`` output, reviewed before use."""
     if not (args.input.is_file() or args.input.is_dir()):
         logger.error(f"Input not found: {args.input}")
         return 1
+    freq_key, ds = _load(args, geometry_var="ground_range_m")
+    results = run_analyses(ds, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples,
+                           bin_width_m=args.bin_width_m, snr_threshold=args.snr_threshold)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-
-    freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
-    start, stop = args.pings
-    ds = _ensure_value_vars(ds.isel(ping=slice(start, stop)).load(), args)
-    ds_geo = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
-
-    values = characterize_values(ds_geo, value_var=args.value_var)
-    units = infer_units(values)
-    nadir = analyze_nadir(ds_geo, value_var=args.value_var, nadir_n_samples=args.nadir_n_samples)
-    usable_range = estimate_usable_range(
-        ds_geo, value_var=args.value_var, range_var="slant_range_m",
-        bin_width_m=args.bin_width_m, snr_threshold=args.snr_threshold,
-    )
-    try:
-        beam = estimate_beam_geometry(ds_geo, nadir.first_bottom_return_sample, usable_range.usable_range_m)
-    except (ValueError, KeyError) as exc:
-        logger.warning(f"beam-geometry could not be computed ({exc}) -- omitting from the recommendation")
-        beam = None
-
-    usable_range_m = usable_range.usable_range_m
-    decay = None
-    if usable_range_m is not None:
-        decay = fit_range_decay(
-            ds_geo, range_var="slant_range_m", bin_width_m=args.bin_width_m,
-            usable_range_m=usable_range_m, r_ref_m="auto", r_fit_min_m="auto",
-        )
-
-    geometry = measure_ping_geometry(ds_geo)
-
-    text = render_recommended_config(
-        source_name=args.input.name, freq_key=freq_key, ping_range=(start, stop), value_var=args.value_var,
-        values=values, nadir=nadir, beam=beam, usable_range=usable_range, decay=decay, units=units,
-        geometry=geometry,
-    )
-    args.output.write_text(text)
-
+    args.output.write_text(render_recommended_config(
+        source_name=args.input.name, freq_key=freq_key, ping_range=args.pings, value_var=args.value_var, **results,
+    ))
+    decay = results["decay"]
     logger.info(
-        f"{args.input.name} / {freq_key}: tvg_status="
-        f"{decay.tvg_status if decay else None}  nadir={nadir.nadir_type}  "
-        f"usable_range_m={usable_range_m}  ping_spacing_m={geometry.ping_spacing_m_median}"
+        f"{args.input.name} / {freq_key}: tvg_status={decay.tvg_status if decay else None}  "
+        f"nadir={results['nadir'].nadir_type}  usable_range_m={results['usable_range'].usable_range_m}  "
+        f"ping_spacing_m={results['geometry'].ping_spacing_m_median} -> {args.output}"
     )
-    logger.info(f"wrote {args.output}")
-
     return 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def build_parser() -> tuple[CLIParser, Any]:
+    """The parser and its subparsers action (``.choices``: name -> subparser)."""
+    parser = CLIParser(prog="sidescan-analyze", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     p_inv = subparsers.add_parser("investigate", help="Characterize units/TVG status/nadir/usable range for an unfamiliar data source")
@@ -799,7 +556,7 @@ def main() -> int:
     p_units.set_defaults(func=run_units)
 
     p_nav = subparsers.add_parser(
-        "nav-attitude",
+        "nav-attitude", aliases=["nav-summary"],
         help="Plot heading/pitch/roll/altitude/depth/heave + position track for a ping range",
     )
     p_nav.add_argument(
@@ -845,32 +602,22 @@ def main() -> int:
     p_rec.add_argument("--output", required=True, type=Path, help="Where to write the recommended config YAML")
     p_rec.set_defaults(func=run_recommend_config)
 
+    for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav):
+        add_plots_arg(p)
     for p in (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec):
-        p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
-        p.add_argument("--strict-config", action="store_true", help="Treat config-file keys this subcommand does not recognize as an error instead of a warning")
-        # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
-        # block for why a plain default=False here would silently
-        # overwrite a real -v already set before the subcommand.
-        add_logging_args(p, subcommand=True)
-
+        add_common_args(p)
     add_logging_args(parser)
+    return parser, subparsers
 
-    argv = sys.argv[1:]
-    config_path = find_config_path(argv)
-    if config_path is not None:
-        config = load_config(config_path)
-        apply_config_to_subparsers(
-            (p_inv, p_tvg, p_seg, p_nadir, p_beam, p_ur, p_units, p_nav, p_rec), config, argv,
-            renamed_keys=_RENAMED_OPTIONS,
-        )
 
-    args = parser.parse_args(argv)
-
+def main(argv: list[str] | None = None) -> int:
+    parser, subparsers = build_parser()
+    args = parse_args(
+        parser, sys.argv[1:] if argv is None else argv, subcommands=subparsers.choices, renamed_keys=_RENAMED_OPTIONS,
+    )
     setup_logging_from_args(args)
-
-    if args.func is not run_recommend_config and not require_matplotlib(f"sidescan-analyze {args.subcommand}"):
+    if getattr(args, "plots", False) and not require_matplotlib(f"sidescan-analyze {args.subcommand}"):
         return 1
-
     return args.func(args)
 
 

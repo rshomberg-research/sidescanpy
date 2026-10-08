@@ -27,3 +27,19 @@ class TestInvertLegacyFile:
             restored["backscatter_intensity"].values, restored["backscatter_raw"].values
         )
         assert "ground_range_m" not in restored
+
+
+class TestWithUncorrectedVar:
+    def test_adds_uncorrected_equal_to_inverted_intensity(self):
+        from sidescanpy.processing import UNCORRECTED_VAR, apply_tvg, with_uncorrected_var
+
+        raw = _make_raw_dataset(backscatter=np.random.default_rng(0).uniform(1, 10, (5, 2, 40)).astype(np.float32))
+        out = with_uncorrected_var(apply_tvg(raw))
+        np.testing.assert_allclose(out[UNCORRECTED_VAR].values, raw["backscatter_intensity"].values, rtol=1e-4)
+        assert UNCORRECTED_VAR not in raw
+
+    def test_existing_variable_kept(self):
+        from sidescanpy.processing import UNCORRECTED_VAR, with_uncorrected_var
+
+        ds = _make_raw_dataset().assign({UNCORRECTED_VAR: (("ping", "channel", "sample"), np.zeros((20, 2, 200)))})
+        assert with_uncorrected_var(ds) is ds

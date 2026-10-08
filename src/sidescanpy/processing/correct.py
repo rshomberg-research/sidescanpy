@@ -7,6 +7,8 @@ replaceable, recording every applied step in ``processing_history``.
   aux records to the ``"interpolate_aux"`` step).
 - :func:`correct_file` -- read a ``.ss.h5`` file, correct it, write it
   atomically (in place by default), optionally in ping chunks to bound memory.
+- :func:`correction_steps` -- a set of requested built-in steps in canonical
+  order, with ``"interpolate_aux"`` added when a step needs it.
 
 Steps
 -----
@@ -70,7 +72,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -346,6 +348,30 @@ def _check_aux(actions: list[_Action], aux: SideScanSurvey | None) -> None:
 # ============================================================
 # PUBLIC API
 # ============================================================
+
+_NEEDS_AUX = frozenset({STEP_TVG, STEP_GEOMETRIC, STEP_RANGE_CORRECTION, STEP_GEOREF})
+
+
+def correction_steps(requested: Iterable[str]) -> list[str]:
+    """Built-in step names in canonical order, adding ``"interpolate_aux"`` when needed.
+
+    ``"interpolate_aux"`` is added whenever any of tvg / geometric /
+    range_correction / georef is requested, since each reads per-ping
+    navigation/attitude fields. Duplicates collapse.
+
+    Raises
+    ------
+    ValueError
+        A name that is not a built-in step.
+    """
+    requested = set(requested)
+    unknown = requested - set(BUILTIN_STEPS)
+    if unknown:
+        raise ValueError(f"unknown correction step(s): {sorted(unknown)} (built-in: {list(BUILTIN_STEPS)})")
+    if requested & _NEEDS_AUX:
+        requested.add(STEP_INTERPOLATE_AUX)
+    return [s for s in BUILTIN_STEPS if s in requested]
+
 
 def correct(
     ds: xr.Dataset,

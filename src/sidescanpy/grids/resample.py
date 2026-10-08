@@ -2,7 +2,8 @@
 Resampling channel data to georeferenced grids.
 
 Provides resample_channel_to_grid() to aggregate sidescan backscatter
-from survey geometry to a regular grid using various aggregation methods.
+from survey geometry to a regular grid using various aggregation methods,
+and grid_channel() to do so on a UTM grid fit to the channel's own extent.
 """
 
 import logging
@@ -18,7 +19,11 @@ from scipy.spatial import cKDTree
 
 from sidescanpy.core.history import STEP_TVG, has_step
 from sidescanpy.core.history import processing_level as derived_processing_level
-from sidescanpy.grids.definition import GridDefinition
+from sidescanpy.grids.definition import (
+    GridDefinition,
+    bbox_from_channel_dataset,
+    utm_grid_from_wgs84_bbox,
+)
 from sidescanpy.grids.raster import SideScanGriddedRaster
 
 logger = logging.getLogger(__name__)
@@ -414,3 +419,44 @@ def resample_channel_to_grid(
     raster.dataset.attrs["backscatter_variable"] = backscatter_var
 
     return raster
+
+
+def grid_channel(
+    channel: xr.Dataset,
+    resolution_m: float = 1.0,
+    method: ResamplingMethod | str = ResamplingMethod.MEAN,
+    *,
+    backscatter_var: str = "backscatter_intensity",
+    max_search_radius_m: Optional[float] = None,
+) -> SideScanGriddedRaster:
+    """Grid a georeferenced channel onto a UTM grid fit to its own extent.
+
+    The grid covers :func:`~sidescanpy.grids.definition.bbox_from_channel_dataset`
+    in the UTM zone of its center
+    (:func:`~sidescanpy.grids.definition.utm_grid_from_wgs84_bbox`), and
+    the channel is resampled onto it with :func:`resample_channel_to_grid`.
+
+    Parameters
+    ----------
+    channel : xr.Dataset
+        Channel with ``latitude_per_sample``/``longitude_per_sample``
+        (georeferencing applied) and ``backscatter_var``.
+    resolution_m : float, default 1.0
+        Cell size in meters.
+    method : ResamplingMethod or str, default "mean"
+        Aggregation method (``"mean"``, ``"median"``, ``"max"``,
+        ``"nearest"``, ``"idw"``).
+    backscatter_var : str, default "backscatter_intensity"
+        Variable to grid.
+    max_search_radius_m : float, optional
+        Passed to :func:`resample_channel_to_grid`.
+
+    Returns
+    -------
+    SideScanGriddedRaster
+    """
+    grid_def = utm_grid_from_wgs84_bbox(bbox_from_channel_dataset(channel), resolution_m=resolution_m)
+    return resample_channel_to_grid(
+        channel, grid_def, method=ResamplingMethod(method),
+        max_search_radius_m=max_search_radius_m, backscatter_var=backscatter_var,
+    )

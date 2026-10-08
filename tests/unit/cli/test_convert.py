@@ -29,26 +29,6 @@ def _target(target_id, lat=None, lon=None, **extra_attrs):
     )
 
 
-class TestDetectCatalogFormat:
-    def test_klein(self, tmp_path):
-        (tmp_path / "Target_1536923484.tgt").write_bytes(b"")
-        assert convert._detect_catalog_format(tmp_path) == "sdf_klein"
-
-    def test_jsf(self, tmp_path):
-        (tmp_path / "Target-0001.target").write_bytes(b"")
-        assert convert._detect_catalog_format(tmp_path) == "jsf_discover"
-
-    def test_ambiguous_raises(self, tmp_path):
-        (tmp_path / "Target_1536923484.tgt").write_bytes(b"")
-        (tmp_path / "Target-0001.target").write_bytes(b"")
-        with pytest.raises(ValueError, match="ambiguous"):
-            convert._detect_catalog_format(tmp_path)
-
-    def test_neither_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="No target catalog files"):
-            convert._detect_catalog_format(tmp_path)
-
-
 class TestRunSurvey:
     def _args(self, tmp_path, **overrides):
         defaults = dict(
@@ -125,7 +105,7 @@ class TestRunTargets:
         defaults = dict(
             source=tmp_path / "cat", output=tmp_path / "out",
             ss_h5_dir=None, max_time_delta_s=300.0, time_offset_s=None,
-            calibrate_offset=False, local_utc_offset_hours=4.0,
+            calibrate_offset=False, local_utc_offset_hours=4.0, plot=True,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -135,7 +115,7 @@ class TestRunTargets:
         cat.mkdir()
         (cat / "Target-0001.target").write_bytes(b"")
         targets = [_target("0001", 41.5, -71.4), _target("0002")]
-        monkeypatch.setattr(convert, "read_discover_targets", lambda source: targets)
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("jsf_discover", targets))
 
         assert convert.run_targets(self._args(tmp_path)) == 0
 
@@ -151,7 +131,7 @@ class TestRunTargets:
         cat.mkdir()
         (cat / "Target_1536923484.tgt").write_bytes(b"")
         targets = [_target("1536923484")]
-        monkeypatch.setattr(convert, "read_klein_targets", lambda source: targets)
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("sdf_klein", targets))
 
         assert convert.run_targets(self._args(tmp_path)) == 0
 
@@ -169,7 +149,7 @@ class TestRunTargets:
         resolved_targets = [_target("1536923484", 41.5, -71.4)]
 
         calls = {}
-        monkeypatch.setattr(convert, "read_klein_targets", lambda source: raw_targets)
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("sdf_klein", raw_targets))
         monkeypatch.setattr(convert, "calibrate_clock_offset", lambda d, local_utc_offset_hours: calls.setdefault("offset", 500.0) or 500.0)
 
         def _fake_resolve(targets, d, offset_s, max_time_delta_s):
@@ -195,7 +175,7 @@ class TestRunTargets:
         raw_targets = [_target("1536923484")]
         resolved_targets = [_target("1536923484", 41.5, -71.4)]
 
-        monkeypatch.setattr(convert, "read_klein_targets", lambda source: raw_targets)
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("sdf_klein", raw_targets))
         monkeypatch.setattr(convert, "resolve_targets_nearest_ping", lambda targets, d, max_time_delta_s: resolved_targets)
 
         args = self._args(tmp_path, ss_h5_dir=ss_h5_dir)
@@ -206,6 +186,14 @@ class TestRunTargets:
     def test_no_catalog_files_returns_1(self, tmp_path):
         (tmp_path / "cat").mkdir()
         assert convert.run_targets(self._args(tmp_path)) == 1
+
+    def test_scatter_only_with_plot(self, tmp_path, monkeypatch):
+        (tmp_path / "cat").mkdir()
+        targets = [_target("0001", 41.5, -71.4)]
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("jsf_discover", targets))
+        assert convert.run_targets(self._args(tmp_path, plot=False)) == 0
+        assert (tmp_path / "out" / "targets.json").exists()
+        assert not (tmp_path / "out" / "position_scatter.png").exists()
 
 
 class TestMainDispatch:

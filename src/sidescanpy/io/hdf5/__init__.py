@@ -64,6 +64,7 @@ from sidescanpy.io.hdf5.survey_dir import (
     concat_survey_frequency,
     load_channel_dataset,
     read_survey_dir,
+    read_survey_pings,
 )
 from sidescanpy.io.hdf5.writer import write_survey
 
@@ -71,6 +72,7 @@ __all__ = [
     "read_survey",
     "write_survey",
     "read_survey_dir",
+    "read_survey_pings",
     "concat_survey_frequency",
     "available_frequencies",
     "load_channel_dataset",

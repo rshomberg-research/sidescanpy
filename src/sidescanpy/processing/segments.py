@@ -15,16 +15,18 @@ These detectors find such stretches so they can be cut out first.
 :func:`find_segments` combines them into :class:`Segment` objects
 labelled ``"clean"`` or ``"excluded"`` with the reasons that fired.
 :func:`split_by_segments` slices a survey into one sub-survey per clean
-segment.
+segment; :func:`write_segments` writes each to its own ``.ss.h5``.
 """
 
 import logging
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 import xarray as xr
 
 from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.slicing import slice_by_pings
 
@@ -317,3 +319,19 @@ def split_by_segments(survey: SideScanSurvey, segments: list[Segment]) -> dict[s
             sub_survey.add_frequency(freq_key, slice_by_pings(ds_f, start=seg.start, stop=seg.stop))
         out[seg.label] = sub_survey
     return out
+
+
+def write_segments(survey: SideScanSurvey, segments: list[Segment], output_dir: Path | str) -> list[Path]:
+    """Write ``<label>.ss.h5`` into ``output_dir`` for every clean segment.
+
+    Uses :func:`split_by_segments`; existing files are overwritten.
+    Returns the paths written, in segment order.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for label, sub_survey in split_by_segments(survey, segments).items():
+        out_path = output_dir / f"{label}.ss.h5"
+        write_survey(sub_survey, out_path, overwrite=True)
+        written.append(out_path)
+    return written

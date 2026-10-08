@@ -2,9 +2,11 @@
 Run-everything driver behind ``sidescan-analyze investigate``.
 
 Loads one frequency channel, runs every analysis in
-:mod:`sidescanpy.analysis` on it, and writes one PNG per plot plus
-``metrics.json``. ``examples/investigate_dataset.py`` walks through the
-same flow as a readable script.
+:mod:`sidescanpy.analysis` on it, and writes ``metrics.json`` plus (unless
+``plots=False``) one PNG per plot. This is a run-everything workflow, so it
+lives with the CLI, not in the library; ``examples/investigate_dataset.py``
+walks through the same flow as a readable script. Only :func:`save_figures`
+needs matplotlib.
 
 2026 rshomberg@uri.edu
 """
@@ -14,7 +16,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import xarray as xr
 
 from sidescanpy.analysis import (
@@ -26,8 +27,7 @@ from sidescanpy.analysis import (
     fit_range_decay,
     infer_units,
 )
-from sidescanpy.io.dispatch import detect_format, read_and_convert
-from sidescanpy.io.hdf5 import read_survey
+from sidescanpy.io import load_survey
 from sidescanpy.processing import (
     LEGACY_RAW_VAR,
     UNCORRECTED_VAR,
@@ -36,39 +36,20 @@ from sidescanpy.processing import (
     invert,
     uniform_exclusion_boundary,
 )
-from sidescanpy.viz.analysis import (
-    plot_beam_geometry,
-    plot_cross_track_profile,
-    plot_nadir_waterfall,
-    plot_nadir_zoom,
-    plot_outlier_comparison,
-    plot_sample_ping,
-    plot_units_distribution,
-    plot_usable_range,
-    plot_value_histograms,
-)
-from sidescanpy.viz.tvg import plot_range_decay_fit, plot_range_decay_residuals
 
 logger = logging.getLogger(__name__)
 
-_HDF5_SUFFIXES = (".h5", ".hdf5")
 _DPI = 150
-
-
-def _read(path: Path):
-    if path.suffix.lower() in _HDF5_SUFFIXES or path.name.endswith(".ss.h5"):
-        return read_survey(path)
-    return read_and_convert([path], detect_format([path]))
 
 
 def list_frequencies(path: Path) -> list[str]:
     """Sorted freq_keys in a ``.ss.h5`` / ``.jsf`` / ``.sdf`` file."""
-    return sorted(_read(path).frequencies)
+    return sorted(load_survey(path).frequencies)
 
 
 def load_frequency(path: Path, freq_key: str | None = None) -> tuple[xr.Dataset, str]:
     """One frequency channel's dataset (default: first sorted freq_key)."""
-    survey = _read(path)
+    survey = load_survey(path)
     freq_key = freq_key or sorted(survey.frequencies)[0]
     if freq_key not in survey.frequencies:
         raise ValueError(f"{freq_key!r} not found. Available: {survey.frequencies}")
@@ -166,6 +147,21 @@ def investigate(
 
 def save_figures(ds: xr.Dataset, value_var: str, results: dict[str, Any], output_dir: Path) -> list[Path]:
     """Render every plot for ``results`` into ``output_dir``; returns the paths."""
+    import matplotlib.pyplot as plt
+
+    from sidescanpy.viz.analysis import (
+        plot_beam_geometry,
+        plot_cross_track_profile,
+        plot_nadir_waterfall,
+        plot_nadir_zoom,
+        plot_outlier_comparison,
+        plot_sample_ping,
+        plot_units_distribution,
+        plot_usable_range,
+        plot_value_histograms,
+    )
+    from sidescanpy.viz.tvg import plot_range_decay_fit, plot_range_decay_residuals
+
     output_dir.mkdir(parents=True, exist_ok=True)
     nadir = results["nadir"]
     figures = {
@@ -223,12 +219,14 @@ def summary_row(source_path: Path, freq_key: str, results: dict[str, Any]) -> di
     }
 
 
-def run(input_path: Path, freq_key: str, output_dir: Path, **kwargs) -> dict[str, Any]:
-    """Investigate one frequency of ``input_path``, write PNGs + ``metrics.json``
-    under ``output_dir``, and return the summary row."""
+def run(input_path: Path, freq_key: str, output_dir: Path, *, plots: bool = True, **kwargs) -> dict[str, Any]:
+    """Investigate one frequency of ``input_path``, write ``metrics.json`` (and
+    the PNGs when ``plots``) under ``output_dir``, and return the summary row."""
     raw, freq_key = load_frequency(input_path, freq_key)
     ds, value_var, params, results = investigate(raw, **kwargs)
-    save_figures(ds, value_var, results, output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if plots:
+        save_figures(ds, value_var, results, output_dir)
     metrics = metrics_dict(input_path, freq_key, ds, value_var, params, results)
     with open(output_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)

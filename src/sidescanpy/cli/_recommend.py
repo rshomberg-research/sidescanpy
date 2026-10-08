@@ -1,7 +1,9 @@
 """
-Render a recommended, hand-editable YAML config from analysis results.
+Recommended, hand-editable YAML config for ``sidescan-analyze recommend-config``.
 
-Used by ``sidescan-analyze recommend-config``. Every emitted key has the
+:func:`run_analyses` runs the analyses the recommendation draws on (a
+small CLI workflow over :mod:`sidescanpy.analysis`);
+:func:`render_recommended_config` turns their results into YAML. Every emitted key has the
 evidence for it in a comment directly above; a finding with no
 downstream config key is reported as a comment only. Hand-formatted
 (not ``yaml.dump``) so comments can sit next to keys. Keys match
@@ -14,13 +16,19 @@ from __future__ import annotations
 import logging
 
 import numpy as np
+import xarray as xr
 
-from sidescanpy.analysis.beam import BeamGeometryResult
-from sidescanpy.analysis.characterize import UnitsResult, ValueSummary
-from sidescanpy.analysis.geometry import PingGeometry
-from sidescanpy.analysis.nadir import NadirResult
-from sidescanpy.analysis.tvg import RangeDecayResult
-from sidescanpy.analysis.usable_range import UsableRangeResult
+from sidescanpy.analysis.beam import BeamGeometryResult, estimate_beam_geometry
+from sidescanpy.analysis.characterize import (
+    UnitsResult,
+    ValueSummary,
+    characterize_values,
+    infer_units,
+)
+from sidescanpy.analysis.geometry import PingGeometry, measure_ping_geometry
+from sidescanpy.analysis.nadir import NadirResult, analyze_nadir
+from sidescanpy.analysis.tvg import RangeDecayResult, fit_range_decay
+from sidescanpy.analysis.usable_range import UsableRangeResult, estimate_usable_range
 from sidescanpy.grids import recommend_resolution
 
 logger = logging.getLogger(__name__)
@@ -33,6 +41,38 @@ _TVG_STATUS_NOTE = {
     "none": "Neither term appears compensated by hardware -- full physics needed "
             "(no override -- sidescan-correct's own defaults already apply full physics).",
 }
+
+
+def run_analyses(
+    ds: xr.Dataset, *, value_var: str, nadir_n_samples: int = 50, bin_width_m: float = 1.0, snr_threshold: float = 3.0,
+) -> dict:
+    """Every result :func:`render_recommended_config` takes, keyed by its
+    argument name, from one channel with geometric ranges.
+
+    The range-decay fit uses the adopted recipe (slant range,
+    ``r_ref_m="auto"``, ``r_fit_min_m="auto"``) and is ``None`` without a
+    usable range; ``beam`` is ``None`` when it cannot be computed.
+    """
+    values = characterize_values(ds, value_var=value_var)
+    nadir = analyze_nadir(ds, value_var=value_var, nadir_n_samples=nadir_n_samples)
+    usable_range = estimate_usable_range(
+        ds, value_var=value_var, range_var="slant_range_m", bin_width_m=bin_width_m, snr_threshold=snr_threshold,
+    )
+    try:
+        beam = estimate_beam_geometry(ds, nadir.first_bottom_return_sample, usable_range.usable_range_m)
+    except (ValueError, KeyError) as exc:
+        logger.warning(f"beam-geometry could not be computed ({exc}) -- omitting from the recommendation")
+        beam = None
+    decay = None
+    if usable_range.usable_range_m is not None:
+        decay = fit_range_decay(
+            ds, range_var="slant_range_m", bin_width_m=bin_width_m,
+            usable_range_m=usable_range.usable_range_m, r_ref_m="auto", r_fit_min_m="auto",
+        )
+    return dict(
+        values=values, units=infer_units(values), nadir=nadir, beam=beam, usable_range=usable_range,
+        decay=decay, geometry=measure_ping_geometry(ds),
+    )
 
 
 def _fmt(value, spec: str = ".2f") -> str:

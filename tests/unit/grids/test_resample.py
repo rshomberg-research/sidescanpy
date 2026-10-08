@@ -832,3 +832,44 @@ class TestResampleChannelNameFromConverterAttrs:
         assert raster.channel_name == expected
         assert raster.dataset.attrs["channel_name"] == expected
         assert raster.dataset.attrs["frequency_hz"] == freq_start
+
+
+class TestGridChannel:
+    """grid_channel: bbox -> auto UTM grid -> resample, as one call."""
+
+    def _small(self):
+        ds = _make_test_channel(num_pings=30, samples_per_ping=40)
+        # ~100 m extent so a 5 m grid stays small
+        ds["latitude_per_sample"] = 39.0 + (ds["latitude_per_sample"] - 39.0) * 1e-3
+        ds["longitude_per_sample"] = -71.0 + (ds["longitude_per_sample"] + 71.0) * 1e-3
+        return ds
+
+    def test_matches_manual_chain(self):
+        from sidescanpy.grids import (
+            bbox_from_channel_dataset,
+            grid_channel,
+            utm_grid_from_wgs84_bbox,
+        )
+
+        ds = self._small()
+        manual = resample_channel_to_grid(
+            ds, utm_grid_from_wgs84_bbox(bbox_from_channel_dataset(ds), resolution_m=5.0), method=ResamplingMethod.MEDIAN,
+        )
+        raster = grid_channel(ds, 5.0, "median")
+        np.testing.assert_array_equal(raster.dataset["backscatter"].values, manual.dataset["backscatter"].values)
+        assert raster.grid_def.crs.is_projected
+
+    def test_backscatter_var_selects_variable(self):
+        from sidescanpy.grids import grid_channel
+
+        ds = self._small()
+        ds["other"] = ds["backscatter_intensity"] * 0 + 7.0
+        raster = grid_channel(ds, 5.0, backscatter_var="other")
+        vals = raster.dataset["backscatter"].values
+        assert np.nanmax(vals) == pytest.approx(7.0) and np.nanmin(vals) == pytest.approx(7.0)
+
+    def test_unknown_method_raises(self):
+        from sidescanpy.grids import grid_channel
+
+        with pytest.raises(ValueError):
+            grid_channel(self._small(), 5.0, "bilinear")

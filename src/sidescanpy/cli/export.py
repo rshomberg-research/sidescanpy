@@ -13,8 +13,10 @@ Subcommands:
   (``--range-mode ground``, the old ``07_ground_waterfalls.py``,
   requires geometric ranges already computed) waterfall PNGs, segmented
   by ping count.
-- ``grid`` — gridded-raster PNGs on an auto-selected UTM grid, segmented
-  by ping count (the old ``09_grid.py``, requires georeferencing).
+- ``grid`` — gridded-raster PNGs on an auto-selected UTM grid
+  (:func:`sidescanpy.grids.grid_channel`), segmented by ping count
+  (requires georeferencing). ``--geotiff`` also writes each segment as a
+  GeoTIFF (:func:`sidescanpy.grids.to_geotiff`, needs the ``geo`` extra).
 - ``track`` — full-survey nadir track + scan-line plot per frequency,
   with an optional target-catalog overlay via ``--targets-json`` (merges
   the old ``03_track_maps.py``/``12_track_with_targets.py``; requires
@@ -71,30 +73,24 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from sidescanpy.cli._common import (
+    add_common_args,
     add_logging_args,
     require_matplotlib,
     resolve_freq_keys,
     setup_logging_from_args,
+    ss_h5_files,
     uncorrected_alias,
 )
-from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
+from sidescanpy.cli._config import CLIParser, parse_args
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.export.ml import DatasetSpec, build_target_dataset
-from sidescanpy.export.windows import (
-    CHIP_STYLES,
-    RENDER_LEVELS,
-    with_uncorrected_var,
-)
-from sidescanpy.grids import (
-    ResamplingMethod,
-    bbox_from_channel_dataset,
-    resample_channel_to_grid,
-    utm_grid_from_wgs84_bbox,
-)
+from sidescanpy.export.windows import CHIP_STYLES, RENDER_LEVELS
+from sidescanpy.grids import grid_channel, to_geotiff
 from sidescanpy.io.hdf5 import concat_survey_frequency, read_survey
-from sidescanpy.processing.inversion import UNCORRECTED_VAR
+from sidescanpy.processing import UNCORRECTED_VAR, ping_windows, with_uncorrected_var
 from sidescanpy.processing.track import build_survey_track
 from sidescanpy.targets.correlate import build_position_index, correlate_catalog
 from sidescanpy.targets.io import read_targets_json
@@ -102,31 +98,29 @@ from sidescanpy.targets.waterfall import BOX_AXES, targets_by_global_ping, water
 
 logger = logging.getLogger(__name__)
 
-# Was 2000 -- not a multiple of HDF5_CHUNK_PING (the on-disk chunk size
-# write_survey() actually stores, 256). run_grid's own --segment-size
-# (this same default) feeds directly into read_survey(chunks=...), so a
-# misaligned value made xr.open_dataset split real HDF5 chunks to match,
-# degrading read performance and printing a UserWarning on every call
-# (found from a real user report, 2026-09-28). 2048 = 8x256, close to
-# the original round-number default, never splits a real chunk.
+# A multiple of HDF5_CHUNK_PING (the on-disk chunk size, 256) so lazy reads
+# chunked by it never split a real HDF5 chunk.
 _DEFAULT_SEGMENT_SIZE = HDF5_CHUNK_PING * 8
 
 
 # ============================================================
-# waterfall (replaces 05_waterfalls.py / 07_ground_waterfalls.py)
+# waterfall
 # ============================================================
 
-def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, boxes=None, box_size=40.0, value_var="backscatter_intensity"):
-    """Render one waterfall window, with a labeled box for each ``(target, global_ping_idx)`` in ``boxes``."""
+def _overview(ds_all, freq_key: str, file_start_ping: dict, args, x_axis: str, value_var: str) -> None:
     from sidescanpy.cli import _figures
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    _figures.save_waterfall_png(
-        ds, output_path, x_axis=x_axis, y_axis=y_axis, ping_offset=ping_offset,
-        cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct,
-        gamma=gamma, dpi=dpi, value_var=value_var,
-        box_rects=waterfall_boxes(ds, boxes or [], ping_offset, x_axis, y_axis, box_size),
+    n_pings = ds_all.sizes["ping"]
+    stride = max(1, n_pings // args.overview_rows)
+    out_path = args.output_dir / freq_key / "overview.png"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _figures.save_survey_overview_png(
+        ds_all, out_path, dpi=args.dpi, ping_stride=stride,
+        break_ping_indices=sorted(p for p in file_start_ping.values() if p > 0),
+        x_axis=x_axis, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+        vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma, value_var=value_var,
     )
+    logger.info(f"{freq_key}: wrote overview.png ({n_pings} pings, 1:{stride} compressed)")
 
 
 def run_waterfall(args: argparse.Namespace) -> int:
@@ -134,231 +128,163 @@ def run_waterfall(args: argparse.Namespace) -> int:
     from sidescanpy.viz.waterfall import resolve_waterfall_axes
 
     if args.range_mode == "ground":
-        # Forces the distance-axis branch regardless of --x-axis/--y-axis
-        # -- geometric ranges have no visible effect on a sample/ping-
-        # indexed plot (only color values change under TVG, not pixel
-        # geometry), matching the old 07_ground_waterfalls.py.
+        # Ground mode always plots on distance axes (TVG changes colors, not geometry).
         x_axis, y_axis = resolve_waterfall_axes(frozenset({"geometric"}), args.x_axis, args.y_axis)
     else:
         x_axis, y_axis = args.x_axis, args.y_axis
 
-    targets = []
-    index: dict[Path, dict] = {}
+    targets, index = [], {}
     if args.targets_json:
         if (x_axis, y_axis) not in BOX_AXES:
             logger.error(
                 "--targets-json only supports the default sample/ping pixel axes or "
-                f"ground mode's across_track/along_track axes -- got x_axis={x_axis!r}, "
-                f"y_axis={y_axis!r}."
+                f"ground mode's across_track/along_track axes -- got x_axis={x_axis!r}, y_axis={y_axis!r}."
             )
             return 1
         targets = read_targets_json(args.targets_json)
         index = build_position_index(args.ss_h5_dir)
 
-    files = sorted(args.ss_h5_dir.glob("*.ss.h5"))
+    files = ss_h5_files(args.ss_h5_dir)
     if not files:
-        logger.error(f"No .ss.h5 files found in {args.ss_h5_dir}")
         return 1
-    logger.info(f"Found {len(files)} .ss.h5 file(s) in {args.ss_h5_dir}")
-
-    stride = args.window_pings - args.overlap_pings
-    if stride <= 0:
+    if args.overlap_pings >= args.window_pings:
         logger.error(f"--overlap-pings ({args.overlap_pings}) must be smaller than --window-pings ({args.window_pings})")
         return 1
 
     value_var = UNCORRECTED_VAR if args.value_var == "uncorrected" else "backscatter_intensity"
-
-    n_written = 0
-    # Each target on every frequency of its file: its own mark on the
-    # frequency it was picked on, a slant-range projection on the others.
+    # Each target is marked on every frequency of its file.
     matched = correlate_catalog(targets, index, args.max_match_dist_m)
     if targets:
         logger.info(f"Overlaying {len(matched)}/{len(targets)} target(s) matched to a real ping")
 
-    ds_first = read_survey(files[0], chunks={"ping": 512})
-    freq_keys = resolve_freq_keys(ds_first.frequencies, args.frequency)
-
-    for freq_key in freq_keys:
+    n_written = 0
+    for freq_key in resolve_freq_keys(read_survey(files[0], chunks={"ping": 512}).frequencies, args.frequency):
         ds_all, file_start_ping = concat_survey_frequency(files, freq_key, chunks={"ping": 512})
         if ds_all is None:
             logger.warning(f"{freq_key}: no file has this frequency, skipping")
             continue
-        n_pings_total = ds_all.sizes["ping"]
         if value_var == UNCORRECTED_VAR:
             ds_all = with_uncorrected_var(ds_all)
+        if args.overview_rows:
+            _overview(ds_all, freq_key, file_start_ping, args, x_axis, value_var)
+            n_written += 1
 
         boxes_by_ping = targets_by_global_ping(matched, freq_key, file_start_ping)
-
-        if args.overview_rows:
-            overview_stride = max(1, n_pings_total // args.overview_rows)
-            breaks = sorted(p for p in file_start_ping.values() if p > 0)
-            out_path = args.output_dir / freq_key / "overview.png"
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            _figures.save_survey_overview_png(
-                ds_all, out_path, dpi=args.dpi,
-                ping_stride=overview_stride, break_ping_indices=breaks,
-                x_axis=x_axis, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
-                vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
-                value_var=value_var,
-            )
-            n_written += 1
-            logger.info(f"{freq_key}: wrote overview.png ({n_pings_total} pings, 1:{overview_stride} compressed)")
-
-        n_windows = 0
-        for start in range(0, n_pings_total, stride):
-            stop = min(start + args.window_pings, n_pings_total)
+        windows = ping_windows(ds_all.sizes["ping"], args.window_pings, args.overlap_pings)
+        for i, (start, stop) in enumerate(windows, 1):
             ds_window = ds_all.isel(ping=slice(start, stop)).load()
-            out_path = args.output_dir / freq_key / f"segment_{n_windows + 1:03d}.png"
-            window_boxes = [(bt, p) for p in range(start, stop) for bt in boxes_by_ping.get(p, [])]
+            out_path = args.output_dir / freq_key / f"segment_{i:03d}.png"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            boxes = [(bt, p) for p in range(start, stop) for bt in boxes_by_ping.get(p, [])]
             try:
-                _export_waterfall_png(
-                    ds_window, out_path,
-                    x_axis=x_axis, y_axis=y_axis, ping_offset=start,
-                    cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
-                    vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
-                    dpi=args.dpi, boxes=window_boxes, box_size=args.box_size,
-                    value_var=value_var,
+                _figures.save_waterfall_png(
+                    ds_window, out_path, x_axis=x_axis, y_axis=y_axis, ping_offset=start,
+                    cmap=args.cmap, vmin=args.vmin, vmax=args.vmax, vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct,
+                    gamma=args.gamma, dpi=args.dpi, value_var=value_var,
+                    box_rects=waterfall_boxes(ds_window, boxes, start, x_axis, y_axis, args.box_size),
                 )
                 n_written += 1
             except Exception as e:
                 logger.error(f"{freq_key}: window starting at ping {start} failed: {type(e).__name__}: {e}")
-            n_windows += 1
-            if stop == n_pings_total:
-                break
-        logger.info(f"{freq_key}: {n_windows} window(s) processed ({n_pings_total} total pings, window={args.window_pings}, overlap={args.overlap_pings})")
+        logger.debug(f"{freq_key}: {len(windows)} window(s) ({ds_all.sizes['ping']} pings)")
 
-    logger.info("=" * 60)
-    logger.info(f"export waterfall ({args.range_mode}, {args.value_var}) complete: {n_written} PNG(s) written")
+    logger.info(f"export waterfall ({args.range_mode}, {args.value_var}): {n_written} PNG(s) written to {args.output_dir}")
     return 0 if n_written > 0 else 1
 
 
 # ============================================================
-# grid (replaces 09_grid.py)
+# grid
 # ============================================================
 
-def _export_gridded_segment(ds, output_path: Path, *, resolution_m, method, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, show_land=False, show_locator=False):
-    bbox_wgs84 = bbox_from_channel_dataset(ds)
-    grid_def = utm_grid_from_wgs84_bbox(bbox_wgs84, resolution_m=resolution_m)
-    raster = resample_channel_to_grid(ds, grid_def, method=ResamplingMethod(method), backscatter_var="backscatter_intensity")
-    from sidescanpy.cli import _figures
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    _figures.save_gridded_png(
-        raster, str(output_path), dpi=dpi, cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct, gamma=gamma,
-        show_land=show_land, show_locator=show_locator,
-    )
+def _has_geotiff_support() -> bool:
+    try:
+        import rioxarray  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def run_grid(args: argparse.Namespace) -> int:
-    files = sorted(args.ss_h5_dir.glob("*.ss.h5"))
-    if not files:
-        logger.error(f"No .ss.h5 files found in {args.ss_h5_dir}")
+    from sidescanpy.cli import _figures
+
+    if args.geotiff and not _has_geotiff_support():
+        logger.error("sidescan-export grid --geotiff needs rioxarray: pip install 'sidescanpy[geo]'")
         return 1
-    logger.info(f"Found {len(files)} .ss.h5 file(s) in {args.ss_h5_dir}")
+    files = ss_h5_files(args.ss_h5_dir)
+    if not files:
+        return 1
 
     n_written = 0
     for path in files:
-        # chunks= keeps this lazy (dask-backed) -- without it, the whole
-        # file loads eagerly before any segmenting happens below,
-        # defeating --segment-size's own purpose on a large real survey
-        # (avoids OOM; every other exporter in
-        # this file -- waterfall/track/chip -- already reads this way,
-        # this one didn't). `.load()` on each segment slice below then
-        # only ever materializes that one segment's data.
+        # Lazy read; each segment below loads only its own pings.
         survey = read_survey(path, chunks={"ping": args.segment_size})
-        freq_keys = resolve_freq_keys(survey.frequencies, args.frequency)
-        for freq_key in freq_keys:
+        for freq_key in resolve_freq_keys(survey.frequencies, args.frequency):
             if freq_key not in survey.frequencies:
                 continue
             ds = survey.get_frequency(freq_key).dataset
-            n_pings = ds.sizes["ping"]
-            n_segments = max(1, -(-n_pings // args.segment_size))
-            for seg_idx in range(n_segments):
-                start = seg_idx * args.segment_size
-                stop = min(start + args.segment_size, n_pings)
-                ds_segment = ds.isel(ping=slice(start, stop)).load()
-                out_path = args.output_dir / freq_key / path.stem / f"segment_{seg_idx + 1:03d}.png"
+            for i, (start, stop) in enumerate(ping_windows(ds.sizes["ping"], args.segment_size), 1):
+                out_path = args.output_dir / freq_key / path.stem / f"segment_{i:03d}.png"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    _export_gridded_segment(
-                        ds_segment, out_path,
-                        resolution_m=args.grid_resolution_m, method=args.grid_method,
-                        cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+                    raster = grid_channel(ds.isel(ping=slice(start, stop)).load(), args.grid_resolution_m, args.grid_method)
+                    _figures.save_gridded_png(
+                        raster, str(out_path), dpi=args.dpi, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
                         vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
-                        dpi=args.dpi, show_land=args.show_land, show_locator=args.show_locator,
+                        show_land=args.show_land, show_locator=args.show_locator,
                     )
+                    if args.geotiff:
+                        to_geotiff(raster, out_path.with_suffix(".tif"))
                     n_written += 1
                 except Exception as e:
-                    logger.error(f"[{path.name}/{freq_key}] segment {seg_idx + 1} failed: {type(e).__name__}: {e}")
-            logger.info(f"[{path.name}/{freq_key}] {n_segments} segment(s) processed")
+                    logger.error(f"[{path.name}/{freq_key}] segment {i} failed: {type(e).__name__}: {e}")
 
-    logger.info("=" * 60)
-    logger.info(f"export grid complete: {n_written} PNG(s) written")
+    kind = "PNG+GeoTIFF" if args.geotiff else "PNG"
+    logger.info(f"export grid: {n_written} segment {kind}(s) written to {args.output_dir}")
     return 0 if n_written > 0 else 1
 
 
 # ============================================================
-# track (replaces 03_track_maps.py / 12_track_with_targets.py)
+# track
 # ============================================================
-
-def _resolve_frequencies(surveys: dict, requested: str) -> list[str]:
-    freqs: set[str] = set()
-    for survey in surveys.values():
-        freqs.update(survey.frequencies)
-    return resolve_freq_keys(freqs, requested)
-
 
 def run_track(args: argparse.Namespace) -> int:
     from sidescanpy.cli import _figures
 
-    paths = sorted(args.ss_h5_dir.glob("*.ss.h5"))
+    paths = ss_h5_files(args.ss_h5_dir)
     if not paths:
-        logger.error(f"No .ss.h5 files found in {args.ss_h5_dir}")
         return 1
-    logger.info(f"Loading {len(paths)} .ss.h5 file(s) (lazy)")
     surveys = {p: read_survey(p, chunks={"ping": _DEFAULT_SEGMENT_SIZE}) for p in paths}
-
-    freq_keys = _resolve_frequencies(surveys, args.frequency)
+    freq_keys = resolve_freq_keys(set().union(*(s.frequencies for s in surveys.values())), args.frequency)
     if not freq_keys:
         logger.error("No frequencies found across input files")
         return 1
-
     targets = read_targets_json(args.targets_json) if args.targets_json else None
-    if targets is not None:
-        logger.info(f"Overlaying {len(targets)} target(s)")
 
     n_written = 0
     for freq_key in freq_keys:
-        logger.info(f"=== {freq_key} ===")
         track = build_survey_track(surveys, freq_key, scanline_stride=args.scanline_stride)
         if track is None:
-            logger.warning(f"  No file contains {freq_key}; skipping")
+            logger.warning(f"No file contains {freq_key}; skipping")
             continue
-
         out_path = args.output_dir / freq_key / "track.png"
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        maps = dict(dpi=args.dpi, show_land=args.show_land, show_locator=args.show_locator)
         try:
             if targets is not None:
-                _figures.save_track_with_targets_png(
-                    track, targets, str(out_path), dpi=args.dpi,
-                    show_land=args.show_land, show_locator=args.show_locator,
-                )
+                _figures.save_track_with_targets_png(track, targets, str(out_path), **maps)
             else:
-                _figures.save_track_png(
-                    track, str(out_path), dpi=args.dpi,
-                    show_land=args.show_land, show_locator=args.show_locator,
-                )
-            logger.info(f"  Wrote {out_path}")
+                _figures.save_track_png(track, str(out_path), **maps)
             n_written += 1
         except Exception as e:
-            logger.error(f"  [{freq_key}] track export failed: {type(e).__name__}: {e}")
+            logger.error(f"[{freq_key}] track export failed: {type(e).__name__}: {e}")
 
-    logger.info("=" * 60)
-    logger.info(f"export track complete: {n_written}/{len(freq_keys)} frequency track(s) written")
+    overlay = f", {len(targets)} target(s) overlaid" if targets is not None else ""
+    logger.info(f"export track: {n_written}/{len(freq_keys)} frequency track(s) written to {args.output_dir}{overlay}")
     return 0 if n_written > 0 else 1
 
 
 # ============================================================
-# chip / survey-window / progression
+# chip
 # ============================================================
 
 def _load_ping_ranges(value) -> dict[str, list[tuple[int, int]]] | None:
@@ -429,8 +355,9 @@ def run_chip(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def build_parser() -> tuple[CLIParser, Any]:
+    """The parser and its subparsers action (``.choices``: name -> subparser)."""
+    parser = CLIParser(prog="sidescan-export", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     common = dict(gamma=1.0, pct_low=1.0, pct_high=99.0)
@@ -496,6 +423,11 @@ def main() -> int:
     p_grid.add_argument("--dpi", type=int, default=100)
     p_grid.add_argument("--show-land", action="store_true", help="Draw land/water context behind the raster (requires the 'maps' extra)")
     p_grid.add_argument("--show-locator", action="store_true", help="Add a zoomed-out locator inset (requires the 'maps' extra)")
+    p_grid.add_argument(
+        "--geotiff", action="store_true",
+        help="Also write each segment as a single-band GeoTIFF (segment_NNN.tif, backscatter, NaN nodata) next to "
+             "its PNG (requires the 'geo' extra)",
+    )
     p_grid.set_defaults(func=run_grid)
 
     p_track = subparsers.add_parser("track", help="Full-survey nadir track + scan-lines, optionally with a target-catalog overlay")
@@ -549,8 +481,7 @@ def main() -> int:
         help="uncorrected signal vs. dB (20*log10 of it, no TVG) vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
              "styles AND --with-context, in either coordinate mode) -- independent of --render-level, "
              "which already fully determines this for 'uncorrected'/'radiometric' render levels (no effect there, "
-             "logged not an error). Added 2026-09-28 so coordinate system and value processing are "
-             "independently selectable, instead of --render-level conflating both.",
+             "logged not an error).",
     )
     p_chip.add_argument(
         "--resample-method", choices=["kdtree", "binned", "griddata"], default="griddata",
@@ -564,19 +495,16 @@ def main() -> int:
              "tight resolution_m on real data. 'griddata' (extract_geometric_window_griddata, "
              "DEFAULT): scipy.interpolate.griddata full interpolation, no gaps inside the recorded swath (cells with no real sample nearby, e.g. past max range, stay no-data) -- real, chosen tradeoff: "
              "at a resolution finer than real along-track ping spacing, most pixels are interpolated from "
-             "nearby real points, not individually measured. Real-data comparison of all three (2026-09-29) "
-             "is in sidescanpy's CHANGELOG.md.",
+             "nearby real points, not individually measured.",
     )
     p_chip.add_argument("--box-size", type=float, default=40.0, help="COCO/YOLO annotation box size AND (with --with-context) the drawn box size, in pixels")
     p_chip.add_argument(
         "--with-context", action="store_true",
         help="Also save context/context_<id>.png -- the full loaded ping neighborhood, BOTH channels "
              "combined (port+starboard), with a real box drawn at the target's true position, via "
-             "sidescanpy.viz.render_target_context. Independent of --styles -- but, as of 2026-09-28, "
-             "follows --render-level's own coordinate choice (native pixel space for 'uncorrected'/'radiometric', "
-             "a real-meters resampled grid -- same shape as the 'dual-swath' style -- for "
-             "'geometric'/'georef') and --value-var's uncorrected/radiometric choice, rather than always being a "
-             "fixed radiometric pixel-space view.",
+             "sidescanpy.viz.render_target_context. Independent of --styles; follows --render-level's "
+             "coordinate choice (native pixel space for 'uncorrected'/'radiometric', a real-meters resampled "
+             "grid -- same shape as the 'dual-swath' style -- for 'geometric'/'georef') and --value-var.",
     )
     p_chip.add_argument("--jitter-px", type=int, default=0)
     p_chip.add_argument(
@@ -655,33 +583,19 @@ def main() -> int:
     p_chip.add_argument("--seed", type=int, default=None)
     p_chip.set_defaults(func=run_chip)
 
-    all_subparsers = (p_wf, p_grid, p_track, p_chip)
-    for p in all_subparsers:
-        p.add_argument("--config", type=Path, default=None, help="YAML or JSON file seeding this subcommand's defaults -- explicit flags still override")
-        p.add_argument("--strict-config", action="store_true", help="Treat config-file keys this subcommand does not recognize as an error instead of a warning")
-        # default=SUPPRESS: see sidescanpy/cli/convert.py's matching
-        # block for why a plain default=False here would silently
-        # overwrite a real -v already set before the subcommand.
-        add_logging_args(p, subcommand=True)
-
+    for p in subparsers.choices.values():
+        add_common_args(p)
     add_logging_args(parser)
+    return parser, subparsers
 
-    argv = sys.argv[1:]
-    config_path = find_config_path(argv)
-    if config_path is not None:
-        config = load_config(config_path)
-        apply_config_to_subparsers(all_subparsers, config, argv)
 
-    args = parser.parse_args(argv)
-
+def main(argv: list[str] | None = None) -> int:
+    parser, subparsers = build_parser()
+    args = parse_args(parser, sys.argv[1:] if argv is None else argv, subcommands=subparsers.choices)
     setup_logging_from_args(args)
-
     if not require_matplotlib(f"sidescan-export {args.subcommand}"):
         return 1
-
-    result = args.func(args)
-    logger.info(f"export {args.subcommand} complete")
-    return result if isinstance(result, int) else 0
+    return args.func(args)
 
 
 if __name__ == "__main__":

@@ -218,10 +218,24 @@ class TestRunGrid:
             ss_h5_dir=ss_h5_dir, output_dir=tmp_path / "out", frequency="all",
             segment_size=2000, grid_resolution_m=1.0, grid_method="mean",
             cmap="copper", vmin=None, vmax=None, vmin_pct=2.0, vmax_pct=98.0,
-            gamma=2.5, dpi=50, show_land=False, show_locator=False,
+            gamma=2.5, dpi=50, show_land=False, show_locator=False, geotiff=False,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
+
+    def test_geotiff_written_next_to_png(self, tmp_path, georef_ss_h5_dir):
+        pytest.importorskip("rioxarray")
+        assert export.run_grid(self._args(tmp_path, georef_ss_h5_dir, geotiff=True)) == 0
+        seg = tmp_path / "out" / "hz_1495000" / "survey_a.ss"
+        assert (seg / "segment_001.png").exists()
+        assert (seg / "segment_001.tif").exists()
+
+    def test_geotiff_without_geo_extra_is_one_line_error(self, tmp_path, georef_ss_h5_dir, monkeypatch, caplog):
+        monkeypatch.setattr(export, "_has_geotiff_support", lambda: False)
+        with caplog.at_level("ERROR"):
+            assert export.run_grid(self._args(tmp_path, georef_ss_h5_dir, geotiff=True)) == 1
+        assert "sidescanpy[geo]" in caplog.text
+        assert not (tmp_path / "out").exists()
 
     def test_writes_gridded_pngs(self, tmp_path, georef_ss_h5_dir):
         assert export.run_grid(self._args(tmp_path, georef_ss_h5_dir)) == 0

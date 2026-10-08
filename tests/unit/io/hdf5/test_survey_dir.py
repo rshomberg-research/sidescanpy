@@ -15,6 +15,7 @@ from sidescanpy.io.hdf5 import (
     load_channel_dataset,
     read_survey,
     read_survey_dir,
+    read_survey_pings,
     write_survey,
 )
 from tests.conftest import make_minimal_sidescan_dataset
@@ -88,3 +89,21 @@ def test_atomic_write_survey_replaces_and_leaves_no_temp(tmp_path):
     atomic_write_survey(new, path)
     assert read_survey(path).get_frequency("hz_900000").dataset.sizes["ping"] == 9
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_read_survey_pings_single_file_cuts_every_channel(tmp_path):
+    _write(tmp_path / "a.ss.h5", 10, freq_keys=("hz_900000", "hz_600000"))
+    survey = read_survey_pings(tmp_path / "a.ss.h5", 2, 6)
+    assert survey.survey_name == "a.ss" and survey.source_format == "SDF"
+    for k in ("hz_900000", "hz_600000"):
+        ds = survey.get_frequency(k).dataset
+        assert ds.sizes["ping"] == 4
+        assert ds["ping_number"].values.tolist() == [3, 4, 5, 6]
+        assert not hasattr(ds["backscatter_intensity"].data, "chunks")
+
+
+def test_read_survey_pings_directory(survey_dir):
+    survey = read_survey_pings(survey_dir, 3, None)
+    assert survey.survey_name == survey_dir.name and survey.source_format == "ss_h5"
+    assert [p.name for p in map(__import__("pathlib").Path, survey.source_files)] == ["a.ss.h5", "b.ss.h5"]
+    assert survey.get_frequency("hz_900000").dataset.sizes["ping"] == 12 - 3

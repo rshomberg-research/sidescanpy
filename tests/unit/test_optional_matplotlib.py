@@ -24,7 +24,7 @@ _BLOCK = "import sys; sys.modules['matplotlib'] = None\n"
 
 # CLI modules that are figure code by design (imported lazily by the
 # subcommands that need them).
-_NEEDS_MATPLOTLIB = ("sidescanpy.viz", "sidescanpy.cli._figures", "sidescanpy.cli._investigate")
+_NEEDS_MATPLOTLIB = ("sidescanpy.viz", "sidescanpy.cli._figures")
 
 
 def _run(code: str, *args: str) -> subprocess.CompletedProcess:
@@ -95,4 +95,35 @@ def test_analyze_subcommand_fails_with_one_line_error(tmp_path):
     """, str(tmp_path / "missing.ss.h5"))
     assert proc.returncode == 1
     assert "sidescan-analyze units needs matplotlib" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_analyze_no_plots_runs_without_matplotlib(tmp_path):
+    _synthetic_ss_h5(tmp_path / "a.ss.h5")
+    proc = _run("""
+        from sidescanpy.cli.analyze import main
+        d = sys.argv[1]
+        sys.exit(main(["units", "--input", d + "/a.ss.h5", "--frequency", "200000", "--output-dir", d + "/out", "--no-plots"]))
+    """, str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "out" / "metrics.json").exists()
+
+
+def test_convert_targets_runs_without_matplotlib_unless_plot(tmp_path):
+    from tests.unit.io.jsf.test_targets import _make_target_file
+
+    (tmp_path / "cat").mkdir()
+    _make_target_file(tmp_path / "cat" / "Target-0001.target")
+    code = """
+        from sidescanpy.cli.convert import main
+        d = sys.argv[1]
+        sys.exit(main(["targets", "--source", d + "/cat", "--output", d + "/out", *sys.argv[2:]]))
+    """
+    proc = _run(code, str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "out" / "targets.json").exists()
+
+    proc = _run(code, str(tmp_path), "--plot")
+    assert proc.returncode == 1
+    assert "sidescan-convert targets --plot needs matplotlib" in proc.stderr
     assert "Traceback" not in proc.stderr

@@ -8,6 +8,7 @@ garbage-runs/instability.
 import numpy as np
 
 from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.processing.segments import (
     Segment,
     detect_gaps,
@@ -17,6 +18,7 @@ from sidescanpy.processing.segments import (
     find_segments,
     score_stability,
     split_by_segments,
+    write_segments,
 )
 from tests.conftest import make_minimal_sidescan_dataset
 
@@ -258,3 +260,38 @@ class TestSplitBySegments:
         assert json.loads(json.dumps(seg.to_dict())) == {
             "label": "section1", "start": 0, "stop": 10, "status": "clean", "reasons": ["clean"],
         }
+
+
+class TestWriteSegments:
+    def _survey(self, n_pings=200):
+        survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="survey_a")
+        survey.add_frequency("hz_1495000", _uniform_track_dataset(n_pings=n_pings))
+        return survey
+
+    def test_writes_only_clean_segments(self, tmp_path):
+        survey = self._survey()
+        segments = [
+            Segment(label="section1", start=0, stop=80, status="clean", reasons=["clean"]),
+            Segment(label="section2", start=80, stop=120, status="excluded", reasons=["garbage_run"]),
+            Segment(label="section3", start=120, stop=200, status="clean", reasons=["clean"]),
+        ]
+        written = write_segments(survey, segments, tmp_path / "sections")
+        names = {p.name for p in written}
+        assert names == {"section1.ss.h5", "section3.ss.h5"}
+        assert not (tmp_path / "sections" / "section2.ss.h5").exists()
+
+    def test_written_segment_has_correct_ping_range(self, tmp_path):
+        survey = self._survey()
+        segments = [Segment(label="section1", start=50, stop=150, status="clean", reasons=["clean"])]
+        [out_path] = write_segments(survey, segments, tmp_path / "sections")
+        reread = read_survey(out_path)
+        assert reread.get_frequency("hz_1495000").dataset.sizes["ping"] == 100
+
+    def test_every_frequency_channel_sliced(self, tmp_path):
+        survey = self._survey()
+        survey.add_frequency("hz_547500", _uniform_track_dataset(n_pings=200))
+        segments = [Segment(label="section1", start=0, stop=40, status="clean", reasons=["clean"])]
+        [out_path] = write_segments(survey, segments, tmp_path / "sections")
+        reread = read_survey(out_path)
+        assert reread.get_frequency("hz_1495000").dataset.sizes["ping"] == 40
+        assert reread.get_frequency("hz_547500").dataset.sizes["ping"] == 40

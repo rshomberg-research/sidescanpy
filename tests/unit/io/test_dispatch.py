@@ -9,7 +9,16 @@ from pathlib import Path
 
 import pytest
 
-from sidescanpy.io.dispatch import detect_format, read_and_convert
+from sidescanpy.io.dispatch import (
+    CATALOG_JSF_DISCOVER,
+    CATALOG_SDF_KLEIN,
+    detect_catalog_format,
+    detect_format,
+    find_sonar_files,
+    load_survey,
+    read_and_convert,
+    read_target_catalog,
+)
 
 # ============================================================
 # detect_format
@@ -88,3 +97,73 @@ class TestReadAndConvert:
     def test_unknown_format_raises(self):
         with pytest.raises(ValueError, match="Unknown format"):
             read_and_convert([Path("a.jsf")], "xtf")
+
+
+class TestFindSonarFiles:
+    def test_auto_finds_both_sorted(self, tmp_path):
+        for name in ("b.sdf", "a.jsf", "c.txt"):
+            (tmp_path / name).write_bytes(b"")
+        assert [p.name for p in find_sonar_files(tmp_path)] == ["a.jsf", "b.sdf"]
+
+    def test_single_format(self, tmp_path):
+        for name in ("b.sdf", "a.jsf"):
+            (tmp_path / name).write_bytes(b"")
+        assert [p.name for p in find_sonar_files(tmp_path, "sdf")] == ["b.sdf"]
+
+    def test_unknown_format_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="input_format"):
+            find_sonar_files(tmp_path, "xtf")
+
+
+class TestLoadSurvey:
+    def test_reads_ss_h5(self, tmp_path, sample_multi_frequency_survey):
+        from sidescanpy.io.hdf5 import write_survey
+
+        write_survey(sample_multi_frequency_survey, tmp_path / "a.ss.h5")
+        survey = load_survey(tmp_path / "a.ss.h5")
+        assert set(survey.frequencies) == set(sample_multi_frequency_survey.frequencies)
+
+    def test_raw_file_is_converted(self, tmp_path, monkeypatch, sample_multi_frequency_survey):
+        import sidescanpy.io.dispatch as dispatch
+
+        calls = []
+        monkeypatch.setattr(dispatch, "read_and_convert", lambda paths, fmt: calls.append((paths, fmt)) or sample_multi_frequency_survey)
+        assert load_survey(tmp_path / "x.sdf") is sample_multi_frequency_survey
+        assert calls == [([tmp_path / "x.sdf"], "sdf")]
+
+
+class TestTargetCatalog:
+    def test_klein(self, tmp_path):
+        (tmp_path / "Target_1536923484.tgt").write_bytes(b"")
+        assert detect_catalog_format(tmp_path) == CATALOG_SDF_KLEIN
+
+    def test_jsf(self, tmp_path):
+        (tmp_path / "Target-0001.target").write_bytes(b"")
+        assert detect_catalog_format(tmp_path) == CATALOG_JSF_DISCOVER
+
+    def test_ambiguous_raises(self, tmp_path):
+        (tmp_path / "Target_1536923484.tgt").write_bytes(b"")
+        (tmp_path / "Target-0001.target").write_bytes(b"")
+        with pytest.raises(ValueError, match="ambiguous"):
+            detect_catalog_format(tmp_path)
+
+    def test_neither_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="No target catalog files"):
+            detect_catalog_format(tmp_path)
+
+    def test_reads_jsf_catalog(self, tmp_path):
+        from tests.unit.io.jsf.test_targets import _make_target_file
+
+        _make_target_file(tmp_path / "Target-0001.target")
+        fmt, targets = read_target_catalog(tmp_path)
+        assert fmt == CATALOG_JSF_DISCOVER
+        assert [t.target_id for t in targets] == ["0001"] or len(targets) == 1
+
+    def test_reads_klein_catalog(self, tmp_path):
+        from tests.unit.io.sdf.test_targets import _make_window, _write_target
+
+        _write_target(tmp_path, "Target_1536923484", channel=0, raw_window_row=10, range_m=12.0, window=_make_window())
+        fmt, targets = read_target_catalog(tmp_path)
+        assert fmt == CATALOG_SDF_KLEIN
+        assert len(targets) == 1
+        assert targets[0].latitude is None

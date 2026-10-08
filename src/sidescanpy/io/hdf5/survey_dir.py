@@ -6,6 +6,8 @@ Helpers for reading and rewriting directories of ``.ss.h5`` files.
 - :func:`concat_survey_frequency`, :func:`available_frequencies`,
   :func:`load_channel_dataset` -- lower-level pieces of the same multi-file
   convention (a file or a directory both work for the latter two).
+- :func:`read_survey_pings` -- every frequency channel of a file or
+  directory, cut to one ping range and loaded.
 - :func:`check_disk_space`, :func:`atomic_write_survey` -- safe in-place
   rewrite support.
 
@@ -75,7 +77,7 @@ def read_survey_dir(path: Path, *, freq_key: str, chunks: dict | None = None) ->
     return ds
 
 
-def available_frequencies(input_path: Path, chunks: dict | None) -> set[str]:
+def available_frequencies(input_path: Path, chunks: dict | None = None) -> set[str]:
     """Every frequency key present at ``input_path`` -- a single
     ``.ss.h5`` file (its own ``.frequencies``) or a directory of them
     (the union across every file -- not every file need carry every key,
@@ -95,7 +97,7 @@ def available_frequencies(input_path: Path, chunks: dict | None) -> set[str]:
     return set(read_survey(input_path, chunks=chunks).frequencies)
 
 
-def load_channel_dataset(input_path: Path, freq_key: str, chunks: dict | None) -> "xr.Dataset":
+def load_channel_dataset(input_path: Path, freq_key: str, chunks: dict | None = None) -> "xr.Dataset":
     """One frequency channel's dataset from ``input_path``.
 
     ``input_path`` may be a single ``.ss.h5`` file (original behavior,
@@ -118,6 +120,32 @@ def load_channel_dataset(input_path: Path, freq_key: str, chunks: dict | None) -
     if freq_key not in survey.frequencies:
         raise ValueError(f"{freq_key!r}: not present in {input_path} (available: {sorted(survey.frequencies)})")
     return survey.get_frequency(freq_key).dataset
+
+
+def read_survey_pings(
+    input_path: Path | str, start: int = 0, stop: int | None = None, *, chunks: dict | None = None,
+) -> SideScanSurvey:
+    """Every frequency channel at ``input_path`` cut to pings ``[start, stop)``, loaded.
+
+    ``input_path`` is a ``.ss.h5`` file or a directory of them (see
+    :func:`load_channel_dataset`). Every channel is cut to the same ping
+    range, so channels must share one ping axis. Only the channel
+    datasets are carried; aux records are not. For a directory, the
+    survey is named after the directory, ``source_format`` is ``"ss_h5"``
+    and ``source_files`` lists the ``.ss.h5`` files.
+    """
+    input_path = Path(input_path)
+    if input_path.is_dir():
+        source_files = sorted(input_path.glob("*.ss.h5"))
+        source_format, survey_name = "ss_h5", input_path.name
+    else:
+        meta = read_survey(input_path, chunks=chunks)
+        source_files, source_format, survey_name = meta.source_files, meta.source_format, meta.survey_name
+    survey = SideScanSurvey(source_files=source_files, source_format=source_format, survey_name=survey_name)
+    for freq_key in sorted(available_frequencies(input_path, chunks)):
+        ds = load_channel_dataset(input_path, freq_key, chunks)
+        survey.add_frequency(freq_key, ds.isel(ping=slice(start, stop)).load())
+    return survey
 
 
 def check_disk_space(path: Path, multiplier: float) -> bool:

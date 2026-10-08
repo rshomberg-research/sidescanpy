@@ -9,6 +9,40 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- Thin-CLI split: logic the `sidescan-*` commands carried moved into the
+  library as public, tested functions:
+  - `sidescanpy.grids.grid_channel(ds, resolution_m=1.0, method="mean", *,
+    backscatter_var="backscatter_intensity", max_search_radius_m=None)`:
+    channel bbox -> auto-UTM grid -> resample in one call (what
+    `sidescan-export grid` does per segment).
+  - `sidescanpy.io.find_sonar_files(input_dir, input_format="auto")`,
+    `sidescanpy.io.load_survey(path, *, chunks=None)` (`.ss.h5` or raw
+    `.jsf`/`.sdf`), `sidescanpy.io.detect_catalog_format(source)` and
+    `sidescanpy.io.read_target_catalog(source) -> (format, targets)`
+    (EdgeTech Discover vs. Klein catalogs, from the directory's contents).
+  - `sidescanpy.io.hdf5.read_survey_pings(input_path, start=0, stop=None,
+    *, chunks=None)`: every channel of a file or directory cut to one ping
+    range.
+  - `sidescanpy.processing.correction_steps(requested)` (canonical order,
+    `interpolate_aux` added when needed), `processing.ping_windows(n_pings,
+    window_pings, overlap_pings=0)`, `processing.write_segments(survey,
+    segments, output_dir)` (was `cli._segments`) and
+    `processing.with_uncorrected_var(ds)` (was only in
+    `export.windows`, which still re-exports it).
+- `sidescan-export grid --geotiff`: also writes each segment as
+  `segment_NNN.tif` next to its PNG (`grids.to_geotiff`; needs the `geo`
+  extra, one-line error without it).
+- `sidescan-convert survey --no-crop-farrange` keeps the full recorded
+  range (default unchanged: crop far-range noise before writing).
+- `sidescan-analyze --plots/--no-plots` on every subcommand that writes a
+  PNG (default on, output unchanged); `--no-plots` writes only the JSON
+  result and runs without the `viz` extra.
+- `sidescan-analyze nav-summary`: alias of `nav-attitude`.
+- `sidescan-analyze tvg-fit` writes `metrics.json` (the fit result's
+  `to_dict()`) next to its PNG, like the other analyze subcommands.
+- `--help` smoke tests for every subcommand; CLI wiring tests.
+
+
 - `sidescanpy.grids.to_geotiff(raster_or_dataset, path, *, variable=,
   dtype=, nodata=, compress=)`: single-band, north-up GeoTIFF with CRS,
   transform, nodata and attrs as tags, via rioxarray. New optional extra
@@ -98,6 +132,25 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   masking, from the CLI's progression grid).
 
 ### Changed
+
+- **Behavior change:** `sidescan-convert targets` writes
+  `position_scatter.png` only with the new `--plot` flag (was always,
+  whenever matplotlib was installed). `targets.json`/`targets.csv` are
+  unchanged.
+- **Breaking (internal):** CLI `--config` handling no longer introspects
+  argparse's private `_actions`: `cli._config.parse_args` parses once,
+  seeds the chosen subparser's defaults from the config and parses again
+  (option dests are recorded by `cli._config.CLIParser`). Behavior is
+  unchanged: explicit flags win, unknown keys warn (`--strict-config`:
+  error), keys for sibling subcommands are accepted, deprecated keys and
+  flags still map with a WARNING. `find_config_path`,
+  `apply_config_defaults` and `apply_config_to_subparsers` are removed. An
+  empty YAML config is now an empty config instead of an error.
+- `sidescan-*` end-of-run summaries are one INFO line (per-file progress
+  stays at INFO; result details at DEBUG, `-v`). Every `main()` accepts an
+  optional `argv` list.
+- `sidescan-analyze investigate` no longer needs matplotlib to import
+  `cli._investigate` (figures are imported only when plotting).
 
 - `resample_channel_to_grid` aggregates all cells at once
   (`cKDTree.sparse_distance_matrix` in bounded blocks + grouped

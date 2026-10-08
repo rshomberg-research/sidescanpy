@@ -83,6 +83,7 @@ from sidescanpy.processing.correct import (
     correct,
     correct_file,
     correct_survey,
+    correction_steps,
     estimate_correct_disk_bytes,
 )
 from sidescanpy.processing.farrange import (
@@ -106,6 +107,7 @@ from sidescanpy.processing.inversion import (
     UNCORRECTED_VAR,
     invert,
     uncorrected_backscatter,
+    with_uncorrected_var,
 )
 from sidescanpy.processing.navigation import (
     along_track_distance_m,
@@ -130,8 +132,10 @@ from sidescanpy.processing.segments import (
     find_segments,
     score_stability,
     split_by_segments,
+    write_segments,
 )
 from sidescanpy.processing.slicing import (
+    ping_windows,
     slice_by_bbox,
     slice_by_ground_range,
     slice_by_pings,
@@ -160,6 +164,7 @@ __all__ = [
     "compute_georeferencing",
     "detect_far_range_cutoff_sample",
     "crop_far_range_noise",
+    "ping_windows",
     "slice_by_pings",
     "slice_by_samples",
     "slice_by_range",
@@ -169,6 +174,7 @@ __all__ = [
     "slice_by_ground_range",
     "correct",
     "correct_survey",
+    "correction_steps",
     "correct_file",
     "estimate_correct_disk_bytes",
     "Step",
@@ -182,6 +188,7 @@ __all__ = [
     "STEP_GEOREF",
     "invert",
     "uncorrected_backscatter",
+    "with_uncorrected_var",
     "LEGACY_RAW_VAR",
     "UNCORRECTED_VAR",
     "INVERTIBLE_STEPS",
@@ -209,6 +216,7 @@ __all__ = [
     "detect_unstable_spans",
     "find_segments",
     "split_by_segments",
+    "write_segments",
     # profiles
     "backscatter_vs_range",
     "backscatter_vs_sample",

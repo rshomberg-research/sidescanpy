@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from sidescanpy.cli import analyze
+from sidescanpy.cli._common import flush_pending_warnings
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
@@ -40,6 +41,7 @@ def _decay_survey(n_pings=10, n_samples=800):
 class TestRunInvestigate:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
+            plots=True,
             input=input_path, frequency=None, all_frequencies=False,
             value_var="uncorrected", pings="0:100", channel=None, nadir_n_samples=10,
             usable_range_bin_width_m=2.0, decay_bin_width_m=5.0,
@@ -80,6 +82,7 @@ class TestRunInvestigate:
 class TestRunSegment:
     def _args(self, tmp_path, input_path, **overrides):
         defaults = dict(
+            plots=True,
             input=input_path, frequency=None, pings=(0, None),
             gap_factor=8.0, time_gap_factor=8.0, sound_vel_rel_tol=0.05,
             garbage_value_var="uncorrected", garbage_min_run_pings=20, garbage_degenerate_frac=0.999,
@@ -174,6 +177,7 @@ class TestRunSegment:
 class TestRunTvgFit:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             ss_h5=ss_h5_path, frequency=1495000, pings=(0, None),
             reconstruct_raw=False, bin_width_m=1.0, r_ref_m="auto",
             r_fit_min_m="auto", range_var="slant_range_m",
@@ -286,6 +290,7 @@ class TestRunTvgFit:
 class TestRunNadir:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, strong_return_min_sample_buffer=0.0, strong_return_peak_percentile=100.0,
             min_first_bottom_return_sample=None, boundary_smoothing_window=15, verbose_diagnostics=False,
@@ -326,6 +331,7 @@ class TestRunNadir:
 class TestRunBeamGeometry:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, usable_range_bin_width_m=2.0, snr_threshold=3.0,
             near_angle_max_std_deg=15.0, min_valid_fraction=0.2,
@@ -350,6 +356,7 @@ class TestRunBeamGeometry:
 class TestRunUsableRange:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             range_var="slant_range_m", bin_width_m=1.0, snr_threshold=3.0,
             reject_outliers=False, outlier_mad_k=3.5,
@@ -374,6 +381,7 @@ class TestRunUsableRange:
 class TestRunUnits:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             output_dir=tmp_path / "out",
         )
@@ -396,6 +404,7 @@ class TestRunUnits:
 class TestRunRecommendConfig:
     def _args(self, tmp_path, ss_h5_path, **overrides):
         defaults = dict(
+            plots=True,
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
             nadir_n_samples=10, bin_width_m=1.0, snr_threshold=3.0,
             output=tmp_path / "out" / "recommended_config.yaml",
@@ -632,7 +641,7 @@ class TestDeprecatedOptionSpellings:
     def _run_main(self, monkeypatch, argv):
         captured = []
         monkeypatch.setattr(analyze, "run_investigate", lambda args: captured.append(args) or 0)
-        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: None)
+        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: flush_pending_warnings())
         monkeypatch.setattr("sys.argv", ["sidescan-analyze", *argv])
         assert analyze.main() == 0
         return captured[0]
@@ -689,7 +698,7 @@ class TestDeprecatedOptionSpellings:
     def test_beam_geometry_old_flag(self, monkeypatch, tmp_path, caplog):
         captured = []
         monkeypatch.setattr(analyze, "run_beam_geometry", lambda args: captured.append(args) or 0)
-        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: None)
+        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: flush_pending_warnings())
         monkeypatch.setattr("sys.argv", [
             "sidescan-analyze", "beam-geometry", "--input", "x.ss.h5", "--frequency", "1",
             "--output-dir", str(tmp_path), "--stage3-bin-width-m", "7",
