@@ -47,11 +47,14 @@ back to 1500 m/s as for SDF.
 ``NumSamples * c / (2 * SlantRange)`` when ``TimeDuration`` is 0), so
 the slant range of the last sample, ``n * c / (2 * fs)``, equals
 ``TimeDuration * c / 2``. The survey model has one sample rate per
-frequency; when the range setting changes inside the converted pings
-(the sample count staying fixed), the most common rate is used and the
-pings at other rates are reported at WARNING and counted in
-``xtf_pings_other_sample_rate``. Their ranges are then wrong by the ratio
-of the rates.
+frequency. Files whose range setting changes mid-file (the sample count
+staying fixed) are meant to be split first with
+:func:`sidescanpy.io.xtf.split_by_sample_rate` and each run converted
+on its own. When unsplit pings still mix rates, the most common rate is
+used and the pings at other rates are reported at WARNING and counted in
+``xtf_pings_other_sample_rate``; their ranges are then wrong by the ratio
+of the rates. For split runs the tolerance is twice the split's
+``rtol``, so the WARNING does not fire for them.
 
 Not converted: ``pulse_length_us`` is not in the XTF ping or channel
 headers and is 0.0 (as for SDF); gain codes are not interpreted.
@@ -64,6 +67,12 @@ and names, whether sound velocity was doubled, and counts of reader
 anomalies summed over the converted files (packets with fewer channel
 blocks than declared, clipped channel blocks, channel blocks without
 ChanInfo, unknown and non-sonar packets, resyncs, truncated files).
+A single split run (``XtfPingData.segment`` set) adds
+``xtf_segment_index`` and ``xtf_segment_count`` (1-based, kept runs of
+the file), ``xtf_segment_ping_start`` / ``xtf_segment_ping_stop`` (its
+half-open range in the file's sonar pings), ``xtf_file_pings``, and
+``xtf_runs_dropped_short`` / ``xtf_pings_dropped_short_runs`` (runs of
+the file shorter than the split's ``min_pings``, and their pings).
 
 2026 rshomberg@uri.edu
 """
@@ -157,6 +166,7 @@ def convert(
     order = _time_order(times)
     sound_vel, doubled = _sound_velocity(files)
     provenance = _provenance(files, doubled)
+    rate_rtol = _rate_rtol(files)
 
     survey = SideScanSurvey(
         source_files=list(source_files),
@@ -168,7 +178,7 @@ def convert(
         raise ValueError("XTF input has no port/starboard sonar channels")
     for freq_hz in sorted(pieces):
         ds = _build_frequency_channel(
-            freq_hz, pieces[freq_hz], headers, times, sound_vel, order, provenance
+            freq_hz, pieces[freq_hz], headers, times, sound_vel, order, provenance, rate_rtol
         )
         freq_key = f"hz_{freq_hz}"
         survey.add_frequency(freq_key, ds)
@@ -200,6 +210,13 @@ def _check_nav_units(data: XtfPingData) -> None:
         f"{data.path}: NavUnits {units} is not defined by the XTF specification; "
         "only NavUnits 3 (longitude/latitude in degrees) is converted"
     )
+
+
+def _rate_rtol(files: list[XtfPingData]) -> float:
+    """Sample-rate tolerance: twice the split's ``rtol`` when every input is a split run."""
+    if all(f.segment is not None for f in files):
+        return max(SAMPLE_RATE_RTOL, 2.0 * max(f.segment.rtol for f in files))
+    return SAMPLE_RATE_RTOL
 
 
 def _time_order(times: np.ndarray) -> np.ndarray:
@@ -340,6 +357,7 @@ def _build_frequency_channel(
     sound_vel: np.ndarray,
     order: np.ndarray,
     provenance: dict,
+    rate_rtol: float = SAMPLE_RATE_RTOL,
 ) -> xr.Dataset:
     n_total = len(headers)
     max_n = 0
@@ -384,7 +402,7 @@ def _build_frequency_channel(
         )
 
     sample_rate, n_other = _sample_rate(
-        freq_hz, nsamp[keep], duration[keep], slant[keep], sound_vel[keep]
+        freq_hz, nsamp[keep], duration[keep], slant[keep], sound_vel[keep], rate_rtol
     )
 
     n = len(keep)
@@ -453,6 +471,7 @@ def _sample_rate(
     duration: np.ndarray,
     slant: np.ndarray,
     sound_vel: np.ndarray,
+    rtol: float = SAMPLE_RATE_RTOL,
 ) -> tuple[float, int]:
     """Most common per-ping sample rate (Hz) and the count of pings at other rates."""
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -473,7 +492,7 @@ def _sample_rate(
         )
     values, counts = np.unique(rate, return_counts=True)
     modal = float(values[np.argmax(counts)])
-    other = np.abs(rate - modal) > SAMPLE_RATE_RTOL * modal
+    other = np.abs(rate - modal) > rtol * modal
     n_other = int(other.sum())
     if n_other:
         hist = Counter(np.round(rate[other], 1).tolist())
@@ -512,7 +531,7 @@ def _provenance(files: list[XtfPingData], sound_vel_doubled: bool) -> dict:
         truncated += int(f.stats.truncated)
         unknown += sum(f.stats.unknown.values())
         other += sum(n for t, n in f.stats.counts.items() if t != HEADER_TYPE_SONAR)
-    return {
+    out = {
         "xtf_recording_program": "; ".join(programs),
         "xtf_sonar_name": "; ".join(sonars),
         "xtf_sonar_type": "; ".join(sonar_types),
@@ -525,6 +544,18 @@ def _provenance(files: list[XtfPingData], sound_vel_doubled: bool) -> dict:
         "xtf_resyncs": resyncs,
         "xtf_files_truncated": truncated,
     }
+    if len(files) == 1 and files[0].segment is not None:
+        seg = files[0].segment
+        out.update({
+            "xtf_segment_index": seg.index,
+            "xtf_segment_count": seg.count,
+            "xtf_segment_ping_start": seg.ping_start,
+            "xtf_segment_ping_stop": seg.ping_stop,
+            "xtf_file_pings": seg.n_pings_file,
+            "xtf_runs_dropped_short": seg.n_runs_dropped,
+            "xtf_pings_dropped_short_runs": seg.n_pings_dropped,
+        })
+    return out
 
 
 # ============================================================

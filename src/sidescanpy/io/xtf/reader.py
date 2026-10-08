@@ -518,6 +518,41 @@ class ChannelBlockStats:
     legacy_count: int = 0
 
 
+@dataclass(frozen=True)
+class XtfSegmentInfo:
+    """Where a run of pings sits in its source file.
+
+    Set by :func:`sidescanpy.io.xtf.split_by_sample_rate`.
+
+    Attributes
+    ----------
+    index : int
+        1-based position among the kept runs.
+    count : int
+        Number of kept runs of the file.
+    ping_start, ping_stop : int
+        The run's pings are ``[ping_start, ping_stop)`` in the file's
+        sonar-ping order.
+    n_pings_file : int
+        Sonar pings in the whole file.
+    n_runs_dropped : int
+        Runs of the file shorter than ``min_pings``, dropped.
+    n_pings_dropped : int
+        Pings in those dropped runs.
+    rtol : float
+        Relative tolerance used for the cuts.
+    """
+
+    index: int
+    count: int
+    ping_start: int
+    ping_stop: int
+    n_pings_file: int
+    n_runs_dropped: int
+    n_pings_dropped: int
+    rtol: float
+
+
 @dataclass
 class XtfPingData:
     """Sonar pings of one XTF file, as recorded.
@@ -541,6 +576,10 @@ class XtfPingData:
         Packet counts from the read.
     block_stats : ChannelBlockStats
         Channel-block mismatches found while parsing sonar packets.
+    segment : XtfSegmentInfo or None
+        Set when these pings are one run of a file split at sample-rate
+        changes (:func:`sidescanpy.io.xtf.split_by_sample_rate`); None
+        for a whole file.
     """
 
     path: Path
@@ -551,6 +590,7 @@ class XtfPingData:
     frequency_groups: list[XtfFrequencyGroup]
     stats: PacketStats
     block_stats: ChannelBlockStats = field(default_factory=ChannelBlockStats)
+    segment: XtfSegmentInfo | None = None
 
     @property
     def n_pings(self) -> int:
