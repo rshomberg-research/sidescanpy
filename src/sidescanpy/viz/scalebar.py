@@ -86,9 +86,11 @@ def add_scale_bar(
     margin : float, default 0.06
         Axes-fraction margin from the plot edge.
 
-    Silently does nothing (not an error) if the axes' current view is
-    degenerate (zero or non-finite width) -- e.g. a single-point plot,
-    where no scale bar length would be meaningful anyway.
+    Notes
+    -----
+    Does nothing (not an error) if the axes' current view is degenerate
+    (zero or non-finite width), e.g. a single-point plot, where no scale
+    bar length would be meaningful.
     """
     if location not in _LOCATIONS:
         raise ValueError(f"Unknown location {location!r}, choose from {_LOCATIONS}")

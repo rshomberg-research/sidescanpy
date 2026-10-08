@@ -16,8 +16,12 @@ test-cov:
 lint:
 	uv run ruff check src tests
 
+# --all-extras: `uv run --extra docs` alone would re-sync the environment
+# without the dev extra. ruff (dev) also formats the rendered signatures.
+DOCS_ENV = DISABLE_MKDOCS_2_WARNING=true NO_MKDOCS_2_WARNING=1
+
 docs:
-	uv run --extra docs mkdocs build --strict
+	$(DOCS_ENV) uv run --all-extras mkdocs build --strict
 
 docs-serve:
-	uv run --extra docs mkdocs serve
+	$(DOCS_ENV) uv run --all-extras mkdocs serve

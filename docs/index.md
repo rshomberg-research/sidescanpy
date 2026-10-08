@@ -16,4 +16,4 @@ functions measure a dataset's units, nadir, usable range and TVG state.
   [Command line](cli.md), [Logging](logging.md).
 - **Formats:** [JSF](io_jsf.md), [SDF](io_sdf.md), [HDF5](io_hdf5.md),
   [NetCDF](io_netcdf.md).
-- **Reference:** the API pages are generated from the docstrings.
+- **Reference:** [API reference](reference/index.md), one page per module, generated from the docstrings.

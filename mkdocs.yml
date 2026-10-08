@@ -4,6 +4,7 @@ repo_url: https://github.com/rshomberg-uri/sidescanpy
 docs_dir: docs
 exclude_docs: |
   _internal/
+  gen_ref_pages.py
 
 theme:
   name: material
@@ -20,6 +21,11 @@ markdown_extensions:
 
 plugins:
   - search
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
   - mkdocstrings:
       handlers:
         python:
@@ -27,7 +33,11 @@ plugins:
           options:
             docstring_style: numpy
             show_source: false
-            show_root_heading: true
+            show_root_heading: false
+            show_signature_annotations: true
+            separate_signature: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
             members_order: source
             filters: ["!^_"]
 
@@ -48,14 +58,5 @@ nav:
       - SDF: io_sdf.md
       - HDF5 (.ss.h5): io_hdf5.md
       - NetCDF: io_netcdf.md
-  - API reference:
-      - Core: api/core.md
-      - IO: api/io.md
-      - Processing: api/processing.md
-      - Analysis: api/analysis.md
-      - Grids: api/grids.md
-      - Targets: api/targets.md
-      - Export: api/export.md
-      - Visualization: api/viz.md
-      - Logging: api/log.md
+  - API reference: reference/
   - Development: development.md
