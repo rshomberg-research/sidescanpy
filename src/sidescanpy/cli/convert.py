@@ -5,8 +5,12 @@ the format-agnostic standard model.
 Two subcommands:
 
 - ``survey`` — ``.jsf``/``.sdf``/``.xtf`` -> ``.ss.h5``, one output file per input
-  file. Far-range noise is detected and cropped in memory before the
-  first write (:func:`sidescanpy.processing.crop_far_range_noise`);
+  file, except that an ``.xtf`` file whose range setting changes is split
+  into one ``<stem>_seg01.ss.h5``, ``<stem>_seg02.ss.h5``, ... per run of
+  constant range (:func:`sidescanpy.io.read_and_convert_segments`; runs
+  shorter than ``--min-segment-pings`` are dropped). Far-range noise is
+  detected and cropped per output in memory before the first write
+  (:func:`sidescanpy.processing.crop_far_range_noise`);
   ``--no-crop-farrange`` keeps the full recorded range.
 - ``targets`` — reads the catalog directory with
   :func:`sidescanpy.io.read_target_catalog` (EdgeTech Discover
@@ -49,7 +53,7 @@ from sidescanpy.io import (
     CATALOG_JSF_DISCOVER,
     detect_format,
     find_sonar_files,
-    read_and_convert,
+    read_and_convert_segments,
     read_target_catalog,
 )
 from sidescanpy.io.hdf5 import write_survey
@@ -68,29 +72,58 @@ logger = logging.getLogger(__name__)
 # survey
 # ============================================================
 
-def _convert_one_file(input_path: Path, *, output_dir: Path, force: bool, crop_farrange: bool = True) -> dict:
-    """Convert one file; ``status`` is success / skipped / failed_convert /
-    failed_process / failed_write (a failure never stops the batch)."""
-    result = {"input_path": input_path, "status": "", "error": "", "cutoffs": {}}
-    out_h5 = output_dir / f"{input_path.stem}.ss.h5"
-    if out_h5.exists() and not force:
-        result["status"] = "skipped"
-        return result
+def _convert_one_file(
+    input_path: Path,
+    *,
+    output_dir: Path,
+    force: bool,
+    crop_farrange: bool = True,
+    min_segment_pings: int = 50,
+) -> list[dict]:
+    """Convert one file into one result per output ``.ss.h5``.
 
-    phase = "failed_convert"
+    ``status`` is success / skipped / failed_convert / failed_process /
+    failed_write; a failure never stops the batch. A ``.jsf``/``.sdf``
+    file whose output exists is skipped without reading; an ``.xtf``
+    file is read (its segments are only known then) and each existing
+    segment output skipped.
+    """
+    def result(out_h5: Path | None, status: str = "", error: str = "") -> dict:
+        return {"input_path": input_path, "output_path": out_h5, "status": status,
+                "error": error, "cutoffs": {}, "n_pings_dropped": 0}
+
+    single = output_dir / f"{input_path.stem}.ss.h5"
+    if not force and single.exists() and detect_format([input_path]) != "xtf":
+        return [result(single, "skipped")]
     try:
-        survey = read_and_convert([input_path], detect_format([input_path]), survey_name=input_path.stem)
-        phase = "failed_process"
-        if crop_farrange:
-            survey, result["cutoffs"] = crop_far_range_noise(survey)
-        phase = "failed_write"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        write_survey(survey, out_h5, overwrite=force)
+        segments = read_and_convert_segments(
+            input_path, survey_name=input_path.stem, min_pings=min_segment_pings
+        )
     except Exception as e:
-        result["status"], result["error"] = phase, f"{type(e).__name__}: {e}"
-        return result
-    result["status"] = "success"
-    return result
+        return [result(None, "failed_convert", f"{type(e).__name__}: {e}")]
+
+    results = []
+    for stem, survey in segments:
+        out_h5 = output_dir / f"{stem}.ss.h5"
+        r = result(out_h5)
+        attrs = next(iter(survey.freq_channels.values())).dataset.attrs if survey.freq_channels else {}
+        r["n_pings_dropped"] = int(attrs.get("xtf_pings_dropped_short_runs", 0))
+        results.append(r)
+        if out_h5.exists() and not force:
+            r["status"] = "skipped"
+            continue
+        phase = "failed_process"
+        try:
+            if crop_farrange:
+                survey, r["cutoffs"] = crop_far_range_noise(survey)
+            phase = "failed_write"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            write_survey(survey, out_h5, overwrite=force)
+        except Exception as e:
+            r["status"], r["error"] = phase, f"{type(e).__name__}: {e}"
+            continue
+        r["status"] = "success"
+    return results
 
 
 def run_survey(args: argparse.Namespace) -> int:
@@ -108,23 +141,33 @@ def run_survey(args: argparse.Namespace) -> int:
     results = []
     for i, path in enumerate(files, 1):
         logger.info(f"[{i}/{len(files)}] {path.name}  (elapsed: {time.time() - start_time:.0f}s)")
-        result = _convert_one_file(path, output_dir=output_dir, force=args.force,
-                                   crop_farrange=getattr(args, "crop_farrange", True))
-        results.append(result)
-        if result["status"] == "success":
-            cropped = {k: v for k, v in result["cutoffs"].items() if v is not None}
-            logger.debug(f"    wrote .ss.h5 (far-range cropped: {cropped})" if cropped else "    wrote .ss.h5")
-        elif result["status"] == "skipped":
-            logger.debug("    skipped (output exists; use --force to reprocess)")
-        else:
-            logger.error(f"    FAILED {result['status']}: {result['error']}")
+        file_results = _convert_one_file(
+            path, output_dir=output_dir, force=args.force,
+            crop_farrange=getattr(args, "crop_farrange", True),
+            min_segment_pings=getattr(args, "min_segment_pings", 50),
+        )
+        results.extend(file_results)
+        if len(file_results) > 1 or file_results[0]["n_pings_dropped"]:
+            logger.info(
+                f"    range setting changes: {len(file_results)} segment(s), "
+                f"{file_results[0]['n_pings_dropped']} ping(s) in short runs dropped"
+            )
+        for result in file_results:
+            name = result["output_path"].name if result["output_path"] is not None else path.name
+            if result["status"] == "success":
+                cropped = {k: v for k, v in result["cutoffs"].items() if v is not None}
+                logger.debug(f"    wrote {name} (far-range cropped: {cropped})" if cropped else f"    wrote {name}")
+            elif result["status"] == "skipped":
+                logger.debug(f"    skipped {name} (output exists; use --force to reprocess)")
+            else:
+                logger.error(f"    FAILED {result['status']}: {name}: {result['error']}")
 
     failed = [r for r in results if r["status"].startswith("failed")]
     n_success = sum(r["status"] == "success" for r in results)
     n_skipped = sum(r["status"] == "skipped" for r in results)
     logger.info(
-        f"convert survey: {n_success}/{len(files)} converted, {n_skipped} skipped, {len(failed)} failed "
-        f"in {time.time() - start_time:.0f}s"
+        f"convert survey: {len(files)} input file(s) -> {n_success} output(s) written, "
+        f"{n_skipped} skipped, {len(failed)} failed in {time.time() - start_time:.0f}s"
     )
     for r in failed:
         logger.warning(f"  failed: {r['input_path'].name}: {r['error']}")
@@ -204,6 +247,12 @@ def build_parser() -> tuple[CLIParser, Any]:
         "--crop-farrange", action=argparse.BooleanOptionalAction, default=True,
         help="Detect and crop far-range noise before writing (default). --no-crop-farrange keeps the full "
              "recorded range; crop later with sidescan-correct --crop-farrange if wanted.",
+    )
+    p.add_argument(
+        "--min-segment-pings", type=int, default=50,
+        help="XTF files whose range setting changes are split into one .ss.h5 per run of constant "
+             "range (<stem>_seg01, <stem>_seg02, ...); runs shorter than this many pings are dropped "
+             "(default 50)",
     )
     p.set_defaults(func=run_survey)
 

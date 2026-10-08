@@ -7,11 +7,16 @@ checked against EdgeTech 4200 files recorded by Isis. Only sonar packets
 are read; other packet types are counted and skipped.
 
 ```python
-from sidescanpy.io import read_and_convert
-from sidescanpy.io.xtf import convert, read_xtf
+from sidescanpy.io import read_and_convert, read_and_convert_segments
+from sidescanpy.io.xtf import convert, read_xtf, split_by_sample_rate
 
-survey = read_and_convert([path], "xtf")      # or, step by step:
-survey = convert(read_xtf(path))
+# One survey per run of constant range (see "Range changes" below):
+for stem, survey in read_and_convert_segments(path):
+    ...
+# or, step by step:
+surveys = [convert(seg) for seg in split_by_sample_rate(read_xtf(path))]
+
+survey = read_and_convert([path], "xtf")      # whole file, one survey
 ```
 
 `read_xtf_header`, `iter_packets`, `count_packets` and `read_xtf_pings`
@@ -55,11 +60,25 @@ anomalies.
   `SoundVelocity` (750 for 1500 m/s). Values below 1000 m/s are doubled,
   and the result is cross-checked against `2 * SlantRange /
   TimeDuration`; a disagreement over 5 % is logged at WARNING.
-- **Range changes.** The model has one `sample_rate_hz` per frequency.
-  When the range setting changes within a file while the sample count
-  stays fixed, the most common rate is used, the other pings are counted
-  in `xtf_pings_other_sample_rate` and a WARNING is logged: their ranges
-  are scaled wrongly by the ratio of the rates.
+- **Range changes.** The model has one `sample_rate_hz` per frequency,
+  but some recorders change the range setting mid-file while keeping the
+  sample count, so the sample interval changes. `split_by_sample_rate`
+  cuts a file's pings into consecutive runs within which every
+  port/starboard channel keeps its rate (`NumSamples / TimeDuration`,
+  relative tolerance `rtol`, default 1 %, measured against the run's
+  first ping); pings where a channel is absent never cause a cut. Runs
+  shorter than `min_pings` (default 50) are dropped — a change often
+  leaves a few pings at an intermediate setting. Each run is a view of
+  the file's arrays and converts to its own survey, with attributes
+  `xtf_segment_index`, `xtf_segment_count`, `xtf_segment_ping_start`,
+  `xtf_segment_ping_stop`, `xtf_file_pings`, `xtf_runs_dropped_short`
+  and `xtf_pings_dropped_short_runs`. `read_and_convert_segments` and
+  `sidescan-convert survey` do this for every XTF file and name the
+  outputs `<stem>` (one run) or `<stem>_seg01`, `<stem>_seg02`, …
+  (several). Converting an unsplit file with mixed rates still works:
+  the most common rate is used, the other pings are counted in
+  `xtf_pings_other_sample_rate` and a WARNING is logged, since their
+  ranges are scaled wrongly by the ratio of the rates.
 - **Pings with fewer channels than declared.** Some EdgeTech files begin
   with pings that hold only the low-frequency pair while declaring all
   four channels. The reader walks channel blocks by the packet byte
