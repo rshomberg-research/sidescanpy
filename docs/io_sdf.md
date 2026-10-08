@@ -113,7 +113,7 @@ without unit conversion.
 
 ### 455 kHz channel reliability
 
-In test data from site-b, the 455 kHz transducer was non-functional;
+In one test survey, the 455 kHz transducer was non-functional;
 data appeared as noise floor + sparse spikes. This is a hardware
 condition, not a parsing issue. If you see similar patterns, check:
 - The transducer hardware

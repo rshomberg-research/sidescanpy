@@ -1,195 +1,159 @@
-# SideScanPy
+# sidescanpy
 
-Python library for processing sidescan sonar data from Edgetech JSF and Klein SDF surveys.
+Read, correct, grid and export sidescan sonar data.
 
-## Features
+sidescanpy converts EdgeTech JSF and Klein SDF surveys into one
+`xarray`-based model, stored as a grouped HDF5 file (`.ss.h5`). On top of
+that model it provides:
 
-- **File I/O:**
-  - Read Edgetech JSF (`.jsf`) format
-  - Read Klein SDF (`.sdf`) format
-  - HDF5 (`.ss.h5`) round-trip serialization with `xarray`
-  - Single-channel NetCDF export
+- **Corrections:** time-varying gain (spreading + Francois-Garrison
+  absorption), slant-to-ground range, per-sample georeferencing, far-range
+  noise cropping. Every applied step is recorded with its parameters, and
+  radiometric steps can be inverted.
+- **Slicing** by ping, time, sample, slant or ground range, and bounding box.
+- **Gridding** onto geographic or UTM rasters (mean, median, max, nearest,
+  IDW), with GeoTIFF output.
+- **Targets and datasets:** read target catalogs, match targets to pings,
+  and build COCO/YOLO training sets of fixed-size chips or full swaths, in
+  native pixels or real-world meters.
+- **Analysis:** small functions that measure a dataset (nadir and first
+  bottom return, usable range, TVG decay fit, units, beam geometry,
+  navigation segments) and return dataclasses.
+- **CLI:** `sidescan-convert`, `sidescan-correct`, `sidescan-export`,
+  `sidescan-analyze` for quick runs over the same API.
 
-- **Processing:**
-  - Aux stream interpolation (nav, attitude, DVL) onto ping timestamps
-  - Time-varying gain (TVG) correction
-  - Slant range → ground range → per-sample depth calculation
-  - Per-sample lat/lon georeferencing
+Workflows, multi-step reports and figure layouts live in your own
+project scripts and in [`examples/`](examples/), not in the library.
 
-- **Visualization:**
-  - Port + starboard waterfall displays
-  - Multiple x-axis modes (sample, ground range, across-track)
-  - Multiple y-axis modes (ping, time, along-track)
-  - Batch PNG export
+## Install
 
-- **Gridding** (v0.6.0, in progress):
-  - Geographic and projected grids (WGS84, UTM)
-  - Multiple resampling methods (histogram, linear, nearest, cubic)
-  - Statistical aggregations (mean, median, max)
-
-## Installation
-
-### Requirements
-- Python 3.14+
-- `uv` (recommended) or `pip`
-
-### From Source
+Python 3.12 or newer.
 
 ```bash
-git clone <repo-url>
-cd sidescanpy
-uv venv
-source .venv/bin/activate
-uv pip install -e .            # core: io, corrections, gridding, export, analysis
-uv pip install -e ".[viz]"     # + plotting (sidescanpy.viz, sidescan-export/-analyze figures)
-uv pip install -e ".[viz,maps]"  # + land/locator basemaps (cartopy)
+pip install "sidescanpy[viz]"          # library + plotting
+pip install "sidescanpy[viz,maps,geo]" # + basemaps (cartopy) + GeoTIFF (rioxarray)
 ```
 
-`sidescan-convert` and `sidescan-correct` work without the `viz` extra
-(`sidescan-convert targets --plot` needs it); `sidescan-export` and
-`sidescan-analyze` exit with a one-line error asking for it, except
-`sidescan-analyze recommend-config` and any `sidescan-analyze` subcommand
-run with `--no-plots` (JSON results only). The dataset builder behind
-`sidescan-export chip` (`sidescanpy.export.ml.build_target_dataset`) runs
-without it; only its contact sheets and context views need plotting.
-
-### Development Install
+From a checkout, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv pip install -e ".[dev]"
-pytest tests/unit/ -v  # Verify installation
+uv sync --all-extras
 ```
 
-## Quick Start
+| Extra | Adds | Needed for |
+|---|---|---|
+| `viz` | matplotlib | `sidescanpy.viz`, figures from `sidescan-export` / `sidescan-analyze` |
+| `maps` | cartopy | land and locator basemaps behind georeferenced plots |
+| `geo` | rioxarray | `grids.to_geotiff`, `sidescan-export grid --geotiff` |
+| `dev` | pytest, ruff, matplotlib | running the tests and linters |
 
-### Load a JSF Survey
+Conversion, correction, gridding, analysis and dataset export run without
+any extra.
+
+## Data model
+
+Backscatter is three-dimensional: `(ping, channel, sample)`, with
+`channel=0` port and `channel=1` starboard. Each frequency of a survey is
+its own `xr.Dataset`; a `SideScanSurvey` holds the frequencies plus the
+navigation, attitude, DVL and sensor streams. Across-track coordinates are
+negative to port and positive to starboard.
+
+## Quickstart
 
 ```python
-from sidescanpy.io.jsf import read_jsf
-from sidescanpy.io.jsf.converter import convert
+from pathlib import Path
 
-# Read raw JSF messages
-messages = read_jsf("survey.jsf")
+from sidescanpy.grids import grid_channel, to_geotiff
+from sidescanpy.io import read_and_convert
+from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.processing import correct_survey, slice_by_range
 
-# Convert to SideScanSurvey
-survey = convert(messages, survey_name="my_survey")
+# Convert raw files to one .ss.h5 survey.
+survey = read_and_convert([Path("line_001.jsf")], fmt="jsf")
+write_survey(survey, "line_001.ss.h5")
 
-print(survey)
-# SideScanSurvey(name='my_survey', n_frequencies=2, nav=1234, att=567, dvl=890, sensors=1)
+# Interpolate navigation onto pings, apply TVG, compute ground range and
+# per-sample lat/lon. Steps already applied are skipped on a re-run.
+survey = correct_survey(read_survey("line_001.ss.h5"))
+write_survey(survey, "line_001.corrected.ss.h5", overwrite=True)
+
+# Keep 5-60 m of slant range on one frequency and grid it at 0.5 m.
+freq = sorted(survey.frequencies)[0]
+ds = slice_by_range(survey.get_frequency(freq).dataset, min_m=5, max_m=60)
+raster = grid_channel(ds, resolution_m=0.5)
+to_geotiff(raster, "line_001.tif")  # needs the [geo] extra
 ```
 
-### Process a Survey
+For files too large for memory, `processing.correct_file(path,
+chunk_pings=2000)` corrects in place, chunk by chunk. A single dataset can
+be corrected with `processing.correct(ds, steps, params)`; steps can be
+built-in names, your own callables, or left out to skip them. See
+`processing.correct` for the step names and their parameters.
+
+### Training dataset from a target catalog
 
 ```python
-from sidescanpy.processing.interpolate import interpolate_aux_onto_pings
-from sidescanpy.processing.radiometric import apply_tvg
-from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.processing.georeferencing import compute_georeferencing
+from sidescanpy.export.ml import DatasetSpec, build_target_dataset
+from sidescanpy.io import read_target_catalog
 
-# Full pipeline
-survey = interpolate_aux_onto_pings(survey)
-survey = apply_tvg(survey)
-survey = compute_geometric_ranges(survey)
-survey = compute_georeferencing(survey)
-```
-
-### Save & Load HDF5
-
-```python
-from sidescanpy.io.hdf5 import write_survey, read_survey
-
-# Write
-write_survey(survey, "survey.ss.h5")
-
-# Read
-survey = read_survey("survey.ss.h5")
-```
-
-### Visualize
-
-```python
-import matplotlib.pyplot as plt
-from sidescanpy.viz import plot_waterfall
-
-channel = survey.get_frequency("hz_1495000")
-fig, ax = plt.subplots(figsize=(14, 6))
-plot_waterfall(
-    channel.dataset,
-    start=0,
-    stop=500,
-    x_axis="ground_range",
-    y_axis="along_track",
-    cmap="copper",
-    ax=ax,
+# A directory holding the catalog: EdgeTech *.target or Klein Target_*.tgt.
+# Klein targets need positions resolved first (sidescanpy.targets.correlate).
+_fmt, targets = read_target_catalog("raw/")
+spec = DatasetSpec(
+    styles=["chip", "dual-swath"], render_level="geometric",
+    size_px=1024, swath_size_px=1024, resolution_m=[30 / 1024],
+    n_augment=4, jitter_px=460, random_flip=True, swath_fill=True,
+    n_background=10, val_fraction=0.2, layout="ultralytics", seed=1,
 )
-plt.show()
+result = build_target_dataset("corrected_ss_h5/", targets, spec, "dataset/")
 ```
 
-### CLI Tools
+`DatasetSpec` round-trips to YAML (`DatasetSpec.from_yaml`), so a project
+keeps one config file per dataset.
 
-This library is a pure Python API — it doesn't ship its own CLI scripts.
-The batch-conversion/visualization CLI tools that used to live in this
-repo's own `scripts/` directory (`convert.py`, `batch_convert_and_plot.py`,
-`export_waterfall_series.py`, `visualization_demo.py`, and others) moved
-out to a downstream consumer project (`project-a`, as of 2026-07-07) —
-see that project's own docs for usage. They're straightforward to
-reproduce against any `sidescanpy` install using the Quick Start examples
-above as a starting point.
+## Command line
 
-## Architecture
+| Command | What it does |
+|---|---|
+| `sidescan-convert survey` | JSF/SDF files to `.ss.h5` |
+| `sidescan-convert targets` | read a target catalog to `targets.json`/`.csv` |
+| `sidescan-correct` | apply correction steps to `.ss.h5` files in place |
+| `sidescan-export waterfall` / `grid` / `track` | images and rasters |
+| `sidescan-export chip` | COCO/YOLO dataset from a target catalog |
+| `sidescan-analyze investigate` | run every analysis on a file and write a report |
+| `sidescan-analyze tvg-fit` / `nadir` / `usable-range` / ... | one analysis at a time |
+| `sidescan-analyze segment` | split a long file into clean sections |
+| `sidescan-analyze recommend-config` | suggest correction and export settings |
 
-See `CLAUDE.md` for detailed architecture and conventions.
+Every subcommand takes `--config file.yaml` with the same keys as its
+flags; unknown keys warn (`--strict-config` makes them errors). Run any
+command with `--help` for its options.
 
-Top-level structure:
+## Examples
 
-```
-sidescanpy/
-├── core/         # Schema validation, survey containers
-├── io/           # File format readers/writers (JSF, SDF, HDF5, NetCDF)
-├── processing/   # Signal processing pipeline
-├── grids/        # Gridding and resampling (v0.6.0)
-└── viz/          # Visualization utilities
-```
+[`examples/`](examples/) holds runnable scripts, each smoke-tested on
+synthetic data: `quickstart.py`, `tvg_calibration.py`,
+`gridding_and_geotiff.py`, `build_yolo_dataset.py`,
+`investigate_dataset.py`, and figure recipes in `examples/figures/`.
 
-## Documentation
+## Logging
 
-- **User docs:** This README + `docs/`
-- **Development:** `docs/DEVELOPMENT.md`
-- **Architecture:** `CLAUDE.md`
-- **Changelog:** `CHANGELOG.md`
-- **Planning:** `docs/planning/`
+The library logs only at DEBUG and WARNING and never configures handlers.
+Call `sidescanpy.log.configure_logging("INFO")` in a script, or pass
+`-v` / `-q` / `--log-file` to any CLI command.
 
-Module documentation:
-- `docs/core.md` — Schema and survey containers
-- `docs/io_jsf.md` — Edgetech JSF format
-- `docs/io_sdf.md` — Klein SDF format
-- `docs/io_hdf5.md` — `.ss.h5` HDF5 layout
-- `docs/io_netcdf.md` — NetCDF export
-- `docs/processing.md` — Processing pipeline
-- `docs/vis.md` — Visualization (⚠️ typo: should be `viz.md`)
-- `docs/jsf_aux_source_selection.md` — JSF aux stream selection
-
-## Testing
+## Development
 
 ```bash
-# Fast unit tests (~30s)
-pytest tests/unit/ -v
-
-# Integration tests (requires real data fixtures)
-pytest tests/integration/ -v --slow
-
-# With coverage
-pytest tests/unit/ --cov=sidescanpy --cov-report=html
+uv sync --all-extras
+make test   # unit tests (clears PYTHONPATH)
+make lint   # ruff
 ```
 
-Test fixtures for real data are not committed to git due to file size limits.
-See `data/README.md` for details.
+Integration tests under `tests/integration/` need real survey files and
+are skipped without them. See [`docs/development.md`](docs/development.md)
+and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 
-MIT — see `LICENSE`
-
-## Contact
-
-Russ Shomberg <rshomberg@uri.edu>
-University of Rhode Island
+MIT. See [`LICENSE`](LICENSE).
