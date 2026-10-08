@@ -1,12 +1,13 @@
 # Build the documentation site on every push and pull request (strict:
 # a malformed docstring fails the build) and publish it to GitHub Pages
-# from main. Pages on a private repository needs a paid GitHub plan; the
-# build job is useful either way.
+# from main. Publishing is opt-in: set the repository variable
+# PUBLISH_DOCS=true and enable Pages (Settings -> Pages -> GitHub Actions).
+# Until then only the build runs.
 name: docs
 
 on:
   push:
-    branches: [main, restructure]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -31,12 +32,12 @@ jobs:
       - name: Build (strict)
         run: uv run --extra docs --extra dev mkdocs build --strict --site-dir site
       - uses: actions/upload-pages-artifact@v3
-        if: github.ref == 'refs/heads/main'
+        if: vars.PUBLISH_DOCS == 'true' && github.ref == 'refs/heads/main'
         with:
           path: site
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: vars.PUBLISH_DOCS == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:
