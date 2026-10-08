@@ -2,16 +2,20 @@
 Real-data tests for the low-level XTF reader, with pyxtf as the oracle.
 
 Set ``SIDESCANPY_XTF_DATA`` to a directory of XTF files to run them; they
-skip otherwise. Developed against EdgeTech 4200 dual-frequency files
-recorded by Isis (four sidescan channels, 16-bit samples). The file
-names below are those of that set; missing files are skipped.
+skip otherwise. Every ``*.xtf`` / ``*.XTF`` file in that directory is
+tested. Developed against a public EdgeTech 4200 XTF archive recorded by
+Isis (four sidescan channels at two frequencies, 16-bit samples).
 
-- ``PYXTF_READABLE``: files pyxtf 1.5.0 reads. Header fields, packet type
-  counts, every sample and the mapped ping-header fields must match
-  pyxtf exactly.
-- ``FEWER_CHANNELS``: files whose first pings hold only the low-frequency
-  pair while declaring four channels (see ``sidescanpy.io.xtf.reader``);
-  pyxtf fails on them, so they are checked for self-consistency.
+Files are classified by content, not by name:
+
+- Files whose sonar packets all hold every declared channel must match
+  pyxtf exactly: header fields, packet type counts, every sample and the
+  mapped ping-header fields.
+- Files with packets holding fewer channel blocks than declared (see
+  ``sidescanpy.io.xtf.reader``) are expected to make pyxtf 1.5.0 fail,
+  and are checked for self-consistency instead.
+
+The two smallest files run without ``slow``; the rest are marked slow.
 
 2026 rshomberg@uri.edu
 """
@@ -23,21 +27,52 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sidescanpy.io.xtf import count_packets, read_xtf_header, read_xtf_pings
+from sidescanpy.io.xtf import XtfPingData, count_packets, read_xtf_header, read_xtf_pings
 from sidescanpy.io.xtf.structs import FILE_HEADER_DTYPE, PING_HEADER_DTYPE
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_data]
 
-FAST_FILES = ["NBP050501C.XTF", "NBP050504A.XTF"]
-PYXTF_READABLE = FAST_FILES + [
-    "NBP050501A.XTF",
-    "NBP050502.XTF",
-    "NBP050503.XTF",
-    "NBP050505.XTF",
-    "NBP050506A.XTF",
-    "NBP050506B.XTF",
-]
-FEWER_CHANNELS = ["NBP050501B.XTF", "NBP050504B.XTF"]
+N_FAST = 2
+
+
+def _data_files() -> list[Path]:
+    """XTF files in ``SIDESCANPY_XTF_DATA``, smallest first."""
+    root = os.environ.get("SIDESCANPY_XTF_DATA")
+    if not root or not Path(root).is_dir():
+        return []
+    files = [p for p in Path(root).iterdir() if p.is_file() and p.suffix.lower() == ".xtf"]
+    return sorted(files, key=lambda p: (p.stat().st_size, p.name))
+
+
+DATA_FILES = _data_files()
+_NO_DATA = pytest.param(
+    None, marks=pytest.mark.skip(reason="SIDESCANPY_XTF_DATA not set or holds no .xtf files")
+)
+
+
+def _params(files: list[Path], slow: bool = False) -> list:
+    if not files:
+        return [_NO_DATA]
+    marks = [pytest.mark.slow] if slow else []
+    return [pytest.param(p, id=p.name, marks=marks) for p in files]
+
+
+FAST_PARAMS = _params(DATA_FILES[:N_FAST])
+ALL_PARAMS = _params(DATA_FILES[:N_FAST]) + (
+    _params(DATA_FILES[N_FAST:], slow=True) if len(DATA_FILES) > N_FAST else []
+)
+
+
+def _read_with_anomaly(path: Path, caplog) -> tuple[XtfPingData, bool]:
+    """Read a file; also return whether the reader reported packets with
+    fewer channel blocks than declared."""
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="sidescanpy.io.xtf.reader"):
+        data = read_xtf_pings(path)
+    reports = [r for r in caplog.records if "fewer channel blocks" in r.getMessage()]
+    assert len(reports) <= 1, "the anomaly is reported once per file"
+    return data, bool(reports)
+
 
 PING_FIELDS = [
     "Year", "Month", "Day", "Hour", "Minute", "Second", "HSeconds", "PingNumber",
@@ -47,16 +82,6 @@ PING_FIELDS = [
 ]
 CHAN_FIELDS = ["ChannelNumber", "SlantRange", "TimeDelay", "TimeDuration", "NumSamples",
                "Frequency", "GainCode", "InitialGainCode", "Weight"]
-
-
-def _data_file(name: str) -> Path:
-    root = os.environ.get("SIDESCANPY_XTF_DATA")
-    if not root:
-        pytest.skip("SIDESCANPY_XTF_DATA not set")
-    path = Path(root) / name
-    if not path.exists():
-        pytest.skip(f"{path} not found")
-    return path
 
 
 def _pyxtf_read(path: Path):
@@ -71,7 +96,7 @@ def _equal(a, b) -> bool:
     return a.shape == b.shape and a.tobytes() == b.tobytes()
 
 
-def _check_against_pyxtf(path: Path) -> None:
+def _check_against_pyxtf(path: Path, data: XtfPingData) -> None:
     pyxtf, fh, packets = _pyxtf_read(path)
 
     header = read_xtf_header(path)
@@ -91,7 +116,6 @@ def _check_against_pyxtf(path: Path) -> None:
     assert dict(stats.counts) == {int(k): len(v) for k, v in packets.items()}
     assert stats.resyncs == 0 and not stats.truncated
 
-    data = read_xtf_pings(path)
     sonar = packets[pyxtf.XTFHeaderType.sonar]
     assert data.n_pings == len(sonar)
     for name in PING_FIELDS:
@@ -115,38 +139,15 @@ def _check_against_pyxtf(path: Path) -> None:
             assert _equal(ch.headers[name], vals), f"channel {c} {name}"
 
 
-@pytest.mark.parametrize("name", FAST_FILES)
-def test_matches_pyxtf(name):
-    _check_against_pyxtf(_data_file(name))
+def _check_fewer_channels(path: Path, data: XtfPingData) -> None:
+    pyxtf = pytest.importorskip("pyxtf")
+    with warnings.catch_warnings(), pytest.raises(RuntimeError, match="exceeds"):
+        warnings.simplefilter("ignore")
+        pyxtf.xtf_read(str(path))
 
-
-@pytest.mark.slow
-@pytest.mark.parametrize("name", [n for n in PYXTF_READABLE if n not in FAST_FILES])
-def test_matches_pyxtf_all_readable(name):
-    _check_against_pyxtf(_data_file(name))
-
-
-def test_dual_frequency_layout():
-    data = read_xtf_pings(_data_file(FAST_FILES[0]))
-    assert data.file_header["NavUnits"] == 3
-    assert [g.frequency for g in data.frequency_groups] == [120.0, 410.0]
-    for group in data.frequency_groups:
-        assert group.port.side == "port" and group.stbd.side == "stbd"
-        assert group.port.samples.shape == group.stbd.samples.shape
-    # Sensor X/Y are longitude/latitude.
-    lon = data.ping_headers["SensorXcoordinate"]
-    lat = data.ping_headers["SensorYcoordinate"]
-    assert np.all((lon > -180) & (lon < 180)) and np.all((lat > -90) & (lat < 90))
-
-
-@pytest.mark.parametrize("name", FEWER_CHANNELS)
-def test_fewer_channel_files_self_consistent(name, caplog):
-    path = _data_file(name)
     stats = count_packets(path)
     assert stats.resyncs == 0 and not stats.truncated
-    data = read_xtf_pings(path)
     assert data.n_pings == stats.counts[0]
-    assert sum("fewer channel blocks" in r.getMessage() for r in caplog.records) == 1
 
     # Every packet framed, and each packet's byte count is fully explained
     # by the channel blocks found in it.
@@ -176,6 +177,30 @@ def test_fewer_channel_files_self_consistent(name, caplog):
     assert low_only.max() <= lo.port.samples[~absent].max()
     assert _lag1(low_only) > 0.5
     assert _lag1(low_only.view(np.uint8)) < 0.2
+
+
+@pytest.mark.parametrize("path", ALL_PARAMS)
+def test_matches_pyxtf_or_self_consistent(path, caplog):
+    data, fewer_channels = _read_with_anomaly(path, caplog)
+    if fewer_channels:
+        _check_fewer_channels(path, data)
+    else:
+        assert all(ch.present.all() for ch in data.channels.values())
+        _check_against_pyxtf(path, data)
+
+
+@pytest.mark.parametrize("path", FAST_PARAMS[:1])
+def test_dual_frequency_layout(path):
+    data = read_xtf_pings(path)
+    assert data.file_header["NavUnits"] == 3
+    assert [g.frequency for g in data.frequency_groups] == [120.0, 410.0]
+    for group in data.frequency_groups:
+        assert group.port.side == "port" and group.stbd.side == "stbd"
+        assert group.port.samples.shape == group.stbd.samples.shape
+    # Sensor X/Y are longitude/latitude.
+    lon = data.ping_headers["SensorXcoordinate"]
+    lat = data.ping_headers["SensorYcoordinate"]
+    assert np.all((lon > -180) & (lon < 180)) and np.all((lat > -90) & (lat < 90))
 
 
 def _lag1(x: np.ndarray) -> float:
