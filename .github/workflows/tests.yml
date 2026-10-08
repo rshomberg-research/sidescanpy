@@ -1,0 +1,32 @@
+# Lint, unit tests and example smoke runs on every push and pull request.
+# Integration tests need real survey files that are not in the repo, so
+# they are not run here (they skip without data anyway).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --all-extras
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Unit tests and examples
+        run: uv run pytest tests/unit tests/examples -q -p no:randomly
