@@ -32,6 +32,8 @@ here; their history is in git.
   `range_correction`, `georef`; any callable or `Step(name, fn)` is also a
   step. Applied steps and their parameters go to `processing_history`;
   re-running skips recorded steps unless `force=True`.
+  `correct_survey` and `correct_file` take `frequency_params` to override
+  step parameters for one frequency (e.g. absorption per frequency).
 - **Reversible corrections:** `processing.invert(ds)` and
   `uncorrected_backscatter(ds)` undo radiometric steps from their
   recorded parameters.

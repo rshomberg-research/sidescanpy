@@ -479,3 +479,46 @@ class TestCorrectionSteps:
         assert correction_steps([]) == []
         with pytest.raises(ValueError, match="unknown correction step"):
             correction_steps(["tvgg"])
+
+
+class TestFrequencyParams:
+    """Per-frequency overrides of ``params`` (e.g. absorption per frequency)."""
+
+    def _absorption(self, ds):
+        return next(h for h in read_history(ds) if h["step"] == "tvg")["params"]["absorption_db_per_m"]
+
+    def test_correct_survey_applies_each_frequency_override(self):
+        out = correct_survey(
+            _survey(), ["tvg"], params={"tvg": {"spreading_loss_db": 20.0}},
+            frequency_params={"hz_1495000": {"tvg": {"absorption_db_per_m": 0.2}},
+                              "hz_547500": {"tvg": {"absorption_db_per_m": 0.1}}},
+        )
+        assert self._absorption(out.get_frequency("hz_1495000").dataset) == pytest.approx(0.2)
+        assert self._absorption(out.get_frequency("hz_547500").dataset) == pytest.approx(0.1)
+
+    def test_override_merges_with_shared_params(self):
+        out = correct_survey(
+            _survey(), ["tvg"], params={"tvg": {"spreading_loss_db": 30.0}},
+            frequency_params={"hz_547500": {"tvg": {"absorption_db_per_m": 0.1}}},
+        )
+        lf = next(h for h in read_history(out.get_frequency("hz_547500").dataset) if h["step"] == "tvg")["params"]
+        assert lf["spreading_loss_db"] == 30.0 and lf["absorption_db_per_m"] == pytest.approx(0.1)
+        hf = next(h for h in read_history(out.get_frequency("hz_1495000").dataset) if h["step"] == "tvg")["params"]
+        assert hf["spreading_loss_db"] == 30.0 and hf["absorption_db_per_m"] != pytest.approx(0.1)
+
+    def test_unknown_frequency_warns_not_raises(self, caplog):
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.correct"):
+            correct_survey(_survey(), ["tvg"], frequency_params={"hz_999": {"tvg": {"absorption_db_per_m": 0.1}}})
+        assert "hz_999" in caplog.text
+
+    def test_override_for_step_not_requested_raises(self):
+        with pytest.raises(ValueError):
+            correct_survey(_survey(), ["tvg"], frequency_params={"hz_547500": {"georef": {}}})
+
+    @pytest.mark.parametrize("chunk_pings", [None, 16])
+    def test_correct_file_eager_and_chunked(self, ss_h5, chunk_pings):
+        correct_file(ss_h5, ["tvg"], frequency_params={"hz_547500": {"tvg": {"absorption_db_per_m": 0.1}}},
+                     chunk_pings=chunk_pings)
+        survey = read_survey(ss_h5)
+        assert self._absorption(survey.get_frequency("hz_547500").dataset) == pytest.approx(0.1)
+        assert self._absorption(survey.get_frequency("hz_1495000").dataset) != pytest.approx(0.1)

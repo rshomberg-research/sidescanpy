@@ -278,6 +278,37 @@ def _resolve_steps(
     return resolved
 
 
+def _merge_params(
+    params: Mapping[str, Mapping[str, Any] | None] | None,
+    override: Mapping[str, Mapping[str, Any] | None] | None,
+) -> dict[str, dict[str, Any]] | None:
+    """``params`` with ``override`` merged in, step by step (override wins per key)."""
+    if not override:
+        return None if params is None else {k: dict(v or {}) for k, v in params.items()}
+    merged = {k: dict(v or {}) for k, v in (params or {}).items()}
+    for step, step_params in override.items():
+        merged.setdefault(step, {}).update(step_params or {})
+    return merged
+
+
+def _resolve_per_frequency(
+    freq_keys: Iterable[str],
+    steps: Sequence[str | Step | Callable],
+    params: Mapping[str, Mapping[str, Any] | None] | None,
+    frequency_params: Mapping[str, Mapping[str, Mapping[str, Any] | None]] | None,
+) -> dict[str, list[_Resolved]]:
+    """Resolved steps for each frequency: ``params`` plus that frequency's overrides.
+
+    A ``frequency_params`` key that matches no frequency is logged (a project
+    config may list frequencies some files lack) and otherwise ignored.
+    """
+    freq_keys = list(freq_keys)
+    for fk in frequency_params or {}:
+        if fk not in freq_keys:
+            logger.warning("frequency_params names %r, which is not in this survey (%s); ignored", fk, ", ".join(freq_keys))
+    return {fk: _resolve_steps(steps, _merge_params(params, (frequency_params or {}).get(fk))) for fk in freq_keys}
+
+
 def _plan(ds: xr.Dataset, resolved: list[_Resolved], *, force: bool) -> list[_Action]:
     """Actions for one channel: optional inversion (force), then the steps not yet applied."""
     actions: list[_Action] = []
@@ -431,20 +462,23 @@ def correct_survey(
     steps: Sequence[str | Step | Callable] = DEFAULT_STEPS,
     params: Mapping[str, Mapping[str, Any]] | None = None,
     *,
+    frequency_params: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
     force: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> SideScanSurvey:
     """:func:`correct` every frequency channel of ``survey``.
 
     The survey's own aux records feed ``"interpolate_aux"``. ``params`` apply
-    to every channel. Returns a new (shallow-copied) survey; ``survey`` is not
-    modified. ``progress``, if given, is called with ``"<freq_key>: <step>"``
-    before each step.
+    to every channel; ``frequency_params`` (``{freq_key: {step: {param:
+    value}}}``) overrides them for one frequency, e.g. a per-frequency
+    ``absorption_db_per_m`` or range-correction table. Returns a new
+    (shallow-copied) survey; ``survey`` is not modified. ``progress``, if
+    given, is called with ``"<freq_key>: <step>"`` before each step.
     """
-    resolved = _resolve_steps(steps, params)
+    resolved_by_fk = _resolve_per_frequency(survey.frequencies, steps, params, frequency_params)
     out = survey.copy()
     for freq_key, channel in survey.freq_channels.items():
-        actions = _plan(channel.dataset, resolved, force=force)
+        actions = _plan(channel.dataset, resolved_by_fk[freq_key], force=force)
         _check_aux(actions, survey)
         if actions:
             out.add_frequency(freq_key, _execute(channel.dataset, actions, survey, progress, f"{freq_key}: "))
@@ -563,6 +597,7 @@ def correct_file(
     steps: Sequence[str | Step | Callable] = DEFAULT_STEPS,
     params: Mapping[str, Mapping[str, Any]] | None = None,
     *,
+    frequency_params: Mapping[str, Mapping[str, Mapping[str, Any]]] | None = None,
     out_path: Path | str | None = None,
     chunk_pings: int | None = None,
     force: bool = False,
@@ -577,6 +612,9 @@ def correct_file(
     steps, params, force
         As for :func:`correct`; applied to every frequency channel, with the
         file's aux records feeding ``"interpolate_aux"``.
+    frequency_params : mapping, optional
+        ``{freq_key: {step: {param: value}}}`` overrides of ``params`` for one
+        frequency (see :func:`correct_survey`).
     out_path : path, optional
         Output file. Default: ``path`` (in place, via a temp file + rename, so
         a failure never corrupts the original).
@@ -605,7 +643,7 @@ def correct_file(
     out = Path(out_path) if out_path is not None else path
     if chunk_pings is not None and chunk_pings <= 0:
         raise ValueError("chunk_pings must be a positive integer")
-    resolved = _resolve_steps(steps, params)
+    resolved = _resolve_steps(steps, params)  # validates steps/params up front
 
     required = _estimate_disk_bytes(path, [r.name for r in resolved], chunk_pings)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -616,17 +654,18 @@ def correct_file(
 
     start = time.perf_counter()
     if chunk_pings is None:
-        written = _correct_file_eager(path, out, resolved, force, progress)
+        written = _correct_file_eager(path, out, steps, params, frequency_params, force, progress)
     else:
-        written = _correct_file_chunked(path, out, resolved, force, progress, chunk_pings)
+        written = _correct_file_chunked(path, out, steps, params, frequency_params, force, progress, chunk_pings)
     logger.debug("correct_file %s: %s in %.1fs", path.name, "written" if written else "unchanged",
                  time.perf_counter() - start)
     return out if written else path
 
 
-def _correct_file_eager(path, out, resolved, force, progress) -> bool:
+def _correct_file_eager(path, out, steps, params, frequency_params, force, progress) -> bool:
     survey = read_survey(path)
-    plans = {fk: _plan(ch.dataset, resolved, force=force) for fk, ch in survey.freq_channels.items()}
+    resolved_by_fk = _resolve_per_frequency(survey.frequencies, steps, params, frequency_params)
+    plans = {fk: _plan(ch.dataset, resolved_by_fk[fk], force=force) for fk, ch in survey.freq_channels.items()}
     if not any(plans.values()) and out == path:
         logger.debug("%s: every requested step already applied; not rewriting", path.name)
         return False
@@ -641,9 +680,10 @@ def _correct_file_eager(path, out, resolved, force, progress) -> bool:
     return True
 
 
-def _correct_file_chunked(path, out, resolved, force, progress, chunk_pings) -> bool:
+def _correct_file_chunked(path, out, steps, params, frequency_params, force, progress, chunk_pings) -> bool:
     survey = read_survey(path, chunks={"ping": HDF5_CHUNK_PING})
-    plans = {fk: _plan(ch.dataset, resolved, force=force) for fk, ch in survey.freq_channels.items()}
+    resolved_by_fk = _resolve_per_frequency(survey.frequencies, steps, params, frequency_params)
+    plans = {fk: _plan(ch.dataset, resolved_by_fk[fk], force=force) for fk, ch in survey.freq_channels.items()}
     if not any(plans.values()) and out == path:
         logger.debug("%s: every requested step already applied; not rewriting", path.name)
         return False
