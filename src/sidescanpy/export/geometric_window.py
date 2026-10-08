@@ -155,8 +155,7 @@ def extract_geometric_window(
         ``along_search_radius_m`` (still sized to bridge real ping
         gaps) fixes this: real across-track texture is preserved
         instead of averaged away, without reintroducing along-track
-        gaps. See ``docs/_internal/anisotropic-crop-search-radius.md``
-        for the full investigation.
+        gaps.
     avoid_edge_gaps : bool, default False
         When True and the requested center is close enough to the edge
         of this channel's own recorded extent that the window would

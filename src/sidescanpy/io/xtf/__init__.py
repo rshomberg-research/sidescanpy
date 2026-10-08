@@ -9,7 +9,7 @@
 - :func:`convert` -- one or more files' pings into a
   :class:`~sidescanpy.core.survey.SideScanSurvey`.
 
-See ``docs/_internal/xtf-reader.md`` for the design.
+See the "XTF" guide page (``docs/io_xtf.md``) for format notes.
 """
 
 from sidescanpy.io.xtf.converter import convert

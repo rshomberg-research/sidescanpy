@@ -6,7 +6,7 @@ Use this workflow for planning new features or major refactors.
 
 1. **Understand requirements** — Ask user clarifying questions
 2. **Read existing code** — Use Read/Grep to understand current state
-3. **Write plan** — Save to `docs/planning/<feature-name>.md`
+3. **Write plan** — Save to `../notes/sidescanpy/<feature-name>.md` (parent workspace, not this repo)
 4. **Get user approval** — Iterate on plan
 5. **Implement in stages** — One logical change at a time
 6. **Update docs** — Reflect changes in relevant docs

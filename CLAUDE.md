@@ -7,7 +7,8 @@ data (EdgeTech JSF, Klein SDF, XTF → `.ss.h5`).
 **Python:** 3.12+. **License:** MIT (private repo for now, publication planned).
 
 This file is the working guide, not a log. Session narratives belong in
-commit messages; design history belongs in `docs/_internal/`.
+commit messages; design notes are kept outside this repo, in the parent
+workspace's `notes/sidescanpy/` (not published).
 
 Private downstream projects consume this library. Never name or describe
 them, their surveys, sites or deployments anywhere in this repo (source,
@@ -64,7 +65,7 @@ own, skippable, and replaceable by a caller-supplied function.
 - Lean on established libraries (numpy, scipy, xarray, pyproj,
   rioxarray). Identify candidates aggressively, swap conservatively: tag
   them `# TODO(lib): …` and swap only once a parity test proves the
-  output matches (`docs/_internal/grids-library-swaps.md`). Justify every
+  output matches (design note `grids-library-swaps.md`). Justify every
   new dependency in `pyproject.toml`.
 - Config files: YAML for anything a human edits, JSON for
   machine-written artifacts (`targets.json`, `metrics.json`, COCO).
@@ -93,7 +94,7 @@ src/sidescanpy/
 ├── cli/         sidescan-convert / -correct / -export / -analyze
 └── log.py       configure_logging, log_timing
 examples/        runnable scripts, smoke-tested in tests/examples
-docs/            mkdocs site (guide + API reference); _internal/ = design notes
+docs/            mkdocs site (guide + API reference)
 ```
 
 ### Data model

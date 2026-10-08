@@ -3,7 +3,6 @@ site_description: Read, correct, grid and export sidescan sonar data
 repo_url: https://github.com/rshomberg-uri/sidescanpy
 docs_dir: docs
 exclude_docs: |
-  _internal/
   gen_ref_pages.py
 
 theme:

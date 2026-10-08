@@ -23,8 +23,6 @@ out/
 demo_output/
 demo_output_real/
 
-# But keep planning docs
-!docs/planning/
 
 # Temporary/backup files
 *.pyc

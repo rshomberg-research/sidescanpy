@@ -34,7 +34,7 @@ See `CLAUDE.md` for detailed architecture overview.
 ### Making Changes
 
 1. **Read `CLAUDE.md`** — Project context and current focus
-2. **Create/update planning doc** if it's a big change (`docs/planning/`)
+2. **Write a design note** first if it's a big change (kept outside the repo)
 3. **Write tests first** — TDD is preferred
 4. **Implement** — Small, focused changes
 5. **Run tests** — `pytest tests/unit/ -v`
@@ -106,7 +106,7 @@ This project is set up for use with Claude Code.
 ### Recommended Session Flow
 
 1. Claude Code reads `CLAUDE.md` — includes current work focus
-2. Plan work (write to `docs/planning/` if complex)
+2. Plan work (a design note outside the repo if complex)
 3. Implement with TDD approach
 4. Run tests after each change
 5. Suggest commits (user approves and commits manually)
@@ -115,8 +115,7 @@ This project is set up for use with Claude Code.
 ## Docs Organization
 
 - **User docs:** `README.md` (installation, quick start), `docs/` (module refs)
-- **Development docs:** `docs/DEVELOPMENT.md`, `CLAUDE.md`
-- **Planning docs:** `docs/planning/`
+- **Development docs:** `docs/development.md`, `CLAUDE.md`
 - **Changelog:** `CHANGELOG.md`
 
 ## Release Process

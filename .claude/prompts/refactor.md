@@ -12,7 +12,7 @@
 
 1. **Verify current state** — Run tests, ensure all pass
 2. **Identify scope** — What exactly is being refactored?
-3. **Plan the refactor** — Write to `docs/planning/` if complex
+3. **Plan the refactor** — Write to `../notes/sidescanpy/` (parent workspace) if complex
 4. **Get user approval** — Iterate on plan
 5. **Refactor in stages** — Small commits
 6. **Run tests after each stage** — Green light before next stage
