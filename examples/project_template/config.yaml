@@ -1,0 +1,67 @@
+# One config per survey, shared by every step script (01_convert.py ...
+# 05_dataset.py). Relative paths are relative to this file's directory.
+# Each step writes under paths.output_root and a report to
+# <output_root>/reports/<step>.{md,json}; read it before the next step.
+
+survey: my-survey
+
+paths:
+  raw_dir: data/raw                  # .jsf or .sdf files (read-only). Leave out to skip conversion.
+  targets_source_dir: data/Targets   # EdgeTech *.target or Klein Target_*.tgt catalog. Leave out if none.
+  output_root: output                # ss_h5/, targets/, convert/, analyze/, correct/, exports/, dataset/, reports/, logs/
+
+# Frequency channels to analyze and export, as freq_key (hz_<frequency>).
+frequencies: [hz_455000, hz_900000]
+
+convert:
+  crop_farrange: true    # detect and crop far-range noise before the first write
+  overwrite: false       # skip raw files already converted
+
+targets:
+  # Klein catalogs carry no position: it is resolved against the converted
+  # files by time. Ignored for EdgeTech catalogs, which have positions.
+  max_time_delta_s: 300.0
+  time_offset_s: null            # known constant clock offset (s), or
+  calibrate_offset: false        # derive it from the .ss.h5 file names vs. their first ping
+  local_utc_offset_hours: null   # required with calibrate_offset (e.g. 4.0 for EDT)
+
+analyze:
+  file: first            # "first" (sorted) or one .ss.h5 file name
+  pings: [0, 5000]
+  bin_width_m: 1.0
+  range_var: slant_range_m
+
+correct:
+  # interpolate_aux is added automatically when a step needs navigation.
+  # Add range_correction (with a table) or crop_farrange as needed.
+  steps: [tvg, geometric, georef]
+  chunk_pings: 2000      # bound memory; null corrects whole files at once
+  params:
+    tvg:
+      spreading_loss_db: 20.0       # 0 if the hardware already compensates spreading
+      # absorption_db_per_m: 0.2    # default: Francois-Garrison for each frequency
+  # Per-frequency overrides of params, e.g.
+  # frequency_params:
+  #   hz_900000: {tvg: {absorption_db_per_m: 0.3}}
+  frequency_params: {}
+
+export:
+  max_match_dist_m: 25.0
+  box_size_px: 50
+  waterfall: {window_pings: 3000, overlap_pings: 500, overview_rows: 60,
+              cmap: copper, vmin_pct: 2.0, vmax_pct: 98.0, gamma: 2.5, dpi: 100}
+  grid: {segment_pings: 2048, resolution_m: 1.0, method: mean, geotiff: true,
+         cmap: copper, vmin_pct: 2.0, vmax_pct: 98.0, gamma: 2.5, dpi: 100}
+  track: {scanline_stride: 50, dpi: 150}
+  basemap: {show_land: false, show_locator: false}   # true needs the [maps] extra
+
+# sidescanpy.export.ml.DatasetSpec fields (unknown keys are an error).
+dataset:
+  styles: [chip, dual-swath]
+  render_level: geometric
+  size_px: 300
+  swath_size_px: 512
+  box_size: 50.0
+  jitter_px: 30
+  min_confidence: verified       # "unknown" for Klein catalogs
+  with_context: true

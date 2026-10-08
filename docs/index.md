@@ -10,7 +10,7 @@ functions measure a dataset's units, nadir, usable range and TVG state.
 
 - **Start:** install and the quickstart are in the
   [README](https://github.com/rshomberg-uri/sidescanpy#readme).
-- **Guide:** [Data model](core.md), [Processing](processing.md),
+- **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
   [Command line](cli.md), [Logging](logging.md).

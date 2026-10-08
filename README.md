@@ -24,6 +24,9 @@ that model it provides:
 
 Workflows, multi-step reports and figure layouts live in your own
 project scripts and in [`examples/`](examples/), not in the library.
+[`examples/project_template/`](examples/project_template/) is a starting
+point: one script per step, one config per survey, a report after each
+step (see [`docs/workflow.md`](docs/workflow.md)).
 
 ## Install
 
@@ -132,7 +135,7 @@ command with `--help` for its options.
 ## Examples
 
 [`examples/`](examples/) holds runnable scripts, each smoke-tested on
-synthetic data: `quickstart.py`, `tvg_calibration.py`,
+synthetic data: `project_template/` (a full per-step workflow), `quickstart.py`, `tvg_calibration.py`,
 `gridding_and_geotiff.py`, `build_yolo_dataset.py`,
 `investigate_dataset.py`, and figure recipes in `examples/figures/`.
 
