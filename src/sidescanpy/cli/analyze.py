@@ -420,7 +420,7 @@ def build_parser() -> tuple[CLIParser, Any]:
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     p_inv = subparsers.add_parser("investigate", help="Characterize units/TVG status/nadir/usable range for an unfamiliar data source")
-    p_inv.add_argument("--input", required=True, type=Path, help="Path to a .ss.h5, .jsf, or .sdf file")
+    p_inv.add_argument("--input", required=True, type=Path, help="Path to a .ss.h5, .jsf, .sdf or .xtf file")
     freq_group = p_inv.add_mutually_exclusive_group()
     freq_group.add_argument("--frequency", type=str, help="e.g. hz_1495000")
     freq_group.add_argument("--all-frequencies", action="store_true")

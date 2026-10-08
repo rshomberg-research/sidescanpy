@@ -43,7 +43,7 @@ _DPI = 150
 
 
 def list_frequencies(path: Path) -> list[str]:
-    """Sorted freq_keys in a ``.ss.h5`` / ``.jsf`` / ``.sdf`` file."""
+    """Sorted freq_keys in a ``.ss.h5`` / ``.jsf`` / ``.sdf`` / ``.xtf`` file."""
     return sorted(load_survey(path).frequencies)
 
 

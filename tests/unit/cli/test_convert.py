@@ -1,5 +1,5 @@
 """
-Unit tests for sidescan-convert — survey (.jsf/.sdf -> .ss.h5) and
+Unit tests for sidescan-convert — survey (.jsf/.sdf/.xtf -> .ss.h5) and
 targets (catalog -> targets.json) subcommands, replacing the old
 per-project 01_convert.py / 11_read_targets.py scripts.
 
@@ -194,6 +194,31 @@ class TestRunTargets:
         assert convert.run_targets(self._args(tmp_path, plot=False)) == 0
         assert (tmp_path / "out" / "targets.json").exists()
         assert not (tmp_path / "out" / "position_scatter.png").exists()
+
+
+class TestSurveyXtf:
+    def test_converts_synthetic_xtf_end_to_end(self, tmp_path):
+        from tests.unit.io.xtf.conftest import (
+            dual_frequency_infos,
+            file_header,
+            ramp,
+            sonar_packet,
+            write_xtf,
+        )
+
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        pk = [sonar_packet([(c, ramp(256, "<u2", i + c)) for c in range(4)], ping_number=i)
+              for i in range(20)]
+        write_xtf(raw / "LINE1.XTF", file_header(dual_frequency_infos()), pk)
+        args = argparse.Namespace(
+            input_dir=str(raw), output_dir=str(tmp_path / "ss_h5"),
+            input_format="xtf", force=False, crop_farrange=False,
+        )
+        assert convert.run_survey(args) == 0
+        result = read_survey(tmp_path / "ss_h5" / "LINE1.ss.h5")
+        assert result.source_format == "xtf"
+        assert set(result.freq_channels) == {"hz_100000", "hz_400000"}
 
 
 class TestMainDispatch:

@@ -43,9 +43,13 @@ class TestDetectFormat:
         with pytest.raises(ValueError, match="mixed extensions"):
             detect_format(paths)
 
+    def test_xtf_any_case(self):
+        assert detect_format([Path("survey.xtf")]) == "xtf"
+        assert detect_format([Path("A.XTF"), Path("b.Xtf")]) == "xtf"
+
     def test_unsupported_extension_raises(self):
-        with pytest.raises(ValueError, match="Unsupported format"):
-            detect_format([Path("survey.xtf")])
+        with pytest.raises(ValueError, match=r"Unsupported format.*\.xtf"):
+            detect_format([Path("survey.s7k")])
 
 
 # ============================================================
@@ -94,16 +98,58 @@ class TestReadAndConvert:
         assert result["pages"] == ["page-from-line1.sdf"]
         assert result["survey_name"] == "custom_name"
 
+    def test_xtf_dispatch_reads_and_converts_all_files(self, monkeypatch):
+        def fake_read_xtf(p):
+            return f"pings-from-{p.name}"
+
+        def fake_xtf_convert(pings, *, source_files, survey_name):
+            return {"pings": pings, "source_files": source_files, "survey_name": survey_name}
+
+        monkeypatch.setattr("sidescanpy.io.dispatch.read_xtf", fake_read_xtf)
+        monkeypatch.setattr("sidescanpy.io.dispatch.xtf_convert", fake_xtf_convert)
+
+        paths = [Path("L1.XTF"), Path("L2.XTF")]
+        result = read_and_convert(paths, "xtf")
+
+        assert result["pings"] == ["pings-from-L1.XTF", "pings-from-L2.XTF"]
+        assert result["source_files"] == paths
+        assert result["survey_name"] == "L1"
+
+    def test_xtf_end_to_end_on_synthetic_file(self, tmp_path):
+        from tests.unit.io.xtf.conftest import (
+            dual_frequency_infos,
+            file_header,
+            ramp,
+            sonar_packet,
+            write_xtf,
+        )
+
+        pk = [sonar_packet([(c, ramp(32, "<u2", i + c)) for c in range(4)], ping_number=i)
+              for i in range(3)]
+        path = write_xtf(tmp_path / "LINE.XTF", file_header(dual_frequency_infos()), pk)
+        survey = read_and_convert([path], detect_format([path]))
+        assert survey.source_format == "xtf"
+        assert survey.frequencies == ["hz_100000", "hz_400000"]
+        assert load_survey(path).frequencies == survey.frequencies
+
     def test_unknown_format_raises(self):
         with pytest.raises(ValueError, match="Unknown format"):
-            read_and_convert([Path("a.jsf")], "xtf")
+            read_and_convert([Path("a.jsf")], "s7k")
 
 
 class TestFindSonarFiles:
-    def test_auto_finds_both_sorted(self, tmp_path):
-        for name in ("b.sdf", "a.jsf", "c.txt"):
+    def test_auto_finds_all_formats_sorted(self, tmp_path):
+        for name in ("b.sdf", "a.jsf", "c.txt", "d.XTF", "e.xtf"):
             (tmp_path / name).write_bytes(b"")
-        assert [p.name for p in find_sonar_files(tmp_path)] == ["a.jsf", "b.sdf"]
+        assert [p.name for p in find_sonar_files(tmp_path)] == [
+            "a.jsf", "b.sdf", "d.XTF", "e.xtf",
+        ]
+
+    def test_xtf_any_case(self, tmp_path):
+        for name in ("a.XTF", "b.xtf", "c.Xtf", "d.jsf"):
+            (tmp_path / name).write_bytes(b"")
+        (tmp_path / "dir.xtf").mkdir()
+        assert [p.name for p in find_sonar_files(tmp_path, "xtf")] == ["a.XTF", "b.xtf", "c.Xtf"]
 
     def test_single_format(self, tmp_path):
         for name in ("b.sdf", "a.jsf"):
@@ -112,7 +158,7 @@ class TestFindSonarFiles:
 
     def test_unknown_format_raises(self, tmp_path):
         with pytest.raises(ValueError, match="input_format"):
-            find_sonar_files(tmp_path, "xtf")
+            find_sonar_files(tmp_path, "s7k")
 
 
 class TestLoadSurvey:

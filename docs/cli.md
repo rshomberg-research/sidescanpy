@@ -5,7 +5,7 @@ function. Run any of them with `--help` for the full option list.
 
 | Command | Subcommands |
 |---|---|
-| `sidescan-convert` | `survey` (JSF/SDF → `.ss.h5`, one file per input; far-range noise cropped unless `--no-crop-farrange`), `targets` (catalog → `targets.json`/`.csv`; `--plot` adds a position scatter) |
+| `sidescan-convert` | `survey` (JSF/SDF/XTF → `.ss.h5`, one file per input; far-range noise cropped unless `--no-crop-farrange`), `targets` (catalog → `targets.json`/`.csv`; `--plot` adds a position scatter) |
 | `sidescan-correct` | applies `--crop-farrange`, `--tvg`, `--geometric`, `--range-correction`, `--georef` to every `.ss.h5` in `--ss-h5-dir`, in place; TVG terms via `--spreading-loss-db`, `--absorption-db-per-m`, `--no-spreading`, `--no-absorption`, water conditions via `--temperature-c --salinity-psu --depth-m --ph`; `--ping-chunk-size` bounds memory |
 | `sidescan-export` | `waterfall`, `grid` (`--geotiff`), `track`, `chip` (COCO/YOLO dataset, see [Targets and datasets](datasets.md)) |
 | `sidescan-analyze` | `investigate` (every analysis + report), `tvg-fit`, `segment`, `nadir`, `beam-geometry`, `usable-range`, `units`, `nav-attitude` (alias `nav-summary`), `recommend-config` |

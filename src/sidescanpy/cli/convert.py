@@ -4,7 +4,7 @@ the format-agnostic standard model.
 
 Two subcommands:
 
-- ``survey`` — ``.jsf``/``.sdf`` -> ``.ss.h5``, one output file per input
+- ``survey`` — ``.jsf``/``.sdf``/``.xtf`` -> ``.ss.h5``, one output file per input
   file. Far-range noise is detected and cropped in memory before the
   first write (:func:`sidescanpy.processing.crop_far_range_noise`);
   ``--no-crop-farrange`` keeps the full recorded range.
@@ -195,10 +195,10 @@ def build_parser() -> tuple[CLIParser, Any]:
     parser = CLIParser(prog="sidescan-convert", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    p = subparsers.add_parser("survey", help="Convert raw .jsf/.sdf files to .ss.h5")
-    p.add_argument("--input-dir", required=True, type=str, help="Directory of .jsf/.sdf files (non-recursive)")
+    p = subparsers.add_parser("survey", help="Convert raw .jsf/.sdf/.xtf files to .ss.h5")
+    p.add_argument("--input-dir", required=True, type=str, help="Directory of .jsf/.sdf/.xtf files (non-recursive)")
     p.add_argument("--output-dir", required=True, type=str, help="Where .ss.h5 files are written")
-    p.add_argument("--input-format", choices=["jsf", "sdf", "auto"], default="auto")
+    p.add_argument("--input-format", choices=["jsf", "sdf", "xtf", "auto"], default="auto")
     p.add_argument("--force", action="store_true", help="Reprocess even if output exists")
     p.add_argument(
         "--crop-farrange", action=argparse.BooleanOptionalAction, default=True,

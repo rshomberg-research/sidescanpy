@@ -11,7 +11,7 @@ implements it.
 ## One script per step
 
 ```
-01_convert.py   raw .jsf/.sdf -> .ss.h5, target catalog -> targets.json
+01_convert.py   raw .jsf/.sdf/.xtf -> .ss.h5, target catalog -> targets.json
 02_analyze.py   measure the uncorrected data (usable range, TVG decay)
 03_correct.py   apply the corrections chosen from step 2
 04_export.py    waterfalls, track, grids, GeoTIFF

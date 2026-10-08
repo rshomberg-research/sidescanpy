@@ -1,7 +1,7 @@
 # sidescanpy — Claude Code Context
 
 **What:** Python library to read, correct, grid and export sidescan sonar
-data (EdgeTech JSF, Klein SDF → `.ss.h5`).
+data (EdgeTech JSF, Klein SDF, XTF → `.ss.h5`).
 **Owner:** Russ Shomberg <rshomberg@uri.edu>
 **Version:** 0.6.0 (unreleased). History: `CHANGELOG.md` and `git log`.
 **Python:** 3.12+. **License:** MIT (private repo for now, publication planned).
@@ -76,8 +76,8 @@ own, skippable, and replaceable by a caller-supplied function.
 ```
 src/sidescanpy/
 ├── core/        schema accessors, SideScanSurvey, Target, history, units
-├── io/          jsf/, sdf/ readers+converters; hdf5/ (.ss.h5, survey dirs);
-│                netcdf/ (single channel); xtf/ (stub); dispatch, catalogs
+├── io/          jsf/, sdf/, xtf/ readers+converters; hdf5/ (.ss.h5, survey
+│                dirs); netcdf/ (single channel); dispatch, catalogs
 ├── processing/  correct (step API), radiometric (TVG, Francois-Garrison),
 │                geometric, georeferencing, interpolate, inversion,
 │                slicing, bottom, farrange, outliers, segments,
