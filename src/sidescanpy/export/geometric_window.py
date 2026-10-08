@@ -155,7 +155,7 @@ def extract_geometric_window(
         ``along_search_radius_m`` (still sized to bridge real ping
         gaps) fixes this: real across-track texture is preserved
         instead of averaged away, without reintroducing along-track
-        gaps. See ``docs/planning/anisotropic-crop-search-radius.md``
+        gaps. See ``docs/_internal/anisotropic-crop-search-radius.md``
         for the full investigation.
     avoid_edge_gaps : bool, default False
         When True and the requested center is close enough to the edge
@@ -490,7 +490,7 @@ def extract_geometric_window_griddata(
     sample at that resolution): griddata never shows a gap, but most of
     what fills those gaps is triangulated from real points several real
     ping-widths away, not a resolved local measurement. See
-    ``docs/planning/`` or the artifact this session's comparison work
+    ``docs/_internal/`` or the artifact this session's comparison work
     produced for the real-image side-by-side against
     :func:`extract_geometric_window` (zero fabrication, real radius
     averaging) and :func:`extract_geometric_window_binned` (zero

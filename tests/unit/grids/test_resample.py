@@ -706,7 +706,7 @@ class TestResampleChannelToGrid3DValidation:
         """
         Port and starboard samples resample into their own distinct grid
         cells, not a blended average. Regression test for the historical
-        bug described in docs/planning/v0.6.0-gridding-refactor.md.
+        bug described in docs/_internal/v0.6.0-gridding-refactor.md.
         """
         num_pings, num_samples = 30, 20
         lat_track = np.linspace(39.0, 39.01, num_pings)

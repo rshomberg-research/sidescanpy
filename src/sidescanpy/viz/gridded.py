@@ -93,7 +93,7 @@ def plot_gridded_raster(
         populations (every raw sample vs. every gridded cell *mean*),
         so even identical ``vmin_pct``/``vmax_pct`` can yield different
         absolute bounds — see ``resample_channel_to_grid()``'s "Notes"
-        section and ``docs/planning/handoff-tvg-range-residual.md``.
+        section and ``docs/_internal/handoff-tvg-range-residual.md``.
     gamma : float, default 1.0
         Display-only power-law contrast curve, applied via
         ``matplotlib.colors.PowerNorm(gamma, vmin, vmax)`` instead of a

@@ -293,7 +293,7 @@ class TestEnd2EndCorrection:
         """Confirmed real-world case (2026-07-16): sound_vel_ms can be
         exactly 0.0, not NaN. Before the fix, this silently pinned every
         sample's slant range at min_range_m, making TVG's gain constant per
-        ping instead of range-varying (docs/planning/handoff-tvg-sound-
+        ping instead of range-varying (docs/_internal/handoff-tvg-sound-
         velocity-zero-bug.md). Must fall back to 1500.0 m/s exactly like
         NaN already does."""
         ds_zero = self.create_simple_dataset(backscatter_val=1.0, n_samples=101, sound_vel_ms=0.0)

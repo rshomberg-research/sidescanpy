@@ -1,7 +1,7 @@
 """
 Thumbnail grid and boxed-context QA rendering for sonar targets.
 
-Per ``docs/planning/v0.10.0-target-catalog-and-coco-export.md`` Phase 3 —
+Per ``docs/_internal/v0.10.0-target-catalog-and-coco-export.md`` Phase 3 —
 confirmed nothing reusable existed anywhere in the family for either of
 these before this module. Uses the same percentile-based amplitude
 auto-scaling convention as ``viz/waterfall.py`` (default 1st/99th
