@@ -1,11 +1,38 @@
-"""XTF (eXtended Triton Format) reader -- stub package.
+"""XTF (eXtended Triton Format) reading.
 
-An XTF reader is planned but not yet implemented; see
-``docs/_internal/xtf-reader.md`` for the design, references and test-data
-sources. Only the public entry point exists so that dispatch code has a
-stable name to target.
+Low-level reading is implemented: :func:`read_xtf_header`,
+:func:`iter_packets` and :func:`read_xtf_pings` (sonar pings into
+per-channel sample arrays). Conversion to a survey is planned;
+:func:`read_xtf` raises ``NotImplementedError`` until then. See
+``docs/_internal/xtf-reader.md`` for the design.
 """
 
-from sidescanpy.io.xtf.reader import read_xtf
+from sidescanpy.io.xtf.reader import (
+    PacketStats,
+    XtfChannel,
+    XtfFileHeader,
+    XtfFrequencyGroup,
+    XtfPacket,
+    XtfPingData,
+    count_packets,
+    iter_packets,
+    ping_times,
+    read_xtf,
+    read_xtf_header,
+    read_xtf_pings,
+)
 
-__all__ = ["read_xtf"]
+__all__ = [
+    "PacketStats",
+    "XtfChannel",
+    "XtfFileHeader",
+    "XtfFrequencyGroup",
+    "XtfPacket",
+    "XtfPingData",
+    "count_packets",
+    "iter_packets",
+    "ping_times",
+    "read_xtf",
+    "read_xtf_header",
+    "read_xtf_pings",
+]
