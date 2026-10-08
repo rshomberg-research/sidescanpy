@@ -88,7 +88,7 @@ def _make_realistic_channel(
             "sample": (["sample"], samples),
         },
         attrs={
-            "frequency_hz": freq_hz,
+            "freq_hz_start": freq_hz,
             "processing_level": "raw",
         },
     )

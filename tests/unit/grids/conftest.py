@@ -60,7 +60,7 @@ def make_channel_3d(
             "sample": (["sample"], samples),
         },
         attrs={
-            "frequency_hz": freq_hz,
+            "freq_hz_start": freq_hz,
             "processing_level": processing_level,
         },
     )

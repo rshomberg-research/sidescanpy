@@ -298,6 +298,11 @@ def extract_geometric_window(
     gg_along, gg_across = np.meshgrid(grid_along, grid_across, indexing="ij")
     query_points = np.column_stack([gg_along.ravel() / along_radius, gg_across.ravel() / across_radius])
 
+    # TODO(lib): the same per-cell query_ball_point loop grids.resample
+    # replaced with cKDTree.sparse_distance_matrix + bincount
+    # (grids.resample._aggregate_cells, MEAN); needs a parity test like
+    # tests/unit/grids/test_resample_parity.py (allclose at float64
+    # rounding: summation order differs).
     grid_values = np.full(query_points.shape[0], np.nan)
     for i, pt in enumerate(query_points):
         idx = tree.query_ball_point(pt, r=1.0)
@@ -584,6 +589,10 @@ def extract_geometric_window_griddata(
     if len(points) == 0:
         grid = np.full((along_size_px, across_size_px), np.nan)
         return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
+    # TODO(lib): scipy.interpolate.LinearNDInterpolator/NearestNDInterpolator
+    # built once per window would avoid griddata re-triangulating for the
+    # NaN-fill pass below; parity test: identical grids (same Qhull
+    # triangulation of the same points).
     if len(points) < 3:
         grid_values = griddata(points, values_valid, query_points, method="nearest")
     else:

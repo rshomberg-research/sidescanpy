@@ -73,6 +73,14 @@ maps = [
     "matplotlib>=3.0",
     "cartopy>=0.24",
 ]
+geo = [
+    # GeoTIFF output for gridded rasters (sidescanpy.grids.to_geotiff).
+    # rioxarray writes an xarray grid with its CRS, affine transform and
+    # nodata through rasterio/GDAL -- the established way to do this,
+    # instead of hand-building GeoTIFF tags. Only to_geotiff imports it,
+    # lazily; everything else in grids runs without it.
+    "rioxarray>=0.15",
+]
 
 [tool.ruff]
 line-length = 100

@@ -460,6 +460,13 @@ def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float)
         for path, channels in index.items():
             freq_key = match_frequency(channels, target_mps)
             c = channels[freq_key]
+            # Accuracy: degrees -> metres without cos(lat) on longitude, so an
+            # east-west offset reads 1/cos(lat) too far (1.33x at 41 deg,
+            # 2x at 60 deg). It picks the nearest ping under that skewed
+            # metric and compares the skewed distance to max_dist_m.
+            # TODO(lib): pyproj.Geod.inv (or a local projected cKDTree)
+            # for the distance; changes matches near the threshold, so
+            # needs a decision and a test on a heading-varied track.
             d_m = np.sqrt((c["lat"] - target.latitude) ** 2 + (c["lon"] - target.longitude) ** 2) * 111000.0
             idx = int(np.argmin(d_m))
             if best is None or d_m[idx] < best.dist_m:

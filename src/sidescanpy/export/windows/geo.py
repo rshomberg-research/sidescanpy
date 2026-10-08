@@ -331,6 +331,12 @@ def extract_geo_style_window(
             resolution_m=resolution_m, center_along_m=center_along_m, center_across_m=center_across_m,
             channel_idx=geom_channel_idx, avoid_edge_gaps=True, backscatter_var=backscatter_var,
         )
+        # TODO(lib): three resamplers over one point cloud -- "kdtree" is
+        # grids' radius-mean in a local along/across frame and "binned" is
+        # scipy binned_statistic_2d; both could call one shared grids
+        # aggregation (grids.resample._aggregate_cells on a frame-agnostic
+        # grid) instead of separate implementations. Needs a parity test
+        # per method against the current chip outputs.
         try:
             if resample_method == "kdtree":
                 grid, meta = extract_geometric_window(

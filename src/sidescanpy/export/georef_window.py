@@ -117,6 +117,9 @@ def locate_point(lat: float, lon: float, meta: dict) -> tuple[float, float]:
     ``meta`` — for marking a *different* point than the one the window
     was centered on.
     """
+    # TODO(lib): this is the inverse of the window's affine transform --
+    # rasterio.transform.rowcol / ~affine.Affine on a transform carried in
+    # meta; parity test: identical fractional (row, col).
     transformer = pyproj.Transformer.from_crs("EPSG:4326", meta["crs"], always_xy=True)
     easting, northing = transformer.transform(lon, lat)
     return (

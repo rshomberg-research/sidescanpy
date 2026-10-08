@@ -21,6 +21,7 @@ from sidescanpy.analysis.geometry import PingGeometry
 from sidescanpy.analysis.nadir import NadirResult
 from sidescanpy.analysis.tvg import RangeDecayResult
 from sidescanpy.analysis.usable_range import UsableRangeResult
+from sidescanpy.grids import recommend_resolution
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def render_recommended_config(
             # coarser axis. Half the finer spacing keeps every real
             # sample on that axis in its own pixel.
             finest = min(spacing, sample_interval)
-            resolution_m = finest / 2.0
+            resolution_m = recommend_resolution(geometry)
             finest_axis = "ping spacing (along-track)" if finest == spacing else "sample interval (across-track)"
             coarse = max(spacing, sample_interval)
             lines.append(f"# Range-axis sample interval = {_fmt(sample_interval, '.4f')} m (across-track).")
@@ -139,7 +140,7 @@ def render_recommended_config(
                 "set size_px (and box_size) to suit the targets."
             )
         else:
-            resolution_m = spacing / 2.0
+            resolution_m = recommend_resolution(geometry)
             lines.append(
                 "# Range-axis sample interval unavailable (no slant_range_m) -- using half the ping "
                 "spacing; the sample interval is usually finer, so check it and prefer half of that."

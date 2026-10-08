@@ -66,7 +66,7 @@ def _make_test_channel(
             "sample": (["sample"], samples),
         },
         attrs={
-            "frequency_hz": freq_hz,
+            "freq_hz_start": freq_hz,
             "processing_level": "raw",
         },
     )
@@ -648,7 +648,8 @@ class TestResampleChannelToGridMetadata:
             method=ResamplingMethod.MEAN,
         )
 
-        assert "frequency_hz" in raster.dataset.attrs or raster.channel_name == "455 kHz"
+        assert raster.dataset.attrs["frequency_hz"] == 455_000
+        assert raster.channel_name == "455 kHz"
 
 
 class TestResampleChannelToGrid3DValidation:
@@ -685,7 +686,7 @@ class TestResampleChannelToGrid3DValidation:
                 "latitude_per_sample": (["ping", "sample"], np.full((20, 32), 39.5)),
                 "longitude_per_sample": (["ping", "sample"], np.full((20, 32), -70.5)),
             },
-            attrs={"frequency_hz": 455_000, "processing_level": "raw"},
+            attrs={"freq_hz_start": 455_000, "processing_level": "raw"},
         )
 
         with pytest.raises(ValueError, match="3D"):
@@ -726,7 +727,7 @@ class TestResampleChannelToGrid3DValidation:
                 "latitude_per_sample": (["ping", "channel", "sample"], lat3d),
                 "longitude_per_sample": (["ping", "channel", "sample"], lon3d),
             },
-            attrs={"frequency_hz": 455_000, "processing_level": "raw"},
+            attrs={"freq_hz_start": 455_000, "processing_level": "raw"},
         )
 
         grid = GridDefinition(
@@ -802,3 +803,32 @@ class TestResampleChannelToGrid3DValidation:
         assert raster.units == "dB"
         assert raster.dataset["backscatter"].attrs["units"] == "dB"
         assert raster.processing_level == "georef"
+
+
+class TestResampleChannelNameFromConverterAttrs:
+    """The raster's channel label comes from ``freq_hz_start`` -- the
+    attribute the JSF/SDF converters actually write -- not a
+    ``frequency_hz`` attribute nothing produces."""
+
+    @pytest.mark.parametrize("freq_start, freq_end, expected", [
+        (455_000, 455_000, "455 kHz"),
+        (1_495_000, 1_495_000, "1495 kHz"),
+        (540_000, 560_000, "540 kHz"),  # chirp: freq_hz_start labels it, as freq_key does
+    ])
+    def test_channel_name_from_converter_built_dataset(self, freq_start, freq_end, expected):
+        from sidescanpy.grids import bbox_from_channel_dataset, utm_grid_from_wgs84_bbox
+        from sidescanpy.processing import correct
+        from tests.conftest import make_minimal_sidescan_dataset
+
+        ds = make_minimal_sidescan_dataset(n_pings=20, n_samples=60, freq_hz_start=freq_start, freq_hz_end=freq_end)
+        ds.attrs["sample_rate_hz"] = 10_000  # 7.5 cm/sample -> 4.5 m slant range
+        ds["altitude_m"] = ("ping", np.full(20, 1.0, dtype=np.float32))
+        ds = correct(ds, ["geometric", "georef"])
+        grid = utm_grid_from_wgs84_bbox(bbox_from_channel_dataset(ds), resolution_m=200.0)
+
+        raster = resample_channel_to_grid(ds, grid)
+
+        assert "frequency_hz" not in ds.attrs
+        assert raster.channel_name == expected
+        assert raster.dataset.attrs["channel_name"] == expected
+        assert raster.dataset.attrs["frequency_hz"] == freq_start

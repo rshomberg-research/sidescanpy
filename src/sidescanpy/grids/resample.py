@@ -6,6 +6,8 @@ from survey geometry to a regular grid using various aggregation methods.
 """
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Optional
 
@@ -72,6 +74,145 @@ class ResamplingMethod(str, Enum):  # noqa: UP042  (StrEnum changes str()/format
     IDW = "idw"
 
 
+# Upper bound on (cell, sample) pairs materialized per block; ~24 bytes per
+# pair in sparse_distance_matrix's output plus a few same-length work
+# arrays (~100 bytes/pair in all), times _MAX_WORKERS blocks in flight:
+# roughly 0.8 GB peak at the defaults, independent of survey size.
+_MAX_PAIRS_PER_BLOCK = 1_000_000
+_MAX_WORKERS = 8
+
+
+def _cell_blocks(pair_counts: np.ndarray, max_pairs: int):
+    """Contiguous ``(start, stop)`` flat-cell ranges, each holding at most
+    ``max_pairs`` (cell, sample) pairs (or a single cell, if one cell alone
+    exceeds it). Trailing cells with no pairs are skipped."""
+    cum = np.cumsum(pair_counts)
+    total = int(cum[-1]) if cum.size else 0
+    start = 0
+    n = len(pair_counts)
+    while start < n:
+        base = int(cum[start - 1]) if start else 0
+        if base >= total:
+            break
+        stop = int(np.searchsorted(cum, base + max_pairs, side="right"))
+        stop = max(stop, start + 1)
+        yield start, min(stop, n)
+        start = stop
+
+
+def _aggregate_cells(
+    tree: cKDTree,
+    sample_ys: np.ndarray,
+    sample_xs: np.ndarray,
+    sample_values: np.ndarray,
+    grid_ys: np.ndarray,
+    grid_xs: np.ndarray,
+    search_radius: float,
+    method: "ResamplingMethod",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Aggregate samples within ``search_radius`` of every cell center.
+
+    Vectorized equivalent of one ``tree.query_ball_point(center, r)`` per
+    cell (same inclusive ``distance <= r`` test): the (cell, sample) pairs
+    come from ``cKDTree.sparse_distance_matrix`` between a tree of cell
+    centers and the sample tree, in blocks of at most
+    ``_MAX_PAIRS_PER_BLOCK`` pairs processed on a small thread pool
+    (scipy's tree queries release the GIL), and each method is a grouped
+    reduction over those pairs. Non-finite sample values are dropped
+    before aggregating; a cell with no finite value stays NaN with a
+    count of 0.
+
+    MAX, MEDIAN and NEAREST reproduce a per-cell ``np.max`` /
+    ``np.median`` / ``tree.query(k=1)`` exactly; MEAN and IDW sum in a
+    different order than per-cell ``np.mean`` / ``np.sum``, so they agree
+    to float64 rounding (~1e-15 relative), not always bit-for-bit.
+    """
+    n_ns, n_ew = grid_ys.shape
+    centers = np.column_stack([grid_ys.ravel(), grid_xs.ravel()])
+    n_cells = len(centers)
+    n_samples = len(sample_values)
+
+    count = np.zeros(n_cells, dtype=np.int64)
+    grid = np.full(n_cells, np.nan)
+
+    if method == ResamplingMethod.MEDIAN:
+        # Global rank of every sample value: sorting pairs by
+        # (cell, rank) == sorting each cell's values, with one integer key.
+        rank = np.empty(n_samples, dtype=np.int64)
+        rank[np.argsort(sample_values, kind="stable")] = np.arange(n_samples)
+
+    def _block(start: int, stop: int) -> None:
+        pairs = cKDTree(centers[start:stop]).sparse_distance_matrix(tree, search_radius, output_type="ndarray")
+        cell = pairs["i"].astype(np.intp)
+        smp = pairs["j"].astype(np.intp)
+        del pairs
+        vals = sample_values[smp]
+        finite = np.isfinite(vals)
+        cell, smp, vals = cell[finite], smp[finite], vals[finite]
+        if cell.size == 0:
+            return
+        n_block = stop - start
+        block_count = np.bincount(cell, minlength=n_block)
+        count[start:stop] = block_count
+        has = block_count > 0
+        out = np.full(n_block, np.nan)
+
+        if method == ResamplingMethod.MEAN:
+            sums = np.bincount(cell, weights=vals, minlength=n_block)
+            out[has] = sums[has] / block_count[has]
+        elif method == ResamplingMethod.MAX:
+            mx = np.full(n_block, -np.inf)
+            np.maximum.at(mx, cell, vals)
+            out[has] = mx[has]
+        elif method == ResamplingMethod.MEDIAN:
+            sorted_vals = vals[np.argsort(cell.astype(np.int64) * n_samples + rank[smp])]
+            group_start = np.concatenate(([0], np.cumsum(block_count)[:-1]))
+            gs, gc = group_start[has], block_count[has]
+            lo = sorted_vals[gs + (gc - 1) // 2]
+            hi = sorted_vals[gs + gc // 2]
+            # np.median: middle element (odd) or mean of the two middle (even)
+            out[has] = np.where(gc % 2 == 1, lo, (lo + hi) / 2.0)
+        elif method == ResamplingMethod.IDW:
+            dy = sample_ys[smp] - centers[start + cell, 0]
+            dx = sample_xs[smp] - centers[start + cell, 1]
+            distances = np.sqrt(dy**2 + dx**2)
+            distances[distances == 0] = 1e-9
+            weights = 1.0 / distances
+            weights /= np.bincount(cell, weights=weights, minlength=n_block)[cell]
+            out[has] = np.bincount(cell, weights=vals * weights, minlength=n_block)[has]
+        elif method == ResamplingMethod.NEAREST:
+            return  # only the counts are needed here; values come from tree.query below
+        else:
+            raise ValueError(f"Unknown resampling method: {method}")
+        grid[start:stop] = out
+
+    # Pair count per cell (includes non-finite values); only used to size
+    # the blocks, so memory stays bounded at any sample density.
+    pair_counts = np.asarray(tree.query_ball_point(centers, r=search_radius, return_length=True, workers=-1))
+    blocks = list(_cell_blocks(pair_counts, _MAX_PAIRS_PER_BLOCK))
+    n_workers = min(_MAX_WORKERS, os.cpu_count() or 1, len(blocks))
+    if n_workers <= 1:
+        for start, stop in blocks:
+            _block(start, stop)
+    else:
+        # Blocks write disjoint slices of count/grid, so no locking needed.
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for future in [pool.submit(_block, a, b) for a, b in blocks]:
+                future.result()
+
+    if method == ResamplingMethod.NEAREST:
+        # Nearest sample over *all* positioned samples (not just finite
+        # values), so a cell whose single nearest sample is NaN stays NaN
+        # even though it still counts its in-radius finite contributors.
+        filled_idx = np.flatnonzero(count > 0)
+        if filled_idx.size:
+            _, nearest = tree.query(centers[filled_idx], k=1, workers=-1)
+            grid[filled_idx] = sample_values[nearest]
+            grid[~np.isfinite(grid)] = np.nan
+
+    return grid.reshape(n_ns, n_ew), count.reshape(n_ns, n_ew)
+
+
 def resample_channel_to_grid(
     channel: xr.Dataset,
     grid_def: GridDefinition,
@@ -134,8 +275,10 @@ def resample_channel_to_grid(
     # Validate input
     _validate_channel_data(channel, backscatter_var)
 
-    # Extract frequency and metadata
-    frequency_hz = channel.attrs.get("frequency_hz", 0)
+    # Channel label from the converters' own attribute (``freq_hz_start``
+    # labels the channel even for a chirp -- see core/schema.py and the
+    # io converters; it is also what ``freq_key`` is built from).
+    frequency_hz = channel.attrs.get("freq_hz_start", 0)
     processing_level = derived_processing_level(channel)
 
     # Convert frequency to friendly name
@@ -209,12 +352,18 @@ def resample_channel_to_grid(
     # geographic grid, northing/easting for a projected one; see
     # GridDefinition.get_grid_centers)
     grid_ys, grid_xs = grid_def.get_grid_centers()
-    num_cells_ns, num_cells_ew = grid_ys.shape
 
     # Search radius in the grid's native units: degrees (~111 km per degree
     # at the equator) for a geographic grid, meters directly for a projected
     # one — resolution_m is already in meters, so no unit conversion needed
     # there.
+    # Accuracy note: on a geographic grid the radius is isotropic in
+    # *degrees*, so its east-west ground reach is only cos(lat) of the
+    # north-south one (0.75x at 41 deg, 0.5x at 60 deg). Past ~70.5 deg
+    # (1.5 * cos(lat) < 0.5 cells) cells can miss samples between them.
+    # Projected (UTM) grids -- what the CLI uses -- are unaffected.
+    # TODO(lib): grid in a local projected CRS (pyproj) and drop the
+    # degree radius; needs a parity test against the UTM path.
     if is_geographic:
         if max_search_radius_m is None:
             search_radius = 1.5 * grid_def.resolution_m / 111000.0
@@ -227,69 +376,9 @@ def resample_channel_to_grid(
             else max_search_radius_m
         )
 
-    # Initialize output arrays
-    backscatter_grid = np.full((num_cells_ns, num_cells_ew), np.nan, dtype=float)
-    n_contributing = np.zeros((num_cells_ns, num_cells_ew), dtype=int)
-
-    # Resample each cell
-    for i in range(num_cells_ns):
-        for j in range(num_cells_ew):
-            cell_y = grid_ys[i, j]
-            cell_x = grid_xs[i, j]
-
-            # Query tree for samples near this cell
-            indices = tree.query_ball_point(
-                [cell_y, cell_x],
-                r=search_radius,
-            )
-
-            if not indices:
-                continue
-
-            # Get backscatter values for contributing samples
-            contrib_backscatter = backscatter_valid[indices]
-
-            # Filter out NaN
-            valid_contrib = contrib_backscatter[np.isfinite(contrib_backscatter)]
-
-            if len(valid_contrib) == 0:
-                continue
-
-            n_contributing[i, j] = len(valid_contrib)
-
-            # Aggregate per method
-            if method == ResamplingMethod.MEAN:
-                backscatter_grid[i, j] = np.mean(valid_contrib)
-            elif method == ResamplingMethod.MEDIAN:
-                backscatter_grid[i, j] = np.median(valid_contrib)
-            elif method == ResamplingMethod.MAX:
-                backscatter_grid[i, j] = np.max(valid_contrib)
-            elif method == ResamplingMethod.NEAREST:
-                # Find nearest sample
-                dists, nearest_idx = tree.query([cell_y, cell_x], k=1)
-                nearest_backscatter = backscatter_valid[nearest_idx]
-                if np.isfinite(nearest_backscatter):
-                    backscatter_grid[i, j] = nearest_backscatter
-            elif method == ResamplingMethod.IDW:
-                # Inverse-distance weighting
-                sample_ys = y_valid[indices]
-                sample_xs = x_valid[indices]
-
-                # Distances in the grid's native units (degrees or meters)
-                dy = sample_ys - cell_y
-                dx = sample_xs - cell_x
-                distances = np.sqrt(dy**2 + dx**2)
-
-                # Avoid division by zero
-                distances[distances == 0] = 1e-9
-
-                # Weight by 1/distance
-                weights = 1.0 / distances
-                weights /= np.sum(weights)
-
-                backscatter_grid[i, j] = np.sum(valid_contrib * weights[:len(valid_contrib)])
-            else:
-                raise ValueError(f"Unknown resampling method: {method}")
+    backscatter_grid, n_contributing = _aggregate_cells(
+        tree, y_valid, x_valid, backscatter_valid, grid_ys, grid_xs, search_radius, method,
+    )
 
     logger.debug(
         f"Resampling complete: {np.sum(np.isfinite(backscatter_grid)):,} / "

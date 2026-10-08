@@ -116,23 +116,16 @@ def test_gridding_and_geotiff(tmp_path):
     proc = _run_example("gridding_and_geotiff.py", source, "--output-dir", out, "--resolution-m", "2")
     assert (out / "moving_hz_200000.png").stat().st_size > 0
     try:
-        import rioxarray  # noqa: F401
+        import rioxarray
     except ImportError:
         assert "skipping moving_hz_200000.tif" in proc.stderr
         assert not (out / "moving_hz_200000.tif").exists()
     else:
-        assert (out / "moving_hz_200000.tif").stat().st_size > 0
-
-
-def test_raster_to_dataarray_is_north_up():
-    module = _load_example("gridding_and_geotiff.py")
-    grid = GridDefinition(bbox=(4320000.0, 400000.0, 4330000.0, 410000.0), resolution_m=1000.0, crs=_utm())
-    raster = SideScanGriddedRaster(grid_def=grid, backscatter=np.arange(100.0).reshape(10, 10))
-    da = module.raster_to_dataarray(raster)
-    assert da.dims == ("y", "x")
-    assert np.all(np.diff(da["y"].values) < 0)
-    assert np.all(np.diff(da["x"].values) > 0)
-    assert float(da.isel(y=-1, x=0)) == float(raster.backscatter[np.argmin(raster.y_values[:, 0]), 0])
+        tif = out / "moving_hz_200000.tif"
+        back = rioxarray.open_rasterio(tif).squeeze("band", drop=True)
+        assert back.rio.crs is not None and back.rio.crs.to_epsg() is not None
+        assert np.all(np.diff(back["y"].values) < 0)  # north-up
+        assert np.isfinite(back.values).any()
 
 
 def _utm():

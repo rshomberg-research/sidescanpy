@@ -9,6 +9,19 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `sidescanpy.grids.to_geotiff(raster_or_dataset, path, *, variable=,
+  dtype=, nodata=, compress=)`: single-band, north-up GeoTIFF with CRS,
+  transform, nodata and attrs as tags, via rioxarray. New optional extra
+  `geo` (`rioxarray>=0.15`); a clear ImportError names the extra when it
+  is missing. `examples/gridding_and_geotiff.py` now uses it.
+- `SideScanGriddedRaster.to_dataset()`: plain `xr.Dataset` on 1-D `y`/`x`
+  cell-center axes with the CRS in a CF `spatial_ref` coordinate.
+- `sidescanpy.grids.recommend_resolution(ds_or_geometry)`: half the finer
+  of median ping spacing and sample interval (the rule
+  `sidescan-analyze recommend-config` already used; it now calls this).
+- `docs/planning/grids-library-swaps.md`: library-replacement candidates
+  in grids/export with the parity test each needs.
+
 - `sidescanpy.export.ml.build_target_dataset(sources, targets, spec,
   out_dir, *, contact_sheet=None, context=None) -> DatasetResult`: the
   whole `sidescan-export chip` workflow as a library call, configured by
@@ -86,6 +99,14 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Changed
 
+- `resample_channel_to_grid` aggregates all cells at once
+  (`cKDTree.sparse_distance_matrix` in bounded blocks + grouped
+  reductions) instead of one `query_ball_point` per cell: 2-10x faster
+  aggregation (about 2-4x end to end; the tree build and reprojection now
+  dominate), bounded memory at any sample density. Counts, max, median and
+  nearest are identical; mean and idw agree to float64 rounding
+  (summation order).
+
 - **Breaking:** `sidescan-export chip` is a thin wrapper over
   `build_target_dataset`; chip output is byte-identical (plus
   `manifest.json`).
@@ -116,6 +137,15 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   (kdtree: 1.9 GB, ~3x faster).
 
 ### Fixed
+
+- Gridded rasters were always labeled channel `"unknown"` and
+  `frequency_hz=0`: `resample_channel_to_grid` read a `frequency_hz`
+  attribute nothing writes. It now reads `freq_hz_start` (what the
+  converters write and `freq_key` is built from), e.g. `"455 kHz"`.
+- `resample_channel_to_grid(method="idw")`: with a NaN sample in a cell's
+  radius, weights were normalized over all samples and then applied
+  positionally to the finite ones only (misaligned). Weights now cover
+  the finite contributors only; NaN-free cells are unchanged.
 
 #### Geometric resampling fills short navigation stalls (2026-09-29)
 
