@@ -67,12 +67,13 @@ Conventions
 2026 rshomberg@uri.edu
 """
 
+import contextlib
 import inspect
 import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -680,6 +681,35 @@ def _correct_file_eager(path, out, steps, params, frequency_params, force, progr
     return True
 
 
+class _DropRepeats(logging.Filter):
+    """Drop log records whose message was already emitted while installed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._seen: set[str] = set()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if message in self._seen:
+            return False
+        self._seen.add(message)
+        return True
+
+
+@contextlib.contextmanager
+def _once_per_channel(*logger_names: str) -> Iterator[None]:
+    """Show each distinct warning from ``logger_names`` once, not once per ping chunk."""
+    loggers = [logging.getLogger(n) for n in logger_names]
+    flt = _DropRepeats()
+    for lg in loggers:
+        lg.addFilter(flt)
+    try:
+        yield
+    finally:
+        for lg in loggers:
+            lg.removeFilter(flt)
+
+
 def _correct_file_chunked(path, out, steps, params, frequency_params, force, progress, chunk_pings) -> bool:
     survey = read_survey(path, chunks={"ping": HDF5_CHUNK_PING})
     resolved_by_fk = _resolve_per_frequency(survey.frequencies, steps, params, frequency_params)
@@ -703,15 +733,17 @@ def _correct_file_chunked(path, out, steps, params, frequency_params, force, pro
                 sample_interval_m(ds[["sound_vel_ms"]].load())
             n_pings = ds.sizes["ping"]
             chunk_paths = []
-            for lo in range(0, n_pings, chunk_pings):
-                hi = min(lo + chunk_pings, n_pings)
-                if progress is not None:
-                    progress(f"{freq_key}: pings {lo}-{hi} of {n_pings}")
-                with invalid_sound_vel_warning_suppressed():
-                    chunk = _execute(ds.isel(ping=slice(lo, hi)).load(), actions, survey)
-                chunk_path = tmp_dir / f"{freq_key}_{lo:012d}.nc"
-                _drop_legacy_raw(chunk).to_netcdf(chunk_path, engine=_HDF5_ENGINE)
-                chunk_paths.append(chunk_path)
+            # interpolate_aux warns about empty/NaN aux fields once per chunk otherwise.
+            with _once_per_channel("sidescanpy.processing.interpolate"):
+                for lo in range(0, n_pings, chunk_pings):
+                    hi = min(lo + chunk_pings, n_pings)
+                    if progress is not None:
+                        progress(f"{freq_key}: pings {lo}-{hi} of {n_pings}")
+                    with invalid_sound_vel_warning_suppressed():
+                        chunk = _execute(ds.isel(ping=slice(lo, hi)).load(), actions, survey)
+                    chunk_path = tmp_dir / f"{freq_key}_{lo:012d}.nc"
+                    _drop_legacy_raw(chunk).to_netcdf(chunk_path, engine=_HDF5_ENGINE)
+                    chunk_paths.append(chunk_path)
             # Lazily reassembled in chunk order (nested concat along ping).
             combined = xr.open_mfdataset(
                 chunk_paths, engine=_HDF5_ENGINE, concat_dim="ping", combine="nested",

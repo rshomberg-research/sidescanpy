@@ -6,6 +6,7 @@ invert / uncorrected_backscatter, and the derived processing level.
 """
 
 import json
+import logging
 
 import numpy as np
 import pytest
@@ -522,3 +523,19 @@ class TestFrequencyParams:
         survey = read_survey(ss_h5)
         assert self._absorption(survey.get_frequency("hz_547500").dataset) == pytest.approx(0.1)
         assert self._absorption(survey.get_frequency("hz_1495000").dataset) != pytest.approx(0.1)
+
+
+class TestChunkedWarningsOncePerChannel:
+    def test_interpolate_warning_logged_once_per_channel_not_per_chunk(self, tmp_path, caplog):
+        survey = _survey(n_pings=45)
+        att = survey.attitude.copy()
+        att["pitch_deg"] = att["pitch_deg"] * np.nan  # every chunk would warn about it
+        survey.attitude = att
+        path = tmp_path / "nan_pitch.ss.h5"
+        write_survey(survey, path)
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.interpolate"):
+            correct_file(path, ["interpolate_aux", "tvg"], chunk_pings=10)  # 5 chunks per channel
+        pitch = [r for r in caplog.records if "pitch_deg" in r.getMessage()]
+        assert len(pitch) == 2  # once per frequency channel
+        # the filter is removed afterwards
+        assert not logging.getLogger("sidescanpy.processing.interpolate").filters
