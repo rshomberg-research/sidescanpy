@@ -37,6 +37,7 @@ from sidescanpy.processing.radiometric import (
     TVGParams,
     absorption_for_frequency,
     apply_tvg,
+    center_frequency_hz,
     tvg_gain_db,
 )
 
@@ -475,7 +476,9 @@ def fit_range_decay(
         Exact linear reference instead of the percentile (e.g. ``1.0``
         for "dB re 1").
     freq_hz : float, optional
-        Default ``ds.attrs["freq_hz_start"]``; sets the absorption term.
+        Default: the channel's center frequency
+        (:func:`~sidescanpy.processing.radiometric.center_frequency_hz`);
+        sets the absorption term.
     bin_width_m : float, default 5.0
         Requested bin width; shrunk (never widened) so that
         ``usable_range_m`` spans at least ``min_bins`` bins.
@@ -540,7 +543,7 @@ def fit_range_decay(
         if min_width_for_bins < bin_width_m:
             bin_width_m = min_width_for_bins
 
-    freq_hz = float(freq_hz) if freq_hz is not None else float(ds.attrs["freq_hz_start"])
+    freq_hz = float(freq_hz) if freq_hz is not None else center_frequency_hz(ds)
 
     if already_db:
         db_da = ds[value_var]

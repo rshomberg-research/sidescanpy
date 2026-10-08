@@ -635,3 +635,35 @@ class TestApplyTvgToAmplitude:
         # Every ping should get the identical per-sample gain.
         np.testing.assert_array_almost_equal(corrected[0], corrected[-1])
 
+
+
+class TestCenterFrequency:
+    """Frequency-dependent physics uses the chirp's center, not its start."""
+
+    def test_chirp_midpoint(self):
+        from sidescanpy.processing.radiometric import center_frequency_hz
+
+        ds = xr.Dataset(attrs={"freq_hz_start": 1_495_000, "freq_hz_end": 1_605_000})
+        assert center_frequency_hz(ds) == pytest.approx(1_550_000.0)
+
+    @pytest.mark.parametrize("end", [455_000, None, 0, float("nan"), "n/a"])
+    def test_falls_back_to_start(self, end):
+        from sidescanpy.processing.radiometric import center_frequency_hz
+
+        attrs = {"freq_hz_start": 455_000}
+        if end is not None:
+            attrs["freq_hz_end"] = end
+        assert center_frequency_hz(xr.Dataset(attrs=attrs)) == 455_000.0
+
+    def test_default_tvg_absorption_uses_center(self):
+        from sidescanpy.processing.radiometric import (
+            absorption_for_frequency,
+            francois_garrison_absorption_db_per_m,
+            resolve_tvg_params,
+        )
+
+        ds = xr.Dataset({"sound_vel_ms": ("ping", np.full(3, 1500.0))},
+                        attrs={"freq_hz_start": 547_500, "freq_hz_end": 612_500})
+        params = resolve_tvg_params(ds, None)
+        assert params.absorption_db_per_m == pytest.approx(francois_garrison_absorption_db_per_m(580_000))
+        assert params.absorption_db_per_m != pytest.approx(absorption_for_frequency(547_500))

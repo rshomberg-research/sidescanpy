@@ -167,6 +167,26 @@ def francois_garrison_absorption_db_per_m(
     return float(alpha_db_per_m) if alpha_db_per_m.ndim == 0 else alpha_db_per_m
 
 
+def center_frequency_hz(ds: xr.Dataset) -> float:
+    """Acoustic center frequency of a channel (Hz), for frequency-dependent physics.
+
+    The midpoint of ``freq_hz_start`` and ``freq_hz_end`` for a chirp (a
+    1495-1605 kHz sweep is centered at 1550 kHz); ``freq_hz_start`` when
+    the end is missing, non-positive or equal to the start. The channel
+    *label* (``hz_<freq_hz_start>``) is the start frequency and is not
+    affected.
+    """
+    start = float(ds.attrs["freq_hz_start"])
+    end = ds.attrs.get("freq_hz_end")
+    try:
+        end = float(end)
+    except (TypeError, ValueError):
+        return start
+    if not np.isfinite(end) or end <= 0 or end == start:
+        return start
+    return (start + end) / 2.0
+
+
 def absorption_for_frequency(frequency_hz, **env):
     """
     Default absorption coefficient (dB/m, one-way) for a sonar frequency.
@@ -340,8 +360,8 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
 def resolve_tvg_params(ds: xr.Dataset, params: TVGParams | None) -> TVGParams:
     """Fill a TVGParams' unset fields from ``ds`` (new object; input untouched).
 
-    ``absorption_db_per_m=None`` -> :func:`absorption_for_frequency` of
-    ``freq_hz_start``; ``sound_velocity_ms=None`` -> mean of the per-ping
+    ``absorption_db_per_m=None`` -> Francois-Garrison absorption at the
+    channel's center frequency (:func:`center_frequency_hz`); ``sound_velocity_ms=None`` -> mean of the per-ping
     ``sound_vel_ms`` (NaN or non-positive mean falls back to 1500 m/s).
     """
     params = TVGParams() if params is None else replace(params)
@@ -351,13 +371,13 @@ def resolve_tvg_params(ds: xr.Dataset, params: TVGParams | None) -> TVGParams:
         params.depth_m = DEFAULT_DEPTH_M if params.depth_m is None else params.depth_m
         params.ph = DEFAULT_PH if params.ph is None else params.ph
         params.absorption_db_per_m = francois_garrison_absorption_db_per_m(
-            ds.attrs["freq_hz_start"], temperature_c=params.temperature_c, salinity_psu=params.salinity_psu,
+            center_frequency_hz(ds), temperature_c=params.temperature_c, salinity_psu=params.salinity_psu,
             depth_m=params.depth_m, ph=params.ph,
         )
         logger.debug(
             "TVG absorption (Francois-Garrison, T=%.1f C, S=%.1f psu, D=%.1f m, pH=%.2f) for %s Hz: %.5f dB/m",
             params.temperature_c, params.salinity_psu, params.depth_m, params.ph,
-            ds.attrs["freq_hz_start"], params.absorption_db_per_m,
+            center_frequency_hz(ds), params.absorption_db_per_m,
         )
     elif any(v is not None for v in (params.temperature_c, params.salinity_psu, params.depth_m, params.ph)):
         logger.debug("TVG: absorption_db_per_m given explicitly; ignoring water-condition parameters")

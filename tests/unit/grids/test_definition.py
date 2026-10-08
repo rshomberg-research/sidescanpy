@@ -476,3 +476,29 @@ class TestBboxFromChannelDataset:
         )
         with pytest.raises(ValueError, match="No valid"):
             bbox_from_channel_dataset(ds)
+
+
+class TestBboxMinMarginMeters:
+    def _point_ds(self, lat0=41.6, lon0=-71.4):
+        import xarray as xr
+
+        return xr.Dataset({
+            "latitude_per_sample": (["ping", "channel", "sample"], np.full((5, 2, 3), lat0)),
+            "longitude_per_sample": (["ping", "channel", "sample"], np.full((5, 2, 3), lon0)),
+        })
+
+    def test_default_min_margin_is_meters_not_a_tenth_of_a_km(self):
+        from pyproj import Geod
+
+        south, west, north, east = bbox_from_channel_dataset(self._point_ds())
+        geod = Geod(ellps="WGS84")
+        _, _, ns = geod.inv(-71.4, south, -71.4, north)
+        _, _, ew = geod.inv(west, 41.6, east, 41.6)
+        assert ns == pytest.approx(10.0, rel=0.02)   # 5 m each side
+        assert ew == pytest.approx(10.0, rel=0.02)
+
+    def test_large_extent_uses_fractional_margin(self, channel_3d):
+        south, _, _, _ = bbox_from_channel_dataset(channel_3d, margin_frac=0.1, min_margin_m=0.0)
+        lats = channel_3d["latitude_per_sample"].values
+        extent = float(np.nanmax(lats)) - float(np.nanmin(lats))
+        assert float(np.nanmin(lats)) - south == pytest.approx(0.1 * extent, rel=0.05)

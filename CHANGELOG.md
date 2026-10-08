@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.6.1] — 2026-10-08
+
+### Changed
+
+- Default TVG absorption (Francois-Garrison, when `absorption_db_per_m` is
+  not given) and `analysis.fit_range_decay`'s absorption model use the
+  channel's acoustic center frequency, `(freq_hz_start + freq_hz_end) / 2`,
+  instead of the chirp start. New `processing.center_frequency_hz(ds)`.
+  For a 1495-1605 kHz chirp the default rises from about 0.74 to 0.79
+  dB/m; single-frequency channels (start == end) are unchanged. Channel
+  labels (`hz_<freq_hz_start>`) are unchanged.
+- `grids.bbox_from_channel_dataset`: the minimum margin is now
+  `min_margin_m=5.0` (meters, converted at the data's latitude) instead of
+  a fixed 0.001 deg (about 110 m), which dominated the margin of a typical
+  grid segment. `min_margin_deg=` still sets a degree minimum explicitly.
+  Auto-fitted grids (`grid_channel`, `sidescan-export grid`) are tighter.
+
 ## [0.6.0] — Unreleased
 
 A restructure into a library API with a thin CLI. Workflow, numbered

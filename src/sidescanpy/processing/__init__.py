@@ -120,6 +120,7 @@ from sidescanpy.processing.radiometric import (
     absorption_for_frequency,
     apply_tvg,
     apply_tvg_to_amplitude,
+    center_frequency_hz,
     francois_garrison_absorption_db_per_m,
     tvg_gain_db,
 )
@@ -158,6 +159,7 @@ __all__ = [
     "tvg_gain_db",
     "TVGParams",
     "absorption_for_frequency",
+    "center_frequency_hz",
     "francois_garrison_absorption_db_per_m",
     "DEFAULT_FIELD_SOURCES",
     "compute_geometric_ranges",

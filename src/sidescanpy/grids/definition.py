@@ -7,7 +7,7 @@ No data — just the schema/contract.
 """
 
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 from pyproj import CRS, Geod, Transformer
@@ -429,8 +429,12 @@ def utm_grid_from_wgs84_bbox(
     return wgs84_grid.reproject_to(utm_crs)
 
 
+# Mean meridional degree length; only sizes a small grid margin.
+_METERS_PER_DEG_LAT = 111_320.0
+
+
 def bbox_from_channel_dataset(
-    ds, margin_frac: float = 0.1, min_margin_deg: float = 0.001
+    ds, margin_frac: float = 0.1, min_margin_m: float = 5.0, min_margin_deg: Optional[float] = None,
 ) -> Tuple[float, float, float, float]:
     """(south, west, north, east) bbox fit to a channel dataset's
     per-sample lat/lon extent, with a small margin so edge cells aren't
@@ -446,8 +450,13 @@ def bbox_from_channel_dataset(
         (i.e. already georeferenced via ``compute_georeferencing``).
     margin_frac : float, default 0.1
         Fraction of the lat/lon extent added as margin on each side.
-    min_margin_deg : float, default 0.001
-        Minimum margin (degrees), for a near-zero-extent segment.
+    min_margin_m : float, default 5.0
+        Minimum margin on each side, in meters (converted to degrees at the
+        data's latitude), for a near-zero-extent segment.
+    min_margin_deg : float, optional
+        Minimum margin in degrees instead of ``min_margin_m``. (Before
+        0.6.1 this was the only option, defaulting to 0.001 deg -- about
+        110 m, which dominated the margin of a typical grid segment.)
 
     Returns
     -------
@@ -474,6 +483,12 @@ def bbox_from_channel_dataset(
 
     south, north = float(np.min(valid_lats)), float(np.max(valid_lats))
     west, east = float(np.min(valid_lons)), float(np.max(valid_lons))
-    margin_lat = max((north - south) * margin_frac, min_margin_deg)
-    margin_lon = max((east - west) * margin_frac, min_margin_deg)
+    if min_margin_deg is not None:
+        min_lat_deg = min_lon_deg = float(min_margin_deg)
+    else:
+        min_lat_deg = min_margin_m / _METERS_PER_DEG_LAT
+        cos_lat = max(np.cos(np.radians((north + south) / 2.0)), 1e-6)
+        min_lon_deg = min_margin_m / (_METERS_PER_DEG_LAT * cos_lat)
+    margin_lat = max((north - south) * margin_frac, min_lat_deg)
+    margin_lon = max((east - west) * margin_frac, min_lon_deg)
     return (south - margin_lat, west - margin_lon, north + margin_lat, east + margin_lon)
