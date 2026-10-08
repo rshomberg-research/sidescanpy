@@ -82,7 +82,8 @@ class TestDualFrequency:
             assert bs.shape == (6, 2, N_SAMP)
             assert list(ds["channel_id"].values) == ["port", "starboard"]
             for i in range(6):
-                np.testing.assert_array_equal(bs.values[i, 0], ramp(N_SAMP, np.uint16, i * 4 + port))
+                # XTF stores port far -> near; the converter puts the near sample first.
+                np.testing.assert_array_equal(bs.values[i, 0], ramp(N_SAMP, np.uint16, i * 4 + port)[::-1])
                 np.testing.assert_array_equal(bs.values[i, 1], ramp(N_SAMP, np.uint16, i * 4 + stbd))
             np.testing.assert_array_equal(ds["sample"].values, np.arange(N_SAMP))
             assert (ds["valid_samples"].values == N_SAMP).all()
@@ -169,7 +170,7 @@ class TestAbsentAndPadding:
         for i, n in enumerate(counts):
             assert not np.isnan(bs[i, :, :n]).any()
             assert np.isnan(bs[i, :, n:]).all()
-            np.testing.assert_array_equal(bs[i, 0, :n], ramp(n, np.uint16, i * 4))
+            np.testing.assert_array_equal(bs[i, 0, :n], ramp(n, np.uint16, i * 4)[::-1])
         np.testing.assert_array_equal(ds["valid_samples"].values[:, 0], counts)
         assert ds["valid_samples"].dtype == np.int32
 
@@ -317,7 +318,7 @@ class TestMultiFile:
         np.testing.assert_array_equal(ds["ping_number"].values, np.arange(6))
         assert np.all(np.diff(ds["time"].values.astype("int64")) > 0)
         np.testing.assert_array_equal(
-            ds["backscatter_intensity"].values[0, 0], ramp(N_SAMP, np.uint16, 2)
+            ds["backscatter_intensity"].values[0, 0], ramp(N_SAMP, np.uint16, 2)[::-1]
         )
         assert np.all(np.diff(survey.navigation["time"].values.astype("int64")) > 0)
 

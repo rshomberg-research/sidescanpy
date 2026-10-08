@@ -38,7 +38,7 @@ and that channel's samples.
 | Survey | XTF source |
 |---|---|
 | frequency key `hz_<Hz>` | `ChanInfo.Frequency` (kHz) of a port/starboard pair |
-| `backscatter_intensity` (ping, channel, sample) | port (`TypeOfChannel` 1) and starboard (2) samples, float32 |
+| `backscatter_intensity` (ping, channel, sample) | port (`TypeOfChannel` 1) and starboard (2) samples, float32; sample 0 nearest the sonar on both sides (XTF stores port far -> near, so port is reversed) |
 | `valid_samples` | per-ping `NumSamples`; padding beyond it is NaN |
 | `latitude`, `longitude` | `SensorYcoordinate`, `SensorXcoordinate` (degrees, `NavUnits` 3) |
 | `heading_deg`, `pitch_deg`, `roll_deg`, `heave_m` | `SensorHeading`, `SensorPitch` (nose up +), `SensorRoll` (port up +), `Heave` |

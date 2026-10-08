@@ -14,7 +14,12 @@ validated survey shaped like the JSF and SDF ones:
   channel 0 = port, 1 = starboard. Samples beyond a ping's
   ``NumSamples`` and a side absent from a ping are NaN;
   ``valid_samples`` (ping, channel) holds the recorded count (0 where
-  absent), as in the SDF converter.
+  absent), as in the SDF converter. Sample 0 is nearest the sonar on
+  both sides: XTF stores port samples far -> near (so ``[port | stbd]``
+  reads as one across-track line), and the converter reverses each
+  port ping's valid samples. Verified on real EdgeTech 4200 files: the
+  first bottom return of the reversed port data tracks
+  ``SensorPrimaryAltitude`` the way the starboard data does as stored.
 - Each frequency has its own ping axis. A ping holding neither channel
   of a frequency (some files' early packets carry only the low-frequency
   pair, see :mod:`sidescanpy.io.xtf.reader`) is left out of that
@@ -417,7 +422,13 @@ def _build_frequency_channel(
             dst = pos[rows + piece.offset]
             m = ch.samples.shape[1]
             block = ch.samples[rows].astype(np.float32)
-            block[np.arange(m)[None, :] >= ch.num_samples[rows, None].astype(np.int64)] = np.nan
+            k = ch.num_samples[rows, None].astype(np.int64)
+            j = np.arange(m)[None, :]
+            block[j >= k] = np.nan
+            if side == 0:
+                # XTF stores port far -> near; reverse each ping's valid
+                # samples so sample 0 is nearest the sonar on both sides.
+                block = np.take_along_axis(block, np.where(j < k, k - 1 - j, j), axis=1)
             bs[dst, side, :m] = block
 
     h = headers[keep]

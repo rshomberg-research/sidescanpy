@@ -60,14 +60,36 @@ def test_converts_and_matches_pyxtf_positions(path: Path, tmp_path):
         np.testing.assert_array_equal(ds["latitude"].values, lat)
         np.testing.assert_array_equal(ds["longitude"].values, lon)
         np.testing.assert_array_equal(ds["time"].values, t)
-        # Port/starboard samples are pyxtf's, as float32.
+        # Port/starboard samples are pyxtf's, as float32; port reversed
+        # (XTF stores it far -> near, the survey near -> far).
         c0 = int(ds.attrs["xtf_channel_numbers"].split(",")[0])
         np.testing.assert_array_equal(
             ds["backscatter_intensity"].values[:, 0],
-            np.vstack([p.data[c0] for p in sonar]).astype(np.float32),
+            np.vstack([p.data[c0] for p in sonar]).astype(np.float32)[:, ::-1],
         )
     np.testing.assert_array_equal(survey.navigation["latitude"].values, lat)
     np.testing.assert_array_equal(survey.navigation["longitude"].values, lon)
+
+
+@pytest.mark.parametrize("path", FAST_PARAMS)
+def test_port_and_starboard_both_near_first(path: Path):
+    """Sample 0 is nearest the sonar on both sides.
+
+    pyxtf returns samples as stored, so the oracle test above cannot catch
+    a mirrored side. Physics can: the nadir gap and bottom return sit at
+    the same range on both sides, so the median across-track profiles of
+    port and starboard agree when both run near -> far, and are roughly
+    mirror images when one side is reversed.
+    """
+    survey = convert(read_xtf(path))
+    for fk in survey.frequencies:
+        bs = survey.get_frequency(fk).dataset["backscatter_intensity"].values
+        port = np.nanmedian(bs[:, 0], axis=0)
+        stbd = np.nanmedian(bs[:, 1], axis=0)
+        ok = np.isfinite(port) & np.isfinite(stbd)
+        same = np.corrcoef(port[ok], stbd[ok])[0, 1]
+        mirrored = np.corrcoef(port[ok][::-1], stbd[ok])[0, 1]
+        assert same > 0.5 and same > mirrored, (fk, same, mirrored)
 
 
 @pytest.mark.parametrize("path", FAST_PARAMS)
