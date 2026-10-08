@@ -13,7 +13,7 @@ import pytest
 
 matplotlib.use("Agg")
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
 from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
 
 

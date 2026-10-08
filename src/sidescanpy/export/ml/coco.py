@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from sidescanpy.targets.core import CONFIDENCE_RANK, Target, bbox_from_center, clip_bbox
+from sidescanpy.core.target import CONFIDENCE_RANK, Target, bbox_from_center, clip_bbox
 
 logger = logging.getLogger(__name__)
 

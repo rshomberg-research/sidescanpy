@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 from pyproj import CRS
 
+from sidescanpy.core.target import Target
 from sidescanpy.processing.track import SurveyTrack
-from sidescanpy.targets.core import Target
 from sidescanpy.viz.targets import plot_target_position_scatter, plot_track_with_targets
 
 

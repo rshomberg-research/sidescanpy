@@ -4,9 +4,9 @@
 
 import pytest
 
-from sidescanpy.targets.core import Target
-from sidescanpy.targets.interchange.coco import CocoImageEntry
-from sidescanpy.targets.interchange.yolo import write_yolo
+from sidescanpy.core.target import Target
+from sidescanpy.export.ml.coco import CocoImageEntry
+from sidescanpy.export.ml.yolo import write_yolo
 
 
 def _entry(

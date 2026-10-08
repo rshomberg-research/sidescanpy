@@ -10,6 +10,8 @@ Public types
   validated ``xr.Dataset``.
 - :class:`SideScanSurvey` — multi-frequency container with optional
   navigation, attitude, DVL, and sensor auxiliary records.
+- :class:`Target` — format-agnostic sonar contact (see
+  :mod:`sidescanpy.core.target`).
 
 Validation is provided through xarray accessors:
 
@@ -74,6 +76,13 @@ from sidescanpy.core.survey import (
     SideScanFrequencyChannel,
     SideScanSurvey,
 )
+from sidescanpy.core.target import (
+    CONFIDENCE_RANK,
+    PositionConfidence,
+    Target,
+    bbox_from_center,
+    clip_bbox,
+)
 
 __all__ = [
     "BUILTIN_STEPS",
@@ -109,4 +118,9 @@ __all__ = [
     "make_empty_attitude_record",
     "make_empty_dvl_record",
     "make_empty_sensor_record",
+    "CONFIDENCE_RANK",
+    "PositionConfidence",
+    "Target",
+    "bbox_from_center",
+    "clip_bbox",
 ]

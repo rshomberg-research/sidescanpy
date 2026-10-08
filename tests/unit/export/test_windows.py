@@ -5,6 +5,7 @@
 import numpy as np
 import pytest
 
+from sidescanpy.core.target import Target
 from sidescanpy.export.windows import (
     WindowExtent,
     extract_chip,
@@ -14,7 +15,6 @@ from sidescanpy.export.windows import (
     sample_negative_window,
     targets_within_window,
 )
-from sidescanpy.targets.core import Target
 
 
 def _target(target_id, row, col):
@@ -106,7 +106,7 @@ class TestResizeTo:
         # fix is stretch-then-resize, not resize-then-stretch. This proves
         # resize_to itself is a pure resize (no renormalization), so a
         # caller doing stretch-then-resize actually gets what it stretched.
-        from sidescanpy.export.eightbit import to_uint8
+        from sidescanpy.export.image import to_uint8
 
         rng = np.random.default_rng(0)
         native = rng.integers(0, 65535, size=(200, 200), dtype=np.uint16)

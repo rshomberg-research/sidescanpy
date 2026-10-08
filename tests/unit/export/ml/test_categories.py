@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from sidescanpy.targets.core import Target
-from sidescanpy.targets.interchange.coco import CocoImageEntry, write_coco
-from sidescanpy.targets.interchange.yolo import write_yolo
+from sidescanpy.core.target import Target
+from sidescanpy.export.ml.coco import CocoImageEntry, write_coco
+from sidescanpy.export.ml.yolo import write_yolo
 from sidescanpy.targets.io import (
     read_targets_csv,
     read_targets_json,

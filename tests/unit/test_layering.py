@@ -25,11 +25,7 @@ _ROOT_CORE = {"log", "_version", "__init__"}
 
 # (importing module, imported package) pairs that violate the order and are
 # known / out of scope for now. Keep as small as possible.
-_KNOWN_VIOLATIONS = {
-    # Catalog readers build the format-agnostic Target dataclass (targets.core is numpy-only).
-    ("io.jsf.targets", "targets"),
-    ("io.sdf.targets", "targets"),
-}
+_KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
 
 
 def _package_of(parts: list[str]) -> str | None:

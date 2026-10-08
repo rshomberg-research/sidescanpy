@@ -22,10 +22,10 @@ from PIL import Image
 from sidescanpy.cli import export
 from sidescanpy.core import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.processing import correct_survey
 from sidescanpy.processing.geometric import compute_geometric_ranges
-from sidescanpy.targets.core import Target
 from sidescanpy.targets.io import write_targets_json
 from tests.conftest import make_minimal_sidescan_dataset
 
@@ -673,162 +673,6 @@ class TestOrientGeoWindow:
         np.testing.assert_array_equal(oriented[:, 0], grid_port[::-1, :][:, -1])
 
 
-class TestCorrelateTarget:
-    """Regression: lots of "no ss_h5 ping within 25.0m of its
-    recorded position" warnings, and some targets missing from chip
-    output entirely -- traced to _correlate_target requiring a GPS
-    lat/lon match for *every* target, silently dropping any target with
-    no recorded GPS position (or one that doesn't match closely enough)
-    even when its real, already-known ping position (e.g. from a pixel-
-    based source catalog like a vendor HDF5 target catalog) was sitting
-    right there on the object. These test the fallback directly against
-    a hand-built index, rather than only indirectly through run_chip."""
-
-    def _index(self, *, lat, lon, n_pings, freq_key="hz_1495000", sample_interval_m=0.05, n_samples=1000, ping_start=0):
-        return {
-            Path("a.ss.h5"): {
-                freq_key: {
-                    "lat": np.asarray(lat, dtype=float),
-                    "lon": np.asarray(lon, dtype=float),
-                    "sample_interval_m": sample_interval_m,
-                    "n_samples": n_samples,
-                    "n_pings": n_pings,
-                    "ping_start": ping_start,
-                }
-            }
-        }
-
-    def test_gps_match_within_range_unchanged(self):
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=float(lat[10]), longitude=float(lon[10]))
-
-        result = export._correlate_target(t, index, max_dist_m=25.0)
-
-        assert result is not None
-        path, freq_key, ping_idx, dist_m = result
-        assert ping_idx == 10
-        assert dist_m < 1.0
-
-    def test_no_gps_falls_back_to_known_ping(self):
-        """The exact reported bug: no recorded GPS position at all, but a
-        real, already-known ping -- must now match instead of being
-        silently dropped."""
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
-
-        result = export._correlate_target(t, index, max_dist_m=25.0)
-
-        assert result is not None
-        path, freq_key, ping_idx, dist_m = result
-        assert ping_idx == 7
-        assert dist_m == 0.0
-
-    def test_gps_too_far_falls_back_to_known_ping(self):
-        """Recorded GPS position exists but doesn't land within
-        max_dist_m of the survey's own track (e.g. a less precise/
-        independent positioning system) -- ping fallback still rescues
-        it rather than dropping it."""
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=41.0, longitude=-71.0, ping=7)
-
-        result = export._correlate_target(t, index, max_dist_m=25.0)
-
-        assert result is not None
-        assert result[2] == 7
-        assert result[3] == 0.0
-
-    def test_ping_out_of_range_returns_none(self):
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=500)
-
-        assert export._correlate_target(t, index, max_dist_m=25.0) is None
-
-    def test_no_position_at_all_returns_none(self):
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=None)
-
-        assert export._correlate_target(t, index, max_dist_m=25.0) is None
-
-    def test_ambiguous_ping_across_multiple_files_returns_none_not_a_guess(self):
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20)
-        index[Path("b.ss.h5")] = {
-            "hz_1495000": {
-                "lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000,
-                "n_pings": 20, "ping_start": 0,
-            },
-        }
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
-
-        assert export._correlate_target(t, index, max_dist_m=25.0) is None
-
-    def test_ping_fallback_uses_global_ping_start_not_local_zero_based_index(self):
-        """Real bug, found 2026-09-27 from a downstream consumer's
-        multi-part-converted mission: every target failed to correlate
-        (all "no ss_h5 ping within Nm" warnings) once a survey's own
-        ping/ping_number coordinate stopped starting at 0 for every file
-        -- true for ANY directory of several globally-renumbered .ss.h5
-        files (segment's own sectionN.ss.h5 outputs already do this,
-        not just the new per-source-file conversion output that
-        triggered this report). The old `0 <= target.ping < n_pings`
-        check silently assumed every file's own ping axis is locally
-        zero-based, which was only ever true for a single, lone file."""
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        # This file covers mission-global pings [100, 120) -- NOT [0, 20).
-        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=100)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=107)
-
-        result = export._correlate_target(t, index, max_dist_m=25.0)
-
-        assert result is not None
-        path, freq_key, ping_idx, dist_m = result
-        assert ping_idx == 7  # 107 - ping_start(100) -- the correct LOCAL array index
-        assert dist_m == 0.0
-
-    def test_ping_fallback_global_ping_before_this_files_range_returns_none(self):
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=100)
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
-
-        assert export._correlate_target(t, index, max_dist_m=25.0) is None
-
-    def test_ping_fallback_across_two_globally_offset_files_picks_the_right_one(self):
-        """The real multi-part scenario: two files, each internally
-        zero-based-*looking* by n_pings alone, but covering disjoint
-        global ping ranges -- exactly one must claim a given global
-        ping, at the right LOCAL index within it."""
-        lat = np.linspace(40.0, 40.001, 20)
-        lon = np.linspace(-70.0, -70.001, 20)
-        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=0)
-        index[Path("b.ss.h5")] = {
-            "hz_1495000": {
-                "lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000,
-                "n_pings": 20, "ping_start": 20,
-            },
-        }
-        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=25)
-
-        result = export._correlate_target(t, index, max_dist_m=25.0)
-
-        assert result is not None
-        path, freq_key, ping_idx, dist_m = result
-        assert path == Path("b.ss.h5")
-        assert ping_idx == 5  # 25 - ping_start(20)
-
-
 class TestRunChip:
     def _args(self, tmp_path, ss_h5_dir, targets_json, **overrides):
         defaults = dict(
@@ -1404,7 +1248,7 @@ class TestRunChip:
     def test_geometric_level_out_of_bounds_sample_skips_gracefully(self, tmp_path, swath_ss_h5_dir):
         """Real crash found running this against real Klein SDF data: a
         target whose catalog entry carries no ping_meters_per_sample
-        (_match_frequency then picks a frequency arbitrarily) can be
+        (match_frequency then picks a frequency arbitrarily) can be
         correlated to a channel whose own sample count is smaller than
         the sample index the target's position was originally captured
         against elsewhere -- an exact .isel(sample=t.sample) then raised
@@ -1785,7 +1629,7 @@ class TestChipCategories:
         import argparse
 
         from sidescanpy.cli.export import run_chip
-        from sidescanpy.targets.core import Target
+        from sidescanpy.core.target import Target
         from sidescanpy.targets.io import write_targets_json
 
         tj = tmp_path / "t.json"

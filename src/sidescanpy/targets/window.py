@@ -3,7 +3,7 @@ Target-window correction: TVG then display orientation.
 
 Composes the decode-only reader in :mod:`sidescanpy.io.jsf.targets` with
 :func:`~sidescanpy.processing.radiometric.apply_tvg_to_amplitude` and
-:func:`~sidescanpy.targets.core.orient_for_display`.
+:func:`~sidescanpy.targets.display.orient_for_display`.
 
 2026 rshomberg@uri.edu
 """
@@ -12,9 +12,10 @@ import logging
 
 import numpy as np
 
+from sidescanpy.core.target import Target
 from sidescanpy.io.jsf.targets import decode_target_window
 from sidescanpy.processing.radiometric import apply_tvg_to_amplitude
-from sidescanpy.targets.core import Target, orient_for_display
+from sidescanpy.targets.display import orient_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,12 @@ def decode_and_correct_window(target: Target, *, freq_hz: float) -> tuple[np.nda
     TVG -> orient-for-display chain used everywhere this project renders
     a target crop.
 
-    Deliberately does not apply ``targets.core.detrend_by_range``: the
+    Deliberately does not apply ``targets.display.detrend_by_range``: the
     per-column median swing it subtracts (3-12 dB on real crops) is
     present whether or not a target is there, so it mostly flattens real
     seafloor texture at crop scale rather than correcting a range residual.
     ``detrend_by_range`` remains available in
-    ``targets.core`` for any caller that wants it.
+    ``targets.display`` for any caller that wants it.
 
     Lives here (not in ``io.jsf.targets``) because TVG is a processing
     step; ``io`` only decodes. Not re-exported from ``sidescanpy.targets``

@@ -10,10 +10,10 @@ import pytest
 from PIL import Image
 
 from sidescanpy.cli import _figures
+from sidescanpy.core.target import Target
 from sidescanpy.grids.definition import GridDefinition
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.processing.track import SurveyTrack
-from sidescanpy.targets.core import Target
 
 
 @pytest.fixture

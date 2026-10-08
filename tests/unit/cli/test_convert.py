@@ -16,8 +16,8 @@ import argparse
 import pytest
 
 from sidescanpy.cli import convert
+from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import read_survey
-from sidescanpy.targets.core import Target
 from sidescanpy.targets.io import read_targets_csv, read_targets_json
 
 

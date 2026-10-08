@@ -22,9 +22,9 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from pyproj import CRS
 
+from sidescanpy.core.target import Target
 from sidescanpy.grids.raster import SideScanGriddedRaster
 from sidescanpy.processing.track import SurveyTrack
-from sidescanpy.targets.core import Target
 from sidescanpy.viz.gridded import plot_gridded_raster
 from sidescanpy.viz.targets import plot_target_position_scatter, plot_track_with_targets
 from sidescanpy.viz.track import plot_track_and_scanlines

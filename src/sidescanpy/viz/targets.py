@@ -3,9 +3,9 @@ Survey track + scan-lines with target catalog positions overlaid.
 
 Builds on ``viz/track.py``'s ``plot_track_and_scanlines`` (with the
 track from ``sidescanpy.processing.build_survey_track``), adding a scatter of target positions (a list of
-``sidescanpy.targets.core.Target``) projected into the same CRS as the
+``sidescanpy.core.target.Target``) projected into the same CRS as the
 track. Kept in its own module rather than folded into ``viz/track.py``
-because it needs ``targets.core.Target`` — matches the existing
+because it needs ``core.target.Target`` — matches the existing
 ``viz/contact_sheet.py`` precedent of keeping that dependency isolated
 from the modules that don't need it.
 
@@ -20,8 +20,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pyproj import CRS, Transformer
 
+from sidescanpy.core.target import Target
 from sidescanpy.processing.track import SurveyTrack
-from sidescanpy.targets.core import Target
 from sidescanpy.viz.track import plot_track_and_scanlines
 
 logger = logging.getLogger(__name__)

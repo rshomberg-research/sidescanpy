@@ -1,7 +1,7 @@
 """
 YOLO-format export for sonar targets.
 
-Mirrors ``interchange/coco.py``'s ``write_coco`` — same input
+Mirrors ``export/ml/coco.py``'s ``write_coco`` — same input
 (``CocoImageEntry`` list, despite the name it's just "one target's
 canonical crop", not COCO-specific), same ``min_confidence`` gating, same
 placeholder ``box_size`` caveat (no measured target dimension exists in
@@ -16,8 +16,8 @@ much beyond "filter, then compute a box".
 import logging
 from pathlib import Path
 
-from sidescanpy.targets.core import CONFIDENCE_RANK, bbox_from_center, clip_bbox
-from sidescanpy.targets.interchange.coco import CocoImageEntry, resolve_categories
+from sidescanpy.core.target import CONFIDENCE_RANK, bbox_from_center, clip_bbox
+from sidescanpy.export.ml.coco import CocoImageEntry, resolve_categories
 
 logger = logging.getLogger(__name__)
 

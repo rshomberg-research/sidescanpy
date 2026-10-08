@@ -53,7 +53,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
 
 logger = logging.getLogger(__name__)
 

@@ -1,45 +1,13 @@
 """
+Unit tests for sidescanpy.targets.display.
+
 2026 rshomberg@uri.edu
 """
 
 import numpy as np
 
-from sidescanpy.targets.core import (
-    Target,
-    detrend_by_range,
-    orient_for_display,
-    project_target_to_frequency,
-)
-
-
-def test_defaults_are_none_or_empty():
-    t = Target(target_id="1", source_format="jsf_discover", catalog_source="Target-0001.target")
-    assert t.ping is None
-    assert t.bbox is None
-    assert t.position_confidence == "unknown"
-    assert t.label is None
-    assert t.extra_attributes == {}
-
-
-def test_full_native_and_pixel_fields():
-    t = Target(
-        target_id="1",
-        source_format="jsf_discover",
-        catalog_source="Target-0001.target",
-        pick_timestamp=1234.5,
-        ping=5300,
-        channel=0,
-        sample=1854,
-        latitude=41.60784,
-        longitude=-71.39521,
-        image_id="target_0001.png",
-        bbox=(1834.0, 80.0, 40.0, 40.0),
-        position_confidence="verified",
-        label=None,
-        extra_attributes={"note": "clean window"},
-    )
-    assert t.bbox == (1834.0, 80.0, 40.0, 40.0)
-    assert t.position_confidence == "verified"
+from sidescanpy.core.target import Target
+from sidescanpy.targets.display import detrend_by_range, orient_for_display
 
 
 def _make_target(channel, sample=1854, window_row=1, **kwargs):
@@ -167,58 +135,3 @@ class TestDetrendByRange:
         window = np.random.rand(7, 13)
         result = detrend_by_range(window)
         assert result.shape == window.shape
-
-
-class TestProjectTargetToFrequency:
-    def _target(self, **overrides):
-        defaults = dict(
-            target_id="1", source_format="jsf_discover", catalog_source="x",
-            ping=100, channel=1, sample=500, position_confidence="verified",
-        )
-        defaults.update(overrides)
-        return Target(**defaults)
-
-    def test_converts_via_physical_slant_range(self):
-        # HF: 0.0137 m/sample: sample 500 -> 6.85m. LF: 0.0233 m/sample
-        # -> 6.85 / 0.0233 = 294 (rounded).
-        t = self._target(sample=500)
-        result = project_target_to_frequency(t, source_mps=0.0137, target_mps=0.0233)
-        assert result.sample == round(500 * 0.0137 / 0.0233)
-
-    def test_ping_and_channel_unchanged(self):
-        t = self._target(ping=4321, channel=0)
-        result = project_target_to_frequency(t, source_mps=0.01, target_mps=0.02)
-        assert result.ping == 4321
-        assert result.channel == 0
-
-    def test_records_source_mps_in_extra_attributes(self):
-        t = self._target()
-        result = project_target_to_frequency(t, source_mps=0.0137, target_mps=0.0233)
-        assert result.extra_attributes["projected_from_mps"] == 0.0137
-
-    def test_identity_when_source_equals_target_mps(self):
-        t = self._target(sample=777)
-        result = project_target_to_frequency(t, source_mps=0.02, target_mps=0.02)
-        assert result.sample == 777
-
-    def test_none_sample_returns_none(self):
-        t = self._target(sample=None)
-        assert project_target_to_frequency(t, source_mps=0.01, target_mps=0.02) is None
-
-    def test_out_of_bounds_projection_returns_none_not_clamped(self):
-        # A target near the source channel's own far range can project
-        # past a shorter-range target channel's own recorded window --
-        # must be reported as unavailable, not silently clamped in.
-        t = self._target(sample=4000)
-        result = project_target_to_frequency(t, source_mps=0.02, target_mps=0.02, n_samples=3896)
-        assert result is None
-
-    def test_within_bounds_projection_not_none(self):
-        t = self._target(sample=100)
-        result = project_target_to_frequency(t, source_mps=0.02, target_mps=0.02, n_samples=3896)
-        assert result is not None
-
-    def test_n_samples_none_skips_bounds_check(self):
-        t = self._target(sample=999999)
-        result = project_target_to_frequency(t, source_mps=1.0, target_mps=1.0, n_samples=None)
-        assert result is not None

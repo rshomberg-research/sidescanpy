@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from sidescanpy.targets.core import Target
-from sidescanpy.targets.interchange.coco import CocoImageEntry, write_coco
+from sidescanpy.core.target import Target
+from sidescanpy.export.ml.coco import CocoImageEntry, write_coco
 
 
 def _entry(

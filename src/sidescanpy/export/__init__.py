@@ -2,7 +2,7 @@
 Dataset-export primitives for SideScan sonar surveys.
 
 Distinct from ``processing/`` (physical corrections: TVG, geometric
-ranges, georeferencing) and ``targets/interchange/`` (ML annotation
+ranges, georeferencing) and ``export/ml/`` (ML annotation
 file formats): this package turns an already-corrected survey channel
 into 8-bit training-dataset images — chips or full-channel views,
 optionally reprojected into geometric or georeferenced meters — plus
@@ -28,14 +28,6 @@ Public entry points
 2026 rshomberg@uri.edu
 """
 
-from sidescanpy.export.eightbit import (
-    ReferenceStats,
-    ReversalMetadata,
-    compute_reference_stats,
-    from_uint8,
-    to_uint8,
-    to_uint16,
-)
 from sidescanpy.export.geometric_window import (
     extract_geometric_window,
     extract_geometric_window_binned,
@@ -44,6 +36,14 @@ from sidescanpy.export.geometric_window import (
 from sidescanpy.export.geometric_window import locate_point as locate_point_geometric
 from sidescanpy.export.georef_window import extract_georef_window
 from sidescanpy.export.georef_window import locate_point as locate_point_georef
+from sidescanpy.export.image import (
+    ReferenceStats,
+    ReversalMetadata,
+    compute_reference_stats,
+    from_uint8,
+    to_uint8,
+    to_uint16,
+)
 from sidescanpy.export.windows import (
     WindowExtent,
     extract_chip,

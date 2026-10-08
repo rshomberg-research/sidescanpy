@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 
-from sidescanpy.export.eightbit import compute_reference_stats, from_uint8, to_uint8, to_uint16
+from sidescanpy.export.image import compute_reference_stats, from_uint8, to_uint8, to_uint16
 
 
 class TestToUint8:

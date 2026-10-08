@@ -15,7 +15,7 @@ import logging
 from dataclasses import asdict
 from pathlib import Path
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
 
 logger = logging.getLogger(__name__)
 

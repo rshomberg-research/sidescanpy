@@ -13,11 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.io.sdf.targets import read_klein_targets
-from sidescanpy.targets.core import Target
 from sidescanpy.targets.correlate import (
     calibrate_clock_offset,
+    correlate_target,
+    project_target_to_frequency,
     resolve_target_position,
     resolve_targets_nearest_ping,
     resolve_targets_offset_corrected,
@@ -220,3 +222,198 @@ class TestResolveTargetsNearestPing:
         resolved = resolve_targets_nearest_ping([target], tmp_path, max_time_delta_s=300.0)[0]
         assert resolved.latitude == pytest.approx(float(near_ds["latitude"].values[3]))
         assert resolved.longitude == pytest.approx(float(near_ds["longitude"].values[3]))
+
+
+class TestProjectTargetToFrequency:
+    def _target(self, **overrides):
+        defaults = dict(
+            target_id="1", source_format="jsf_discover", catalog_source="x",
+            ping=100, channel=1, sample=500, position_confidence="verified",
+        )
+        defaults.update(overrides)
+        return Target(**defaults)
+
+    def test_converts_via_physical_slant_range(self):
+        # HF: 0.0137 m/sample: sample 500 -> 6.85m. LF: 0.0233 m/sample
+        # -> 6.85 / 0.0233 = 294 (rounded).
+        t = self._target(sample=500)
+        result = project_target_to_frequency(t, source_mps=0.0137, target_mps=0.0233)
+        assert result.sample == round(500 * 0.0137 / 0.0233)
+
+    def test_ping_and_channel_unchanged(self):
+        t = self._target(ping=4321, channel=0)
+        result = project_target_to_frequency(t, source_mps=0.01, target_mps=0.02)
+        assert result.ping == 4321
+        assert result.channel == 0
+
+    def test_records_source_mps_in_extra_attributes(self):
+        t = self._target()
+        result = project_target_to_frequency(t, source_mps=0.0137, target_mps=0.0233)
+        assert result.extra_attributes["projected_from_mps"] == 0.0137
+
+    def test_identity_when_source_equals_target_mps(self):
+        t = self._target(sample=777)
+        result = project_target_to_frequency(t, source_mps=0.02, target_mps=0.02)
+        assert result.sample == 777
+
+    def test_none_sample_returns_none(self):
+        t = self._target(sample=None)
+        assert project_target_to_frequency(t, source_mps=0.01, target_mps=0.02) is None
+
+    def test_out_of_bounds_projection_returns_none_not_clamped(self):
+        # A target near the source channel's own far range can project
+        # past a shorter-range target channel's own recorded window --
+        # must be reported as unavailable, not silently clamped in.
+        t = self._target(sample=4000)
+        result = project_target_to_frequency(t, source_mps=0.02, target_mps=0.02, n_samples=3896)
+        assert result is None
+
+    def test_within_bounds_projection_not_none(self):
+        t = self._target(sample=100)
+        result = project_target_to_frequency(t, source_mps=0.02, target_mps=0.02, n_samples=3896)
+        assert result is not None
+
+    def test_n_samples_none_skips_bounds_check(self):
+        t = self._target(sample=999999)
+        result = project_target_to_frequency(t, source_mps=1.0, target_mps=1.0, n_samples=None)
+        assert result is not None
+
+
+class TestCorrelateTarget:
+    """Position match first, then fall back to the target's own ping."""
+
+    def _index(self, *, lat, lon, n_pings, freq_key="hz_1495000", sample_interval_m=0.05, n_samples=1000, ping_start=0):
+        return {
+            Path("a.ss.h5"): {
+                freq_key: {
+                    "lat": np.asarray(lat, dtype=float),
+                    "lon": np.asarray(lon, dtype=float),
+                    "sample_interval_m": sample_interval_m,
+                    "n_samples": n_samples,
+                    "n_pings": n_pings,
+                    "ping_start": ping_start,
+                }
+            }
+        }
+
+    def test_gps_match_within_range_unchanged(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=float(lat[10]), longitude=float(lon[10]))
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert ping_idx == 10
+        assert dist_m < 1.0
+
+    def test_no_gps_falls_back_to_known_ping(self):
+        """The exact reported bug: no recorded GPS position at all, but a
+        real, already-known ping -- must now match instead of being
+        silently dropped."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert ping_idx == 7
+        assert dist_m == 0.0
+
+    def test_gps_too_far_falls_back_to_known_ping(self):
+        """Recorded GPS position exists but doesn't land within
+        max_dist_m of the survey's own track (e.g. a less precise/
+        independent positioning system) -- ping fallback still rescues
+        it rather than dropping it."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=41.0, longitude=-71.0, ping=7)
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        assert result[2] == 7
+        assert result[3] == 0.0
+
+    def test_ping_out_of_range_returns_none(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=500)
+
+        assert correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_no_position_at_all_returns_none(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=None)
+
+        assert correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_ambiguous_ping_across_multiple_files_returns_none_not_a_guess(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        index[Path("b.ss.h5")] = {
+            "hz_1495000": {
+                "lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000,
+                "n_pings": 20, "ping_start": 0,
+            },
+        }
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
+
+        assert correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_ping_fallback_uses_global_ping_start_not_local_zero_based_index(self):
+        """A file's ping axis need not start at 0 (globally renumbered
+        files), so a target's global ping must be offset by ``ping_start``."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        # This file covers mission-global pings [100, 120) -- NOT [0, 20).
+        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=100)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=107)
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert ping_idx == 7  # 107 - ping_start(100) -- the correct LOCAL array index
+        assert dist_m == 0.0
+
+    def test_ping_fallback_global_ping_before_this_files_range_returns_none(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=100)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=7)
+
+        assert correlate_target(t, index, max_dist_m=25.0) is None
+
+    def test_ping_fallback_across_two_globally_offset_files_picks_the_right_one(self):
+        """The real multi-part scenario: two files, each internally
+        zero-based-*looking* by n_pings alone, but covering disjoint
+        global ping ranges -- exactly one must claim a given global
+        ping, at the right LOCAL index within it."""
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        index = self._index(lat=lat, lon=lon, n_pings=20, ping_start=0)
+        index[Path("b.ss.h5")] = {
+            "hz_1495000": {
+                "lat": lat.copy(), "lon": lon.copy(), "sample_interval_m": 0.05, "n_samples": 1000,
+                "n_pings": 20, "ping_start": 20,
+            },
+        }
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=None, longitude=None, ping=25)
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        path, freq_key, ping_idx, dist_m = result
+        assert path == Path("b.ss.h5")
+        assert ping_idx == 5  # 25 - ping_start(20)

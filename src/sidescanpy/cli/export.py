@@ -107,6 +107,7 @@ from sidescanpy.export import (
     to_uint8,
     to_uint16,
 )
+from sidescanpy.export.ml import CocoImageEntry, write_coco, write_yolo
 from sidescanpy.grids import (
     ResamplingMethod,
     bbox_from_channel_dataset,
@@ -120,8 +121,11 @@ from sidescanpy.processing.inversion import UNCORRECTED_VAR, uncorrected_backsca
 from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
 from sidescanpy.processing.track import build_survey_track
-from sidescanpy.targets.core import project_target_to_frequency
-from sidescanpy.targets.interchange import CocoImageEntry, write_coco, write_yolo
+from sidescanpy.targets.correlate import (
+    build_position_index,
+    correlate_target,
+    project_target_to_frequency,
+)
 from sidescanpy.targets.io import read_targets_json
 
 logger = logging.getLogger(__name__)
@@ -286,7 +290,7 @@ def run_waterfall(args: argparse.Namespace) -> int:
             )
             return 1
         targets = read_targets_json(args.targets_json)
-        index = _build_position_index(args.ss_h5_dir)
+        index = build_position_index(args.ss_h5_dir)
 
     files = sorted(args.ss_h5_dir.glob("*.ss.h5"))
     if not files:
@@ -310,7 +314,7 @@ def run_waterfall(args: argparse.Namespace) -> int:
     # rendered frequency, not just the one it happened to be picked on.
     matched = []
     for t in targets:
-        m = _correlate_target(t, index, args.max_match_dist_m)
+        m = correlate_target(t, index, args.max_match_dist_m)
         if m is not None:
             matched.append((t,) + m)  # (t, path, native_freq_key, local_ping, dist_m)
     if targets:
@@ -536,119 +540,6 @@ def _reference_stats_for_scope(scope: str, arrays: list[np.ndarray], pct_low: fl
     if scope == "shared":
         return compute_reference_stats(*arrays, pct_low=pct_low, pct_high=pct_high)
     raise ValueError(f"unknown --normalization-scope: {scope!r}")
-
-
-def _build_position_index(ss_h5_dir: Path) -> dict[Path, dict]:
-    """For every ``.ss.h5`` in ``ss_h5_dir``, cache each frequency
-    channel's per-ping lat/lon and computed sample interval (meters per
-    sample, at the standard 1500 m/s fallback whenever ``sound_vel_ms``
-    isn't usable — matching ``compute_geometric_ranges``'s own fallback)
-    — used to locate a cataloged target's real position and match it to
-    the right frequency channel.
-    """
-    index = {}
-    for path in sorted(ss_h5_dir.glob("*.ss.h5")):
-        # chunks= keeps this lazy (dask-backed) -- large surveys' .ss.h5
-        # files carry raw+intensity+geometric+georef arrays together
-        # (10x+ the base backscatter size); read_survey(chunks=None)
-        # loads that eagerly, which is real memory risk on a
-        # multi-gigabyte file when only tiny per-ping lat/lon is needed
-        # here.
-        survey = read_survey(path, chunks={"ping": 512})
-        channels = {}
-        for freq_key, ch in survey.freq_channels.items():
-            ds = ch.dataset
-            sound_vel = float(ds["sound_vel_ms"].values[0])
-            if not np.isfinite(sound_vel) or sound_vel <= 0:
-                sound_vel = 1500.0
-            sample_interval_m = sound_vel / (2.0 * float(ds.attrs["sample_rate_hz"]))
-            channels[freq_key] = {
-                "lat": ds["latitude"].values.astype(float),
-                "lon": ds["longitude"].values.astype(float),
-                "sample_interval_m": sample_interval_m,
-                "n_samples": ds.sizes["sample"],
-                "n_pings": ds.sizes["ping"],
-                # This file's own first ping's value on the survey's
-                # MISSION-GLOBAL ping axis -- 0 for a lone/first file,
-                # but NOT always 0 for a directory of several .ss.h5
-                # files (segment's own sectionN.ss.h5 outputs, or any
-                # per-source-file conversion output that globally
-                # renumbers ping/ping_number across files) -- see
-                # _correlate_target's ping-fallback branch, which needs
-                # this to convert a target's global ping into the right
-                # LOCAL array index for this specific file.
-                "ping_start": int(ds["ping"].values[0]),
-            }
-        index[path] = channels
-    return index
-
-
-def _match_frequency(channels: dict, target_mps: float | None) -> str:
-    if target_mps is None:
-        return next(iter(channels))
-    return min(channels, key=lambda fk: abs(channels[fk]["sample_interval_m"] - target_mps))
-
-
-def _correlate_target(target, index: dict[Path, dict], max_dist_m: float):
-    """Find ``(ss_h5_path, freq_key, ping_idx, dist_m)`` for ``target`` by
-    matching its recorded lat/lon against every candidate file+frequency's
-    own per-ping track. Falls back to the target's own already-known
-    ``ping`` (see below) when GPS matching isn't available or fails.
-    Returns ``None`` if neither resolves it.
-
-    **Why this fallback exists**: some source catalogs give a target's
-    position directly as a pixel location (e.g. a vendor HDF5 format with
-    pixel-based target catalogs, read into ``Target.ping``/``.sample``
-    and already projected onto the survey's own global ping index) with no GPS lat/lon at all, or a lat/lon recorded by a less
-    precise/independent system than the sonar's own nav log. Requiring a
-    GPS match for *every* target silently dropped any target lacking a
-    close-enough (or any) recorded lat/lon, even though its real,
-    already-known ping position was sitting right there on the object --
-    "no ss_h5 ping within Nm of its recorded position" on a real
-    production run, for a target that in fact had no recorded *GPS*
-    position to compare against at all.
-
-    The ping-based fallback only fires when it's genuinely unambiguous:
-    exactly one ``(path, freq_key)`` in ``index`` has ``target.ping``
-    within its own recorded ping range. Zero matches (out of range
-    everywhere) or more than one (which file/channel the ping number
-    belongs to is actually ambiguous) both still return ``None`` rather
-    than guess -- this can only *add* matches GPS search was dropping,
-    never change what a successful GPS match already resolves to.
-    """
-    target_mps = target.extra_attributes.get("ping_meters_per_sample")
-    if target.latitude is not None and target.longitude is not None:
-        best = None
-        for path, channels in index.items():
-            freq_key = _match_frequency(channels, target_mps)
-            c = channels[freq_key]
-            d_m = np.sqrt((c["lat"] - target.latitude) ** 2 + (c["lon"] - target.longitude) ** 2) * 111000.0
-            idx = int(np.argmin(d_m))
-            if best is None or d_m[idx] < best[3]:
-                best = (path, freq_key, idx, float(d_m[idx]))
-        if best is not None and best[3] <= max_dist_m:
-            return best
-
-    if target.ping is not None:
-        candidates = []
-        for path, channels in index.items():
-            freq_key = _match_frequency(channels, target_mps)
-            c = channels[freq_key]
-            # target.ping is a MISSION-GLOBAL ping index (see module
-            # docstring / project_to_survey_pings) -- convert to this
-            # file's own LOCAL array index via its recorded ping_start,
-            # not a bare 0..n_pings-1 check, which silently assumed every
-            # file's own ping axis starts at 0 (true for a lone file, not
-            # true for a directory of several globally-renumbered files
-            # -- every target on a multi-part-converted mission
-            # failed to correlate at all).
-            local_idx = int(target.ping) - c["ping_start"]
-            if 0 <= local_idx < c["n_pings"]:
-                candidates.append((path, freq_key, local_idx, 0.0))
-        if len(candidates) == 1:
-            return candidates[0]
-
-    return None
 
 
 _CHIP_STYLES = ("chip", "single-swath", "dual-swath")
@@ -950,7 +841,7 @@ def _style_size_px(style: str, args: argparse.Namespace) -> int:
 
 
 def _orient_pixel_window(window: np.ndarray, co_targets: list, channel_idx: int, style: str) -> tuple[np.ndarray, list]:
-    """Match ``targets.core.orient_for_display``'s two display
+    """Match ``targets.display.orient_for_display``'s two display
     conventions (found by comparing rendered output against EdgeTech
     Discover's own target thumbnails) for a chip/full-swath export
     window, which — unlike ``orient_for_display`` itself — can carry
@@ -1212,7 +1103,7 @@ def _extract_geo_style_window(
     Also ``None`` if ``t.sample`` doesn't fit this *specific* channel's own
     sample axis -- real bug found running this against Klein SDF data: a
     target whose catalog entry carries no ``ping_meters_per_sample``
-    (``_match_frequency`` then has no basis to prefer one frequency
+    (``match_frequency`` then has no basis to prefer one frequency
     channel over another and picks arbitrarily) can be correlated to a
     frequency/file whose own sample count is smaller than the sample
     index the target's position was originally captured against on a
@@ -1445,11 +1336,11 @@ def run_chip(args: argparse.Namespace) -> int:
         if unknown:
             raise SystemExit(f"error: target categories {unknown} are not in --categories {categories}")
 
-    index = _build_position_index(args.ss_h5_dir)
+    index = build_position_index(args.ss_h5_dir)
 
     matched = []
     for t in targets:
-        m = _correlate_target(t, index, args.max_match_dist_m)
+        m = correlate_target(t, index, args.max_match_dist_m)
         if m is None:
             logger.warning(f"target {t.target_id}: no ss_h5 ping within {args.max_match_dist_m}m of its recorded position, skipping")
             continue
@@ -1967,12 +1858,12 @@ def run_progression(args: argparse.Namespace) -> None:
         want = 0 if args.channel == "port" else 1
         targets = [t for t in targets if t.channel == want]
 
-    index = _build_position_index(args.ss_h5_dir)
+    index = build_position_index(args.ss_h5_dir)
     file_n_pings = {path: max(len(c["lat"]) for c in channels.values()) for path, channels in index.items()}
 
     matched = []
     for t in targets:
-        m = _correlate_target(t, index, args.max_match_dist_m)
+        m = correlate_target(t, index, args.max_match_dist_m)
         if m is None:
             continue
         path, freq_key, ping_idx, _dist_m = m

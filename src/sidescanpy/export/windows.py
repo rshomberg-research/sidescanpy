@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from scipy.ndimage import zoom
 
-from sidescanpy.targets.core import Target
+from sidescanpy.core.target import Target
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ def extract_full_channel(
     """Full-sample-axis window spanning a fixed ping span, at native
     resolution — **not resized here**. Resize (via :func:`resize_to`)
     belongs *after* a photometric transform (e.g.
-    :func:`sidescanpy.export.eightbit.to_uint8`) has run on the full
+    :func:`sidescanpy.export.image.to_uint8`) has run on the full
     native-resolution values, not before it: computing a percentile
     stretch on an already-downsampled array measures the stretch against
     a blurred, artificially low-variance distribution and washes the
@@ -154,7 +154,7 @@ def extract_full_channel(
 
 def resize_to(image: np.ndarray, output_size_px: int) -> np.ndarray:
     """Resize an already-photometrically-transformed 2D image (e.g. the
-    uint8 output of :func:`sidescanpy.export.eightbit.to_uint8`) to a
+    uint8 output of :func:`sidescanpy.export.image.to_uint8`) to a
     square ``output_size_px x output_size_px`` — the deliberately-last
     step after :func:`extract_full_channel` + a percentile/gamma stretch,
     never before it (see that function's docstring for why the order

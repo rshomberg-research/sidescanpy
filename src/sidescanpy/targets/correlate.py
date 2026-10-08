@@ -4,7 +4,9 @@ Resolve target positions and clock offsets against converted ``.ss.h5`` files.
 Catalog formats that store no absolute position (the Klein ``.tgt`` reader in
 :mod:`sidescanpy.io.sdf.targets`) are located here by matching each target's
 pick timestamp against per-ping times of converted surveys, with optional
-constant clock-offset calibration and geodesic speed estimates.
+constant clock-offset calibration and geodesic speed estimates. Also
+provides position-based correlation of any target to a ping in a directory of
+converted surveys, and projection of a target onto another frequency channel.
 
 2026 rshomberg@uri.edu
 """
@@ -14,13 +16,14 @@ import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from pyproj import Geod
 
 from sidescanpy.core.survey import SideScanSurvey
+from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import read_survey
-from sidescanpy.targets.core import Target
 
 logger = logging.getLogger(__name__)
 
@@ -293,3 +296,179 @@ def resolve_targets_nearest_ping(
                         best, best_delta = candidate, delta
         resolved.append(best)
     return resolved
+
+
+def project_target_to_frequency(target: Target, source_mps: float, target_mps: float, *, n_samples: int | None = None) -> Target | None:
+    """Re-express ``target``'s position on a *different* frequency channel
+    of the same survey, using the one thing both channels share exactly:
+    the physical world.
+
+    A source catalog (EdgeTech Discover, Klein SonarWiz) only ever marks
+    a contact against the one frequency channel it was picked on — there
+    is no "also visible on the other channel" field. But ``ping`` (both
+    channels are pinged in lockstep — the same physical vessel position,
+    identical ping *count* per channel within one
+    file) and the physical slant range a sample represents
+    (``sample * meters_per_sample``) are both real, channel-independent
+    quantities. So the target's true position on the untagged channel is
+    recoverable: convert its sample index to a physical slant range using
+    the *source* channel's own meters/sample, then back to a sample index
+    using the *target* channel's — same ping, same side, no catalog entry
+    needed for that channel at all.
+
+    ``ping``/``channel``/every other field are carried through unchanged
+    (``replace``) — only ``sample`` moves, plus
+    ``extra_attributes["projected_from_mps"]`` recording the source
+    resolution, so a caller/renderer can tell a real catalog mark apart
+    from one recovered this way (e.g. to draw it with a different box
+    style) without losing the fact that it's the same real contact.
+
+    Returns ``None`` (not a clamped/guessed value) if the projected
+    sample would land at or past ``n_samples`` — a real, physical
+    consequence of the two channels recording different maximum ranges,
+    not a placement bug: the contact genuinely sits beyond the other
+    channel's recorded window and has no honest position to report
+    there. Only checked when ``n_samples`` is given.
+    """
+    if target.sample is None:
+        return None
+    slant_range_m = target.sample * source_mps
+    projected_sample = round(slant_range_m / target_mps)
+    if n_samples is not None and not (0 <= projected_sample < n_samples):
+        return None
+    return replace(
+        target,
+        sample=projected_sample,
+        extra_attributes={**target.extra_attributes, "projected_from_mps": source_mps},
+    )
+
+
+class PositionMatch(NamedTuple):
+    """Where a target falls in a set of converted surveys.
+
+    Attributes
+    ----------
+    path : Path
+        The ``.ss.h5`` file containing the matched ping.
+    freq_key : str
+        Frequency channel the match was made on.
+    ping_idx : int
+        Index along that file's own ping axis (file-local, not the
+        mission-global ping number).
+    dist_m : float
+        Distance from the target's recorded position to the ping, in meters;
+        ``0.0`` for a match made from ``Target.ping`` alone.
+    """
+
+    path: Path
+    freq_key: str
+    ping_idx: int
+    dist_m: float
+
+
+def build_position_index(ss_h5_dir: str | Path) -> dict[Path, dict]:
+    """Cache per-ping positions of every ``.ss.h5`` in ``ss_h5_dir``.
+
+    Parameters
+    ----------
+    ss_h5_dir : str or Path
+        Directory searched (non-recursively) for ``*.ss.h5``.
+
+    Returns
+    -------
+    dict
+        ``{path: {freq_key: info}}`` where ``info`` has ``lat``, ``lon``
+        (per-ping arrays), ``sample_interval_m`` (meters per sample, using
+        1500 m/s when ``sound_vel_ms`` is not a positive finite value),
+        ``n_samples``, ``n_pings`` and ``ping_start`` (the file's first value
+        on the mission-global ping axis; nonzero for files that continue a
+        global numbering). Surveys are read lazily so only the small
+        position arrays are loaded.
+    """
+    index = {}
+    for path in sorted(Path(ss_h5_dir).glob("*.ss.h5")):
+        survey = read_survey(path, chunks={"ping": 512})
+        channels = {}
+        for freq_key, ch in survey.freq_channels.items():
+            ds = ch.dataset
+            sound_vel = float(ds["sound_vel_ms"].values[0])
+            if not np.isfinite(sound_vel) or sound_vel <= 0:
+                sound_vel = 1500.0
+            sample_interval_m = sound_vel / (2.0 * float(ds.attrs["sample_rate_hz"]))
+            channels[freq_key] = {
+                "lat": ds["latitude"].values.astype(float),
+                "lon": ds["longitude"].values.astype(float),
+                "sample_interval_m": sample_interval_m,
+                "n_samples": ds.sizes["sample"],
+                "n_pings": ds.sizes["ping"],
+                "ping_start": int(ds["ping"].values[0]),
+            }
+        index[path] = channels
+    logger.debug(f"Built position index over {len(index)} file(s) in {ss_h5_dir}")
+    return index
+
+
+def match_frequency(channels: dict, target_mps: float | None) -> str:
+    """Pick the frequency key in ``channels`` whose sample interval is closest
+    to ``target_mps`` (meters per sample); the first key if ``target_mps`` is
+    ``None``.
+    """
+    if target_mps is None:
+        return next(iter(channels))
+    return min(channels, key=lambda fk: abs(channels[fk]["sample_interval_m"] - target_mps))
+
+
+def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float) -> PositionMatch | None:
+    """Locate ``target`` in the surveys described by ``index``.
+
+    The frequency channel is chosen per file with :func:`match_frequency`
+    using ``target.extra_attributes["ping_meters_per_sample"]`` when present.
+
+    Two strategies are tried in order:
+
+    1. **Position**: the nearest ping (planar approximation, 111 km/degree)
+       over all files, accepted if within ``max_dist_m``.
+    2. **Ping number** (only if step 1 fails or the target has no lat/lon):
+       ``target.ping`` is a mission-global ping number, converted to a
+       file-local index via each channel's ``ping_start``. Accepted only when
+       exactly one file's range contains it; zero or several candidates
+       return ``None`` rather than guess. This recovers catalogs that carry
+       only a pixel-derived ping and no (or a less precise) GPS position.
+
+    Parameters
+    ----------
+    target : Target
+    index : dict
+        From :func:`build_position_index`.
+    max_dist_m : float
+        Maximum distance for a position match.
+
+    Returns
+    -------
+    PositionMatch or None
+    """
+    target_mps = target.extra_attributes.get("ping_meters_per_sample")
+    if target.latitude is not None and target.longitude is not None:
+        best = None
+        for path, channels in index.items():
+            freq_key = match_frequency(channels, target_mps)
+            c = channels[freq_key]
+            d_m = np.sqrt((c["lat"] - target.latitude) ** 2 + (c["lon"] - target.longitude) ** 2) * 111000.0
+            idx = int(np.argmin(d_m))
+            if best is None or d_m[idx] < best.dist_m:
+                best = PositionMatch(path, freq_key, idx, float(d_m[idx]))
+        if best is not None and best.dist_m <= max_dist_m:
+            return best
+
+    if target.ping is not None:
+        candidates = []
+        for path, channels in index.items():
+            freq_key = match_frequency(channels, target_mps)
+            c = channels[freq_key]
+            local_idx = int(target.ping) - c["ping_start"]
+            if 0 <= local_idx < c["n_pings"]:
+                candidates.append(PositionMatch(path, freq_key, local_idx, 0.0))
+        if len(candidates) == 1:
+            return candidates[0]
+
+    return None

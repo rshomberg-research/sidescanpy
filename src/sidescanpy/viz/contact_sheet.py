@@ -18,7 +18,7 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from sidescanpy.targets.core import Target, bbox_from_center
+from sidescanpy.core.target import Target, bbox_from_center
 from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
