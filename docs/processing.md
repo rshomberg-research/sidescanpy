@@ -61,8 +61,14 @@ Steps run in the order given; respecting dependencies is the caller's job
 
 `apply_tvg` adds the two-way propagation loss back:
 
-- **Spreading:** `spreading_loss_db * log10(R)` (20 for spherical
-  spreading).
+- **Spreading:** `spreading_loss_db * log10(R)`. The default, 40, is
+  two-way spherical spreading. 30 is a common sidescan alternative: the
+  insonified seafloor patch grows in proportion to range, adding back
+  10 log R (e.g. [J. Mar. Sci. Eng. 2017, 5(4), 54](https://www.mdpi.com/2077-1312/5/4/54)).
+  Which fits real data is open; measure it per survey with
+  `analysis.fit_range_decay` and set the coefficient in the config. 20
+  (one-way spreading) was the default before 0.7.0; files corrected with
+  it record 20 in their history, so `invert()` still undoes them exactly.
 - **Absorption:** `2 * alpha * R`. When `absorption_db_per_m` is not given,
   alpha comes from the Francois-Garrison model for the channel's
   frequency (`francois_garrison_absorption_db_per_m`), using

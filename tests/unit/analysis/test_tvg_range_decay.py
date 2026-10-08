@@ -25,7 +25,7 @@ class TestFitRangeDecay:
 
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
 
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
@@ -44,7 +44,7 @@ class TestFitRangeDecay:
         ds = compute_geometric_ranges(ds)
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
@@ -176,7 +176,7 @@ class TestFitRangeDecay:
 
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
@@ -468,7 +468,7 @@ class TestFitRangeDecay:
         ds = compute_geometric_ranges(ds)
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         ref = np.nanmin(loss_db[np.isfinite(loss_db)])
@@ -546,7 +546,7 @@ class TestFitRangeDecay:
 
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
@@ -584,7 +584,7 @@ class TestFitRangeDecay:
 
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
@@ -608,7 +608,7 @@ class TestFitRangeDecay:
 
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)
@@ -646,7 +646,7 @@ class TestFitRangeDecay:
 
         freq_hz = float(ds.attrs["freq_hz_start"])
         alpha = absorption_for_frequency(freq_hz)
-        params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=alpha)
+        params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=alpha)
         ground_range = ds["ground_range_m"].values
         loss_db = tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
         amplitude = 10.0 ** (-(loss_db - loss_db[np.isfinite(loss_db)].min()) / 20.0)

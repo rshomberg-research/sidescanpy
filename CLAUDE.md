@@ -169,6 +169,9 @@ not in the repo; they skip without them.
   spreading or both TVG terms were applied in hardware. Measure per survey
   with `analysis.fit_range_decay` and turn TVG terms off accordingly; do
   not assume.
+- **TVG spreading coefficient is unsettled.** The default is 40 log R
+  (two-way spherical); 30 log R (insonified area grows with range) may fit
+  sidescan better. `spreading_loss_db` sets it; compare both per survey.
 - **Klein SDF depth is NaN.** Depth is a sensor voltage; the calibration
   lives in companion INI files that are not parsed.
 - **Sound velocity.** Zero or missing values fall back to 1500 m/s

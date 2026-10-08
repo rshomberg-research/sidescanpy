@@ -126,7 +126,7 @@ def build_parser() -> CLIParser:
     parser.add_argument("--georef", action="store_true", help="Apply georeferencing")
     parser.add_argument(
         "--spreading-loss-db", type=float, default=None,
-        help="Override TVG spreading-loss coefficient (dB/decade). Default: library default (20.0). Requires --tvg.",
+        help="Override TVG spreading-loss coefficient (dB/decade). Default: library default (40.0, two-way spherical spreading; 30.0 is a common sidescan alternative). Requires --tvg.",
     )
     parser.add_argument(
         "--absorption-db-per-m", type=float, default=None,

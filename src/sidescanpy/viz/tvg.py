@@ -239,7 +239,7 @@ def plot_altitude_bin_comparison(
 
 def _params_label(params: TVGParams) -> str:
     """Human-readable summary of a candidate's literal, uncalibrated
-    coefficients -- e.g. "spreading=20.0dB, absorption=0.20dB/m" -- for
+    coefficients -- e.g. "spreading=40.0dB, absorption=0.20dB/m" -- for
     `plot_candidate_fit`'s legend. Only non-zero terms are listed
     (`flat` has neither, so this returns an empty string for it)."""
     parts = []

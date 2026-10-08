@@ -7,6 +7,20 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TVG spreading default is now 40 log R** (two-way spherical spreading),
+  up from 20 log R. Samples are amplitude converted with `20*log10`, so the
+  two-way spherical loss is 40 dB per decade; 20 was the one-way term,
+  inconsistent with the two-way absorption term `2*alpha*R`. Affects
+  `TVGParams`, the `"tvg"` step, `fit_range_decay`'s candidates and
+  `sidescan-correct --tvg` when no coefficient is given. Configs that set
+  `spreading_loss_db` explicitly are unchanged, and files already corrected
+  record their coefficient in history, so `invert()` still undoes them
+  exactly. 30 log R (insonified area growing with range) is a documented
+  alternative still to be evaluated on real data; set
+  `spreading_loss_db: 30.0` to use it.
+
 ### Added
 
 - XTF reader (`io.xtf`): numpy structured dtypes for the file, channel and

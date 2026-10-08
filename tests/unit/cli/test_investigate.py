@@ -37,7 +37,7 @@ def _two_channel_dataset(n_pings=40, n_samples=300):
     base["fathometer_reading_m"] = ("ping", np.full(n_pings, 5.0, dtype=np.float32))
     ground_range = compute_geometric_ranges(base)["ground_range_m"].values
 
-    full_physics = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=absorption_for_frequency(_FREQ_HZ))
+    full_physics = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=absorption_for_frequency(_FREQ_HZ))
     loss_db = tvg_gain_db(np.clip(ground_range, full_physics.min_range_m, None), full_physics)
     ref = np.nanmin(loss_db[np.isfinite(loss_db)])
     port = np.nan_to_num(10.0 ** (-(loss_db - ref) / 20.0), nan=0.0)

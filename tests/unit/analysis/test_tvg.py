@@ -402,7 +402,7 @@ class TestFitTvgCurve:
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-9)
 
     def test_spreading_only_curve_picks_spreading_only(self):
-        binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0))
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=40.0, absorption_db_per_m=0.0))
         result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "spreading_only"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
@@ -431,7 +431,7 @@ class TestFitTvgCurve:
         assert result_median.best.rmse_db == pytest.approx(0.0, abs=1e-6)
 
     def test_full_physics_curve_picks_full_physics(self):
-        binned = _make_binned_curve(TVGParams(spreading_loss_db=20.0, absorption_db_per_m=_ABSORPTION))
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION))
         result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "full_physics"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
@@ -507,7 +507,7 @@ class TestFitTvgCurve:
         r_min, r_max, step = 1.0, 38.0, 1.0
         r = np.arange(r_min, r_max, step)
         rng = np.random.default_rng(3)
-        true_params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=_ABSORPTION)
+        true_params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION)
         mean = 50.0 - tvg_gain_db(r, true_params) + rng.normal(0, 1.5, size=r.shape)
         binned = pd.DataFrame({
             "range_min_m": r - step / 2, "range_max_m": r + step / 2,

@@ -438,7 +438,7 @@ def _make_scaled_spreading_dataset(*, scale: float, n_pings: int = 30, n_samples
     exists to make correct."""
     ds = make_raw_dataset(n_pings=n_pings, n_samples=n_samples, freq_hz=1_495_000.0)
     ds = compute_geometric_ranges(ds)
-    params = TVGParams(spreading_loss_db=20.0, absorption_db_per_m=0.0)
+    params = TVGParams(spreading_loss_db=40.0, absorption_db_per_m=0.0)
     ground_range = ds["ground_range_m"].values
     loss_db = scale * tvg_gain_db(np.clip(ground_range, params.min_range_m, None), params)
     ref = np.nanmin(loss_db[np.isfinite(loss_db)])

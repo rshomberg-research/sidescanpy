@@ -47,7 +47,7 @@ correct:
   steps: [tvg, geometric, georef]
   chunk_pings: 2000
   params:
-    tvg: {spreading_loss_db: 20.0}
+    tvg: {spreading_loss_db: 40.0}
   frequency_params:            # per-frequency overrides
     hz_1495000: {tvg: {absorption_db_per_m: 0.2}}
     hz_547500:  {tvg: {absorption_db_per_m: 0.1}}
