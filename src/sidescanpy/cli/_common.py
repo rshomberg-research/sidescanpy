@@ -100,6 +100,29 @@ def setup_logging_from_args(args: argparse.Namespace) -> None:
         log.warning(msg, *args)
 
 
+VIZ_INSTALL_HINT = "pip install 'sidescanpy[viz]'"
+
+
+def has_matplotlib() -> bool:
+    """True if matplotlib can be imported; also selects the headless Agg
+    backend so later pyplot imports never probe for a GUI."""
+    try:
+        import matplotlib
+    except ImportError:
+        return False
+    matplotlib.use("Agg")
+    return True
+
+
+def require_matplotlib(command: str) -> bool:
+    """:func:`has_matplotlib`, logging a one-line ERROR naming ``command``
+    and the ``viz`` extra when it is missing."""
+    if has_matplotlib():
+        return True
+    logger.error(f"{command} needs matplotlib: {VIZ_INSTALL_HINT}")
+    return False
+
+
 def resolve_freq_keys(available: "list[str] | set[str]", requested: str) -> list[str]:
     """Resolve a ``--frequency`` CLI value to one or more real freq_keys.
 

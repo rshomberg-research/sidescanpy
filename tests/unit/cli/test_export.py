@@ -8,6 +8,7 @@ are tested here directly against small synthetic surveys.
 """
 
 import argparse
+import importlib
 import json
 import warnings
 from dataclasses import replace
@@ -27,6 +28,10 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.targets.core import Target
 from sidescanpy.targets.io import write_targets_json
 from tests.conftest import make_minimal_sidescan_dataset
+
+# The module, not the same-named function viz/__init__ re-exports; run_chip
+# imports its plotting helpers from here at call time, so spies go here.
+viz_contact_sheet = importlib.import_module("sidescanpy.viz.contact_sheet")
 
 
 def _geo_friendly_survey():
@@ -1009,7 +1014,7 @@ class TestRunChip:
             assert len(coco["annotations"]) == 1
 
     def test_contact_sheet_gets_boxes(self, tmp_path, swath_ss_h5_dir, mocker):
-        spy = mocker.spy(export, "contact_sheet")
+        spy = mocker.spy(viz_contact_sheet, "contact_sheet")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -1031,7 +1036,7 @@ class TestRunChip:
         render_target_context's own array argument, since the saved PNG's
         pixel dimensions don't directly reflect the source array's shape
         (matplotlib renders it at a fixed figure size/DPI)."""
-        spy = mocker.spy(export, "render_target_context")
+        spy = mocker.spy(viz_contact_sheet, "render_target_context")
         targets_json = tmp_path / "targets.json"
         write_targets_json([self._swath_matched_target()], targets_json)
 
@@ -1280,8 +1285,8 @@ class TestRunChip:
         looked generated."""
         from sidescanpy.viz.contact_sheet import _target_box_size
 
-        sheet = mocker.spy(export, "contact_sheet")
-        context = mocker.spy(export, "render_target_context")
+        sheet = mocker.spy(viz_contact_sheet, "contact_sheet")
+        context = mocker.spy(viz_contact_sheet, "render_target_context")
         t = replace(self._matched_target(), bbox=(490.0, 95.0, 4.0, 3.0))
         targets_json = tmp_path / "targets.json"
         write_targets_json([t], targets_json)

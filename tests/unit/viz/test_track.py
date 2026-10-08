@@ -4,19 +4,13 @@ Unit tests for sidescanpy.viz.track — survey track + scan-line plotting.
 2026 rshomberg@uri.edu
 """
 
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 from pyproj import CRS
 
-from sidescanpy.viz.track import (
-    _project,
-    build_survey_track,
-    export_track_and_scanlines_png,
-    plot_track_and_scanlines,
-)
+from sidescanpy.viz.track import _project, plot_track_and_scanlines
 
 
 def _make_track(n_pings=50, n_rungs=10):
@@ -134,123 +128,10 @@ class TestPlotTrackAndScanlines:
             plt.close(fig)
 
 
-class TestExportTrackAndScanlinesPng:
-    def test_export_creates_file(self, tmp_path):
-        lat, lon, pl, po, sl, so = _make_track()
-        out_path = tmp_path / "track.png"
-        export_track_and_scanlines_png(lat, lon, pl, po, sl, so, str(out_path))
-        assert out_path.exists()
-        assert out_path.stat().st_size > 0
-
-    def test_saved_dimensions_constant_regardless_of_track_shape(self, tmp_path):
-        """Real user report: every saved track.png should be the same
-        pixel dimensions regardless of the real survey's own aspect
-        ratio -- previously bbox_inches="tight" cropped a long/skinny
-        survey's mostly-blank canvas down to just its thin strip of real
-        content, while a wide/square survey (already filling the canvas)
-        saved close to the full size, so saved files came out
-        inconsistently sized despite the figure always being created at
-        one fixed size."""
-        from PIL import Image
-
-        wide_lat, wide_lon, w_pl, w_po, w_sl, w_so = _make_track(n_pings=50, n_rungs=10)
-        wide_path = tmp_path / "wide.png"
-        export_track_and_scanlines_png(wide_lat, wide_lon, w_pl, w_po, w_sl, w_so, str(wide_path))
-
-        # A genuinely long/skinny real-world track: latitude spans ~50km,
-        # longitude barely moves at all -- a real aspect ratio nothing
-        # like the wide/square fixture above.
-        n_pings = 50
-        narrow_lat = np.linspace(41.00, 41.45, n_pings)
-        narrow_lon = np.full(n_pings, -71.40)
-        idx = np.linspace(0, n_pings - 1, 10).astype(int)
-        n_pl, n_po = narrow_lat[idx], narrow_lon[idx] - 0.0002
-        n_sl, n_so = narrow_lat[idx], narrow_lon[idx] + 0.0002
-        narrow_path = tmp_path / "narrow.png"
-        export_track_and_scanlines_png(narrow_lat, narrow_lon, n_pl, n_po, n_sl, n_so, str(narrow_path))
-
-        assert Image.open(wide_path).size == Image.open(narrow_path).size
-
-
-class TestBuildSurveyTrack:
-    def test_none_when_no_file_has_frequency(self, sample_multi_frequency_survey):
-        surveys = {Path("a.ss.h5"): sample_multi_frequency_survey}
-        result = build_survey_track(surveys, "hz_999999", scanline_stride=5)
-        assert result is None
-
-    def test_returns_track_and_scanline_arrays(self, sample_multi_frequency_survey):
-        surveys = {Path("a.ss.h5"): sample_multi_frequency_survey}
-        n_pings = sample_multi_frequency_survey.get_frequency("hz_1495000").dataset.sizes["ping"]
-        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
-        assert result is not None
-        assert len(result["track_lat"]) == n_pings
-        assert len(result["track_lon"]) == n_pings
-        expected_n_rungs = len(np.arange(0, n_pings, 3))
-        assert len(result["scan_port_lat"]) == expected_n_rungs
-        assert len(result["scan_stbd_lat"]) == expected_n_rungs
-
-    def test_multi_file_concatenates_in_time_order(self, sample_multi_frequency_survey):
-        from sidescanpy.core import SideScanSurvey
-
-        ds_a = sample_multi_frequency_survey.get_frequency("hz_1495000").dataset.copy()
-        ds_b = ds_a.copy()
-        # Shift file b's timestamps later so file a must sort first
-        ds_b = ds_b.assign_coords(time=ds_b["time"] + np.timedelta64(1, "h"))
-        ds_b["latitude"] = ds_a["latitude"] + 10.0  # distinguishable values
-
-        survey_a = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
-        survey_a.add_frequency("hz_1495000", ds_a)
-        survey_b = SideScanSurvey(source_files=["b.jsf"], source_format="JSF", survey_name="b")
-        survey_b.add_frequency("hz_1495000", ds_b)
-
-        surveys = {Path("b.ss.h5"): survey_b, Path("a.ss.h5"): survey_a}
-        n_pings = ds_a.sizes["ping"]
-        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
-        # file a (earlier timestamps) must appear first in the concatenated track
-        np.testing.assert_array_equal(result["track_lat"][:n_pings], ds_a["latitude"].values)
-        np.testing.assert_array_equal(result["track_lat"][n_pings:], ds_b["latitude"].values)
-
-    def test_mismatched_sample_window_lengths_do_not_nan_out_rungs(self):
-        """Regression test: a real survey's two files can have
-        differently-sized sample axes (e.g. one file's channel was
-        trimmed further by the far-range noise crop than the other's).
-        The last-sample "sample" coordinate then differs by value
-        across files (e.g. index 79 vs. 99); concatenating without
-        accounting for that used to align on the mismatched label and
-        NaN out whichever file didn't have that particular value."""
-        from sidescanpy.core import SideScanSurvey
-        from tests.conftest import make_minimal_sidescan_dataset
-
-        # altitude_m must be well below the (very short, default-fixture)
-        # slant range reached by the last sample, or every sample is
-        # legitimately water-column-masked regardless of this bug.
-        # A real .ss.h5-loaded dataset carries an explicit indexed
-        # "sample" coordinate (assigned by the HDF5 backend on open,
-        # not by this in-memory fixture) — assign one here too, since
-        # that indexed label is exactly what the old code aligned on.
-        ds_a = make_minimal_sidescan_dataset(n_pings=10, n_samples=100)
-        ds_a["altitude_m"] = (["ping"], np.full(10, 0.05, dtype=np.float32))
-        ds_a = ds_a.assign_coords(sample=np.arange(ds_a.sizes["sample"]))
-        ds_b = make_minimal_sidescan_dataset(n_pings=10, n_samples=80)
-        ds_b["altitude_m"] = (["ping"], np.full(10, 0.05, dtype=np.float32))
-        ds_b = ds_b.assign_coords(sample=np.arange(ds_b.sizes["sample"]))
-
-        survey_a = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
-        survey_a.add_frequency("hz_1495000", ds_a)
-        survey_b = SideScanSurvey(source_files=["b.jsf"], source_format="JSF", survey_name="b")
-        survey_b.add_frequency("hz_1495000", ds_b)
-
-        surveys = {Path("a.ss.h5"): survey_a, Path("b.ss.h5"): survey_b}
-        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
-
-        assert not np.isnan(result["scan_port_lat"]).any()
-        assert not np.isnan(result["scan_stbd_lat"]).any()
-
-
 class TestBasemapIntegration:
     """show_land/show_locator -- see tests/unit/viz/test_basemap.py for
     the basemap module itself; these confirm the wiring into
-    plot_track_and_scanlines/export_track_and_scanlines_png specifically."""
+    plot_track_and_scanlines specifically."""
 
     cartopy = pytest.importorskip("cartopy", reason="requires the optional 'maps' extra")
 
@@ -268,12 +149,6 @@ class TestBasemapIntegration:
         assert len(ax.child_axes) >= 1
         plt.close(fig)
 
-    def test_export_with_land_and_locator(self, tmp_path):
-        lat, lon, pl, po, sl, so = _make_track()
-        out = tmp_path / "track_basemap.png"
-        export_track_and_scanlines_png(lat, lon, pl, po, sl, so, str(out), show_land=True, show_locator=True)
-        assert out.exists()
-        assert out.stat().st_size > 0
 
     def test_default_false_adds_no_inset(self):
         lat, lon, pl, po, sl, so = _make_track()

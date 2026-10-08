@@ -10,13 +10,9 @@ import numpy as np
 import pytest
 from pyproj import CRS
 
+from sidescanpy.processing.track import SurveyTrack
 from sidescanpy.targets.core import Target
-from sidescanpy.viz.targets import (
-    export_target_position_scatter_png,
-    export_track_with_targets_png,
-    plot_target_position_scatter,
-    plot_track_with_targets,
-)
+from sidescanpy.viz.targets import plot_target_position_scatter, plot_track_with_targets
 
 
 def _make_track(n_pings=50, n_rungs=10):
@@ -25,11 +21,11 @@ def _make_track(n_pings=50, n_rungs=10):
     idx = np.linspace(0, n_pings - 1, n_rungs).astype(int)
     port_lat, port_lon = lat[idx] - 0.0005, lon[idx]
     stbd_lat, stbd_lon = lat[idx] + 0.0005, lon[idx]
-    return {
-        "track_lat": lat, "track_lon": lon,
-        "scan_port_lat": port_lat, "scan_port_lon": port_lon,
-        "scan_stbd_lat": stbd_lat, "scan_stbd_lon": stbd_lon,
-    }
+    return SurveyTrack(
+        track_lat=lat, track_lon=lon,
+        scan_port_lat=port_lat, scan_port_lon=port_lon,
+        scan_stbd_lat=stbd_lat, scan_stbd_lon=stbd_lon,
+    )
 
 
 def _make_target(target_id, lat=None, lon=None):
@@ -93,44 +89,6 @@ class TestPlotTrackWithTargets:
             plt.close(fig)
 
 
-class TestExportTrackWithTargetsPng:
-    def test_export_creates_file(self, tmp_path):
-        track = _make_track()
-        targets = [_make_target("0001", 41.505, -71.395)]
-        out_path = tmp_path / "track_with_targets.png"
-        export_track_with_targets_png(track, targets, str(out_path))
-        assert out_path.exists()
-        assert out_path.stat().st_size > 0
-
-    def test_saved_dimensions_constant_regardless_of_track_shape(self, tmp_path):
-        """Real user report: every saved track.png should be the same
-        pixel dimensions regardless of the real survey's own aspect
-        ratio -- this is the function sidescan-export track actually
-        calls whenever --targets-json is given (every survey with
-        a target catalog), so it needed the same fix as the plain
-        track export (see viz/track.py's own matching test)."""
-        from PIL import Image
-
-        wide_track = _make_track(n_pings=50, n_rungs=10)
-        targets = [_make_target("0001", 41.505, -71.395)]
-        wide_path = tmp_path / "wide.png"
-        export_track_with_targets_png(wide_track, targets, str(wide_path))
-
-        n_pings = 50
-        narrow_lat = np.linspace(41.00, 41.45, n_pings)
-        narrow_lon = np.full(n_pings, -71.40)
-        idx = np.linspace(0, n_pings - 1, 10).astype(int)
-        narrow_track = {
-            "track_lat": narrow_lat, "track_lon": narrow_lon,
-            "scan_port_lat": narrow_lat[idx], "scan_port_lon": narrow_lon[idx] - 0.0002,
-            "scan_stbd_lat": narrow_lat[idx], "scan_stbd_lon": narrow_lon[idx] + 0.0002,
-        }
-        narrow_path = tmp_path / "narrow.png"
-        export_track_with_targets_png(narrow_track, targets, str(narrow_path))
-
-        assert Image.open(wide_path).size == Image.open(narrow_path).size
-
-
 class TestPlotTargetPositionScatter:
     def test_returns_none_when_no_target_has_position(self):
         targets = [_make_target("0001"), _make_target("0002")]
@@ -158,21 +116,6 @@ class TestPlotTargetPositionScatter:
             plt.close(fig)
 
 
-class TestExportTargetPositionScatterPng:
-    def test_writes_file_when_positions_exist(self, tmp_path):
-        out_path = tmp_path / "scatter.png"
-        wrote = export_target_position_scatter_png([_make_target("0001", 41.5, -71.4)], str(out_path))
-        assert wrote is True
-        assert out_path.exists()
-        assert out_path.stat().st_size > 0
-
-    def test_no_file_written_when_no_positions(self, tmp_path):
-        out_path = tmp_path / "scatter.png"
-        wrote = export_target_position_scatter_png([_make_target("0001")], str(out_path))
-        assert wrote is False
-        assert not out_path.exists()
-
-
 class TestBasemapIntegration:
     """show_land/show_locator passthrough into plot_track_and_scanlines
     -- see tests/unit/viz/test_basemap.py for the basemap module itself."""
@@ -188,10 +131,3 @@ class TestBasemapIntegration:
         assert len(ax.child_axes) >= 1
         plt.close(fig)
 
-    def test_export_with_land_and_locator(self, tmp_path):
-        track = _make_track()
-        targets = [_make_target("0001", 41.505, -71.395)]
-        out = tmp_path / "track_targets_basemap.png"
-        export_track_with_targets_png(track, targets, str(out), show_land=True, show_locator=True)
-        assert out.exists()
-        assert out.stat().st_size > 0

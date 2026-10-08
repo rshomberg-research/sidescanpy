@@ -41,6 +41,8 @@ Public entry points
   :func:`split_by_segments`, :class:`Segment` and the individual detectors.
 - :func:`backscatter_vs_range` / :func:`backscatter_vs_sample` — binned
   backscatter profiles.
+- :func:`build_survey_track` / :class:`SurveyTrack` — nadir track plus
+  strided swath-edge positions across a multi-file survey.
 
 Conventions
 -----------
@@ -137,8 +139,11 @@ from sidescanpy.processing.slicing import (
     slice_by_time,
     slice_survey,
 )
+from sidescanpy.processing.track import SurveyTrack, build_survey_track
 
 __all__ = [
+    "SurveyTrack",
+    "build_survey_track",
     "along_track_distance_m",
     "fill_nav_stalls",
     "interpolate_aux_onto_pings",

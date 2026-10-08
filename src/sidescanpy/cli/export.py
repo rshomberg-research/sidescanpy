@@ -74,18 +74,14 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-import matplotlib
-import pyproj
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+import pyproj
 import xarray as xr
-from matplotlib.patches import Rectangle
 from PIL import Image
 
 from sidescanpy.cli._common import (
     add_logging_args,
+    require_matplotlib,
     resolve_freq_keys,
     setup_logging_from_args,
     uncorrected_alias,
@@ -123,14 +119,10 @@ from sidescanpy.processing.bottom import mask_nadir_gap
 from sidescanpy.processing.inversion import UNCORRECTED_VAR, uncorrected_backscatter
 from sidescanpy.processing.navigation import along_track_distance_m
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg_to_amplitude
+from sidescanpy.processing.track import build_survey_track
 from sidescanpy.targets.core import project_target_to_frequency
 from sidescanpy.targets.interchange import CocoImageEntry, write_coco, write_yolo
 from sidescanpy.targets.io import read_targets_json
-from sidescanpy.viz import plot_survey_overview, plot_waterfall, resolve_waterfall_axes
-from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
-from sidescanpy.viz.gridded import export_gridded_png
-from sidescanpy.viz.targets import export_track_with_targets_png
-from sidescanpy.viz.track import build_survey_track, export_track_and_scanlines_png
 
 logger = logging.getLogger(__name__)
 
@@ -233,40 +225,46 @@ def _target_waterfall_xy(target, ds, ping_idx: int, ping_offset: int, x_axis: st
     return None
 
 
+def _waterfall_box_rects(ds, boxes, ping_offset, x_axis, y_axis, box_size) -> list[tuple[str, float, float, float, float]]:
+    """``(label, x0, y0, width, height)`` in the waterfall's axis units for
+    each ``(target, ping_idx)`` in ``boxes`` that can be placed on these
+    axes -- see ``_target_waterfall_xy``."""
+    # Computed once per window, not per box -- along_track_distance_m
+    # does a real pyproj.Geod.inv call over every ping in ds.
+    along_track = along_track_distance_m(ds) if boxes and y_axis == "along_track" else None
+    rects = []
+    for target, ping_idx in boxes:
+        xy = _target_waterfall_xy(target, ds, ping_idx, ping_offset, x_axis, y_axis, along_track)
+        if xy is None:
+            continue
+        x_center, y_center, x_scale, y_scale = xy
+        half_x = (box_size / 2.0) * x_scale
+        half_y = (box_size / 2.0) * y_scale
+        rects.append((str(target.target_id), x_center - half_x, y_center - half_y, 2 * half_x, 2 * half_y))
+    return rects
+
+
 def _export_waterfall_png(ds, output_path: Path, *, x_axis, y_axis, ping_offset, cmap, vmin, vmax, vmin_pct, vmax_pct, gamma, dpi, boxes=None, box_size=40.0, value_var="backscatter_intensity"):
     """``boxes``, if given: list of ``(target, ping_idx)`` (global ping
     index within whatever ``ds`` this call was handed) to draw a red box
     + target_id label for, on top of the rendered waterfall. Supports
     both the default sample/ping axes and ground mode's across_track/
     along_track axes -- see ``_target_waterfall_xy``."""
+    from sidescanpy.cli import _figures
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(14, 6))
-    try:
-        plot_waterfall(
-            ds, x_axis=x_axis, y_axis=y_axis, ping_offset=ping_offset,
-            cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct,
-            gamma=gamma, ax=ax, value_var=value_var,
-        )
-        boxes = boxes or []
-        # Computed once per window, not per box -- along_track_distance_m
-        # does a real pyproj.Geod.inv call over every ping in ds.
-        along_track = along_track_distance_m(ds) if boxes and y_axis == "along_track" else None
-        for target, ping_idx in boxes:
-            xy = _target_waterfall_xy(target, ds, ping_idx, ping_offset, x_axis, y_axis, along_track)
-            if xy is None:
-                continue
-            x_center, y_center, x_scale, y_scale = xy
-            half_x = (box_size / 2.0) * x_scale
-            half_y = (box_size / 2.0) * y_scale
-            ax.add_patch(Rectangle((x_center - half_x, y_center - half_y), 2 * half_x, 2 * half_y, fill=False, edgecolor="red", linewidth=1.2))
-            ax.annotate(str(target.target_id), (x_center - half_x, y_center - half_y), color="red", fontsize=11, fontweight="bold", xytext=(2, 2), textcoords="offset points")
-        fig.tight_layout()
-        fig.savefig(output_path, dpi=dpi)
-    finally:
-        plt.close(fig)
+    _figures.save_waterfall_png(
+        ds, output_path, x_axis=x_axis, y_axis=y_axis, ping_offset=ping_offset,
+        cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct,
+        gamma=gamma, dpi=dpi, value_var=value_var,
+        box_rects=_waterfall_box_rects(ds, boxes or [], ping_offset, x_axis, y_axis, box_size),
+    )
 
 
 def run_waterfall(args: argparse.Namespace) -> int:
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.waterfall import resolve_waterfall_axes
+
     if args.range_mode == "ground":
         # Forces the distance-axis branch regardless of --x-axis/--y-axis
         # -- geometric ranges have no visible effect on a sample/ping-
@@ -350,20 +348,15 @@ def run_waterfall(args: argparse.Namespace) -> int:
             breaks = sorted(p for p in file_start_ping.values() if p > 0)
             out_path = args.output_dir / freq_key / "overview.png"
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            fig, ax = plt.subplots(figsize=(14, 8))
-            try:
-                plot_survey_overview(
-                    ds_all, ping_stride=overview_stride, break_ping_indices=breaks,
-                    x_axis=x_axis, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
-                    vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma, ax=ax,
-                    value_var=value_var,
-                )
-                fig.tight_layout()
-                fig.savefig(out_path, dpi=args.dpi)
-                n_written += 1
-                logger.info(f"{freq_key}: wrote overview.png ({n_pings_total} pings, 1:{overview_stride} compressed)")
-            finally:
-                plt.close(fig)
+            _figures.save_survey_overview_png(
+                ds_all, out_path, dpi=args.dpi,
+                ping_stride=overview_stride, break_ping_indices=breaks,
+                x_axis=x_axis, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+                vmin_pct=args.vmin_pct, vmax_pct=args.vmax_pct, gamma=args.gamma,
+                value_var=value_var,
+            )
+            n_written += 1
+            logger.info(f"{freq_key}: wrote overview.png ({n_pings_total} pings, 1:{overview_stride} compressed)")
 
         n_windows = 0
         for start in range(0, n_pings_total, stride):
@@ -401,8 +394,10 @@ def _export_gridded_segment(ds, output_path: Path, *, resolution_m, method, cmap
     bbox_wgs84 = bbox_from_channel_dataset(ds)
     grid_def = utm_grid_from_wgs84_bbox(bbox_wgs84, resolution_m=resolution_m)
     raster = resample_channel_to_grid(ds, grid_def, method=ResamplingMethod(method), backscatter_var="backscatter_intensity")
+    from sidescanpy.cli import _figures
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    export_gridded_png(
+    _figures.save_gridded_png(
         raster, str(output_path), dpi=dpi, cmap=cmap, vmin=vmin, vmax=vmax, vmin_pct=vmin_pct, vmax_pct=vmax_pct, gamma=gamma,
         show_land=show_land, show_locator=show_locator,
     )
@@ -467,6 +462,8 @@ def _resolve_frequencies(surveys: dict, requested: str) -> list[str]:
 
 
 def run_track(args: argparse.Namespace) -> int:
+    from sidescanpy.cli import _figures
+
     paths = sorted(args.ss_h5_dir.glob("*.ss.h5"))
     if not paths:
         logger.error(f"No .ss.h5 files found in {args.ss_h5_dir}")
@@ -495,16 +492,13 @@ def run_track(args: argparse.Namespace) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             if targets is not None:
-                export_track_with_targets_png(
+                _figures.save_track_with_targets_png(
                     track, targets, str(out_path), dpi=args.dpi,
                     show_land=args.show_land, show_locator=args.show_locator,
                 )
             else:
-                export_track_and_scanlines_png(
-                    track["track_lat"], track["track_lon"],
-                    track["scan_port_lat"], track["scan_port_lon"],
-                    track["scan_stbd_lat"], track["scan_stbd_lon"],
-                    str(out_path), dpi=args.dpi,
+                _figures.save_track_png(
+                    track, str(out_path), dpi=args.dpi,
                     show_land=args.show_land, show_locator=args.show_locator,
                 )
             logger.info(f"  Wrote {out_path}")
@@ -1414,6 +1408,9 @@ def _parse_categories(value) -> list[str] | None:
 
 
 def run_chip(args: argparse.Namespace) -> int:
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
+
     resolution_m_override = getattr(args, "resolution_m", None)
     if resolution_m_override is not None and args.render_level in _PIXEL_LEVELS:
         logger.warning(
@@ -1646,8 +1643,7 @@ def run_chip(args: argparse.Namespace) -> int:
                         # already-applied horizontal mirror, only flips vertically).
                         combined, (context_target,) = _orient_pixel_window(combined, [context_target], channel_idx, "dual-swath")
                         fig = render_target_context(combined, context_target, box_size=(args.box_size, args.box_size), coordinate_system="pixel")
-                        fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                        plt.close(fig)
+                        _figures.save_figure(fig, args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                     else:
                         # Geometric/georef QA view (2026-09-28, real user
                         # ask): the same "whole loaded neighborhood, both
@@ -1675,8 +1671,7 @@ def run_chip(args: argparse.Namespace) -> int:
                                 grid, context_targets = context_result
                                 fig = render_target_context(grid, context_targets[0], box_size=(args.box_size, args.box_size), coordinate_system=args.render_level,
                                                     resolution_m=context_targets[0].extra_attributes.get("window_resolution_m"))
-                                fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                                plt.close(fig)
+                                _figures.save_figure(fig, args.output / "context" / f"context_{t.target_id}.png", dpi=150)
 
                 # --n-augment: independent jitter (+ optional flip) draws
                 # of the same target from the same loaded neighborhood --
@@ -1700,8 +1695,7 @@ def run_chip(args: argparse.Namespace) -> int:
                             primary = next((ct for ct in co_targets if ct.target_id == t.target_id), co_targets[0])
                             fig = render_target_context(window, primary, box_size=(args.box_size, args.box_size), coordinate_system=args.render_level,
                                                         resolution_m=primary.extra_attributes.get("window_resolution_m"))
-                            fig.savefig(args.output / "context" / f"context_{t.target_id}.png", dpi=150)
-                            plt.close(fig)
+                            _figures.save_figure(fig, args.output / "context" / f"context_{t.target_id}.png", dpi=150)
                         if box_size_m is not None:
                             # Meters placeholder for center-only picks (no
                             # measured bbox): same real extent at every
@@ -1746,8 +1740,7 @@ def run_chip(args: argparse.Namespace) -> int:
             thumbnails, captions, boxes=sheet_boxes, box_size=(args.box_size, args.box_size),
             ncols=6, suptitle=f"{style}: {len(thumbnails)} chips" + (f" (first of {n_augment} draws each)" if n_augment > 1 else ""),
         )
-        sheet_fig.savefig(style_dir / "contact_sheet.png", dpi=150)
-        plt.close(sheet_fig)
+        _figures.save_figure(sheet_fig, style_dir / "contact_sheet.png", dpi=150)
         sheet[style] = ([], [], [])
 
         if n_augment > 1 or random_flip:
@@ -1773,6 +1766,9 @@ def run_chip(args: argparse.Namespace) -> int:
     return 0
 
 def run_survey_window(args: argparse.Namespace) -> int:
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.contact_sheet import contact_sheet
+
     args.output.mkdir(parents=True, exist_ok=True)
     survey = read_survey(args.ss_h5, chunks={"ping": 512})
     channel = survey.get_frequency(args.freq_key)
@@ -1856,8 +1852,7 @@ def run_survey_window(args: argparse.Namespace) -> int:
         captions.append(f"no target ({args.mode})")
 
     sheet_fig = contact_sheet(thumbnails, captions, ncols=6, suptitle=f"{len(thumbnails)} {args.mode} windows")
-    sheet_fig.savefig(args.output / "contact_sheet.png", dpi=150)
-    plt.close(sheet_fig)
+    _figures.save_figure(sheet_fig, args.output / "contact_sheet.png", dpi=150)
 
     # No real target ground truth is correlated to this array (see module
     # docstring) — every window here is honestly a no-target negative, so
@@ -2450,6 +2445,9 @@ def main() -> int:
     args = parser.parse_args(argv)
 
     setup_logging_from_args(args)
+
+    if args.func is not run_progression and not require_matplotlib(f"sidescan-export {args.subcommand}"):
+        return 1
 
     result = args.func(args)
     logger.info(f"export {args.subcommand} complete")

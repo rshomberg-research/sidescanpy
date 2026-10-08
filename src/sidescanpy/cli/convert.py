@@ -36,11 +36,12 @@ import sys
 import time
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")  # must precede any import that pulls in pyplot (viz.targets below) -- otherwise matplotlib probes for a GUI backend on import and can throw/thrash on a headless machine
-
-from sidescanpy.cli._common import add_logging_args, setup_logging_from_args
+from sidescanpy.cli._common import (
+    VIZ_INSTALL_HINT,
+    add_logging_args,
+    has_matplotlib,
+    setup_logging_from_args,
+)
 from sidescanpy.cli._config import apply_config_to_subparsers, find_config_path, load_config
 from sidescanpy.io import detect_format, read_and_convert
 from sidescanpy.io.hdf5 import write_survey
@@ -53,7 +54,6 @@ from sidescanpy.targets.correlate import (
     resolve_targets_offset_corrected,
 )
 from sidescanpy.targets.io import write_targets_csv, write_targets_json
-from sidescanpy.viz.targets import export_target_position_scatter_png
 
 logger = logging.getLogger(__name__)
 
@@ -230,9 +230,16 @@ def run_targets(args: argparse.Namespace) -> int:
     write_targets_csv(targets, output / "targets.csv")
     logger.info(f"Wrote {output / 'targets.csv'}")
 
-    wrote_scatter = export_target_position_scatter_png(targets, str(output / "position_scatter.png"), title=scatter_title)
-    if not wrote_scatter:
-        logger.warning("No targets had a resolvable position; skipping position scatter")
+    # The scatter is a QA side output: without matplotlib the catalog is
+    # still converted, only the PNG is skipped.
+    if not has_matplotlib():
+        logger.warning(f"matplotlib is not installed; skipping position_scatter.png ({VIZ_INSTALL_HINT})")
+    else:
+        from sidescanpy.cli import _figures
+
+        wrote_scatter = _figures.save_target_position_scatter_png(targets, str(output / "position_scatter.png"), title=scatter_title)
+        if not wrote_scatter:
+            logger.warning("No targets had a resolvable position; skipping position scatter")
 
     logger.info("convert targets complete")
     return 0

@@ -5,8 +5,9 @@ Enforce the package dependency direction: imports only point leftward in
 
 Parses every module under ``src/sidescanpy`` with ``ast`` (including
 function-level lazy imports). Root modules ``log``, ``_version`` and
-``__init__`` count as core-level. ``analysis`` and ``processing`` must also
-never import matplotlib (plotting lives in ``viz``).
+``__init__`` count as core-level. Nothing below ``viz`` may import
+matplotlib, even lazily (plotting lives in ``viz``; matplotlib is the
+optional ``viz`` extra -- see test_optional_matplotlib.py).
 
 2026 rshomberg@uri.edu
 """
@@ -96,7 +97,7 @@ def test_known_violations_are_still_violations():
     assert not stale, f"remove fixed entries from _KNOWN_VIOLATIONS: {stale}"
 
 
-_NO_MATPLOTLIB_LAYERS = ("analysis", "processing")
+_NO_MATPLOTLIB_LAYERS = ("core", "io", "processing", "analysis", "grids", "targets", "export")
 
 
 def _imports_matplotlib(tree: ast.AST) -> bool:
@@ -110,7 +111,7 @@ def _imports_matplotlib(tree: ast.AST) -> bool:
     return False
 
 
-def test_analysis_and_processing_do_not_import_matplotlib():
+def test_layers_below_viz_do_not_import_matplotlib():
     root = Path(sidescanpy.__file__).parent
     offenders = [
         str(path.relative_to(root))
@@ -121,9 +122,10 @@ def test_analysis_and_processing_do_not_import_matplotlib():
     assert not offenders, f"matplotlib imported in compute layers: {offenders}"
 
 
-def test_importing_analysis_and_processing_does_not_load_matplotlib():
+def test_importing_layers_below_viz_does_not_load_matplotlib():
     code = (
-        "import sys, sidescanpy.analysis, sidescanpy.processing; "
+        "import sys, sidescanpy.analysis, sidescanpy.processing, sidescanpy.grids, "
+        "sidescanpy.targets, sidescanpy.export, sidescanpy.io; "
         "sys.exit(1 if any(m == 'matplotlib' or m.startswith('matplotlib.') for m in sys.modules) else 0)"
     )
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0

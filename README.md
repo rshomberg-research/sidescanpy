@@ -40,8 +40,14 @@ git clone <repo-url>
 cd sidescanpy
 uv venv
 source .venv/bin/activate
-uv pip install -e .
+uv pip install -e .            # core: io, corrections, gridding, export, analysis
+uv pip install -e ".[viz]"     # + plotting (sidescanpy.viz, sidescan-export/-analyze figures)
+uv pip install -e ".[viz,maps]"  # + land/locator basemaps (cartopy)
 ```
+
+`sidescan-convert` and `sidescan-correct` work without the `viz` extra;
+`sidescan-export` (except `progression`) and `sidescan-analyze` (except
+`recommend-config`) exit with a one-line error asking for it.
 
 ### Development Install
 

@@ -71,11 +71,7 @@ import logging
 import sys
 from pathlib import Path
 
-import matplotlib
 import xarray as xr
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 from sidescanpy.analysis.beam import estimate_beam_geometry
 from sidescanpy.analysis.characterize import characterize_values, infer_units
@@ -84,10 +80,10 @@ from sidescanpy.analysis.nadir import analyze_nadir
 from sidescanpy.analysis.navigation import summarize_navigation
 from sidescanpy.analysis.tvg import fit_range_decay
 from sidescanpy.analysis.usable_range import estimate_usable_range
-from sidescanpy.cli import _investigate
 from sidescanpy.cli._common import (
     add_deprecated_alias,
     add_logging_args,
+    require_matplotlib,
     resolve_freq_keys,
     setup_logging_from_args,
     uncorrected_alias,
@@ -103,16 +99,6 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.inversion import UNCORRECTED_VAR, invert, uncorrected_backscatter
 from sidescanpy.processing.segments import find_segments
 from sidescanpy.processing.slicing import slice_by_pings
-from sidescanpy.viz.analysis import (
-    plot_beam_geometry,
-    plot_nadir_waterfall,
-    plot_nadir_zoom,
-    plot_navigation_summary,
-    plot_segments_overview,
-    plot_units_distribution,
-    plot_usable_range,
-)
-from sidescanpy.viz.tvg import plot_candidate_fit, plot_range_decay_residuals, set_fit_window_limits
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +171,8 @@ def _parse_numeric_or_literal(value: str | None) -> float | str | None:
 # ============================================================
 
 def run_investigate(args: argparse.Namespace) -> int:
+    from sidescanpy.cli import _investigate
+
     if not args.input.is_file():
         logger.error(f"Input file not found: {args.input}")
         return 1
@@ -302,25 +290,15 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
         logger.debug(f"  note: {note}")
     logger.debug("=" * 70)
 
-    fit_result = decay.fit
+    from sidescanpy.cli import _figures
 
-    fig, (ax_fit, ax_res) = plt.subplots(2, 1, figsize=(9, 10), sharex=True, gridspec_kw={"height_ratios": [1.3, 1]})
-    for i, c in enumerate(fit_result.candidates):
-        plot_candidate_fit(c, fit_result.observed_range_m, fit_result.observed_loss_db, ax=ax_fit, show_observed=(i == 0))
-    ax_fit.set_title(f"Decay fit — best: {decay.best_candidate}, RMSE={decay.best_rmse_db:.2f}dB")
-    ax_fit.set_xlabel("")
-
-    plot_range_decay_residuals(decay, ax=ax_res, relative_x=False)
-    ax_res.set_title("Residuals")
-    ax_res.set_xlabel("Slant range (m)" if args.range_var == "slant_range_m" else f"{args.range_var} (m)")
-
-    set_fit_window_limits(ax_fit, decay)
-
-    fig.suptitle(f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}")
-    fig.tight_layout()
     out_path = args.output_dir / f"{args.ss_h5.stem}_{freq_key}_tvg_fit.png"
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
+    _figures.save_tvg_fit_png(
+        decay, out_path,
+        suptitle=f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}",
+        residual_xlabel="Slant range (m)" if args.range_var == "slant_range_m" else f"{args.range_var} (m)",
+        dpi=140,
+    )
     logger.info(f"wrote {out_path}")
 
     return 0
@@ -341,6 +319,9 @@ def run_segment(args: argparse.Namespace) -> int:
     default, not "the whole file," since a real production `.ss.h5` can
     be many GB.
     """
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.analysis import plot_segments_overview
+
     if not (args.input.is_file() or args.input.is_dir()):
         logger.error(f"Input not found: {args.input}")
         return 1
@@ -397,8 +378,7 @@ def run_segment(args: argparse.Namespace) -> int:
 
     fig, _ = plot_segments_overview(ds, segments)
     overview_path = args.output_dir / "overview.png"
-    fig.savefig(overview_path, dpi=120)
-    plt.close(fig)
+    _figures.save_figure(fig, overview_path, dpi=120)
     logger.debug(f"wrote {overview_path}")
 
     return 0
@@ -414,6 +394,9 @@ def run_nadir(args: argparse.Namespace) -> int:
     the classification) -- ``--verbose-diagnostics`` also writes the
     full-survey waterfall boundary overlay.
     """
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.analysis import plot_nadir_waterfall, plot_nadir_zoom
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
@@ -441,15 +424,13 @@ def run_nadir(args: argparse.Namespace) -> int:
 
     fig, _ = plot_nadir_zoom(ds_geo, args.value_var, nadir=nadir, nadir_n_samples=args.nadir_n_samples)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_zoom.png"
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
+    _figures.save_figure(fig, out_path, dpi=140)
     logger.debug(f"wrote {out_path}")
 
     if args.verbose_diagnostics:
         fig, _ = plot_nadir_waterfall(ds_geo, args.value_var, nadir=nadir)
         wf_path = args.output_dir / f"{args.input.stem}_{freq_key}_nadir_waterfall.png"
-        fig.savefig(wf_path, dpi=140)
-        plt.close(fig)
+        _figures.save_figure(fig, wf_path, dpi=140)
         logger.debug(f"wrote {wf_path}")
 
     return 0
@@ -465,6 +446,9 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
     ``nadir``/``usable-range`` subcommands to tune either). Writes only
     the beam-geometry diagram, the direct evidence for the result.
     """
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.analysis import plot_beam_geometry
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
@@ -492,8 +476,7 @@ def run_beam_geometry(args: argparse.Namespace) -> int:
 
     fig, _ = plot_beam_geometry(ds_geo, beam, value_var=args.value_var)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_beam_geometry.png"
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
+    _figures.save_figure(fig, out_path, dpi=140)
     logger.debug(f"wrote {out_path}")
 
     return 0
@@ -507,6 +490,9 @@ def run_usable_range(args: argparse.Namespace) -> int:
     """Bin backscatter by range, find the usable-range boundary, and write
     only the median/std-vs-range plot -- the direct evidence for the number.
     """
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.analysis import plot_usable_range
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
@@ -528,8 +514,7 @@ def run_usable_range(args: argparse.Namespace) -> int:
 
     fig, _ = plot_usable_range(usable_range)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_usable_range.png"
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
+    _figures.save_figure(fig, out_path, dpi=140)
     logger.debug(f"wrote {out_path}")
 
     return 0
@@ -545,6 +530,9 @@ def run_units(args: argparse.Namespace) -> int:
     Doesn't cross-check against a range-decay fit (``investigate`` does)
     -- run ``tvg-fit`` separately if that matters for a source.
     """
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.analysis import plot_units_distribution
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
@@ -562,8 +550,7 @@ def run_units(args: argparse.Namespace) -> int:
 
     fig, _ = plot_units_distribution(ds, args.value_var)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_units.png"
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
+    _figures.save_figure(fig, out_path, dpi=140)
     logger.debug(f"wrote {out_path}")
 
     return 0
@@ -581,6 +568,9 @@ def run_nav_attitude(args: argparse.Namespace) -> int:
     it at the specific ping range a heading/attitude anomaly was
     reported in and look at the trace directly.
     """
+    from sidescanpy.cli import _figures
+    from sidescanpy.viz.analysis import plot_navigation_summary
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _resolve_and_load(args.input, args.frequency, _PING_CHUNKS)
     start, stop = args.pings
@@ -597,8 +587,7 @@ def run_nav_attitude(args: argparse.Namespace) -> int:
 
     fig, _ = plot_navigation_summary(ds, ping_offset=start, result=result)
     out_path = args.output_dir / f"{args.input.stem}_{freq_key}_nav_attitude.png"
-    fig.savefig(out_path, dpi=140)
-    plt.close(fig)
+    _figures.save_figure(fig, out_path, dpi=140)
     logger.debug(f"wrote {out_path}")
 
     return 0
@@ -878,6 +867,9 @@ def main() -> int:
     args = parser.parse_args(argv)
 
     setup_logging_from_args(args)
+
+    if args.func is not run_recommend_config and not require_matplotlib(f"sidescan-analyze {args.subcommand}"):
+        return 1
 
     return args.func(args)
 
