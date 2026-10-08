@@ -433,8 +433,9 @@ def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float)
 
     Two strategies are tried in order:
 
-    1. **Position**: the nearest ping (planar approximation, 111 km/degree)
-       over all files, accepted if within ``max_dist_m``.
+    1. **Position**: the nearest ping by geodesic distance on the WGS84
+       ellipsoid (:meth:`pyproj.Geod.inv`) over all files, accepted if
+       within ``max_dist_m``. Pings without a position fix are skipped.
     2. **Ping number** (only if step 1 fails or the target has no lat/lon):
        ``target.ping`` is a mission-global ping number, converted to a
        file-local index via each channel's ``ping_start``. Accepted only when
@@ -460,15 +461,18 @@ def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float)
         for path, channels in index.items():
             freq_key = match_frequency(channels, target_mps)
             c = channels[freq_key]
-            # Accuracy: degrees -> metres without cos(lat) on longitude, so an
-            # east-west offset reads 1/cos(lat) too far (1.33x at 41 deg,
-            # 2x at 60 deg). It picks the nearest ping under that skewed
-            # metric and compares the skewed distance to max_dist_m.
-            # TODO(lib): pyproj.Geod.inv (or a local projected cKDTree)
-            # for the distance; changes matches near the threshold, so
-            # needs a decision and a test on a heading-varied track.
-            d_m = np.sqrt((c["lat"] - target.latitude) ** 2 + (c["lon"] - target.longitude) ** 2) * 111000.0
-            idx = int(np.argmin(d_m))
+            # Geodesic distance on the WGS84 ellipsoid (pyproj.Geod.inv).
+            # Pings with no fix (NaN lat/lon) give NaN and are skipped.
+            _, _, d_m = _GEOD.inv(
+                c["lon"],
+                c["lat"],
+                np.full_like(c["lon"], target.longitude, dtype=float),
+                np.full_like(c["lat"], target.latitude, dtype=float),
+            )
+            d_m = np.asarray(d_m, dtype=float)
+            if not np.isfinite(d_m).any():
+                continue
+            idx = int(np.nanargmin(d_m))
             if best is None or d_m[idx] < best.dist_m:
                 best = PositionMatch(path, freq_key, idx, float(d_m[idx]))
         if best is not None and best.dist_m <= max_dist_m:

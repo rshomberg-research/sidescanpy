@@ -191,6 +191,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+- `targets.correlate_target` measured target-to-ping distance as `111000 * hypot(dlat, dlon)` with no `cos(lat)` on longitude, so east-west offsets read `1/cos(lat)` too long (1.33x at 41 deg). It now uses the geodesic distance on the WGS84 ellipsoid (`pyproj.Geod.inv`) and skips pings with no position fix. Targets near `max_dist_m` may now match where they did not before, and the nearest ping can change.
+
 - Gridded rasters were always labeled channel `"unknown"` and
   `frequency_hz=0`: `resample_channel_to_grid` read a `frequency_hz`
   attribute nothing writes. It now reads `freq_hz_start` (what the

@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from pyproj import Geod
 
 from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import write_survey
@@ -308,6 +309,35 @@ class TestCorrelateTarget:
         path, freq_key, ping_idx, dist_m = result
         assert ping_idx == 10
         assert dist_m < 1.0
+
+    def test_east_west_offset_uses_geodesic_distance(self):
+        """A target 20 m east of a north-south track at 41N is 20 m away,
+        not 20/cos(41) = 26.5 m (the old degrees-times-111 km error)."""
+        lat = np.linspace(41.0, 41.002, 41)
+        lon = np.full(41, -71.0)
+        index = self._index(lat=lat, lon=lon, n_pings=41)
+        geod = Geod(ellps="WGS84")
+        t_lon, t_lat, _ = geod.fwd(-71.0, float(lat[20]), 90.0, 20.0)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=float(t_lat), longitude=float(t_lon))
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        assert result.ping_idx == 20
+        assert result.dist_m == pytest.approx(20.0, abs=0.01)
+
+    def test_pings_without_fix_are_skipped(self):
+        lat = np.linspace(40.0, 40.001, 20)
+        lon = np.linspace(-70.0, -70.001, 20)
+        lat[:5] = np.nan
+        lon[:5] = np.nan
+        index = self._index(lat=lat, lon=lon, n_pings=20)
+        t = Target(target_id="1", source_format="x", catalog_source="x", latitude=float(lat[10]), longitude=float(lon[10]))
+
+        result = correlate_target(t, index, max_dist_m=25.0)
+
+        assert result is not None
+        assert result.ping_idx == 10
 
     def test_no_gps_falls_back_to_known_ping(self):
         """The exact reported bug: no recorded GPS position at all, but a
