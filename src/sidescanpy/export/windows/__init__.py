@@ -12,6 +12,9 @@ Export windows: where an image is cut from a survey, and what is in it.
   windows.
 - :mod:`~sidescanpy.export.windows.background` -- screened no-target
   windows.
+- :mod:`~sidescanpy.export.windows.native` -- chips and dual-swath tiles
+  that are square/scaled in metres on the native ping x sample grid, with
+  pixel <-> native mapping (annotation round trips).
 
 2026 rshomberg@uri.edu
 """
@@ -42,6 +45,12 @@ from sidescanpy.export.windows.levels import (
     with_db_var,
     with_uncorrected_var,
 )
+from sidescanpy.export.windows.native import (
+    NativeWindow,
+    along_track_spacing_m,
+    native_chip,
+    swath_tiles,
+)
 from sidescanpy.export.windows.neighborhood import (
     GeoNeighborhood,
     across_values,
@@ -69,6 +78,10 @@ from sidescanpy.export.windows.pixel import (
 )
 
 __all__ = [
+    "NativeWindow",
+    "along_track_spacing_m",
+    "native_chip",
+    "swath_tiles",
     "BackgroundCandidate",
     "BackgroundWindow",
     "WindowFootprint",

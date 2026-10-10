@@ -17,6 +17,19 @@
 | `targets.correlate.resolve_targets_by_catalog_ping(targets, ss_h5_dir)` | Klein: place each target at the ping its catalog names (catalog ping time + number, no clock offset) |
 | `targets.correlate.calibrate_clock_offset` | estimate a constant clock offset between a catalog's pick times and the survey (fallback for catalogs without ping fields) |
 
+## Native-resolution windows
+
+`export.windows.native` cuts windows that are square (chips) or a fixed
+length (tiles) *in metres* from the native ping x sample grid and resizes
+them with linear interpolation, for sonars whose ping spacing is much
+coarser than their sample spacing:
+
+| Function | Purpose |
+|---|---|
+| `native_chip(ds, ping=, channel=, sample=, size_m=, size_px=)` | one side, centred on a target |
+| `swath_tiles(ds, tile_m=, px_m=, overlap_m=)` | the whole channel as dual-swath tiles (port mirrored left) |
+| `NativeWindow.to_pixel` / `to_native` / `box_to_native` | map between image pixels and (ping, sample, channel), e.g. to turn annotation boxes back into sonar coordinates |
+
 ## Building a dataset
 
 `export.ml.build_target_dataset(sources, targets, spec, out_dir)` renders

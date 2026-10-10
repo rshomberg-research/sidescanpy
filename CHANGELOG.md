@@ -9,6 +9,14 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `export.windows.native`: `native_chip` and `swath_tiles` cut windows that
+  are square (or a fixed length) in metres from the native ping x sample
+  grid and resize them with linear interpolation, keeping NaN cells NaN.
+  `NativeWindow` maps image pixels to (ping, sample, channel) and back
+  (`to_pixel`, `to_native`, `box_to_native`), for annotation round trips.
+  For sonars whose ping spacing is ~10x the sample spacing, the metric
+  render levels repeat or smear pings and native pixel crops squash shapes.
+
 - `DatasetSpec.frequencies`: restrict target and background windows to
   the listed frequency keys. Without it a target is matched to the
   frequency whose sample spacing is closest to its catalog's, which is
