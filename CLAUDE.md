@@ -178,13 +178,21 @@ not in the repo; they skip without them.
   (always the case for SDF). One value per ping; no water-column profile.
 - **SDF layout** matches the Klein 3500 series (no fields 93/94); bit-17
   masking of samples is empirical. Pings of different lengths within a
-  file are NaN-padded and `valid_samples` records the true length.
+  file are NaN-padded and `valid_samples` records the true length; a
+  change of sample interval (range setting) is only handled by
+  `read_and_convert_segments`, which splits the file.
 - **DVL and attitude validity flags** reject everything on the devices
   seen so far; embedded per-ping values are used instead.
 - **griddata resampling** (`resample_method="griddata"`, the dataset
   default) interpolates most pixels at resolutions finer than the ping
   spacing, is much slower than `kdtree`/`binned`, and dominates peak
   memory for 1024 px swath windows on dense surveys.
+- **Re-correcting a georeferenced file is slow.** Adding a step to a file
+  that already has `latitude_per_sample` etc. spends ~250 s per 2500-ping
+  file in h5py writes (one cheap custom step), against ~15 s for all
+  steps in one pass on a freshly converted file. Not yet diagnosed
+  (chunk-size alignment to `HDF5_CHUNK_PING` is not the cause). Until
+  then, run every step in one pass from a fresh conversion.
 - **Gridding:** a UTM grid uses the zone of the bbox centre;
   `bbox_from_channel_dataset` pads by a fixed amount in degrees.
 - **Analysis assumptions:** `analyze_nadir` detects on values as given

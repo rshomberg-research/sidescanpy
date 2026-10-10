@@ -5,6 +5,63 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [Unreleased]
+
+### Added
+
+- `DatasetSpec.frequencies`: restrict target and background windows to
+  the listed frequency keys. Without it a target is matched to the
+  frequency whose sample spacing is closest to its catalog's, which is
+  ambiguous when two frequencies share a sample spacing (and can put a
+  dataset on a dead channel).
+
+### Fixed
+
+- **Distance-axis waterfalls no longer smear.** `viz.plot_waterfall` with
+  `across_track`/`ground_range`/`slant_range` axes set every sample without
+  a coordinate (water column, NaN padding of shorter pings after
+  concatenating files of different lengths) to x = 0, so the last real cell
+  of each ping stretched across the swath and whole rows came out one
+  colour. Missing coordinates are now interpolated within the ping (cells
+  stay masked) and all-padding columns are dropped.
+- **SDF files whose range setting changes mid-file are split.** When a
+  frequency's sample interval changes (e.g. 2500 samples at 60 m, then
+  3334 at 40 m), `io.read_and_convert_segments` now cuts the file into one
+  survey per constant-rate run (`<stem>_seg01`, ...), as it already did for
+  XTF (`io.sdf.split`). Previously the whole file used the first page's
+  sample rate and the later pings were mapped to the wrong ranges (twice
+  their true range in the case seen). `read_and_convert` is unchanged. The
+  project template's `01_convert` now converts through
+  `read_and_convert_segments`.
+- **Klein targets are placed at the ping their catalog names.** The
+  `.tgt` string fields hold the target ping's own time and ping number on
+  the sonar's clock (the clock of the converted pings). The reader now
+  parses them into `extra_attributes["catalog_ping_time"]` /
+  `["catalog_ping_number"]`, and the new
+  `targets.correlate.resolve_targets_by_catalog_ping` matches them exactly,
+  with no clock offset. `sidescan-convert targets` uses it by default for
+  Klein catalogs. Previously targets were matched by `pick_timestamp`, the
+  save time, which on real catalogs is 30-90 s after the target ping
+  (hours for picks made in playback), so targets landed roughly 100 m
+  along track from where they were. `--use-pick-time` (and the
+  clock-offset options) keep the old behaviour for catalogs without those
+  fields. Matched targets get `position_confidence="approximate"` and
+  record `ss_h5` / `ping_index` / `ping_number`, which
+  `targets.correlate.correlate_target` (and so exports and datasets) now
+  uses directly instead of re-matching the nearest vessel position (a
+  navigation fix repeated over ~10 pings put several targets on the same,
+  wrong ping).
+- **Klein targets are matched to the right frequency.** The reader now
+  records the `.tgd` window's sample spacing
+  (`extra_attributes["ping_meters_per_sample"]`), which
+  `correlate_target` uses to pick the frequency `sample` is counted on.
+  Without it a target fell to the first frequency in the file and was
+  "projected" onto the high-frequency sample axis, doubling its range where
+  the two frequencies differ in spacing (40 m range on some Klein 4900
+  files); some targets left the swath and were dropped.
+- `io.sdf.targets` documents the `.tgd` layout: every second ping, newest
+  first; `window_row` is not always the target's ping.
+
 ## [0.7.0] — 2026-10-08
 
 New XTF reader and a changed TVG default (results change for callers who
