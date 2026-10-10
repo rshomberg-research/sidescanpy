@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [Unreleased]
+
+### Removed
+
+- The 0.6.0 deprecation shims (breaking):
+  - `sidescanpy.viz.along_track_distance_m` and
+    `sidescanpy.viz.waterfall.along_track_distance_m`; import it from
+    `sidescanpy.processing.navigation`.
+  - `sidescan-analyze` flags `--stage3-bin-width-m`,
+    `--stage4-bin-width-m`, `--stage4-db-reference-percentile` and
+    `--stage4-fit-value-col`, and the matching `--config` keys; use
+    `--usable-range-bin-width-m`, `--decay-bin-width-m`,
+    `--decay-db-reference-percentile` and `--decay-fit-value-col`.
+  - The `raw` and `backscatter_raw` spellings of `uncorrected` for
+    `--value-var`, `--garbage-value-var` and `--render-level`.
+  - The internal deprecated-alias and renamed-config-key helpers in
+    `sidescanpy.cli`.
+- `.vscode/settings.json` and the `.gitmessage` commit template from the
+  repository.
+
+### Changed
+
+- **TVG spreading default is now 30 log R**, down from 40 (breaking for
+  callers relying on the default). 30 is the usual sidescan seafloor
+  term: two-way spherical spreading (40 log R) less 10 log R, because the
+  insonified seafloor footprint grows linearly with range. Affects
+  `TVGParams`, the `"tvg"` step, `fit_range_decay`'s candidates and
+  `sidescan-correct --tvg` when no coefficient is given. Set
+  `spreading_loss_db: 40.0` to keep the old behavior, or 0 where hardware
+  already applies TVG. Already-corrected files record their coefficient, so
+  `invert()` is unaffected.
+
 ## [0.7.0] — 2026-10-08
 
 New XTF reader and a changed TVG default (results change for callers who
