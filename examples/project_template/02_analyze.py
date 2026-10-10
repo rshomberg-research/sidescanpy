@@ -85,12 +85,20 @@ def main(argv=None) -> None:
             ds = invert(ds)  # analyze the uncorrected signal even on a corrected file
         if "slant_range_m" not in ds:
             ds = compute_geometric_ranges(ds)
-        usable = estimate_usable_range(ds, range_var=range_var, bin_width_m=bin_width_m).usable_range_m
+        # analyze.usable_range_m / r_fit_min_m override the automatic choices, for
+        # data (e.g. AGC-flattened) where the detector finds no usable range or the
+        # fit window starts inside the near-field rise. Check the decay figure.
+        usable = opts.get("usable_range_m")
         if usable is None:
-            report.note(f"{freq_key}: usable range could not be determined; no TVG fit")
+            usable = estimate_usable_range(ds, range_var=range_var, bin_width_m=bin_width_m).usable_range_m
+        else:
+            report.note(f"{freq_key}: usable range set in the config: {usable} m")
+        if usable is None:
+            report.note(f"{freq_key}: usable range could not be determined; no TVG fit "
+                        "(set analyze.usable_range_m after looking at the data)")
             continue
         decay = fit_range_decay(ds, range_var=range_var, bin_width_m=bin_width_m, usable_range_m=usable,
-                                r_ref_m="auto", r_fit_min_m="auto")
+                                r_ref_m="auto", r_fit_min_m=opts.get("r_fit_min_m", "auto"))
         (out_dir / f"{freq_key}_metrics.json").write_text(json.dumps(decay.to_dict(), indent=2, default=str))
         if decay.fit is None:
             report.note(f"{freq_key}: no decay model could be fit ({decay.tvg_status}): {'; '.join(decay.notes)}")

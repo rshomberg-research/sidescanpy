@@ -24,9 +24,8 @@ from steplib import logger, save_figure, ss_h5_files, start_step
 
 from sidescanpy.io import (
     CATALOG_SDF_KLEIN,
-    detect_format,
     find_sonar_files,
-    read_and_convert,
+    read_and_convert_segments,
     read_target_catalog,
 )
 from sidescanpy.io.hdf5 import concat_survey_frequency, write_survey
@@ -34,6 +33,7 @@ from sidescanpy.processing import crop_far_range_noise
 from sidescanpy.targets import write_targets_csv, write_targets_json
 from sidescanpy.targets.correlate import (
     calibrate_clock_offset,
+    resolve_targets_by_catalog_ping,
     resolve_targets_nearest_ping,
     resolve_targets_offset_corrected,
 )
@@ -51,25 +51,37 @@ def convert_files(cfg, paths, report) -> None:
     paths.ss_h5.mkdir(parents=True, exist_ok=True)
     per_file = {}
     for i, raw in enumerate(files, 1):
-        out = paths.ss_h5 / f"{raw.stem}.ss.h5"
-        if out.exists() and not opts.get("overwrite", False):
+        existing = sorted(paths.ss_h5.glob(f"{raw.stem}.ss.h5")) + sorted(paths.ss_h5.glob(f"{raw.stem}_seg*.ss.h5"))
+        if existing and not opts.get("overwrite", False):
             logger.info("[%d/%d] %s: already converted, skipping", i, len(files), raw.name)
             per_file[raw.name] = {"status": "skipped"}
             continue
+        for old in existing:
+            old.unlink()
         t0 = time.perf_counter()
         logger.info("[%d/%d] %s: converting", i, len(files), raw.name)
-        survey = read_and_convert([raw], detect_format([raw]), survey_name=raw.stem)
-        cutoffs = {}
-        if opts.get("crop_farrange", True):
-            survey, cutoffs = crop_far_range_noise(survey)
-        write_survey(survey, out, overwrite=True)
-        per_file[raw.name] = {
-            "status": "converted",
-            "frequencies": {fk: dict(survey.get_frequency(fk).dataset.sizes) for fk in survey.frequencies},
-            "far_range_cutoff_sample": cutoffs,
-            "size_mb": round(out.stat().st_size / 1e6, 1),
-            "seconds": round(time.perf_counter() - t0, 1),
-        }
+        # One survey per run of constant range setting (a file whose range,
+        # and so sample interval, changes mid-file is split into <stem>_segNN).
+        segments = read_and_convert_segments(raw, survey_name=raw.stem,
+                                              min_pings=opts.get("min_segment_pings", 50))
+        if len(segments) > 1:
+            report.note(f"{raw.name}: range setting changes mid-file; split into {len(segments)} segments")
+        for stem, survey in segments:
+            out = paths.ss_h5 / f"{stem}.ss.h5"
+            cutoffs = {}
+            if opts.get("crop_farrange", True):
+                survey, cutoffs = crop_far_range_noise(survey)
+            write_survey(survey, out, overwrite=True)
+            per_file[out.name] = {
+                "status": "converted",
+                "source": raw.name,
+                "frequencies": {fk: dict(survey.get_frequency(fk).dataset.sizes) for fk in survey.frequencies},
+                "sample_rate_hz": {fk: survey.get_frequency(fk).dataset.attrs["sample_rate_hz"]
+                                   for fk in survey.frequencies},
+                "far_range_cutoff_sample": cutoffs,
+                "size_mb": round(out.stat().st_size / 1e6, 1),
+                "seconds": round(time.perf_counter() - t0, 1),
+            }
     report.results["files"] = per_file
 
 
@@ -78,9 +90,21 @@ def convert_targets(cfg, paths, report) -> None:
         logger.info("no targets_source_dir configured; no catalog to convert")
         return
     fmt, targets = read_target_catalog(paths.targets_source_dir)
-    if fmt == CATALOG_SDF_KLEIN:
-        # Klein targets have no position until matched to pings by time.
-        opts = cfg.get("targets", {})
+    opts = cfg.get("targets", {})
+    if fmt == CATALOG_SDF_KLEIN and opts.get("resolve", "catalog_ping") == "catalog_ping":
+        # The catalog names the target's own ping (time + number on the
+        # sonar clock), so no clock offset is needed.
+        targets = resolve_targets_by_catalog_ping(targets, paths.ss_h5)
+        sources = {}
+        for t in targets:
+            src = t.extra_attributes.get("position_source", "unplaced")
+            sources[src] = sources.get(src, 0) + 1
+        report.results["target_position_source"] = sources
+        if sources.get("unplaced"):
+            report.note(f"{sources['unplaced']} target(s) have a catalog time in no converted file "
+                        "(picked while not logging, or that file was not converted)")
+    elif fmt == CATALOG_SDF_KLEIN:
+        # Legacy: match the pick (save) time, 30-90 s after the target ping.
         offset_s = opts.get("time_offset_s")
         if opts.get("calibrate_offset"):
             if opts.get("local_utc_offset_hours") is None:

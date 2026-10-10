@@ -18,8 +18,12 @@ convert:
   overwrite: false       # skip raw files already converted
 
 targets:
-  # Klein catalogs carry no position: it is resolved against the converted
-  # files by time. Ignored for EdgeTech catalogs, which have positions.
+  # Klein catalogs carry no position. "catalog_ping" (default) places each
+  # target at the ping its catalog names (catalog time + ping number, same
+  # clock as the pings; no offset needed). "pick_time" matches the save time
+  # instead (30-90 s late) using the options below. Ignored for EdgeTech
+  # catalogs, which have positions.
+  resolve: catalog_ping
   max_time_delta_s: 300.0
   time_offset_s: null            # known constant clock offset (s), or
   calibrate_offset: false        # derive it from the .ss.h5 file names vs. their first ping
@@ -30,6 +34,8 @@ analyze:
   pings: [0, 5000]
   bin_width_m: 1.0
   range_var: slant_range_m
+  usable_range_m: null   # null: detect; set it when the detector finds none
+  r_fit_min_m: auto      # or a range (m) past the near-field peak
 
 correct:
   # interpolate_aux is added automatically when a step needs navigation.
