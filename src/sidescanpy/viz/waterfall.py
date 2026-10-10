@@ -478,16 +478,30 @@ def _compute_y_full(ds: xr.Dataset, y_axis: YAxisMode, ping_offset: int = 0) -> 
 # ==========================================================
 
 def _mask_invalid_coord(x, y, c):
-    """Build a masked array for c where x has non-finite values.
-    y is always finite in supported modes.
+    """Mask ``c`` where ``x`` is not finite, with ``x`` made safe for pcolormesh.
+
+    Columns with no finite ``x`` in any ping (NaN padding of shorter pings
+    after concatenating files of different lengths) are dropped. Remaining
+    gaps (water column, short pings) take a coordinate interpolated from
+    the finite samples of the same ping, held constant beyond them, so a
+    masked cell has (near) zero width instead of stretching its
+    neighbours. Setting gaps to 0 made the last real cell of each ping
+    span the whole swath. ``y`` is always finite in supported modes.
     """
     nan_mask = ~np.isfinite(x)
     if not nan_mask.any():
         return x, y, c
-    # Replace NaN in x with a finite placeholder
-    x_safe = np.where(np.isnan(x), 0.0, x)
-    c_masked = np.ma.masked_array(c, mask=nan_mask)
+    keep = ~nan_mask.all(axis=0)
+    if not keep.all():
+        x, y, c, nan_mask = x[:, keep], y[:, keep], c[:, keep], nan_mask[:, keep]
+    idx = np.arange(x.shape[1], dtype=np.float64)
+    x_safe = np.array(x, dtype=np.float64, copy=True)
+    for i in np.nonzero(nan_mask.any(axis=1))[0]:
+        good = ~nan_mask[i]
+        x_safe[i] = np.interp(idx, idx[good], x[i, good]) if good.any() else 0.0
+    c_masked = np.ma.masked_array(c, mask=nan_mask | np.ma.getmaskarray(c))
     return x_safe, y, c_masked
+
 
 # ============================================================
 # AXIS LABELS

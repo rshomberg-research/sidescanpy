@@ -376,3 +376,43 @@ def test_along_track_shim_warns():
         assert wf.along_track_distance_m is along_track_distance_m
     with pytest.warns(DeprecationWarning, match="processing.navigation"):
         assert sidescanpy.viz.along_track_distance_m is along_track_distance_m
+
+
+class TestInvalidCoordinates:
+    """Samples without a coordinate (water column, NaN padding of shorter pings)
+    must not stretch the neighbouring cells across the plot."""
+
+    def test_nan_coordinates_interpolated_not_zeroed(self):
+        from sidescanpy.viz.waterfall import _mask_invalid_coord
+
+        # Row 0 has a water-column gap and a short ping; row 1 is complete.
+        x = np.array([[np.nan, np.nan, 1.0, 2.0, 3.0, np.nan, np.nan],
+                      [0.1, 0.5, 1.0, 2.0, 3.0, 4.0, 5.0]])
+        y = np.zeros_like(x)
+        c = np.arange(14.0).reshape(2, 7)
+        xs, ys, cs = _mask_invalid_coord(x, y, c)
+        assert xs.shape == (2, 7)
+        assert np.all(np.isfinite(xs))
+        assert np.all(np.diff(xs[0]) >= 0)          # no jump back to 0
+        assert xs[0, -1] == pytest.approx(3.0)      # beyond the last real sample: held constant
+        assert np.ma.getmaskarray(cs)[0].tolist() == [True, True, False, False, False, True, True]
+        assert not np.ma.getmaskarray(cs)[1].any()
+
+    def test_all_nan_padding_columns_trimmed(self):
+        from sidescanpy.viz.waterfall import _mask_invalid_coord
+
+        x = np.array([[1.0, 2.0, np.nan, np.nan], [1.0, 2.5, np.nan, np.nan]])
+        xs, ys, cs = _mask_invalid_coord(x, np.zeros_like(x), np.ones_like(x))
+        assert xs.shape == (2, 2) and ys.shape == (2, 2) and cs.shape == (2, 2)
+
+    def test_padded_concatenation_renders_like_single_file(self):
+        # A window whose samples were padded to a longer file's length must
+        # draw its real samples at their own across-track positions.
+        from sidescanpy.viz.waterfall import _mask_invalid_coord
+
+        n = 50
+        x_real = np.linspace(0.5, 40.0, n)
+        x = np.concatenate([x_real, np.full(20, np.nan)])[None, :].repeat(3, axis=0)
+        xs, _, cs = _mask_invalid_coord(x, np.zeros_like(x), np.ones_like(x))
+        np.testing.assert_allclose(xs[:, :n], x_real[None, :].repeat(3, axis=0))
+        assert xs.shape[1] == n
