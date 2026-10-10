@@ -6,11 +6,11 @@ transmission losses in the water column. The raw backscatter_intensity values
 represent echo levels received by the transducer but do not account for:
 
 1. Geometric spreading: sound spreads in 3D, so intensity falls as 1/R² each
-   way. Over the two-way path that is 40*log10(R) dB (samples are amplitude,
+   way, 40*log10(R) dB over the two-way path (samples are amplitude,
    converted with 20*log10, so dB values are comparable to intensity dB).
-   Some authors use 30*log10(R) for sidescan, because the insonified seafloor
-   patch grows in proportion to R and adds back 10*log10(R) (see the note on
-   :class:`TVGParams`); the coefficient is a parameter, not fixed.
+   For sidescan the default is 30*log10(R): the insonified seafloor patch
+   grows in proportion to R, which gives back 10*log10(R) (see the note on
+   :class:`TVGParams`). The coefficient is a parameter, not fixed.
 2. Absorption: water absorbs acoustic energy proportional to distance traveled
    (in dB: 2*alpha*R dB loss for two-way path)
 
@@ -58,16 +58,16 @@ class TVGParams:
 
     Attributes
     ----------
-    spreading_loss_db : float, default=40.0
+    spreading_loss_db : float, default=30.0
         Spreading loss coefficient (dB per decade of range): the gain is
-        ``spreading_loss_db * log10(R)``. 40.0 is two-way spherical
-        spreading. 30.0 is the alternative used for sidescan, where the
-        insonified area grows with range (e.g. J. Mar. Sci. Eng. 2017,
-        5(4), 54, https://www.mdpi.com/2077-1312/5/4/54); which one fits
-        real data is not yet settled, so measure with
-        :func:`sidescanpy.analysis.fit_range_decay` per survey. 20.0 is
-        one-way spherical spreading (the default before 0.7.0). 0.0
-        disables the term (hardware already compensates spreading).
+        ``spreading_loss_db * log10(R)``. 30.0 is the usual sidescan
+        seafloor spreading term: two-way spherical spreading (40 log R)
+        less 10 log R, because the insonified seafloor footprint grows
+        linearly with range (e.g. J. Mar. Sci. Eng. 2017, 5(4), 54,
+        https://www.mdpi.com/2077-1312/5/4/54). 40.0 (point target or
+        volume scattering) and 20.0 (one-way spherical) remain available;
+        measure with :func:`sidescanpy.analysis.fit_range_decay` per
+        survey. 0.0 disables the term (hardware already applies TVG).
     absorption_db_per_m : float, optional
         Absorption coefficient (dB per meter).
         If None, derived from the channel frequency with
@@ -87,7 +87,7 @@ class TVGParams:
         pH 8 -- pass real values when known).
     """
 
-    spreading_loss_db: float = 40.0
+    spreading_loss_db: float = 30.0
     absorption_db_per_m: float | None = None
     min_range_m: float = 0.5
     sound_velocity_ms: float | None = None

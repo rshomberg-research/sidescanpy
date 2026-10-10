@@ -174,7 +174,7 @@ class TVGCandidateFitResult:
 def fit_tvg_curve(
     binned: pd.DataFrame,
     *,
-    spreading_loss_db: float = 40.0,
+    spreading_loss_db: float = 30.0,
     absorption_db_per_m: float,
     r_ref_m: float | None = None,
     r_fit_min_m: float | None = None,
@@ -206,7 +206,7 @@ def fit_tvg_curve(
     binned : pd.DataFrame
         :func:`backscatter_vs_range` output computed on uncorrected dB
         backscatter.
-    spreading_loss_db : float, default 40.0
+    spreading_loss_db : float, default 30.0
     absorption_db_per_m : float
         Required; pass the survey's own frequency-appropriate value.
     r_ref_m : float, optional
