@@ -140,8 +140,8 @@ class TestReadAndConvert:
 
 
 class TestReadAndConvertSegments:
-    @pytest.mark.parametrize("name, fmt", [("a.jsf", "jsf"), ("b.sdf", "sdf")])
-    def test_jsf_sdf_unchanged_single_survey(self, monkeypatch, name, fmt):
+    @pytest.mark.parametrize("name, fmt", [("a.jsf", "jsf")])
+    def test_jsf_unchanged_single_survey(self, monkeypatch, name, fmt):
         calls = []
         monkeypatch.setattr(
             "sidescanpy.io.dispatch.read_and_convert",

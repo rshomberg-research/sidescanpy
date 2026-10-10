@@ -30,6 +30,7 @@ from sidescanpy.io.jsf import read_jsf
 from sidescanpy.io.jsf.targets import read_discover_targets
 from sidescanpy.io.sdf import convert as sdf_convert
 from sidescanpy.io.sdf import read_sdf
+from sidescanpy.io.sdf.split import split_by_sample_rate as split_by_sample_rate_sdf
 from sidescanpy.io.sdf.targets import read_klein_targets
 from sidescanpy.io.xtf import convert as xtf_convert
 from sidescanpy.io.xtf import read_xtf, split_by_sample_rate
@@ -157,13 +158,14 @@ def read_and_convert_segments(
 ) -> list[tuple[str, SideScanSurvey]]:
     """Read one raw sonar file into one survey per constant-range segment.
 
-    ``.jsf`` and ``.sdf`` files give one survey, exactly as
-    :func:`read_and_convert`. An ``.xtf`` file is split at sample-rate
-    (range-setting) changes with
-    :func:`~sidescanpy.io.xtf.split_by_sample_rate` and each kept run is
-    converted on its own, so every survey has the right
-    ``sample_rate_hz``; runs shorter than ``min_pings`` are dropped and
-    counted in each survey's ``xtf_pings_dropped_short_runs`` attribute.
+    A ``.jsf`` file gives one survey, exactly as :func:`read_and_convert`.
+    ``.xtf`` and ``.sdf`` files are split at sample-rate (range-setting)
+    changes (:func:`~sidescanpy.io.xtf.split_by_sample_rate`,
+    :func:`~sidescanpy.io.sdf.split.split_by_sample_rate`) and each kept
+    run is converted on its own, so every survey has the right
+    ``sample_rate_hz``; runs shorter than ``min_pings`` are dropped (for
+    XTF, counted in each survey's ``xtf_pings_dropped_short_runs``
+    attribute).
 
     Parameters
     ----------
@@ -172,7 +174,7 @@ def read_and_convert_segments(
     survey_name : str, optional
         Base name; defaults to ``path.stem``.
     min_pings : int, default 50
-        XTF only: shortest run kept when a file is split.
+        XTF and SDF: shortest run kept when a file is split.
 
     Returns
     -------
@@ -185,12 +187,21 @@ def read_and_convert_segments(
     Raises
     ------
     ValueError
-        Unsupported extension, or an XTF file whose runs are all shorter
+        Unsupported extension, or an XTF or SDF file whose runs are all shorter
         than ``min_pings``.
     """
     path = Path(path)
     fmt = detect_format([path])
     base = survey_name or path.stem
+    if fmt == "sdf":
+        logger.debug(f"  Reading SDF: {path}")
+        runs = split_by_sample_rate_sdf(read_sdf(path), min_pings=min_pings, source=path.name)
+        if not runs:
+            raise ValueError(f"{path}: no run of constant sample rate is at least {min_pings} pings long")
+        return [
+            (stem := segment_stem(base, i, len(runs)), sdf_convert(run, source_files=[path], survey_name=stem))
+            for i, run in enumerate(runs, 1)
+        ]
     if fmt != "xtf":
         return [(base, read_and_convert([path], fmt, survey_name=base))]
 
