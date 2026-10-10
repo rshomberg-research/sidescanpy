@@ -135,3 +135,38 @@ def test_decode_target_window_matches_source_channel(tmp_path):
     decoded = decode_target_window(targets[0])
     assert decoded.shape == (15, 50)
     np.testing.assert_array_equal(decoded, window[:, 1, :])
+
+
+class TestCatalogPingFields:
+    """The first two string fields are the target ping's TPU time (the same
+    clock as the pings in the .sdf files) and its ping number."""
+
+    def test_catalog_ping_time_and_number_parsed(self, tmp_path):
+        from datetime import UTC, datetime
+
+        window = _make_window()
+        _write_target(tmp_path, "Target_1536923484", channel=0, raw_window_row=4, range_m=10.0, window=window)
+        t = read_klein_targets(tmp_path)[0]
+        assert t.extra_attributes["catalog_ping_number"] == 61704
+        expected = datetime(2026, 5, 13, 14, 51, 5, tzinfo=UTC).timestamp()
+        assert t.extra_attributes["catalog_ping_time"] == expected
+
+    def test_malformed_catalog_fields_give_none(self, tmp_path):
+        timestamp = 1536923484
+        (tmp_path / "Target_1536923484.tgt").write_bytes(
+            _make_tgt_bytes(timestamp=timestamp, channel=0, raw_window_row=4, range_m=10.0,
+                            strings=["not a date", "abc", "1.0", "X1", "notes"])
+        )
+        (tmp_path / "Target_1536923484.tgd").write_bytes(_make_tgd_bytes(_make_window()))
+        t = read_klein_targets(tmp_path)[0]
+        assert t.extra_attributes["catalog_ping_number"] is None
+        assert t.extra_attributes["catalog_ping_time"] is None
+
+
+def test_window_sample_spacing_recorded_for_frequency_matching(tmp_path):
+    # The .tgd window's metres per sample identifies which frequency (and so
+    # which sample axis) ``sample`` is counted on.
+    window = _make_window(n_samples=100)
+    _write_target(tmp_path, "Target_1536923484", channel=0, raw_window_row=4, range_m=24.0, window=window)
+    t = read_klein_targets(tmp_path)[0]
+    assert t.extra_attributes["ping_meters_per_sample"] == 0.6   # max_range 60 m / 100 samples

@@ -60,6 +60,7 @@ from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.processing import crop_far_range_noise
 from sidescanpy.targets.correlate import (
     calibrate_clock_offset,
+    resolve_targets_by_catalog_ping,
     resolve_targets_nearest_ping,
     resolve_targets_offset_corrected,
 )
@@ -179,7 +180,21 @@ def run_survey(args: argparse.Namespace) -> int:
 # ============================================================
 
 def _resolve_klein_positions(targets: list, args: argparse.Namespace) -> list:
-    """Klein targets carry no position: resolve it against ``--ss-h5-dir``."""
+    """Klein targets carry no position: resolve it against ``--ss-h5-dir``.
+
+    By default each target is placed at the ping its catalog names (catalog
+    ping time + number, same clock as the pings). The pick-timestamp paths
+    (``--time-offset-s`` / ``--calibrate-offset`` / ``--use-pick-time``)
+    match the later save time instead and are kept for catalogs without
+    those fields.
+    """
+    has_catalog_ping = any(t.extra_attributes.get("catalog_ping_time") is not None for t in targets)
+    use_pick_time = args.use_pick_time or args.time_offset_s is not None or args.calibrate_offset
+    if has_catalog_ping and not use_pick_time:
+        targets = resolve_targets_by_catalog_ping(targets, args.ss_h5_dir)
+        n_resolved = sum(1 for t in targets if t.latitude is not None)
+        logger.info(f"Position resolved for {n_resolved}/{len(targets)} target(s) (catalog ping)")
+        return targets
     offset_s = args.time_offset_s
     if args.calibrate_offset:
         logger.info("Calibrating clock offset from .ss.h5 filenames vs. first ping...")
@@ -261,7 +276,13 @@ def build_parser() -> tuple[CLIParser, Any]:
     p.add_argument("--output", required=True, type=Path, help="Output directory for targets.json/targets.csv")
     p.add_argument(
         "--ss-h5-dir", type=Path, default=None,
-        help="Klein only: directory of .ss.h5 files to resolve position from (nearest ping by timestamp)",
+        help="Klein only: directory of .ss.h5 files to resolve position from (the ping named by the "
+             "catalog's own ping time and number)",
+    )
+    p.add_argument(
+        "--use-pick-time", action="store_true",
+        help="Klein only: match the pick (save) timestamp instead of the catalog ping. The pick is "
+             "typically 30-90 s after the target ping; use only for catalogs without ping fields.",
     )
     p.add_argument("--max-time-delta-s", type=float, default=300.0)
     p.add_argument(

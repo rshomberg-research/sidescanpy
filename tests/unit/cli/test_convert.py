@@ -105,7 +105,7 @@ class TestRunTargets:
         defaults = dict(
             source=tmp_path / "cat", output=tmp_path / "out",
             ss_h5_dir=None, max_time_delta_s=300.0, time_offset_s=None,
-            calibrate_offset=False, local_utc_offset_hours=4.0, plot=True,
+            calibrate_offset=False, local_utc_offset_hours=4.0, plot=True, use_pick_time=False,
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -182,6 +182,40 @@ class TestRunTargets:
         assert convert.run_targets(args) == 0
         written = read_targets_json(tmp_path / "out" / "targets.json")
         assert written[0].latitude == pytest.approx(41.5)
+
+    def _catalog_ping_target(self):
+        t = _target("1536923484")
+        t.extra_attributes["catalog_ping_time"] = 1778683865.0
+        t.extra_attributes["catalog_ping_number"] = 61704
+        return t
+
+    def test_klein_catalog_ping_fields_use_catalog_ping_by_default(self, tmp_path, monkeypatch):
+        (tmp_path / "cat").mkdir()
+        ss_h5_dir = tmp_path / "ss_h5"
+        ss_h5_dir.mkdir()
+        calls = {}
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("sdf_klein", [self._catalog_ping_target()]))
+
+        def _fake(targets, d):
+            calls["catalog"] = True
+            return [_target("1536923484", 41.5, -71.4)]
+
+        monkeypatch.setattr(convert, "resolve_targets_by_catalog_ping", _fake)
+        monkeypatch.setattr(convert, "resolve_targets_nearest_ping", lambda *a, **k: pytest.fail("pick-time path used"))
+        assert convert.run_targets(self._args(tmp_path, ss_h5_dir=ss_h5_dir)) == 0
+        assert calls["catalog"]
+        assert read_targets_json(tmp_path / "out" / "targets.json")[0].latitude == pytest.approx(41.5)
+
+    def test_use_pick_time_overrides_catalog_ping(self, tmp_path, monkeypatch):
+        (tmp_path / "cat").mkdir()
+        ss_h5_dir = tmp_path / "ss_h5"
+        ss_h5_dir.mkdir()
+        monkeypatch.setattr(convert, "read_target_catalog", lambda source: ("sdf_klein", [self._catalog_ping_target()]))
+        monkeypatch.setattr(convert, "resolve_targets_by_catalog_ping", lambda *a, **k: pytest.fail("catalog path used"))
+        monkeypatch.setattr(convert, "resolve_targets_nearest_ping",
+                            lambda targets, d, max_time_delta_s: [_target("1536923484", 41.5, -71.4)])
+        args = self._args(tmp_path, ss_h5_dir=ss_h5_dir, use_pick_time=True)
+        assert convert.run_targets(args) == 0
 
     def test_no_catalog_files_returns_1(self, tmp_path):
         (tmp_path / "cat").mkdir()

@@ -59,18 +59,44 @@ trailer that follows the string fields, found by comparing several real
 files and noting which int32/float32 slots vary plausibly vs. stay
 constant):
 
-- ``channel`` (0/1): an int32 slot that's always exactly 0 or 1. Not
-  independently verified — the six-target row check above used whatever
-  channel this field selected and found real features there, which is
-  indirect support, but the alternate channel per target was never
-  compared.
-- The string fields ahead of the trailer are read and kept verbatim in
-  ``extra_attributes`` (a short numeric-looking code, a decimal number,
-  a line-ID-like string, and a notes field) but not interpreted --
-  their meaning wasn't determined. The notes field is the *unedited
-  placeholder text* ("The operator places target notes here. Multiple
-  lines OK.") on every real target checked so far, not a real label —
-  passed through as-is rather than guessed at.
+- ``channel`` (0/1): an int32 slot that's always exactly 0 or 1; 0 =
+  port, 1 = starboard. Confirmed on real catalogs: the ``.tgd`` window
+  matches the survey's own pings on that side.
+- The string fields ahead of the trailer are kept verbatim in
+  ``extra_attributes["string_fields"]``: ping time, ping number (both
+  interpreted below), a decimal number (not interpreted), the target
+  name, and a notes field. The notes field is the *unedited placeholder
+  text* ("The operator places target notes here. Multiple lines OK.") on
+  every real target checked so far, not a real label.
+
+Catalog ping time and number (confirmed on real catalogs by matching
+every ``.tgd`` window back to the survey's own pings):
+
+- String field 0 is the date-time (``M/D/YYYY h:mm:ss``) and field 1 the
+  ping number of the **target's own ping**, both on the sonar's own clock,
+  the same clock as the pings in the ``.sdf`` files (which can be years off
+  real time). Parsed into ``extra_attributes["catalog_ping_time"]`` (Unix
+  seconds on that clock, 1 s resolution) and
+  ``extra_attributes["catalog_ping_number"]``. Ping counters can restart
+  after a recording gap, so the number alone is not unique; the time
+  disambiguates. Use
+  :func:`sidescanpy.targets.correlate.resolve_targets_by_catalog_ping` to
+  place targets: it needs no clock offset.
+- ``pick_timestamp`` (the ``Target_<unix>`` file name) is when the pick
+  was saved, on the acquisition PC's clock: typically 30-90 s *after* the
+  target ping, and hours later for picks made during playback. Matching
+  pings by it places targets tens to hundreds of metres along track from
+  where they are.
+- The ``.tgd`` window holds the catalog channel of the high-frequency
+  data, one row per **second** ping, **newest ping first**. ``window_row``
+  counts rows from the top, so its ping is ``newest - 2 * window_row``.
+  On real catalogs this lands on the catalog ping for about three
+  quarters of the targets; for the rest it is several to ~100 pings
+  older, so ``window_row`` is not a reliable target ping. ``sample`` (from
+  the range field) has been consistent.
+- Some picks are made from the live display while logging is off; their
+  catalog time falls in a recording gap and the ``.tgd`` is the only copy
+  of that data.
 
 No absolute latitude/longitude was found anywhere in ``.tgt`` (searched
 exhaustively for plausible float32/float64 pairs in the survey area's
@@ -88,6 +114,7 @@ converted ``.ss.h5`` files live in :mod:`sidescanpy.targets.correlate`.
 
 import logging
 import struct
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -128,6 +155,23 @@ def _parse_string_fields(data: bytes, start: int = _STRING_FIELDS_START) -> tupl
     return fields, off
 
 
+def _parse_catalog_time(text: str) -> float | None:
+    """``"5/13/2026 14:51:05"`` -> Unix seconds, read as UTC on the sonar's clock."""
+    try:
+        return datetime.strptime(text.strip(), "%m/%d/%Y %H:%M:%S").replace(tzinfo=UTC).timestamp()
+    except ValueError:
+        logger.debug(f"Unparseable catalog ping time {text!r}")
+        return None
+
+
+def _parse_int(text: str) -> int | None:
+    try:
+        return int(text.strip())
+    except ValueError:
+        logger.debug(f"Unparseable catalog ping number {text!r}")
+        return None
+
+
 def _target_id_from_filename(path: Path) -> str:
     # "Target_1536923484.tgt" -> "1536923484"
     return path.stem.removeprefix("Target_")
@@ -151,14 +195,24 @@ def _read_one_target(tgt_path: Path) -> Target:
 
     tgd_path = tgt_path.with_suffix(".tgd")
     sample = None
+    meters_per_sample = None
     if tgd_path.exists() and max_range_m > 0:
         n_samples = struct.unpack_from("<i", tgd_path.read_bytes(), 4)[0]
         meters_per_sample = max_range_m / n_samples
         sample = int(round(range_m / meters_per_sample))
 
+    catalog_ping_time = _parse_catalog_time(fields[0]) if fields else None
+    catalog_ping_number = _parse_int(fields[1]) if len(fields) > 1 else None
+
     extra_attributes = {
+        "catalog_ping_time": catalog_ping_time,
+        "catalog_ping_number": catalog_ping_number,
         "window_row": window_row,
         "max_window_range_m": max_range_m,
+        # The window's sample spacing: ``sample`` counts samples at this
+        # spacing, which picks the matching frequency when targets are
+        # correlated to a survey (frequencies can differ in spacing).
+        "ping_meters_per_sample": meters_per_sample,
         "range_m": range_m,
         "string_fields": fields,
         "notes": fields[-1] if fields else None,
@@ -199,11 +253,10 @@ def decode_target_window(target: Target) -> np.ndarray:
     ``target.channel`` from its paired ``.tgd`` file.
 
     Returns real int16 sonar amplitude (not a rendered/processed image),
-    cast to float64. Row ``target.extra_attributes["window_row"]`` is the
-    target's own ping within this array (confirmed by visual cross-check
-    — see module docstring); column ``target.sample`` is its inferred
-    position within each ping (not independently verified to the same
-    degree).
+    cast to float64. Rows are every second ping, newest first. Row
+    ``target.extra_attributes["window_row"]`` is the catalog's box row,
+    which is not always the target's own ping (see module docstring);
+    column ``target.sample`` is the target's sample within each ping.
     """
     tgd_path = Path(target.catalog_source).with_suffix(".tgd")
     data = tgd_path.read_bytes()

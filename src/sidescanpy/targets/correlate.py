@@ -2,9 +2,12 @@
 Resolve target positions and clock offsets against converted ``.ss.h5`` files.
 
 Catalog formats that store no absolute position (the Klein ``.tgt`` reader in
-:mod:`sidescanpy.io.sdf.targets`) are located here by matching each target's
-pick timestamp against per-ping times of converted surveys, with optional
-constant clock-offset calibration and geodesic speed estimates. Also
+:mod:`sidescanpy.io.sdf.targets`) are located here against per-ping times of
+converted surveys. For Klein catalogs use
+:func:`resolve_targets_by_catalog_ping`, which matches the catalog's own ping
+time and number exactly; the pick-timestamp functions (with optional
+constant clock-offset calibration) match the later save time and are only
+a fallback for catalogs without those fields. Also
 provides position-based correlation of any target to a ping in a directory of
 converted surveys, and projection of a target onto another frequency channel.
 
@@ -169,19 +172,25 @@ def calibrate_clock_offset(ss_h5_dir: str | Path, *, local_utc_offset_hours: flo
     return offset_s
 
 
-def _preload_ss_h5_nav(ss_h5_dir: Path) -> list[dict]:
+def _preload_ss_h5_nav(ss_h5_dir: Path, *, with_ping_number: bool = False) -> list[dict]:
     loaded = []
     for path in sorted(Path(ss_h5_dir).glob("*.ss.h5")):
         survey = read_survey(path)
         freq_key = next(iter(survey.frequencies))
         ds = survey.get_frequency(freq_key).dataset
-        loaded.append({
-            "stem": path.stem,
+        rec = {
+            "stem": path.name.removesuffix(".ss.h5"),
             "times_s": ds["time"].values.astype("datetime64[s]").astype(np.int64).astype(np.float64),
             "alt": ds["altitude_m"].values,
             "lat": ds["latitude"].values,
             "lon": ds["longitude"].values,
-        })
+        }
+        if with_ping_number:
+            # Sub-second times: the catalog time is whole seconds, the window
+            # comparison should not add another second of rounding.
+            rec["times_s"] = ds["time"].values.astype("datetime64[ns]").astype(np.int64) / 1e9
+            rec["ping_number"] = ds["ping_number"].values.astype(np.int64)
+        loaded.append(rec)
     return loaded
 
 
@@ -298,6 +307,111 @@ def resolve_targets_nearest_ping(
                         best, best_delta = candidate, delta
         resolved.append(best)
     return resolved
+
+
+def resolve_targets_by_catalog_ping(
+    targets: list[Target],
+    ss_h5_dir: str | Path,
+    *,
+    max_time_delta_s: float = 1.5,
+) -> list[Target]:
+    """Place targets at the ping their catalog names (Klein ``.tgt``).
+
+    Klein catalogs store the target ping's own time and ping number
+    (``extra_attributes["catalog_ping_time"]`` / ``["catalog_ping_number"]``,
+    see :mod:`sidescanpy.io.sdf.targets`) on the sonar's clock, the same
+    clock as the converted pings. Matching them needs no clock offset and,
+    unlike ``pick_timestamp`` (the later save time), identifies the
+    target's ping exactly.
+
+    For each target, the pings of every ``.ss.h5`` in ``ss_h5_dir`` within
+    ``max_time_delta_s`` of the catalog time are searched for the catalog
+    ping number (ping counters restart after recording gaps, so the time
+    window is what makes the number unique). If the number is not there,
+    the nearest ping in time within the window is used and recorded as
+    ``position_source="catalog_ping_time"``.
+
+    Sets ``latitude``/``longitude`` to that ping's position (the vehicle
+    position at the target ping, not the target's own seafloor position)
+    and ``position_confidence="approximate"``, and records ``ss_h5`` (file
+    stem), ``ping_index`` (file-local), ``ping_number``,
+    ``position_source`` (``"catalog_ping"``), ``position_time_delta_s``,
+    ``altitude_m``, ``ground_range_m``/``ground_range_clipped`` (from
+    ``range_m``), and ``speed_mps``/``meters_per_ping`` in
+    ``extra_attributes``.
+
+    Parameters
+    ----------
+    targets : list of Target
+    ss_h5_dir : str or Path
+        Directory of converted ``.ss.h5`` files.
+    max_time_delta_s : float, default 1.5
+        Half-width of the time window around the catalog time (the catalog
+        time has 1 s resolution).
+
+    Returns
+    -------
+    list of Target
+        Same order as ``targets``. Targets without catalog fields, or
+        whose catalog time is in no file (for example picked while not
+        logging), are returned unchanged.
+    """
+    preloaded = _preload_ss_h5_nav(Path(ss_h5_dir), with_ping_number=True)
+    resolved = []
+    n_placed = 0
+    for target in targets:
+        t = target.extra_attributes.get("catalog_ping_time")
+        number = target.extra_attributes.get("catalog_ping_number")
+        if t is None:
+            resolved.append(target)
+            continue
+        best = None
+        for rec in preloaded:
+            near = np.nonzero(np.abs(rec["times_s"] - t) <= max_time_delta_s)[0]
+            if len(near) == 0:
+                continue
+            exact = near[rec["ping_number"][near] == number] if number is not None else near[:0]
+            if len(exact):
+                idx = int(exact[np.argmin(np.abs(rec["times_s"][exact] - t))])
+                cand = (0, rec, idx, "catalog_ping")
+            else:
+                idx = int(near[np.argmin(np.abs(rec["times_s"][near] - t))])
+                cand = (1, rec, idx, "catalog_ping_time")
+            delta = abs(rec["times_s"][cand[2]] - t)
+            if best is None or (cand[0], delta) < (best[0], best[4]):
+                best = (*cand, delta)
+        if best is None:
+            logger.debug(f"Target {target.target_id}: no ping within {max_time_delta_s}s of its catalog time")
+            resolved.append(target)
+            continue
+        _, rec, idx, source, delta = best
+        resolved.append(_place_at_ping(target, rec, idx, source, delta))
+        n_placed += 1
+    logger.debug(f"Placed {n_placed}/{len(targets)} target(s) by catalog ping")
+    return resolved
+
+
+def _place_at_ping(target: Target, rec: dict, idx: int, source: str, delta: float) -> Target:
+    altitude_m = float(rec["alt"][idx])
+    speed_mps, meters_per_ping = _local_speed_mps(rec, idx)
+    ea = dict(target.extra_attributes)
+    ea.update({
+        "position_source": source,
+        "position_time_delta_s": float(delta),
+        "ss_h5": rec["stem"],
+        "ping_index": idx,
+        "ping_number": int(rec["ping_number"][idx]),
+        "altitude_m": altitude_m,
+    })
+    if speed_mps is not None:
+        ea["speed_mps"] = speed_mps
+        ea["meters_per_ping"] = meters_per_ping
+    range_m = ea.get("range_m")
+    if range_m is not None:
+        ea["ground_range_m"] = float(np.sqrt(max(range_m**2 - altitude_m**2, 0.0)))
+        ea["ground_range_clipped"] = altitude_m >= range_m
+    return replace(target, latitude=float(rec["lat"][idx]), longitude=float(rec["lon"][idx]),
+                   position_confidence="approximate", extra_attributes=ea)
 
 
 def project_target_to_frequency(target: Target, source_mps: float, target_mps: float, *, n_samples: int | None = None) -> Target | None:
@@ -431,8 +545,14 @@ def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float)
     The frequency channel is chosen per file with :func:`match_frequency`
     using ``target.extra_attributes["ping_meters_per_sample"]`` when present.
 
-    Two strategies are tried in order:
+    Strategies are tried in order:
 
+    0. **Resolved ping**: a target placed by
+       :func:`resolve_targets_by_catalog_ping` records its file stem
+       (``extra_attributes["ss_h5"]``) and file-local ``ping_index``; when
+       that file is in ``index`` and the ping in range, it is used as is
+       (distance 0). Navigation fixes often repeat over several pings, so
+       the nearest position alone can be several pings off.
     1. **Position**: the nearest ping by geodesic distance on the WGS84
        ellipsoid (:meth:`pyproj.Geod.inv`) over all files, accepted if
        within ``max_dist_m``. Pings without a position fix are skipped.
@@ -456,6 +576,14 @@ def correlate_target(target: Target, index: dict[Path, dict], max_dist_m: float)
     PositionMatch or None
     """
     target_mps = target.extra_attributes.get("ping_meters_per_sample")
+    stem, ping_index = target.extra_attributes.get("ss_h5"), target.extra_attributes.get("ping_index")
+    if stem is not None and ping_index is not None:
+        for path, channels in index.items():
+            if path.name.removesuffix(".ss.h5") != stem:
+                continue
+            freq_key = match_frequency(channels, target_mps)
+            if 0 <= int(ping_index) < channels[freq_key]["n_pings"]:
+                return PositionMatch(path, freq_key, int(ping_index), 0.0)
     if target.latitude is not None and target.longitude is not None:
         best = None
         for path, channels in index.items():

@@ -14,7 +14,8 @@
 | `targets.correlate.build_position_index(ss_h5_dir)` | cache per-ping positions of every `.ss.h5` |
 | `targets.correlate.correlate_target(target, index, max_dist_m)` | the closest ping (geodesic distance) across files and frequencies |
 | `targets.correlate.correlate_catalog` / `place_catalog` | the same for a whole catalog, grouped by file, frequency and channel |
-| `targets.correlate.calibrate_clock_offset` | estimate a constant clock offset between a catalog and the survey |
+| `targets.correlate.resolve_targets_by_catalog_ping(targets, ss_h5_dir)` | Klein: place each target at the ping its catalog names (catalog ping time + number, no clock offset) |
+| `targets.correlate.calibrate_clock_offset` | estimate a constant clock offset between a catalog's pick times and the survey (fallback for catalogs without ping fields) |
 
 ## Building a dataset
 

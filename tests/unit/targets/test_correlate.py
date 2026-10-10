@@ -22,6 +22,7 @@ from sidescanpy.targets.correlate import (
     correlate_target,
     project_target_to_frequency,
     resolve_target_position,
+    resolve_targets_by_catalog_ping,
     resolve_targets_nearest_ping,
     resolve_targets_offset_corrected,
 )
@@ -447,3 +448,131 @@ class TestCorrelateTarget:
         path, freq_key, ping_idx, dist_m = result
         assert path == Path("b.ss.h5")
         assert ping_idx == 5  # 25 - ping_start(20)
+
+
+# ============================================================
+# Catalog-ping resolution (Klein): match the catalog's own ping number and
+# TPU time, which share the clock of the converted pings -- no offset.
+# ============================================================
+
+def _write_ping_clock_ss_h5(directory: Path, name: str, start, first_ping_number: int, *, n_pings: int = 100,
+                            altitude_m: float = 8.0, lat0: float = 44.0) -> Path:
+    from sidescanpy.core.survey import SideScanSurvey
+    from tests.conftest import make_minimal_sidescan_dataset
+
+    ds = make_minimal_sidescan_dataset(n_pings=n_pings)
+    times = pd.date_range(start, periods=n_pings, freq="1s").values.astype("datetime64[ns]")
+    ds = ds.assign_coords(time=("ping", times),
+                          ping_number=("ping", np.arange(first_ping_number, first_ping_number + n_pings, dtype=np.int32)))
+    ds["latitude"] = ("ping", lat0 + np.arange(n_pings) * 1e-5)
+    ds["altitude_m"] = ("ping", np.full(n_pings, altitude_m, dtype=np.float32))
+    survey = SideScanSurvey(source_files=[f"{name}.sdf"], source_format="SDF", survey_name=name)
+    survey.add_frequency("hz_900000", ds)
+    path = directory / f"{name}.ss.h5"
+    write_survey(survey, path)
+    return path
+
+
+def _catalog_target(ping_time, ping_number, *, pick_timestamp=1536923484.0, range_m=10.0):
+    return Target(
+        target_id="t", source_format="sdf_klein", catalog_source="x.tgt", pick_timestamp=pick_timestamp,
+        channel=0, sample=10, position_confidence="unknown",
+        extra_attributes={"range_m": range_m, "catalog_ping_time": ping_time, "catalog_ping_number": ping_number},
+    )
+
+
+class TestResolveTargetsByCatalogPing:
+    _START = pd.Timestamp("2026-05-13 14:50:00", tz="UTC")
+
+    def test_matches_catalog_ping_exactly(self, tmp_path):
+        _write_ping_clock_ss_h5(tmp_path, "sonar_data180914072000", self._START.tz_localize(None), 61650)
+        t = _catalog_target((self._START + pd.Timedelta(seconds=65)).timestamp(), 61715)
+        r = resolve_targets_by_catalog_ping([t], tmp_path)[0]
+        assert r.latitude == pytest.approx(44.0 + 65 * 1e-5)
+        ea = r.extra_attributes
+        assert ea["position_source"] == "catalog_ping"
+        assert ea["ping_index"] == 65
+        assert ea["ss_h5"] == "sonar_data180914072000"
+        assert ea["altitude_m"] == pytest.approx(8.0)
+        assert ea["ground_range_m"] == pytest.approx(6.0, abs=1e-6)  # sqrt(10^2 - 8^2)
+
+    def test_pick_timestamp_is_ignored(self, tmp_path):
+        _write_ping_clock_ss_h5(tmp_path, "a", self._START.tz_localize(None), 61650)
+        t = _catalog_target((self._START + pd.Timedelta(seconds=10)).timestamp(), 61660, pick_timestamp=0.0)
+        r = resolve_targets_by_catalog_ping([t], tmp_path)[0]
+        assert r.extra_attributes["ping_index"] == 10
+
+    def test_repeated_ping_numbers_disambiguated_by_time(self, tmp_path):
+        # The ping counter resets after a recording gap: both files contain ping 120.
+        _write_ping_clock_ss_h5(tmp_path, "a", self._START.tz_localize(None), 100, lat0=44.0)
+        later = self._START + pd.Timedelta(hours=1)
+        _write_ping_clock_ss_h5(tmp_path, "b", later.tz_localize(None), 100, lat0=45.0)
+        t = _catalog_target((later + pd.Timedelta(seconds=20)).timestamp(), 120)
+        r = resolve_targets_by_catalog_ping([t], tmp_path)[0]
+        assert r.extra_attributes["ss_h5"] == "b"
+        assert r.latitude == pytest.approx(45.0 + 20 * 1e-5)
+
+    def test_time_outside_every_file_returns_unchanged(self, tmp_path):
+        # e.g. picked from the live display while not logging
+        _write_ping_clock_ss_h5(tmp_path, "a", self._START.tz_localize(None), 61650)
+        t = _catalog_target((self._START + pd.Timedelta(hours=2)).timestamp(), 61715)
+        r = resolve_targets_by_catalog_ping([t], tmp_path)[0]
+        assert r.latitude is None
+
+    def test_ping_number_mismatch_within_time_window_uses_nearest_time(self, tmp_path):
+        _write_ping_clock_ss_h5(tmp_path, "a", self._START.tz_localize(None), 61650)
+        t = _catalog_target((self._START + pd.Timedelta(seconds=30)).timestamp(), 99999)
+        r = resolve_targets_by_catalog_ping([t], tmp_path)[0]
+        assert r.extra_attributes["ping_index"] == 30
+        assert r.extra_attributes["position_source"] == "catalog_ping_time"
+
+    def test_target_without_catalog_fields_returned_unchanged(self, tmp_path):
+        _write_ping_clock_ss_h5(tmp_path, "a", self._START.tz_localize(None), 61650)
+        t = replace(_catalog_target(None, None), extra_attributes={"range_m": 10.0})
+        r = resolve_targets_by_catalog_ping([t], tmp_path)[0]
+        assert r.latitude is None
+
+
+class TestCorrelateTargetResolvedPing:
+    """A target placed by resolve_targets_by_catalog_ping carries its exact file
+    and ping; correlation uses them instead of the nearest vessel position
+    (fixes repeat over several pings, so the nearest position is ambiguous)."""
+
+    def _index(self, n_pings=20):
+        lat = np.repeat(np.linspace(44.0, 44.001, n_pings // 10), 10)  # each fix held for 10 pings
+        lon = np.full(n_pings, -68.9)
+        return {Path("dir/f1.ss.h5"): {"hz_900000": {
+            "lat": lat, "lon": lon, "sample_interval_m": 0.024, "n_samples": 2500, "n_pings": n_pings, "ping_start": 0}}}
+
+    def _target(self, **ea):
+        return Target(target_id="t", source_format="sdf_klein", catalog_source="x", channel=0, sample=100,
+                      latitude=44.0, longitude=-68.9, position_confidence="approximate", extra_attributes=ea)
+
+    def test_resolved_file_and_ping_used_exactly(self):
+        m = correlate_target(self._target(ss_h5="f1", ping_index=7), self._index(), max_dist_m=25.0)
+        assert (m.path.name, m.ping_idx, m.dist_m) == ("f1.ss.h5", 7, 0.0)
+
+    def test_without_resolved_ping_nearest_position_picks_first_of_repeated_fix(self):
+        m = correlate_target(self._target(), self._index(), max_dist_m=25.0)
+        assert m.ping_idx == 0
+
+    def test_resolved_file_absent_falls_back_to_position(self):
+        m = correlate_target(self._target(ss_h5="other", ping_index=7), self._index(), max_dist_m=25.0)
+        assert m.ping_idx == 0
+
+    def test_resolved_ping_out_of_range_falls_back(self):
+        m = correlate_target(self._target(ss_h5="f1", ping_index=999), self._index(), max_dist_m=25.0)
+        assert m.ping_idx == 0
+
+
+class TestKleinSampleSpacingPicksFrequency:
+    def test_target_matched_on_frequency_with_its_own_sample_spacing(self):
+        # 40 m range: 455 kHz at 0.024 m/sample, 900 kHz at 0.012 m/sample.
+        index = {Path("a.ss.h5"): {
+            "hz_455000": {"lat": np.array([44.0]), "lon": np.array([-68.9]), "sample_interval_m": 0.024,
+                          "n_samples": 1666, "n_pings": 1, "ping_start": 0},
+            "hz_900000": {"lat": np.array([44.0]), "lon": np.array([-68.9]), "sample_interval_m": 0.012,
+                          "n_samples": 3334, "n_pings": 1, "ping_start": 0}}}
+        t = Target(target_id="t", source_format="sdf_klein", catalog_source="x", channel=0, sample=1600,
+                   latitude=44.0, longitude=-68.9, extra_attributes={"ping_meters_per_sample": 0.012})
+        assert correlate_target(t, index, max_dist_m=25.0).freq_key == "hz_900000"
