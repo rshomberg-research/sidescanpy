@@ -101,43 +101,6 @@ def add_plots_arg(parser: argparse.ArgumentParser, *, help: str = "Write the evi
     parser.add_argument("--plots", action=argparse.BooleanOptionalAction, default=True, help=help)
 
 
-def uncorrected_alias(*old_names: str):
-    """argparse ``type=`` callable mapping deprecated spellings of the
-    uncorrected-signal choice to ``"uncorrected"`` with a WARNING.
-
-    Kept for one release so existing scripts and configs keep working.
-    """
-    def _convert(value: str) -> str:
-        if value in old_names:
-            warn_deferred(logger, "%r is deprecated; use 'uncorrected'", value)
-            return "uncorrected"
-        return value
-    return _convert
-
-
-class _DeprecatedAlias(argparse.Action):
-    def __init__(self, option_strings, dest, *, replacement: str, **kwargs):
-        self.replacement = replacement
-        super().__init__(option_strings, dest, **kwargs)
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        warn_deferred(logger, "%s is deprecated; use %s", option_string, self.replacement)
-        setattr(namespace, self.dest, values)
-
-
-def add_deprecated_alias(parser: argparse.ArgumentParser, old_flag: str, new_flag: str, **kwargs) -> None:
-    """Add a hidden ``old_flag`` that sets ``new_flag``'s value with a WARNING.
-
-    ``kwargs`` (``type``, ``choices``) should match ``new_flag``'s. Kept for
-    one release so existing scripts keep working.
-    """
-    dest = new_flag.lstrip("-").replace("-", "_")
-    parser.add_argument(
-        old_flag, dest=dest, action=_DeprecatedAlias, replacement=new_flag,
-        default=argparse.SUPPRESS, help=argparse.SUPPRESS, **kwargs,
-    )
-
-
 def setup_logging_from_args(args: argparse.Namespace) -> None:
     """Configure logging from the flags added by :func:`add_logging_args`."""
     verbose = getattr(args, "verbose", False)

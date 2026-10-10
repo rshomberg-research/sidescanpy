@@ -81,25 +81,11 @@ def load_config(path: Path) -> dict:
     return json.loads(text)
 
 
-def rename_config_keys(config: dict, renamed: "Mapping[str, str]") -> dict:
-    """Return ``config`` with deprecated keys mapped to their current names,
-    logging a WARNING for each. A key given under both names keeps the
-    current one."""
-    out = dict(config)
-    for old, new in renamed.items():
-        if old in out:
-            warn_deferred(logger, "config key %r is deprecated; use %r", old, new)
-            value = out.pop(old)
-            out.setdefault(new, value)
-    return out
-
-
 def parse_args(
     parser: CLIParser,
     argv: Sequence[str],
     *,
     subcommands: "Mapping[str, CLIParser] | None" = None,
-    renamed_keys: "Mapping[str, str] | None" = None,
 ) -> argparse.Namespace:
     """Parse ``argv``, seeding defaults from ``--config`` when one is given.
 
@@ -108,7 +94,6 @@ def parse_args(
     again, so explicit flags still win. ``subcommands`` maps every subcommand
     name (aliases included -- e.g. a subparsers action's ``choices``) to its
     parser; the namespace must then carry the name as ``subcommand``.
-    ``renamed_keys`` maps deprecated config keys to current dests.
 
     Keys matching no option of any subcommand are logged as a WARNING
     naming the subcommand; with ``--strict-config`` they are a parser error.
@@ -116,21 +101,19 @@ def parse_args(
     :func:`~sidescanpy.cli._common.setup_logging_from_args`.
     """
     with deferred_warnings():
-        return _parse_args(parser, argv, subcommands, renamed_keys)
+        return _parse_args(parser, argv, subcommands)
 
 
-def _parse_args(parser, argv, subcommands, renamed_keys) -> argparse.Namespace:
+def _parse_args(parser, argv, subcommands) -> argparse.Namespace:
     mark = pending_warnings_mark()
     args = parser.parse_args(argv)
     config_path = getattr(args, "config", None)
     if config_path is None:
         return args
-    # The second parse re-raises any deprecation warnings from the first.
+    # The second parse re-raises any warnings from the first.
     discard_pending_warnings(mark)
 
     config = load_config(Path(config_path))
-    if renamed_keys:
-        config = rename_config_keys(config, renamed_keys)
     if subcommands:
         name = args.subcommand
         target = subcommands[name]

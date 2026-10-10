@@ -146,7 +146,7 @@ not in the repo; they skip without them.
   (`feat(io/sdf):`, `fix(grids/resample):`), one logical change each.
   Suggest commits; commit only when the user asks.
 - **Versioning:** SemVer, bumped per release, not per commit. Deprecation
-  shims added in 0.6.0 are removed in 0.8.0.
+  shims added in 0.6.0 were removed in 0.8.0.
 
 ### Gates (all in the unit suite)
 

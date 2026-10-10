@@ -6,12 +6,11 @@ defaults support for the sidescan-* CLIs.
 """
 
 import json
-import logging
 
 import pytest
 
-from sidescanpy.cli._common import add_common_args, add_deprecated_alias, setup_logging_from_args
-from sidescanpy.cli._config import CLIParser, load_config, parse_args, rename_config_keys
+from sidescanpy.cli._common import add_common_args, setup_logging_from_args
+from sidescanpy.cli._config import CLIParser, load_config, parse_args
 
 
 def _single(tmp_path=None):
@@ -122,25 +121,6 @@ class TestParseArgsSubcommands:
             parse_args(top, ["cmd_a", "--strict-config", "--config", _write(tmp_path, {"typo_key": 1})], subcommands=subs)
         assert "typo_key" in capsys.readouterr().err
 
-    def test_renamed_keys_map_with_warning(self, tmp_path, caplog):
-        top, subs = _multi()
-        with caplog.at_level("WARNING"):
-            args = parse_args(top, ["cmd_a", "--config", _write(tmp_path, {"old_gamma": 5.0})],
-                              subcommands=subs, renamed_keys={"old_gamma": "gamma"})
-            setup_logging_from_args(args)
-        assert args.gamma == 5.0
-        assert "'old_gamma' is deprecated" in caplog.text
-
-    def test_deprecated_flag_warns_once_with_config(self, tmp_path, caplog):
-        top, subs = _multi()
-        add_deprecated_alias(subs["cmd_a"], "--old-gamma", "--gamma", type=float)
-        with caplog.at_level(logging.WARNING):
-            args = parse_args(top, ["cmd_a", "--old-gamma", "7", "--config", _write(tmp_path, {"grouped": 1})],
-                              subcommands=subs)
-            setup_logging_from_args(args)
-        assert args.gamma == 7.0
-        assert caplog.text.count("--old-gamma is deprecated") == 1
-
 
 class TestLoadConfig:
     def test_loads_json_by_extension(self, tmp_path):
@@ -168,6 +148,3 @@ class TestLoadConfig:
         config_path.write_text(json.dumps({"gamma": 2.5}))
         assert load_config(config_path) == {"gamma": 2.5}
 
-
-def test_rename_config_keys_keeps_current_name_when_both_given():
-    assert rename_config_keys({"old": 1, "new": 2}, {"old": "new"}) == {"new": 2}

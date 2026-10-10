@@ -82,7 +82,6 @@ from sidescanpy.cli._common import (
     resolve_freq_keys,
     setup_logging_from_args,
     ss_h5_files,
-    uncorrected_alias,
 )
 from sidescanpy.cli._config import CLIParser, parse_args
 from sidescanpy.core import HDF5_CHUNK_PING
@@ -384,7 +383,7 @@ def build_parser() -> tuple[CLIParser, Any]:
              "a marker line at every file boundary. Omit to skip the overview.",
     )
     p_wf.add_argument(
-        "--value-var", choices=["uncorrected", "radiometric"], type=uncorrected_alias("raw"), default="radiometric",
+        "--value-var", choices=["uncorrected", "radiometric"], default="radiometric",
         help="uncorrected = uncorrected signal, inverted from processing_history (no TVG); radiometric = backscatter_intensity (TVG-corrected, "
              "the old default). Combine with --range-mode ground for a geometrically-axed view.",
     )
@@ -453,7 +452,7 @@ def build_parser() -> tuple[CLIParser, Any]:
              "'dual-swath' (both channels combined, square, port+starboard). Default: all three.",
     )
     p_chip.add_argument(
-        "--render-level", choices=list(RENDER_LEVELS), type=uncorrected_alias("raw"), default="radiometric",
+        "--render-level", choices=list(RENDER_LEVELS), default="radiometric",
         help="Processing level every style renders from this run (applies to both COCO and YOLO): "
              "'uncorrected' (uncorrected signal, linear, no TVG), 'db' (20*log10 of it, no TVG), "
              "'radiometric' (TVG-corrected, the old default), 'geometric' (across/along-track meters -- requires --geometric already run via "
@@ -477,7 +476,7 @@ def build_parser() -> tuple[CLIParser, Any]:
              "concept at all. Several values build one dataset per resolution under res_<m>m/.",
     )
     p_chip.add_argument(
-        "--value-var", choices=["uncorrected", "db", "radiometric"], type=uncorrected_alias("raw"), default="radiometric",
+        "--value-var", choices=["uncorrected", "db", "radiometric"], default="radiometric",
         help="uncorrected signal vs. dB (20*log10 of it, no TVG) vs. backscatter_intensity for 'geometric'/'georef' render levels (chip "
              "styles AND --with-context, in either coordinate mode) -- independent of --render-level, "
              "which already fully determines this for 'uncorrected'/'radiometric' render levels (no effect there, "
