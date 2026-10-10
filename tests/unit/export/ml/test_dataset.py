@@ -889,3 +889,42 @@ class TestBackgrounds:
         log = [e for e in json.loads((chip_dir / "augmentations.json").read_text()) if e["target_id"] is None]
         assert all(0 <= e["ping"] < 60 for e in log)
         assert {"flip_h", "flip_v", "nan_fraction", "source_file", "freq_key"} <= set(log[0])
+
+
+class TestFrequencies:
+    """``frequencies`` restricts which channels targets (and backgrounds) are drawn from."""
+
+    @pytest.fixture
+    def two_freq_dir(self, tmp_path):
+        from sidescanpy.io.hdf5 import write_survey
+        from sidescanpy.processing import correct_survey
+        from tests.unit.export.surveys import swath_friendly_survey
+
+        survey = swath_friendly_survey()
+        ds = survey.get_frequency("hz_1495000").dataset.copy()
+        ds.attrs.update(freq_hz_start=455_000, freq_hz_end=455_000)
+        survey.add_frequency("hz_455000", ds)
+        d = tmp_path / "ss_h5"
+        d.mkdir()
+        write_survey(correct_survey(survey), d / "survey_a.ss.h5")
+        return d
+
+    def _freqs_used(self, out):
+        log = json.loads((out / "chip" / "augmentations.json").read_text())
+        return {e["freq_key"] for e in log}
+
+    @pytest.mark.parametrize("keep", ["hz_455000", "hz_1495000"])
+    def test_targets_drawn_only_from_listed_frequency(self, tmp_path, two_freq_dir, keep):
+        spec = DatasetSpec(styles=("chip",), size_px=16, seed=0, n_augment=2, frequencies=[keep])
+        result = build_target_dataset(two_freq_dir, [_swath_target()], spec, tmp_path / "out")
+        assert result.n_matched == 1
+        assert self._freqs_used(tmp_path / "out") == {keep}
+
+    def test_absent_frequency_matches_nothing(self, tmp_path, two_freq_dir):
+        spec = DatasetSpec(styles=("chip",), size_px=16, seed=0, frequencies=["hz_1"])
+        result = build_target_dataset(two_freq_dir, [_swath_target()], spec, tmp_path / "out")
+        assert result.n_matched == 0
+
+    def test_round_trips_through_dict(self):
+        spec = DatasetSpec(frequencies=["hz_900000"])
+        assert DatasetSpec.from_dict(spec.to_dict()).frequencies == ["hz_900000"]

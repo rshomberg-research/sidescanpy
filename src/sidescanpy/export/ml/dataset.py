@@ -155,6 +155,13 @@ class DatasetSpec:
         background windows share a split.
     layout : str
         One of :data:`LAYOUTS`.
+    frequencies : list of str, optional
+        Frequency keys (e.g. ``["hz_900000"]``) that target and background
+        windows may come from. Default: every frequency in the files. Use it
+        to keep a dead or unwanted channel out of the dataset; a target is
+        otherwise matched to the frequency whose sample spacing is closest
+        to its catalog's, which can be ambiguous when frequencies share a
+        sample spacing.
     """
 
     styles: tuple[str, ...] = CHIP_STYLES
@@ -188,6 +195,7 @@ class DatasetSpec:
     val_fraction: float = 0.0
     split_block_pings: int = 500
     layout: str = "flat"
+    frequencies: list[str] | None = None
 
     def __post_init__(self):
         self.styles = tuple(self.styles)
@@ -200,6 +208,8 @@ class DatasetSpec:
                 self.resolution_m = self.resolution_m[0]
         if self.categories is not None:
             self.categories = list(self.categories)
+        if self.frequencies is not None:
+            self.frequencies = [str(f) for f in self.frequencies]
         if self.background_ping_ranges is not None:
             self.background_ping_ranges = {
                 str(name): [(int(a), int(b)) for a, b in ranges] for name, ranges in self.background_ping_ranges.items()
@@ -817,6 +827,10 @@ def build_target_dataset(
     result = DatasetResult(out_dir=out_dir, skipped=skipped, n_targets=len(selected))
 
     index = build_position_index(sources)
+    if spec.frequencies is not None:
+        index = {p: {fk: c for fk, c in ch.items() if fk in spec.frequencies} for p, ch in index.items()}
+        index = {p: ch for p, ch in index.items() if ch}
+        logger.debug(f"restricted to frequencies {spec.frequencies}: {len(index)} file(s) left")
     matched, unmatched = _correlate(selected, index, spec.max_match_dist_m)
     result.skipped += unmatched
     result.n_matched = len(matched)
