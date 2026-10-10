@@ -53,6 +53,7 @@ from sidescanpy.viz.analysis import (
     plot_outlier_comparison,
     plot_sample_ping,
     plot_segments_overview,
+    plot_shadow_proposals,
     plot_units_distribution,
     plot_usable_range,
     plot_value_histograms,
@@ -101,6 +102,7 @@ __all__ = [
     "plot_usable_range",
     "plot_segments_overview",
     "plot_navigation_summary",
+    "plot_shadow_proposals",
     # TVG / range decay
     "plot_mean_vs_range",
     "plot_tvg_gain_curve",

@@ -21,6 +21,7 @@ a report.
 | `bin_by_altitude` | pings split into equal-count altitude bins |
 | `summarize_navigation` | per-field navigation/attitude statistics and a heading-convention check |
 | `measure_ping_geometry` | median ping spacing, swath width and sample interval |
+| `detect_shadow_proposals` | object proposal boxes (native ping, sample, side) from acoustic shadows and the highlight in front of them, with sizes, contrast, estimated height and a score |
 
 Analysis that needs the uncorrected signal recovers it with
 `processing.uncorrected_backscatter`, so it works on corrected files.

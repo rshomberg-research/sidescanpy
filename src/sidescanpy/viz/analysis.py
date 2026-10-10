@@ -23,7 +23,9 @@ from sidescanpy.analysis.beam import BeamGeometryResult
 from sidescanpy.analysis.nadir import NadirResult
 from sidescanpy.analysis.navigation import NavigationSummary
 from sidescanpy.analysis.outliers import OutlierComparisonResult
+from sidescanpy.analysis.shadows import ShadowProposals
 from sidescanpy.analysis.usable_range import UsableRangeResult
+from sidescanpy.export.windows.native import NativeWindow
 from sidescanpy.viz.waterfall import plot_waterfall
 
 logger = logging.getLogger(__name__)
@@ -634,3 +636,40 @@ def plot_navigation_summary(
 
     _finish(fig, created, f"pings {ping_axis[0]}:{ping_axis[-1] + 1}" if n_pings else "pings (empty)")
     return fig, (ax_heading, ax_attitude, ax_vertical, ax_track)
+
+
+def plot_shadow_proposals(
+    proposals: ShadowProposals,
+    *,
+    ax: Axes,
+    window: NativeWindow | None = None,
+    channel: int | None = None,
+    min_score: float = 0.0,
+    cmap: str = "autumn",
+    linewidth: float = 0.8,
+) -> tuple[Figure, Axes]:
+    """Draw proposal boxes onto an image already shown in ``ax``.
+
+    With ``window`` (the :class:`~sidescanpy.export.windows.native.NativeWindow`
+    of a chip or tile shown with ``imshow``), boxes are mapped to image
+    pixels. Without it, ``ax`` is taken to show one channel in native
+    coordinates (x = sample position, y = ping position) and only that
+    ``channel``'s proposals (default 0) are drawn. Box colour follows the
+    score through ``cmap``; proposals below ``min_score`` are skipped.
+    """
+    df = proposals.proposals
+    df = df[df["score"] >= min_score]
+    colours = plt.get_cmap(cmap)
+    for row in df.itertuples():
+        if window is None:
+            if row.channel != (0 if channel is None else channel):
+                continue
+            x0, x1, y0, y1 = row.sample_start, row.sample_stop, row.ping_start, row.ping_stop
+        else:
+            if channel is not None and row.channel != channel:
+                continue
+            xa, y0 = window.to_pixel(row.ping_start, row.sample_start, row.channel)
+            xb, y1 = window.to_pixel(row.ping_stop, row.sample_stop, row.channel)
+            x0, x1 = min(xa, xb), max(xa, xb)
+        ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colours(float(row.score)), lw=linewidth))
+    return ax.figure, ax

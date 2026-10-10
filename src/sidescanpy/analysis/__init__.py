@@ -23,6 +23,8 @@ Each function takes data and returns a result dataclass (with
   stats (:class:`NavigationSummary`).
 - :func:`measure_ping_geometry` — ping spacing and resolution
   (:class:`PingGeometry`).
+- :func:`detect_shadow_proposals` — object proposals from acoustic
+  shadows and their highlights (:class:`ShadowProposals`).
 
 2026 rshomberg@uri.edu
 """
@@ -38,6 +40,7 @@ from sidescanpy.analysis.geometry import PingGeometry, measure_ping_geometry
 from sidescanpy.analysis.nadir import NadirResult, analyze_nadir
 from sidescanpy.analysis.navigation import FieldStats, NavigationSummary, summarize_navigation
 from sidescanpy.analysis.outliers import OutlierComparisonResult, compare_outlier_rejection
+from sidescanpy.analysis.shadows import ShadowProposals, detect_shadow_proposals
 from sidescanpy.analysis.tvg import (
     RangeDecayResult,
     TVGCandidateFit,
@@ -74,4 +77,6 @@ __all__ = [
     "FieldStats",
     "measure_ping_geometry",
     "PingGeometry",
+    "detect_shadow_proposals",
+    "ShadowProposals",
 ]

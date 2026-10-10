@@ -9,6 +9,14 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `analysis.detect_shadow_proposals`: object proposals from acoustic
+  shadows in native slant-range data. Cells well below a running-median
+  seabed level form shadow regions; each is paired with the highlight in
+  front of it and returned as a box in native (ping, sample, channel)
+  coordinates with sizes, contrast, a flat-seabed height estimate and a
+  score (`ShadowProposals`). Meant to pre-fill annotation boxes.
+  `viz.plot_shadow_proposals` draws them on a tile or chip.
+
 - `export.windows.native`: `native_chip` and `swath_tiles` cut windows that
   are square (or a fixed length) in metres from the native ping x sample
   grid and resize them with linear interpolation, keeping NaN cells NaN.
