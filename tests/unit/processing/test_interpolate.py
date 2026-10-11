@@ -18,7 +18,9 @@ import xarray as xr
 
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
 from sidescanpy.processing.interpolate import (
+    CIRCULAR_FIELDS,
     DEFAULT_FIELD_SOURCES,
+    interpolate_aux_onto_dataset,
     interpolate_aux_onto_pings,
     interpolate_onto_channel,
 )
@@ -685,3 +687,128 @@ class TestEdgeCases:
         # Should not crash
         result = interpolate_aux_onto_pings(survey)
         assert result is not None
+
+
+# ============================================================
+# CIRCULAR (COMPASS-ANGLE) FIELDS
+# ============================================================
+
+def _heading_source(values, *, step_sec: float = 1.0, extra=None) -> xr.Dataset:
+    """Aux-like record with heading (and optional extra vars) from t=0."""
+    n = len(values)
+    times = pd.date_range("2026-01-01T00:00:00", periods=n,
+                          freq=f"{step_sec}s").values.astype("datetime64[ns]")
+    data = {"hdg": (("obs",), np.asarray(values, dtype=np.float64))}
+    for k, v in (extra or {}).items():
+        data[k] = (("obs",), np.asarray(v, dtype=np.float64))
+    return xr.Dataset(data_vars=data, coords={"time": (("obs",), times)})
+
+
+def _channel_at(offsets_sec, n_samples: int = 10) -> SideScanFrequencyChannel:
+    """Channel whose pings sit at the given offsets (s) from the source t=0."""
+    t0 = np.datetime64("2026-01-01T00:00:00", "ns")
+    times = t0 + (np.asarray(offsets_sec) * 1e9).astype("timedelta64[ns]")
+    ds = make_minimal_sidescan_dataset(n_pings=len(times), n_samples=n_samples)
+    ds = ds.assign_coords(time=("ping", times))
+    return SideScanFrequencyChannel(ds, freq_key="hz_1495000")
+
+
+def _interp_heading(values, offsets, **kw) -> np.ndarray:
+    out = interpolate_onto_channel(
+        _channel_at(offsets), source=_heading_source(values),
+        field_map={"heading_deg": "hdg"}, record_history=False, **kw,
+    )
+    return out.dataset["heading_deg"].values
+
+
+@pytest.mark.unit
+class TestCircularFields:
+    def test_circular_fields_contains_heading(self):
+        assert "heading_deg" in CIRCULAR_FIELDS
+        assert "roll_deg" not in CIRCULAR_FIELDS
+        assert "pitch_deg" not in CIRCULAR_FIELDS
+
+    def test_crossing_north_clockwise_never_near_180(self):
+        h = _interp_heading([359.0, 1.0], [0.0, 0.25, 0.5, 0.75, 1.0])
+        # 359 -> 361 unwrapped: 359.5, 360(=0), 360.5 at the quarter points
+        expected = np.array([359.0, 359.5, 0.0, 0.5, 1.0])
+        diff = (h - expected + 180.0) % 360.0 - 180.0
+        np.testing.assert_allclose(diff, 0.0, atol=1e-9)
+        assert np.all((h >= 0.0) & (h < 360.0))
+
+    def test_crossing_north_counterclockwise(self):
+        h = _interp_heading([1.0, 359.0], [0.0, 0.5, 1.0])
+        diff = (h - np.array([1.0, 0.0, 359.0]) + 180.0) % 360.0 - 180.0
+        np.testing.assert_allclose(diff, 0.0, atol=1e-9)
+        assert np.all((h >= 0.0) & (h < 360.0))
+
+    def test_midpoint_is_near_north_not_south(self):
+        mid = _interp_heading([359.0, 1.0], [0.5])[0]
+        assert min(mid, 360.0 - mid) < 1e-9
+
+    def test_multiple_full_turns(self):
+        # Steady 100 deg/s clockwise over 10 s = ~2.8 turns, sampled at 1 Hz.
+        true = lambda t: (100.0 * np.asarray(t)) % 360.0  # noqa: E731
+        src_t = np.arange(11.0)
+        tgt_t = np.arange(0.0, 10.0, 0.37)
+        h = _interp_heading(true(src_t), tgt_t)
+        diff = (h - true(tgt_t) + 180.0) % 360.0 - 180.0
+        np.testing.assert_allclose(diff, 0.0, atol=1e-5)
+        assert np.all((h >= 0.0) & (h < 360.0))
+
+    def test_non_crossing_matches_linear(self):
+        vals = [10.0, 40.0, 30.0, 90.0]
+        offs = [0.0, 0.5, 1.5, 2.2, 3.0]
+        h = _interp_heading(vals, offs)
+        np.testing.assert_allclose(h, np.interp(offs, [0, 1, 2, 3], vals), atol=1e-9)
+
+    def test_signed_source_convention_wraps_to_0_360(self):
+        h = _interp_heading([-2.0, 2.0], [0.0, 0.5, 1.0])
+        np.testing.assert_allclose(h, [358.0, 0.0, 2.0], atol=1e-9)
+
+    def test_clamp_uses_boundary_values(self):
+        h = _interp_heading([350.0, 10.0], [-5.0, 0.0, 1.0, 5.0], extrapolation="clamp")
+        np.testing.assert_allclose(h, [350.0, 350.0, 10.0, 10.0], atol=1e-9)
+
+    def test_linear_extrapolation_on_unwrapped_series_then_wraps(self):
+        # +20 deg/s through north; one second after the end -> 30, one before -> 330
+        h = _interp_heading([350.0, 10.0], [-1.0, 2.0], extrapolation="linear")
+        np.testing.assert_allclose(h, [330.0, 30.0], atol=1e-9)
+
+    def test_nan_extrapolation_outside_range(self):
+        h = _interp_heading([359.0, 1.0], [-1.0, 0.5, 2.0], extrapolation="nan")
+        assert np.isnan(h[0]) and np.isnan(h[2])
+        assert min(h[1], 360.0 - h[1]) < 1e-9
+
+    def test_roll_and_pitch_stay_plain_linear(self):
+        # Values that would be treated very differently if unwrapped.
+        src = _heading_source([0.0, 0.0],
+                              extra={"r": [-170.0, 170.0], "p": [359.0, 1.0]})
+        out = interpolate_onto_channel(
+            _channel_at([0.5]), source=src,
+            field_map={"roll_deg": "r", "pitch_deg": "p"}, record_history=False,
+        )
+        assert out.dataset["roll_deg"].values[0] == pytest.approx(0.0)
+        assert out.dataset["pitch_deg"].values[0] == pytest.approx(180.0)
+
+    def test_step_path_attitude_crossing_north(self):
+        survey = _build_known_survey(n_pings=5, ping_step_sec=1.0)
+        # Attitude at 1 Hz from t=0: heading 357, 359, 1, 3, 5, 7 (+2 deg/s);
+        # pings are at t = 1..5 s -> 359, 1, 3, 5, 7
+        hdg = (357.0 + 2.0 * np.arange(6)) % 360.0
+        att = _heading_source(hdg).rename({"hdg": "heading_deg"})
+        att["roll_deg"] = ("obs", np.zeros(6))
+        att["pitch_deg"] = ("obs", np.zeros(6))
+        att["heave_m"] = ("obs", np.zeros(6))
+        att.attrs["source"] = "synthetic"
+        survey.attitude = att
+
+        expected = [359.0, 1.0, 3.0, 5.0, 7.0]
+
+        out = interpolate_aux_onto_pings(survey)
+        h = out.get_frequency("hz_1495000").dataset["heading_deg"].values
+        np.testing.assert_allclose(h, expected, atol=1e-6)
+
+        ds = survey.get_frequency("hz_1495000").dataset
+        h2 = interpolate_aux_onto_dataset(ds, survey)["heading_deg"].values
+        np.testing.assert_allclose(h2, expected, atol=1e-6)

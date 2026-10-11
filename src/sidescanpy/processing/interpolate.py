@@ -60,6 +60,13 @@ DEFAULT_FIELD_SOURCES: dict[str, tuple[str, str]] = {
 }
 
 
+# Per-ping fields holding compass angles in degrees (bearing clockwise from
+# north, stored in [0, 360)). These wrap at 360, so interpolating them
+# linearly across north (359 -> 1) would pass through ~180. They are
+# unwrapped, interpolated, and wrapped back to [0, 360). Roll, pitch and
+# the other fields are plain linear.
+CIRCULAR_FIELDS: frozenset[str] = frozenset({"heading_deg", "course_deg"})
+
 _VALID_AUX_NAMES = {"navigation", "attitude", "dvl", "sensor"}
 _VALID_EXTRAPOLATION = ("clamp", "linear", "nan")
 
@@ -274,6 +281,7 @@ def interpolate_onto_channel(
             method=method,
             extrapolation=extrapolation,
             drop_invalid=drop_invalid,
+            circular=ping_field in CIRCULAR_FIELDS,
         )
         new_ds = new_ds.assign({ping_field: ("ping", interpolated)})
 
@@ -361,6 +369,7 @@ def _interpolate_dataset_from_survey(
                 method=method,
                 extrapolation=extrapolation,
                 drop_invalid=drop_invalid,
+                circular=ping_field in CIRCULAR_FIELDS,
             )
 
             new_ds = new_ds.assign({ping_field: ("ping", interpolated)})
@@ -397,8 +406,14 @@ def _interpolate_one_var(
     method: str,
     extrapolation: str,
     drop_invalid: bool,
+    circular: bool = False,
 ) -> np.ndarray:
     """Interpolate one variable from `source` onto `target_times`.
+
+    With ``circular=True`` the values are compass angles in degrees: the
+    de-duplicated, time-sorted source is unwrapped (period 360),
+    interpolated (extrapolation applies to the unwrapped series), and the
+    result is wrapped back to [0, 360).
 
     Returns a 1D numpy array aligned with target_times.
     """
@@ -436,11 +451,23 @@ def _interpolate_one_var(
     if n_source == 0:
         return np.full(len(target_times), np.nan, dtype=np.float64)
 
+    if circular:
+        vals = source_da.values.astype(np.float64)
+        if np.isfinite(vals).all():
+            vals = np.unwrap(vals, period=360.0)
+        else:
+            # drop_invalid=False with NaNs present: unwrap finite runs only
+            fin = np.isfinite(vals)
+            vals[fin] = np.unwrap(vals[fin], period=360.0)
+            logger.debug("Circular field has NaN source values; unwrapped finite ones")
+        source_da = source_da.copy(data=vals)
+
     # Single-point degenerate case — return constant
     if n_source == 1:
-        return np.full(len(target_times),
-                       float(source_da.values[0]),
-                       dtype=np.float64)
+        const = float(source_da.values[0])
+        if circular:
+            const = const % 360.0
+        return np.full(len(target_times), const, dtype=np.float64)
 
     # Build interp kwargs based on extrapolation policy
     if extrapolation == "linear":
@@ -458,7 +485,10 @@ def _interpolate_one_var(
         kwargs=kwargs,
     )
 
-    return interpolated.values.astype(np.float64)
+    out = interpolated.values.astype(np.float64)
+    if circular:
+        out = np.mod(out, 360.0)
+    return out
 
 
 def _append_history_entry(

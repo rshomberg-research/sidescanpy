@@ -7,6 +7,17 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `processing.interpolate`: compass-angle fields (`heading_deg`, and
+  `course_deg` if requested) were interpolated linearly, so a heading that
+  crossed north between two aux fixes (e.g. 359 to 1 degrees) passed
+  through about 180 degrees for the pings in between. These fields are now
+  unwrapped (period 360), interpolated, and wrapped back to [0, 360) in
+  both `interpolate_aux_onto_pings` and `interpolate_onto_channel`;
+  clamp, linear and nan extrapolation still apply. The set is exposed as
+  `CIRCULAR_FIELDS`. Other fields are unchanged.
+
 ## [0.7.1] — 2026-10-11
 
 ### Added
