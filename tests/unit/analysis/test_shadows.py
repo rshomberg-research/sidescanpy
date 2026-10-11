@@ -31,7 +31,8 @@ def _seabed(n_pings=200, n_samples=2500, seed=0):
     return ds
 
 
-def _object(ds, *, channel, ping, n_pings, slant_m, height_m=0.5, highlight_m=0.3):
+def _object(ds, *, channel, ping, n_pings, slant_m, height_m=0.5, highlight_m=0.3, shadow_drop_db=20.0,
+            highlight_gain_db=12.0):
     """Highlight then shadow on ``n_pings`` pings; shadow length from the flat-seabed geometry."""
     s0 = int(slant_m / M_PER_SAMPLE)
     hl = int(highlight_m / M_PER_SAMPLE)
@@ -39,8 +40,8 @@ def _object(ds, *, channel, ping, n_pings, slant_m, height_m=0.5, highlight_m=0.
     ls = height_m * r_shadow / (ALTITUDE - height_m)
     n_sh = int(ls / M_PER_SAMPLE)
     v = ds["backscatter_intensity"].values
-    v[ping:ping + n_pings, channel, s0:s0 + hl] += 12.0
-    v[ping:ping + n_pings, channel, s0 + hl:s0 + hl + n_sh] -= 20.0
+    v[ping:ping + n_pings, channel, s0:s0 + hl] += highlight_gain_db
+    v[ping:ping + n_pings, channel, s0 + hl:s0 + hl + n_sh] -= shadow_drop_db
     return {"ping_start": ping, "ping_stop": ping + n_pings, "sample_start": s0, "sample_stop": s0 + hl + n_sh,
             "shadow_m": n_sh * M_PER_SAMPLE}
 
@@ -110,6 +111,34 @@ class TestDetectShadowProposals:
         box = _object(ds, channel=1, ping=80, n_pings=6, slant_m=10.0, height_m=2.5)
         df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING, max_height_m=1.0).proposals
         assert all(_iou(row, box) < 0.3 for row in df.itertuples())
+
+    def test_shallow_short_shadow_near_nadir_found_by_weak_pass(self):
+        ds = _seabed()
+        box = _object(ds, channel=1, ping=80, n_pings=6, slant_m=8.5, height_m=0.15, shadow_drop_db=5.0,
+                      highlight_gain_db=8.0)
+        strong = detect_shadow_proposals(ds, m_per_ping=M_PER_PING, weak_shadow_db=None).proposals
+        assert all(_iou(row, box) < 0.3 for row in strong.itertuples())
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING).proposals
+        best = max(df.itertuples(), key=lambda row: _iou(row, box))
+        assert _iou(best, box) > 0.4
+        assert best.weak
+
+    def test_weak_shadow_without_highlight_is_dropped(self):
+        ds = _seabed()
+        box = _object(ds, channel=1, ping=80, n_pings=6, slant_m=8.5, height_m=0.15, shadow_drop_db=5.0,
+                      highlight_m=0.0)
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING).proposals
+        assert all(_iou(row, box) < 0.3 for row in df.itertuples())
+
+    def test_score_uses_height_so_range_does_not_matter(self):
+        ds = _seabed()
+        near = _object(ds, channel=1, ping=50, n_pings=6, slant_m=9.0, height_m=0.4)
+        far = _object(ds, channel=1, ping=130, n_pings=6, slant_m=25.0, height_m=0.4)
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING).proposals
+        a = max(df.itertuples(), key=lambda row: _iou(row, near))
+        b = max(df.itertuples(), key=lambda row: _iou(row, far))
+        assert a.shadow_length_m < 0.6 * b.shadow_length_m
+        assert a.score == pytest.approx(b.score, abs=0.08)
 
     def test_result_serialises(self):
         ds = _seabed()

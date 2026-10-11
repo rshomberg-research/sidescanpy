@@ -15,6 +15,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   front of it and returned as a box in native (ping, sample, channel)
   coordinates with sizes, contrast, a flat-seabed height estimate and a
   score (`ShadowProposals`). Meant to pre-fill annotation boxes.
+  A second, weaker threshold (`weak_shadow_db`) finds the short, shallow
+  shadows of objects near nadir and keeps them only with a highlight in
+  front (`weak` column). The score uses the estimated height rather than
+  the shadow length, so the same object scores alike at any range.
   `viz.plot_shadow_proposals` draws them on a tile or chip.
 
 - `export.windows.native`: `native_chip` and `swath_tiles` cut windows that
