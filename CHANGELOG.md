@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-10-11
+
 ### Added
 
 - `analysis.detect_shadow_proposals`: object proposals from acoustic

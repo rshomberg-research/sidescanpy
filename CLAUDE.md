@@ -3,7 +3,7 @@
 **What:** Python library to read, correct, grid and export sidescan sonar
 data (EdgeTech JSF, Klein SDF, XTF → `.ss.h5`).
 **Owner:** Russ Shomberg <rshomberg@uri.edu>
-**Version:** 0.7.0. History: `CHANGELOG.md` and `git log`.
+**Version:** 0.7.1. History: `CHANGELOG.md` and `git log`.
 **Python:** 3.12+. **License:** MIT (private repo for now, publication planned).
 
 This file is the working guide, not a log. Session narratives belong in
