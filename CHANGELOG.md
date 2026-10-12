@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-10-12
+
 ### Added
 
 - `merge_window_s` on `processing.held_value_fixes` (default `None`, no
