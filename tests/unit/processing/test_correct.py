@@ -534,7 +534,9 @@ class TestChunkedWarningsOncePerChannel:
         path = tmp_path / "nan_pitch.ss.h5"
         write_survey(survey, path)
         with caplog.at_level("WARNING", logger="sidescanpy.processing.interpolate"):
-            correct_file(path, ["interpolate_aux", "tvg"], chunk_pings=10)  # 5 chunks per channel
+            correct_file(  # 5 chunks per channel; no per-ping fallback, so pitch warns
+                path, ["interpolate_aux", "tvg"], {"interpolate_aux": {"per_ping_fallback": False}}, chunk_pings=10,
+            )
         pitch = [r for r in caplog.records if "pitch_deg" in r.getMessage()]
         assert len(pitch) == 2  # once per frequency channel
         # the filter is removed afterwards

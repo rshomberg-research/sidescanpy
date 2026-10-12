@@ -319,7 +319,7 @@ class TestEmptyAuxSkips:
         original_lat = survey.get_frequency("hz_1495000").dataset["latitude"].values.copy()
 
         with caplog.at_level(logging.WARNING):
-            result = interpolate_aux_onto_pings(survey)
+            result = interpolate_aux_onto_pings(survey, per_ping_fallback=False)
 
         ch = result.get_frequency("hz_1495000")
         np.testing.assert_array_equal(ch.dataset["latitude"].values, original_lat)
@@ -383,7 +383,7 @@ class TestEmptyAuxForce:
         survey.add_frequency("hz_1495000", sample_dataset)
         # No navigation set
 
-        result = interpolate_aux_onto_pings(survey, force=True)
+        result = interpolate_aux_onto_pings(survey, force=True, per_ping_fallback=False)
 
         ch = result.get_frequency("hz_1495000")
         # latitude should be NaN-filled (no aux data to interpolate from)
@@ -438,7 +438,8 @@ class TestDropInvalid:
 
         # With drop_invalid=False, the NaN region in source straddles the ping
         # times → scipy interpolates between NaN points → all NaN output.
-        result = interpolate_aux_onto_pings(survey, drop_invalid=False)
+        # (drop_invalid applies to raw entries; reduced fixes never hold NaN.)
+        result = interpolate_aux_onto_pings(survey, drop_invalid=False, held_values="raw")
         ch = result.get_frequency("hz_1495000")
         assert np.all(np.isnan(ch.dataset["latitude"].values))
 

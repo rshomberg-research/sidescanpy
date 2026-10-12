@@ -52,3 +52,174 @@ def make_raw_dataset(
         "processing_history": "[]",
     }
     return xr.Dataset(data_vars, coords, attrs)
+
+
+# ============================================================
+# SAMPLE-AND-HOLD NAVIGATION / ATTITUDE
+# ============================================================
+
+_M_PER_DEG_LAT = 111_320.0
+
+
+def _held(update_times: np.ndarray, update_values: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """Value of the latest update at or before each of ``at`` (sample-and-hold)."""
+    idx = np.searchsorted(update_times, at, side="right") - 1
+    return update_values[np.clip(idx, 0, None)]
+
+
+def _jittered_schedule(rng, t_end: float, mean_s: float, jitter: float) -> np.ndarray:
+    """Sensor update times from 0 to ``t_end`` with irregular intervals."""
+    gaps = rng.uniform(mean_s * (1 - jitter), mean_s * (1 + jitter), int(t_end / mean_s * 1.5) + 10)
+    times = np.concatenate([[0.0], np.cumsum(gaps)])
+    return times[times <= t_end]
+
+
+def make_held_aux_scenario(
+    *,
+    duration_s: float = 120.0,
+    ping_hz: float = 10.0,
+    n_samples: int = 500,
+    speed_ms: float = 2.0,
+    stop_s: tuple[float, float] = (70.0, 85.0),
+    gps_dropout_s: tuple[float, float] = (95.0, 100.0),
+    seed: int = 0,
+) -> dict:
+    """A survey whose navigation and attitude are logged sample-and-hold.
+
+    Truth: a platform at ``speed_ms`` on heading 340 deg, turning at 4 deg/s
+    through north to 20 deg (40-50 s), stopping during ``stop_s``, then
+    continuing. Pings at ``ping_hz``. A ~1 Hz GPS with irregular update
+    intervals and no updates during ``gps_dropout_s``; heading (~2 Hz),
+    roll (~5 Hz) and pitch (~3 Hz) on their own irregular schedules.
+
+    The navigation record has one entry per ping holding the latest fix,
+    plus a duplicated timestamp on every third ping (first the value just
+    before the latest update, then the current one) and a few NaN entries.
+    The attitude record has one entry per ping. The per-ping fields on the
+    channel hold the same sample-and-hold values, as a converter writes
+    them.
+
+    Returns
+    -------
+    dict
+        ``survey`` (SideScanSurvey), ``freq_key``, ``t`` (ping seconds),
+        truth arrays ``lat``, ``lon``, ``heading``, ``roll``, ``pitch`` at the
+        ping times, and boolean masks ``moving``, ``stopped``, ``dropout``.
+    """
+    from pathlib import Path
+
+    from sidescanpy.core.survey import SideScanSurvey
+
+    rng = np.random.default_rng(seed)
+    t0 = np.datetime64("2026-01-01T00:00:00", "ns")
+    lat0, lon0 = 41.5, -71.5
+    m_per_deg_lon = _M_PER_DEG_LAT * np.cos(np.deg2rad(lat0))
+
+    # Truth on a fine (1 ms) grid, integrated from speed and heading.
+    fine = np.arange(0.0, duration_s + 1.0, 0.001)
+    heading = np.where(fine < 40.0, 340.0, np.where(fine < 50.0, 340.0 + 4.0 * (fine - 40.0), 380.0)) % 360.0
+    speed = np.where((fine >= stop_s[0]) & (fine < stop_s[1]), 0.0, speed_ms)
+    hdg_rad = np.deg2rad(heading)
+    north = np.concatenate([[0.0], np.cumsum(speed[:-1] * np.cos(hdg_rad[:-1]) * 0.001)])
+    east = np.concatenate([[0.0], np.cumsum(speed[:-1] * np.sin(hdg_rad[:-1]) * 0.001)])
+
+    def lat_at(tt):
+        return lat0 + np.interp(tt, fine, north) / _M_PER_DEG_LAT
+
+    def lon_at(tt):
+        return lon0 + np.interp(tt, fine, east) / m_per_deg_lon
+
+    def heading_at(tt):
+        unwrapped = np.where(tt < 40.0, 340.0, np.where(tt < 50.0, 340.0 + 4.0 * (tt - 40.0), 380.0))
+        return unwrapped % 360.0
+
+    def roll_at(tt):
+        return 3.0 * np.sin(2 * np.pi * tt / 8.0)
+
+    def pitch_at(tt):
+        return 2.0 * np.sin(2 * np.pi * tt / 11.0 + 0.3)
+
+    n_pings = int(duration_s * ping_hz)
+    t = np.arange(n_pings) / ping_hz
+
+    # Sensor schedules.
+    gps = _jittered_schedule(rng, duration_s, 1.0, 0.25)
+    gps = gps[(gps < gps_dropout_s[0]) | (gps >= gps_dropout_s[1])]
+    gps_lat, gps_lon = lat_at(gps), lon_at(gps)
+    hdg_u = _jittered_schedule(rng, duration_s, 0.5, 0.3)
+    roll_u = _jittered_schedule(rng, duration_s, 0.2, 0.3)
+    pitch_u = _jittered_schedule(rng, duration_s, 1 / 3, 0.3)
+
+    held_lat, held_lon = _held(gps, gps_lat, t), _held(gps, gps_lon, t)
+    held_hdg = _held(hdg_u, heading_at(hdg_u), t)
+    held_roll = _held(roll_u, roll_at(roll_u), t)
+    held_pitch = _held(pitch_u, pitch_at(pitch_u), t)
+
+    # Navigation record: one entry per ping, every 3rd ping logged twice at
+    # the same time (stale value first), and a few invalid (NaN) entries.
+    nav_t, nav_lat, nav_lon = [], [], []
+    for k, tk in enumerate(t):
+        if k % 3 == 0 and k > 0:
+            stale = tk - 0.5 / ping_hz
+            nav_t.append(tk)
+            nav_lat.append(_held(gps, gps_lat, np.array([stale]))[0])
+            nav_lon.append(_held(gps, gps_lon, np.array([stale]))[0])
+        nav_t.append(tk)
+        nav_lat.append(held_lat[k])
+        nav_lon.append(held_lon[k])
+    nav_lat, nav_lon = np.array(nav_lat), np.array(nav_lon)
+    bad = rng.choice(np.arange(10, len(nav_lat) - 10), 15, replace=False)
+    nav_lat[bad] = np.nan
+    nav_lon[bad] = np.nan
+    nav_times = t0 + (np.array(nav_t) * 1e9).round().astype("timedelta64[ns]")
+    ping_times = t0 + (t * 1e9).round().astype("timedelta64[ns]")
+
+    navigation = xr.Dataset(
+        {"latitude": (("obs",), nav_lat), "longitude": (("obs",), nav_lon)},
+        coords={"time": (("obs",), nav_times)},
+        attrs={"source": "synthetic_held"},
+    )
+    attitude = xr.Dataset(
+        {
+            "heading_deg": (("obs",), held_hdg.astype(np.float32)),
+            "roll_deg": (("obs",), held_roll.astype(np.float32)),
+            "pitch_deg": (("obs",), held_pitch.astype(np.float32)),
+            "heave_m": (("obs",), np.zeros(n_pings, dtype=np.float32)),
+        },
+        coords={"time": (("obs",), ping_times)},
+        attrs={"source": "synthetic_held"},
+    )
+
+    ds = make_raw_dataset(n_pings=n_pings, n_samples=n_samples)
+    ds = ds.assign_coords(time=("ping", ping_times))
+    ds = ds.assign(
+        latitude=("ping", held_lat),
+        longitude=("ping", held_lon),
+        heading_deg=("ping", held_hdg.astype(np.float32)),
+        roll_deg=("ping", held_roll.astype(np.float32)),
+        pitch_deg=("ping", held_pitch.astype(np.float32)),
+    )
+    freq_key = "hz_200000"
+    survey = SideScanSurvey(source_files=[Path("synthetic.sdf")], source_format="SDF", survey_name="held")
+    survey.add_frequency(freq_key, ds)
+    survey.navigation = navigation
+    survey.attitude = attitude
+
+    stopped = (t >= stop_s[0]) & (t < stop_s[1])
+    dropout = (t >= gps_dropout_s[0] - 1.5) & (t < gps_dropout_s[1] + 1.5)
+    edges = (t < 2.0) | (t > duration_s - 2.0)
+    moving = ~stopped & ~dropout & ~edges & ~((t >= stop_s[0] - 1.5) & (t < stop_s[1] + 1.5))
+    return {
+        "survey": survey,
+        "freq_key": freq_key,
+        "t": t,
+        "lat": lat_at(t),
+        "lon": lon_at(t),
+        "heading": heading_at(t),
+        "roll": roll_at(t),
+        "pitch": pitch_at(t),
+        "moving": moving,
+        "stopped": stopped,
+        "dropout": dropout,
+        "m_per_deg_lon": m_per_deg_lon,
+    }

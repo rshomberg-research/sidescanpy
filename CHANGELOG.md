@@ -7,6 +7,51 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `processing.held_value_fixes` (module `processing.aux_fixes`): reduce a
+  sample-and-hold aux record to its real fixes. Many recorders log the
+  latest GPS fix or attitude value at every ping or packet, so the same
+  value repeats until the sensor updates. An entry is kept when its value
+  differs from the previous finite entry (latitude + longitude as one
+  group, every other variable on its own); a fix that ends a held run is
+  timed at the midpoint between the last held entry and the changed one;
+  duplicate timestamps collapse to the last entry logged; NaN entries are
+  never fixes; a value held longer than `max_hold_s` (default 2 s) keeps an
+  anchor at its last entry so stops and dropouts stay flat. A record with
+  no repeats is returned unchanged.
+
+- `io.jsf`: the JSF attitude record includes `heading_deg` from
+  message 2020. `core.schema` lists `OPTIONAL_ATT_VARS`
+  (`heading_deg`, `yaw_deg`, `temperature_c`).
+
+### Changed
+
+- The `interpolate_aux` step (`interpolate_aux_onto_pings`,
+  `interpolate_aux_onto_dataset`) now reduces each aux record with
+  `held_value_fixes` before interpolating (`held_values="fixes"`, the new
+  default). Interpolating the held entries as logged kept the stair-steps:
+  consecutive pings stacked on one position, then jumped, in ground-range
+  and georeferenced output, and `fill_nav_stalls` cannot repair this when
+  most steps are zero. On a synthetic 1 Hz GPS under 10 Hz pings, position
+  RMS error drops from about 1.2 m to 0.05 m. `held_values="raw"` restores
+  the previous behavior exactly; `max_hold_s` is also a step parameter.
+  **Outputs of corrected surveys change** (per-ping positions and attitude,
+  and everything derived from them). Files already corrected keep their
+  values, since a recorded step is not re-applied: re-convert them, or
+  correct with `force=True`, to benefit.
+- `interpolate_aux` falls back to the channel's own per-ping values when a
+  field has no usable aux source (record absent or empty, variable missing
+  or all NaN), reduced the same way (`per_ping_fallback=True`, the
+  default; only with `held_values="fixes"`). Per-ping values that never
+  repeat are unchanged. Previously such fields kept their held per-ping
+  values with a warning (or were NaN-filled with `force=True`, which still
+  happens when no per-ping values exist). On a ping slice or chunk the
+  per-ping values come from the matching whole channel of the survey, so
+  chunked and unchunked runs agree.
+- The `interpolate_aux` history record now also carries `held_values`,
+  `max_hold_s`, `per_ping_fallback` and `per_ping_fallback_fields`.
+
 ### Fixed
 
 - `io.jsf`: the attitude record built from `PitchRollDataMessage`
@@ -22,12 +67,6 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `io.jsf`: DVL and pressure-sensor record times had the same
   seconds-as-nanoseconds error and are now absolute. Navigation record
   times are rounded to the microsecond instead of truncated.
-
-### Added
-
-- `io.jsf`: the JSF attitude record includes `heading_deg` from
-  message 2020. `core.schema` lists `OPTIONAL_ATT_VARS`
-  (`heading_deg`, `yaw_deg`, `temperature_c`).
 
 ## [0.7.2] — 2026-10-11
 

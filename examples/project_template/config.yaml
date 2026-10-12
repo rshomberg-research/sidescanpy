@@ -46,6 +46,9 @@ correct:
     tvg:
       spreading_loss_db: 20.0       # 0 if the hardware already compensates spreading
       # absorption_db_per_m: 0.2    # default: Francois-Garrison for each frequency
+    # interpolate_aux:
+    #   held_values: fixes          # "raw" interpolates repeated (sample-and-hold) aux entries as logged
+    #   max_hold_s: 2.0             # longer unchanged values stay flat (stops, dropouts)
   # Per-frequency overrides of params, e.g.
   # frequency_params:
   #   hz_900000: {tvg: {absorption_db_per_m: 0.3}}

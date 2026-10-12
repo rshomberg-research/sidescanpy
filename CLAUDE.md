@@ -80,7 +80,7 @@ src/sidescanpy/
 ├── io/          jsf/, sdf/, xtf/ readers+converters; hdf5/ (.ss.h5, survey
 │                dirs); netcdf/ (single channel); dispatch, catalogs
 ├── processing/  correct (step API), radiometric (TVG, Francois-Garrison),
-│                geometric, georeferencing, interpolate, inversion,
+│                geometric, georeferencing, interpolate, aux_fixes, inversion,
 │                slicing, bottom, farrange, outliers, segments,
 │                navigation, profiles, range_correction, track, sample_axis
 ├── analysis/    characterize, nadir, beam, usable_range, tvg, navigation,
@@ -217,5 +217,9 @@ not in the repo; they skip without them.
   frequencies when a result looks too clean.
 - **Diagnostic views are not data products.** Judge a GeoTIFF in a GIS,
   not by a coverage-alpha plot.
+- **Aux streams are sample-and-hold.** In every supported format, nav and
+  attitude (aux records and per-ping fields) repeat the latest sensor value
+  until it updates. Count repeats before trusting a track, and interpolate
+  between real fixes (`held_value_fixes`), not between logged entries.
 - **Documentation drifts.** Check claims in this file against the code
   before relying on them.

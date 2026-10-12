@@ -11,6 +11,9 @@ Public entry points
 - :func:`interpolate_aux_onto_pings` — replace per-ping nav, attitude,
   and heave fields with values interpolated from the survey's auxiliary
   records onto each ping's timestamp.
+- :func:`held_value_fixes` — reduce a sample-and-hold aux record (the
+  latest fix repeated at every ping or packet) to its real fixes; the
+  ``interpolate_aux`` step does this by default.
 - :func:`interpolate_onto_channel` — lower-level: interpolate any
   ``xr.Dataset`` (e.g. an external GPS log) onto one channel's ping
   times.
@@ -67,6 +70,7 @@ from sidescanpy.core.history import (
     STEP_TVG,
     processing_level,
 )
+from sidescanpy.processing.aux_fixes import held_value_fixes
 from sidescanpy.processing.bottom import (
     altitude_sample_index,
     blank_nadir_noise,
@@ -154,6 +158,7 @@ __all__ = [
     "fill_nav_stalls",
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
+    "held_value_fixes",
     "apply_tvg",
     "apply_tvg_to_amplitude",
     "tvg_gain_db",

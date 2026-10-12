@@ -10,6 +10,14 @@ to the ping's exact timestamp.
 This module provides higher-precision per-ping values by interpolating
 each frequency channel's ping times against the survey's auxiliary records.
 
+Aux records are themselves often sample-and-hold (each entry repeats the
+latest sensor value until the sensor updates). By default
+(``held_values="fixes"``) each record is first reduced to its real fixes
+with :func:`~sidescanpy.processing.aux_fixes.held_value_fixes`, so the
+interpolated track is smooth instead of stair-stepped. When a field has no
+usable aux source, the channel's own per-ping values (also typically held)
+are reduced the same way and interpolated (``per_ping_fallback``).
+
 Two layers:
 
 - ``interpolate_aux_onto_pings(survey, ...)``  — top-level entrypoint.
@@ -33,6 +41,7 @@ import xarray as xr
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_INTERPOLATE_AUX, append_history
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
+from sidescanpy.processing.aux_fixes import held_value_fixes
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +78,7 @@ CIRCULAR_FIELDS: frozenset[str] = frozenset({"heading_deg", "course_deg"})
 
 _VALID_AUX_NAMES = {"navigation", "attitude", "dvl", "sensor"}
 _VALID_EXTRAPOLATION = ("clamp", "linear", "nan")
+_VALID_HELD_VALUES = ("fixes", "raw")
 
 
 # ============================================================
@@ -84,6 +94,9 @@ def interpolate_aux_onto_pings(
     drop_invalid: bool = True,
     force: bool = False,
     in_place: bool = False,
+    held_values: Literal["fixes", "raw"] = "fixes",
+    max_hold_s: float = 2.0,
+    per_ping_fallback: bool = True,
 ) -> SideScanSurvey:
     """
     Update per-ping fields on every frequency channel by interpolating
@@ -108,13 +121,37 @@ def interpolate_aux_onto_pings(
         If True, drop rows where the aux source variable is NaN before
         interpolating. Avoids NaN propagation through the interpolated
         result. Set False to require the source be clean.
+        With ``held_values="fixes"`` NaN entries are never fixes and are
+        always dropped.
     force : bool, default False
         If True, attempt interpolation even when the aux record is empty
-        or absent. Per-ping field receives NaN. If False (default), the
-        field is left unchanged and a warning is logged.
+        or absent and no per-ping fallback applies: the per-ping field
+        receives NaN. If False (default), the field is left unchanged and a
+        warning is logged.
     in_place : bool, default False
         If True, mutate ``survey`` in place and return it. If False,
         return a new SideScanSurvey leaving the input untouched.
+    held_values : {"fixes", "raw"}, default "fixes"
+        ``"fixes"`` reduces each aux record to its real fixes first
+        (:func:`~sidescanpy.processing.aux_fixes.held_value_fixes`): many
+        recorders log the latest GPS or attitude value at every ping or
+        packet, and interpolating between those repeated entries keeps the
+        stair-steps (consecutive pings stack on one position, then jump).
+        ``"raw"`` interpolates the entries as logged (the only behavior up
+        to 0.7.2).
+    max_hold_s : float, default 2.0
+        With ``held_values="fixes"``: a value unchanged for longer than this
+        is kept flat across the hold (a stop, or a sensor dropout) rather
+        than ramped through it. See
+        :func:`~sidescanpy.processing.aux_fixes.held_value_fixes`.
+    per_ping_fallback : bool, default True
+        With ``held_values="fixes"``: when a field's aux record is absent
+        or empty, or its variable is missing or all NaN, reduce the
+        channel's own per-ping values of that field (against the ping
+        times) to fixes and interpolate those instead. Per-ping values
+        that never repeat are returned unchanged. The fields filled this
+        way are recorded in the history entry. No effect with
+        ``held_values="raw"``.
 
     Returns
     -------
@@ -126,12 +163,10 @@ def interpolate_aux_onto_pings(
     ------
     ValueError
         If ``fields`` references an unknown aux record name.
-        If ``extrapolation`` is not one of the supported values.
+        If ``extrapolation`` or ``held_values`` is not one of the supported
+        values.
     """
-    if extrapolation not in _VALID_EXTRAPOLATION:
-        raise ValueError(
-            f"extrapolation must be one of {_VALID_EXTRAPOLATION}, got {extrapolation!r}"
-        )
+    _validate_modes(extrapolation, held_values, max_hold_s)
 
     field_map = fields if fields is not None else dict(DEFAULT_FIELD_SOURCES)
 
@@ -154,6 +189,9 @@ def interpolate_aux_onto_pings(
             extrapolation=extrapolation,
             drop_invalid=drop_invalid,
             force=force,
+            held_values=held_values,
+            max_hold_s=max_hold_s,
+            per_ping_fallback=per_ping_fallback,
         )
         target._freq_channels[freq_key] = SideScanFrequencyChannel(new_ds, freq_key=freq_key)
 
@@ -169,6 +207,9 @@ def interpolate_aux_onto_dataset(
     extrapolation: Literal["clamp", "linear", "nan"] = "clamp",
     drop_invalid: bool = True,
     force: bool = False,
+    held_values: Literal["fixes", "raw"] = "fixes",
+    max_hold_s: float = 2.0,
+    per_ping_fallback: bool = True,
 ) -> xr.Dataset:
     """One frequency channel dataset's per-ping fields, interpolated from
     ``aux``'s auxiliary records (the ``"interpolate_aux"`` step).
@@ -176,12 +217,17 @@ def interpolate_aux_onto_dataset(
     Same parameters as :func:`interpolate_aux_onto_pings`, but for a single
     dataset (or a ping slice of one) with the survey supplying the aux
     records. Always appends an ``"interpolate_aux"`` history record (with
-    the fields actually updated, possibly none) so the step is not re-run.
+    the fields actually updated, possibly none, ``held_values``,
+    ``max_hold_s``, ``per_ping_fallback`` and the fields filled from
+    per-ping values as ``per_ping_fallback_fields``) so the step is not
+    re-run.
+
+    For the per-ping fallback on a ping slice, the per-ping values come
+    from the matching whole channel in ``aux`` (same ``freq_hz_start``,
+    same times at the slice's ``ping`` coordinates) when there is one, so
+    a chunked run gives the same result as an unchunked one.
     """
-    if extrapolation not in _VALID_EXTRAPOLATION:
-        raise ValueError(
-            f"extrapolation must be one of {_VALID_EXTRAPOLATION}, got {extrapolation!r}"
-        )
+    _validate_modes(extrapolation, held_values, max_hold_s)
     field_map = fields if fields is not None else dict(DEFAULT_FIELD_SOURCES)
     for ping_field, (aux_name, _aux_var) in field_map.items():
         if aux_name not in _VALID_AUX_NAMES:
@@ -189,7 +235,7 @@ def interpolate_aux_onto_dataset(
                 f"Unknown aux record '{aux_name}' for field '{ping_field}'. "
                 f"Valid names: {sorted(_VALID_AUX_NAMES)}"
             )
-    new_ds, touched = _interpolate_dataset_from_survey(
+    new_ds, touched, fallback = _interpolate_dataset_from_survey(
         ds,
         survey=aux,
         field_map=field_map,
@@ -197,6 +243,9 @@ def interpolate_aux_onto_dataset(
         extrapolation=extrapolation,
         drop_invalid=drop_invalid,
         force=force,
+        held_values=held_values,
+        max_hold_s=max_hold_s,
+        per_ping_fallback=per_ping_fallback,
     )
     return append_history(
         new_ds,
@@ -206,6 +255,10 @@ def interpolate_aux_onto_dataset(
             "method": method,
             "extrapolation": extrapolation,
             "drop_invalid": drop_invalid,
+            "held_values": held_values,
+            "max_hold_s": float(max_hold_s),
+            "per_ping_fallback": bool(per_ping_fallback),
+            "per_ping_fallback_fields": sorted(fallback),
         },
         function="sidescanpy.processing.interpolate.interpolate_aux_onto_dataset",
         version=__version__,
@@ -229,6 +282,10 @@ def interpolate_onto_channel(
     """
     Interpolate variables from an arbitrary source dataset onto one
     frequency channel's ping times.
+
+    The source entries are used as given. For a sample-and-hold source
+    (the latest value repeated until the sensor updates), pass
+    ``held_value_fixes(source)`` to interpolate between real fixes.
 
     Parameters
     ----------
@@ -301,6 +358,17 @@ def interpolate_onto_channel(
 # INTERNALS
 # ============================================================
 
+def _validate_modes(extrapolation: str, held_values: str, max_hold_s: float) -> None:
+    if extrapolation not in _VALID_EXTRAPOLATION:
+        raise ValueError(
+            f"extrapolation must be one of {_VALID_EXTRAPOLATION}, got {extrapolation!r}"
+        )
+    if held_values not in _VALID_HELD_VALUES:
+        raise ValueError(f"held_values must be one of {_VALID_HELD_VALUES}, got {held_values!r}")
+    if np.isnan(max_hold_s) or max_hold_s < 0:
+        raise ValueError(f"max_hold_s must be >= 0 (or inf), got {max_hold_s!r}")
+
+
 def _interpolate_dataset_from_survey(
     ds: xr.Dataset,
     *,
@@ -310,14 +378,31 @@ def _interpolate_dataset_from_survey(
     extrapolation: str,
     drop_invalid: bool,
     force: bool,
-) -> tuple[xr.Dataset, list[str]]:
+    held_values: str = "raw",
+    max_hold_s: float = 2.0,
+    per_ping_fallback: bool = False,
+) -> tuple[xr.Dataset, list[str], list[str]]:
     """Interpolate one channel dataset against a survey's aux records.
 
-    Skips fields whose aux record is empty/absent unless force=True.
+    Returns the new dataset, the fields updated, and the fields of those
+    filled from the channel's own per-ping values. A field without a usable
+    aux source falls back to its per-ping values when enabled and
+    available, else is skipped (NaN-filled with force=True if the record is
+    empty).
     """
     ping_times = ds["time"].values
     new_ds = ds
     fields_touched: list[str] = []
+    fixes = held_values == "fixes"
+    use_fallback = fixes and per_ping_fallback
+    pending_fallback: list[str] = []
+
+    def can_fall_back(ping_field: str) -> bool:
+        return (
+            use_fallback
+            and ping_field in ds.data_vars
+            and bool(np.isfinite(np.asarray(ds[ping_field].values, dtype=np.float64)).any())
+        )
 
     # Group field_map by aux_name so we apply interpolation per aux record.
     by_aux: dict[str, dict[str, str]] = {}
@@ -329,33 +414,40 @@ def _interpolate_dataset_from_survey(
 
         is_empty = aux_ds is None or aux_ds.sizes.get("obs", 0) == 0
 
-        if is_empty and not force:
-            logger.warning(
-                f"Skipping {sorted(sub_map.keys())}: "
-                f"aux record '{aux_name}' is empty"
-            )
+        if is_empty:
+            fb = [f for f in sub_map if can_fall_back(f)]
+            pending_fallback.extend(fb)
+            rest = [f for f in sub_map if f not in fb]
+            if rest and not force:
+                logger.warning(f"Skipping {sorted(rest)}: aux record '{aux_name}' is empty")
+            elif rest:
+                # Force NaN-fill since no source data exists
+                for ping_field in rest:
+                    nan_arr = np.full(ds.sizes["ping"], np.nan, dtype=np.float64)
+                    new_ds = new_ds.assign({ping_field: ("ping", nan_arr)})
+                    fields_touched.append(ping_field)
             continue
 
-        if is_empty and force:
-            # Force NaN-fill since no source data exists
-            for ping_field in sub_map.keys():
-                nan_arr = np.full(ds.sizes["ping"], np.nan, dtype=np.float64)
-                new_ds = new_ds.assign({ping_field: ("ping", nan_arr)})
-                fields_touched.append(ping_field)
-            continue
+        source = held_value_fixes(aux_ds, max_hold_s=max_hold_s) if fixes else aux_ds
 
-        # Standard path: interpolate each var in sub_map from aux_ds
+        # Standard path: interpolate each var in sub_map from the source
         for ping_field, aux_var in sub_map.items():
             if aux_var not in aux_ds.data_vars:
+                if can_fall_back(ping_field):
+                    pending_fallback.append(ping_field)
+                    continue
                 logger.warning(
                     f"Skipping '{ping_field}': "
                     f"variable '{aux_var}' not found in '{aux_name}' aux record"
                 )
                 continue
 
-            # NEW: check if source variable is all NaN → preserve original
+            # All-NaN source -> per-ping fallback, else preserve original
             source_values = aux_ds[aux_var].values
             if np.all(np.isnan(source_values)):
+                if can_fall_back(ping_field):
+                    pending_fallback.append(ping_field)
+                    continue
                 logger.warning(
                     f"Skipping '{ping_field}': '{aux_name}.{aux_var}' source "
                     f"is all NaN. Preserving original per-ping value."
@@ -363,19 +455,71 @@ def _interpolate_dataset_from_survey(
                 continue
 
             interpolated = _interpolate_one_var(
-                source=aux_ds,
+                source=source,
                 var_name=aux_var,
                 target_times=ping_times,
                 method=method,
                 extrapolation=extrapolation,
-                drop_invalid=drop_invalid,
+                # Reduced records are NaN wherever a variable has no fix.
+                drop_invalid=drop_invalid or fixes,
                 circular=ping_field in CIRCULAR_FIELDS,
             )
 
             new_ds = new_ds.assign({ping_field: ("ping", interpolated)})
             fields_touched.append(ping_field)
 
-    return new_ds, fields_touched
+    if pending_fallback:
+        logger.debug(
+            "interpolate_aux: no usable aux source for %s; interpolating the "
+            "channel's own per-ping values reduced to held-value fixes",
+            sorted(pending_fallback),
+        )
+        whole = _whole_channel(ds, survey)
+        per_ping = xr.Dataset(
+            {f: (("obs",), np.asarray(whole[f].values, dtype=np.float64)) for f in pending_fallback},
+            coords={"time": (("obs",), np.asarray(whole["time"].values))},
+        )
+        source = held_value_fixes(per_ping, max_hold_s=max_hold_s)
+        for ping_field in pending_fallback:
+            interpolated = _interpolate_one_var(
+                source=source,
+                var_name=ping_field,
+                target_times=ping_times,
+                method=method,
+                extrapolation=extrapolation,
+                drop_invalid=True,
+                circular=ping_field in CIRCULAR_FIELDS,
+            )
+            new_ds = new_ds.assign({ping_field: ("ping", interpolated)})
+            fields_touched.append(ping_field)
+
+    return new_ds, fields_touched, pending_fallback
+
+
+def _whole_channel(ds: xr.Dataset, survey: SideScanSurvey) -> xr.Dataset:
+    """The survey channel ``ds`` is (a ping slice of), else ``ds`` itself.
+
+    Matched by ``freq_hz_start`` and identical times at ``ds``'s ``ping``
+    coordinates, so the per-ping fallback sees the whole channel when the
+    step runs chunk by chunk.
+    """
+    if "ping" not in ds.coords:
+        return ds
+    for channel in survey.freq_channels.values():
+        whole = channel.dataset
+        if whole is ds:
+            return ds
+        if whole.attrs.get("freq_hz_start") != ds.attrs.get("freq_hz_start") or "ping" not in whole.coords:
+            continue
+        if whole.sizes["ping"] < ds.sizes["ping"]:
+            continue
+        try:
+            times = whole["time"].sel(ping=ds["ping"].values).values
+        except (KeyError, IndexError):
+            continue
+        if np.array_equal(times, ds["time"].values):
+            return whole
+    return ds
 
 
 def _get_aux_record(survey: SideScanSurvey, aux_name: str) -> xr.Dataset | None:

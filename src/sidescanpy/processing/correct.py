@@ -22,7 +22,8 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
     :func:`~sidescanpy.processing.interpolate.interpolate_aux_onto_dataset`;
     needs the survey's aux records (``aux=`` / :func:`correct_survey`);
     :func:`correct` skips it when no ``aux`` is given.
-    Params: ``fields, method, extrapolation, drop_invalid``.
+    Params: ``fields, method, extrapolation, drop_invalid, held_values,
+    max_hold_s, per_ping_fallback``.
 ``"tvg"``
     :func:`~sidescanpy.processing.radiometric.apply_tvg`. Params:
     ``spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms``,
@@ -160,9 +161,13 @@ def _interpolate_aux_step(
     method: str = "linear",
     extrapolation: str = "clamp",
     drop_invalid: bool = True,
+    held_values: str = "fixes",
+    max_hold_s: float = 2.0,
+    per_ping_fallback: bool = True,
 ) -> xr.Dataset:
     return interpolate_aux_onto_dataset(
         ds, aux, fields=fields, method=method, extrapolation=extrapolation, drop_invalid=drop_invalid,
+        held_values=held_values, max_hold_s=max_hold_s, per_ping_fallback=per_ping_fallback,
     )
 
 

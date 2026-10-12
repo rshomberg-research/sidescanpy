@@ -27,7 +27,7 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 | Step | Function | Parameters |
 |---|---|---|
 | `crop_farrange` | `crop_far_range` | `cutoff_sample`, `n_bins`, `min_valid_fraction`, `rise_threshold_db`, `margin_bins` |
-| `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid` |
+| `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid`, `held_values`, `max_hold_s`, `per_ping_fallback` |
 | `tvg` | `apply_tvg` | `spreading_loss_db`, `absorption_db_per_m`, `min_range_m`, `sound_velocity_ms`, `temperature_c`, `salinity_psu`, `depth_m`, `ph` |
 | `geometric` | `compute_geometric_ranges` | `expose_unmasked_z` |
 | `range_correction` | `apply_empirical_range_correction` | `table` (required) |
@@ -117,6 +117,38 @@ sensor readings and are not interpolated by default; see
 [JSF aux source selection](jsf_aux_source_selection.md).
 `interpolate_onto_channel` takes any external `xr.Dataset` with a `time`
 coordinate, such as a separate GPS log.
+
+**Sample-and-hold aux streams.** Recorders commonly log the latest GPS fix
+or attitude value at every ping or packet, so a value repeats until the
+sensor updates (a ~1 Hz GPS under ~10 Hz pings repeats each position about
+ten times; attitude streams repeat on their own schedules). Interpolating
+those entries as logged keeps the stair-steps: consecutive pings stack on
+one position, then jump, which shows up in ground-range and georeferenced
+output. By default (`held_values="fixes"`) each aux record is first reduced
+with `held_value_fixes`:
+
+- latitude and longitude change together and form one group; every other
+  variable is its own group;
+- an entry is a fix when its group's value differs from the previous
+  finite entry; NaN entries are never fixes;
+- a fix that ends a held run is placed midway between the last held entry
+  and the changed one (the update arrived in between); a fix right after
+  another fix keeps its own time, so a stream with no repeats is unchanged;
+- duplicate timestamps collapse to the last entry logged at that time;
+- a value held for longer than `max_hold_s` (default 2 s) also keeps an
+  anchor at its last entry, so the track stays flat across a real stop or
+  a sensor dropout instead of ramping through it.
+
+When a field has no usable aux source (record absent or empty, variable
+missing or all NaN), `per_ping_fallback=True` (default) reduces the
+channel's own per-ping values the same way and interpolates those. The
+step's history record carries `held_values`, `max_hold_s`,
+`per_ping_fallback` and `per_ping_fallback_fields`. `held_values="raw"`
+interpolates the entries as logged, as in 0.7.2 and earlier.
+
+The step is skipped on files whose history already records it; re-convert,
+or correct with `force=True`, to apply the reduction to a file corrected
+before.
 
 ## Slicing
 
