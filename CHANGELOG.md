@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-10-12
+
 ### Changed
 
 - **TVG spreading default is now 30 log R** (`DEFAULT_SPREADING_LOSS_DB`,
