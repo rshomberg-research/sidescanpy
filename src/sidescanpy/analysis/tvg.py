@@ -34,6 +34,7 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.outliers import reject_range_outliers
 from sidescanpy.processing.profiles import backscatter_vs_range, backscatter_vs_sample
 from sidescanpy.processing.radiometric import (
+    DEFAULT_SPREADING_LOSS_DB,
     TVGParams,
     absorption_for_frequency,
     apply_tvg,
@@ -174,7 +175,7 @@ class TVGCandidateFitResult:
 def fit_tvg_curve(
     binned: pd.DataFrame,
     *,
-    spreading_loss_db: float = 40.0,
+    spreading_loss_db: float = DEFAULT_SPREADING_LOSS_DB,
     absorption_db_per_m: float,
     r_ref_m: float | None = None,
     r_fit_min_m: float | None = None,
@@ -206,7 +207,9 @@ def fit_tvg_curve(
     binned : pd.DataFrame
         :func:`backscatter_vs_range` output computed on uncorrected dB
         backscatter.
-    spreading_loss_db : float, default 40.0
+    spreading_loss_db : float, default 30.0
+        Spreading coefficient of the ``spreading_only`` and ``full_physics``
+        candidates (:data:`~sidescanpy.processing.radiometric.DEFAULT_SPREADING_LOSS_DB`).
     absorption_db_per_m : float
         Required; pass the survey's own frequency-appropriate value.
     r_ref_m : float, optional
@@ -445,6 +448,7 @@ def fit_range_decay(
     r_ref_search_fraction: float = 0.5,
     r_ref_window_fraction: float = 1.0 / 3.0,
     channel: int | str | None = None,
+    spreading_loss_db: float = DEFAULT_SPREADING_LOSS_DB,
 ) -> RangeDecayResult:
     """Classify which TVG terms ``value_var`` already carries.
 
@@ -523,6 +527,9 @@ def fit_range_decay(
     channel : int or str, optional
         Restrict to one physical side (index or ``channel_id`` value).
         ``None`` pools both. Applied by masking.
+    spreading_loss_db : float, default 30.0
+        Spreading coefficient of the ``spreading_only`` and ``full_physics``
+        candidates; pass the value the survey's correction uses.
     """
     if range_var not in ds:
         raise ValueError(f"fit_range_decay: {range_var!r} not found — compute geometric ranges first")
@@ -704,8 +711,8 @@ def fit_range_decay(
 
     absorption_db_per_m = absorption_for_frequency(freq_hz)
     fit_result = fit_tvg_curve(
-        binned, absorption_db_per_m=absorption_db_per_m, r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m,
-        r_fit_max_m=usable_range_m, r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
+        binned, spreading_loss_db=spreading_loss_db, absorption_db_per_m=absorption_db_per_m,
+        r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m, r_fit_max_m=usable_range_m, r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
     )
 
     ranked = sorted(fit_result.candidates, key=lambda c: c.fixed_scale_rmse_db)

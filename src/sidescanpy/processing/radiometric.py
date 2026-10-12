@@ -51,6 +51,16 @@ DEFAULT_DEPTH_M = 10.0
 DEFAULT_PH = 8.0
 
 
+DEFAULT_SPREADING_LOSS_DB = 30.0
+"""Default TVG spreading coefficient (dB per decade of range): 30 log R.
+
+Used by :class:`TVGParams` and the TVG curve fits. 30 log R models the
+insonified seafloor area growing with range; 40 log R (two-way spherical
+spreading) and 20 log R (one-way) remain available by passing
+``spreading_loss_db``.
+"""
+
+
 @dataclass
 class TVGParams:
     """
@@ -58,16 +68,17 @@ class TVGParams:
 
     Attributes
     ----------
-    spreading_loss_db : float, default=40.0
+    spreading_loss_db : float, default=30.0
         Spreading loss coefficient (dB per decade of range): the gain is
-        ``spreading_loss_db * log10(R)``. 40.0 is two-way spherical
-        spreading. 30.0 is the alternative used for sidescan, where the
-        insonified area grows with range (e.g. J. Mar. Sci. Eng. 2017,
-        5(4), 54, https://www.mdpi.com/2077-1312/5/4/54); which one fits
-        real data is not yet settled, so measure with
-        :func:`sidescanpy.analysis.fit_range_decay` per survey. 20.0 is
-        one-way spherical spreading (the default before 0.7.0). 0.0
-        disables the term (hardware already compensates spreading).
+        ``spreading_loss_db * log10(R)``. 30.0 (the default,
+        :data:`DEFAULT_SPREADING_LOSS_DB`) models the insonified seafloor
+        area growing with range (e.g. J. Mar. Sci. Eng. 2017, 5(4), 54,
+        https://www.mdpi.com/2077-1312/5/4/54). 40.0 is two-way spherical
+        spreading (the default in 0.7.0-0.7.5); 20.0 is one-way spherical
+        spreading (the default before 0.7.0). Which fits real data varies,
+        so measure with :func:`sidescanpy.analysis.fit_range_decay` per
+        survey. 0.0 disables the term (hardware already compensates
+        spreading).
     absorption_db_per_m : float, optional
         Absorption coefficient (dB per meter).
         If None, derived from the channel frequency with
@@ -87,7 +98,7 @@ class TVGParams:
         pH 8 -- pass real values when known).
     """
 
-    spreading_loss_db: float = 40.0
+    spreading_loss_db: float = DEFAULT_SPREADING_LOSS_DB
     absorption_db_per_m: float | None = None
     min_range_m: float = 0.5
     sound_velocity_ms: float | None = None

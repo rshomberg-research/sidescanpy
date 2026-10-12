@@ -7,6 +7,23 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **TVG spreading default is now 30 log R** (`DEFAULT_SPREADING_LOSS_DB`,
+  `processing.radiometric`), down from 40 log R: `TVGParams`, the `"tvg"`
+  step and `sidescan-correct --tvg` without a coefficient, and the
+  `spreading_only` / `full_physics` candidates of `fit_tvg_curve` and
+  `fit_range_decay`. 30 log R models the insonified seafloor area growing
+  with range. Configs that set `spreading_loss_db` are unchanged; files
+  already corrected record their coefficient, so `invert()` still undoes
+  them exactly. Pass `spreading_loss_db=40.0` for the previous behaviour.
+
+### Added
+
+- `analysis.fit_range_decay` takes `spreading_loss_db`, passed to its
+  candidate curves, so a fit can use the same coefficient as the survey's
+  correction.
+
 ## [0.7.5] — 2026-10-12
 
 ### Added

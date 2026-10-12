@@ -667,3 +667,11 @@ class TestCenterFrequency:
         params = resolve_tvg_params(ds, None)
         assert params.absorption_db_per_m == pytest.approx(francois_garrison_absorption_db_per_m(580_000))
         assert params.absorption_db_per_m != pytest.approx(absorption_for_frequency(547_500))
+
+
+class TestDefaultSpreading:
+    def test_default_spreading_is_30_log_r(self):
+        from sidescanpy.processing.radiometric import DEFAULT_SPREADING_LOSS_DB
+
+        assert DEFAULT_SPREADING_LOSS_DB == 30.0
+        assert TVGParams().spreading_loss_db == 30.0

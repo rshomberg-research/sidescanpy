@@ -403,7 +403,7 @@ class TestFitTvgCurve:
 
     def test_spreading_only_curve_picks_spreading_only(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=40.0, absorption_db_per_m=0.0))
-        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "spreading_only"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
@@ -432,7 +432,7 @@ class TestFitTvgCurve:
 
     def test_full_physics_curve_picks_full_physics(self):
         binned = _make_binned_curve(TVGParams(spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION))
-        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        result = fit_tvg_curve(binned, spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION)
         assert result.best.name == "full_physics"
         assert result.best.scale == pytest.approx(1.0, abs=1e-6)
         assert result.best.rmse_db == pytest.approx(0.0, abs=1e-6)
@@ -515,7 +515,8 @@ class TestFitTvgCurve:
             "p10": mean, "p90": mean, "count": np.full_like(r, 1000, dtype=int),
         })
 
-        result = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, r_ref_m=2.5, r_fit_max_m=38.0)
+        result = fit_tvg_curve(binned, spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION, r_ref_m=2.5,
+                               r_fit_max_m=38.0)
 
         free_fit_winner = min(result.candidates, key=lambda c: c.rmse_db).name
         assert free_fit_winner == "full_physics"
@@ -616,3 +617,14 @@ class TestFitTvgCurve:
         binned = _make_binned_curve(TVGParams(spreading_loss_db=0.0, absorption_db_per_m=0.0), count=1)
         with pytest.raises(ValueError, match="min_count_for_r_ref"):
             fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION, min_count_for_r_ref=30)
+
+
+class TestFitDefaultSpreading:
+    def test_fit_candidates_use_default_30_and_follow_the_argument(self):
+        binned = _make_binned_curve(TVGParams(spreading_loss_db=30.0, absorption_db_per_m=0.0))
+        default = fit_tvg_curve(binned, absorption_db_per_m=_ABSORPTION)
+        by_name = {c.name: c for c in default.candidates}
+        assert by_name["spreading_only"].params.spreading_loss_db == 30.0
+        assert default.best.name == "spreading_only"
+        forty = fit_tvg_curve(binned, spreading_loss_db=40.0, absorption_db_per_m=_ABSORPTION)
+        assert {c.name: c for c in forty.candidates}["spreading_only"].params.spreading_loss_db == 40.0

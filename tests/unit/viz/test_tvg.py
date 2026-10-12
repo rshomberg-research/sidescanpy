@@ -472,7 +472,7 @@ class TestPlotRangeDecayResiduals:
         by this fixture's own construction, so this isn't a coincidental
         pass."""
         ds = _make_scaled_spreading_dataset(scale=1.6)
-        decay = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
+        decay = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0, spreading_loss_db=40.0)  # matches _make_scaled_spreading_dataset's own ground_range_m construction
         spreading = next(c for c in decay.fit.candidates if c.name == "spreading_only")
         assert abs(spreading.scale - 1.6) < 0.3  # sanity: free fit actually found the injected scale
         assert spreading.fixed_scale_rmse_db > spreading.rmse_db + 1.0  # and the two RMSEs meaningfully differ

@@ -564,8 +564,9 @@ class TestFitRangeDecay:
         # fit must be evaluated against that same variable regardless of
         # fit_range_decay's own (unrelated) 2026-09-02 default change to
         # slant_range_m.
-        with_spikes = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0)
-        cleaned = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0, reject_outliers=True)
+        with_spikes = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0, spreading_loss_db=40.0)
+        cleaned = fit_range_decay(ds, range_var="ground_range_m", bin_width_m=2.0, reject_outliers=True,
+                                  spreading_loss_db=40.0)
 
         assert cleaned.outlier_n_rejected > 0
         assert cleaned.best_rmse_db < with_spikes.best_rmse_db
