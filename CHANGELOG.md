@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-10-12
+
 ### Changed
 
 - `processing.held_value_fixes` (and so the `interpolate_aux` step) now
