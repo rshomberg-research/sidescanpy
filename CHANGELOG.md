@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-10-12
+
 ### Added
 
 - `processing.held_value_fixes` (module `processing.aux_fixes`): reduce a
