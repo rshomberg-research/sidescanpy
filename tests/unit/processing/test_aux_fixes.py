@@ -21,7 +21,7 @@ from sidescanpy.core.schema import make_empty_attitude_record, make_empty_naviga
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.processing import correct_file, correct_survey
-from sidescanpy.processing.aux_fixes import held_value_fixes
+from sidescanpy.processing.aux_fixes import POSITION_GROUP, held_value_fixes
 from sidescanpy.processing.interpolate import (
     DEFAULT_FIELD_SOURCES,
     interpolate_aux_onto_dataset,
@@ -99,13 +99,43 @@ class TestHeldValueFixes:
         out = held_value_fixes(rec)
         np.testing.assert_allclose(_secs(out), [0.0, 1.5, 3.0])
 
-    def test_lat_lon_grouped_by_default(self):
-        # Only longitude changes at t=2: still one position fix there.
+    def test_lat_lon_are_separate_groups_by_default(self):
+        # Only longitude changes at t=2: a longitude fix there, no latitude fix.
         rec = _record([0, 1, 2, 3], latitude=[1, 1, 1, 1], longitude=[5, 5, 6, 6])
-        out = held_value_fixes(rec)
+        out = held_value_fixes(rec, max_hold_s=np.inf)
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5])
+        np.testing.assert_array_equal(out["latitude"].values, [1, np.nan])
+        np.testing.assert_array_equal(out["longitude"].values, [5, 6])
+
+    def test_position_group_joins_lat_lon_when_asked(self):
+        rec = _record([0, 1, 2, 3], latitude=[1, 1, 1, 1], longitude=[5, 5, 6, 6])
+        out = held_value_fixes(rec, groups=[POSITION_GROUP], max_hold_s=np.inf)
         np.testing.assert_allclose(_secs(out), [0.0, 1.5])
         np.testing.assert_array_equal(out["latitude"].values, [1, 1])
         np.testing.assert_array_equal(out["longitude"].values, [5, 6])
+
+    def test_interleaved_lat_lon_updates_give_even_track_by_default(self):
+        # A 1 Hz GPS logged at 20 Hz whose latitude reaches the log 0.1 s
+        # before longitude: a joint group turns the latitude-only update into
+        # a fix with a stale longitude, a stair-step once per second.
+        t_log = np.arange(0, 60, 0.05)
+        fix_t = np.floor(t_log)                        # latest 1 Hz fix time
+        lon_t = np.where(t_log - fix_t >= 0.1, fix_t, fix_t - 1)
+        speed = 1e-5                                   # deg/s on each axis
+        rec = _record(t_log, latitude=fix_t * speed, longitude=np.maximum(lon_t, 0) * speed)
+        ping_t = np.arange(5, 55, 0.1)
+
+        def spread(out):
+            secs = _secs(out)
+            pos = []
+            for v in ("latitude", "longitude"):
+                ok = np.isfinite(out[v].values)
+                pos.append(np.interp(ping_t, secs[ok], out[v].values[ok]))
+            step = np.hypot(np.diff(pos[0]), np.diff(pos[1]))
+            return np.percentile(step, 95) / np.median(step)
+
+        assert spread(held_value_fixes(rec)) < 1.2
+        assert spread(held_value_fixes(rec, groups=[POSITION_GROUP])) > 1.5
 
     def test_other_variables_are_own_groups_with_nan_elsewhere(self):
         rec = _record([0, 1, 2, 3], roll=[0, 0, 1, 1], pitch=[5, 6, 6, 6])

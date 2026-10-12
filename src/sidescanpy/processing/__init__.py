@@ -70,7 +70,7 @@ from sidescanpy.core.history import (
     STEP_TVG,
     processing_level,
 )
-from sidescanpy.processing.aux_fixes import held_value_fixes
+from sidescanpy.processing.aux_fixes import POSITION_GROUP, held_value_fixes
 from sidescanpy.processing.bottom import (
     altitude_sample_index,
     blank_nadir_noise,
@@ -159,6 +159,7 @@ __all__ = [
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
     "held_value_fixes",
+    "POSITION_GROUP",
     "apply_tvg",
     "apply_tvg_to_amplitude",
     "tvg_gain_db",

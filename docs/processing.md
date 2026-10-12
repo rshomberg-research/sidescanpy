@@ -127,8 +127,9 @@ one position, then jump, which shows up in ground-range and georeferenced
 output. By default (`held_values="fixes"`) each aux record is first reduced
 with `held_value_fixes`:
 
-- latitude and longitude change together and form one group; every other
-  variable is its own group;
+- every variable is its own group, latitude and longitude included, since
+  some recorders log the two coordinates of one fix in separate entries
+  (`groups=[POSITION_GROUP]` joins them);
 - an entry is a fix when its group's value differs from the previous
   finite entry; NaN entries are never fixes;
 - a fix that ends a held run is placed midway between the last held entry

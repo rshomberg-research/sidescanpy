@@ -7,6 +7,17 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `processing.held_value_fixes` (and so the `interpolate_aux` step) now
+  treats latitude and longitude as separate groups by default. Some
+  recorders log the two coordinates of one GPS fix in separate entries a
+  fraction of a second apart; as one group, each latitude-only or
+  longitude-only update became a fix carrying a stale other coordinate,
+  leaving a stair-step about once per fix in interpolated tracks.
+  `groups=[POSITION_GROUP]` restores the joint behaviour. Corrected
+  surveys' positions change again; re-correct to benefit.
+
 ## [0.7.3] — 2026-10-12
 
 ### Added

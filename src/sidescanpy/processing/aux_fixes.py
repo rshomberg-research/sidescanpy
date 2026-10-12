@@ -21,8 +21,11 @@ import xarray as xr
 
 logger = logging.getLogger(__name__)
 
-#: Variables that change together and form one group by default.
-DEFAULT_POSITION_GROUP: tuple[str, str] = ("latitude", "longitude")
+#: Latitude and longitude as one group, for ``groups=[POSITION_GROUP]``.
+#: Not the default: some recorders log the two coordinates of one GPS fix in
+#: separate entries, and joining them turns each half-update into a fix
+#: with a stale other coordinate.
+POSITION_GROUP: tuple[str, str] = ("latitude", "longitude")
 
 _OBS = "obs"
 
@@ -42,10 +45,13 @@ def held_value_fixes(
         along it (datetime64). Entries need not be sorted.
     groups : sequence of sequence of str, optional
         Variables that update together. A group's entry is a fix when any of
-        its variables changed. By default ``latitude`` + ``longitude`` form
-        one group (when both are present) and every other numeric ``obs``
-        variable is its own group. Variables not named in ``groups`` are
-        single-variable groups.
+        its variables changed. By default every numeric ``obs`` variable is
+        its own group, latitude and longitude included: some recorders log
+        the two coordinates of one fix in separate entries a fraction of a
+        second apart, and a joint group would turn each half-update into a
+        fix carrying a stale other coordinate. Pass
+        ``groups=[POSITION_GROUP]`` to join them. Variables not named in
+        ``groups`` are single-variable groups.
     max_hold_s : float, default 2.0
         A value unchanged for longer than this (from the first to the last
         entry that carries it) is treated as a real hold, such as a stop or
@@ -172,9 +178,9 @@ def held_value_fixes(
 def _resolve_groups(
     numeric: list[str], groups: Iterable[Iterable[str]] | None, record: xr.Dataset,
 ) -> list[tuple[str, ...]]:
-    """Variable groups: the caller's (or the default position group), then singletons."""
+    """Variable groups: the caller's, then every other variable on its own."""
     if groups is None:
-        groups = [DEFAULT_POSITION_GROUP] if all(v in numeric for v in DEFAULT_POSITION_GROUP) else []
+        groups = []
     resolved: list[tuple[str, ...]] = []
     seen: set[str] = set()
     for group in groups:
