@@ -1012,6 +1012,64 @@ _EPOCH_2026_S  = _EPOCH_2026_NS / 1e9   # float seconds since Unix epoch
 
 
 # ============================================================
+# SPEC-LAYOUT BYTE BUILDERS — real parsing, synthetic values
+# ============================================================
+
+# Message 2020 validity bits (EdgeTech JSF spec)
+PR_FLAG_PITCH   = 1 << 6
+PR_FLAG_ROLL    = 1 << 7
+PR_FLAG_HEAVE   = 1 << 8
+PR_FLAG_HEADING = 1 << 9
+
+
+def _make_pitch_roll_bytes(
+    *,
+    time_s: int,
+    ms_in_second: int,
+    pitch_deg: float = 0.0,
+    roll_deg: float = 0.0,
+    heave_m: float = 0.0,
+    heading_deg: float = 0.0,
+    flags: int = PR_FLAG_PITCH | PR_FLAG_ROLL | PR_FLAG_HEAVE | PR_FLAG_HEADING,
+) -> tuple[bytes, bytes]:
+    """Header and 44-byte body of a message 2020, laid out per the JSF spec.
+
+    Body: int32 seconds since 1970, int32 ms in current second, 4 reserved
+    bytes, int16 accel x/y/z, int16 rate x/y/z, int16 pitch and roll
+    (x 180/32768 deg), int16 temperature (0.1 degC), uint16 device info,
+    int16 heave (mm), uint16 heading (0.01 deg), int32 validity flags,
+    int16 yaw (0.01 deg), int16 reserved.
+    """
+    import struct
+
+    body = struct.pack(
+        "<iiBBBBhhhhhhhhhHhHihh",
+        time_s, ms_in_second,
+        0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0,
+        round(pitch_deg * 32768.0 / 180.0),
+        round(roll_deg * 32768.0 / 180.0),
+        0, 0,
+        round(heave_m * 1e3),
+        round(heading_deg * 100.0),
+        flags,
+        0, 0,
+    )
+    header = JSFMessageHeader(
+        marker=0x1601, protocol_version=17, session_ID=0, message_type=2020,
+        command_type=2, subsystem_num=101, channel=0, sequence_number=0,
+        _reserved=0, message_size=len(body),
+    ).to_bytes()
+    return header, body
+
+
+def _make_real_pitch_roll_msg(**kwargs) -> PitchRollDataMessage:
+    """Parse a synthetic spec-layout message 2020 into a real message object."""
+    header, body = _make_pitch_roll_bytes(**kwargs)
+    return PitchRollDataMessage.from_bytes(JSFMessageHeader.from_bytes(header), body)
+
+
+# ============================================================
 # BUILDERS — pure functions
 # ============================================================
 

@@ -346,6 +346,7 @@ class NavigationRecordAccessor:
 REQUIRED_ATT_DIMS   : set = {"obs"}
 REQUIRED_ATT_COORDS : set = {"time"}
 REQUIRED_ATT_VARS   : set = {"roll_deg", "pitch_deg", "heave_m"}
+OPTIONAL_ATT_VARS   : set = {"heading_deg", "yaw_deg", "temperature_c"}
 REQUIRED_ATT_ATTRS  : set = {"source"}
 
 
@@ -354,8 +355,17 @@ class AttitudeRecordAccessor:
     """
     Auxiliary stream for attitude data (roll, pitch, heave).
 
-    Typically sourced from PitchRollDataMessage (JSF type 2020). Optional vars
-    include heading_deg, yaw_deg, temperature_c.
+    Typically sourced from PitchRollDataMessage (JSF type 2020) or XTF ping
+    headers.
+
+    Required dims: {obs}
+    Required coords: {time} (datetime64[ns], same timebase as ping times)
+    Required vars: {roll_deg, pitch_deg, heave_m}
+    Optional vars: heading_deg (compass bearing, degrees clockwise from
+    north), yaw_deg, temperature_c
+    Required attrs: {source}
+
+    A NaN value marks a reading the source flagged invalid or did not carry.
     """
 
     _ds: xr.Dataset

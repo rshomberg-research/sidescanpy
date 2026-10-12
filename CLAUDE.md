@@ -181,8 +181,10 @@ not in the repo; they skip without them.
   file are NaN-padded and `valid_samples` records the true length; a
   change of sample interval (range setting) is only handled by
   `read_and_convert_segments`, which splits the file.
-- **DVL and attitude validity flags** reject everything on the devices
-  seen so far; embedded per-ping values are used instead.
+- **DVL validity flags** reject everything on the devices seen so far;
+  embedded per-ping values are used instead. JSF attitude (type 2020)
+  flags are honoured: pitch, roll and heading are valid on the devices
+  seen so far, heave is flagged invalid and stays NaN.
 - **griddata resampling** (`resample_method="griddata"`, the dataset
   default) interpolates most pixels at resolutions finer than the ping
   spacing, is much slower than `kdtree`/`binned`, and dominates peak

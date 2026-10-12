@@ -18,6 +18,12 @@ from sidescanpy.io.jsf.messages import (
     PressureSensorReadingMessage,
     SonarDataMessage,
 )
+from tests.unit.io.jsf.conftest import (
+    PR_FLAG_HEADING,
+    PR_FLAG_PITCH,
+    PR_FLAG_ROLL,
+    _make_real_pitch_roll_msg,
+)
 
 # ============================================================================
 # SONAR DATA MESSAGE TESTS
@@ -154,6 +160,51 @@ class TestSonarDataMessage:
 
 
 # ============================================================================
+# PITCH/ROLL MESSAGE — SPEC LAYOUT, SYNTHETIC VALUES
+# ============================================================================
+
+@pytest.mark.unit
+class TestPitchRollSpecDecoding:
+    """Message 2020 decoded from synthetic bytes laid out per the JSF spec."""
+
+    def test_values_populate_declared_fields_when_flags_set(self):
+        msg = _make_real_pitch_roll_msg(
+            time_s=1_700_000_000, ms_in_second=250,
+            pitch_deg=3.5, roll_deg=-2.25, heave_m=0.125, heading_deg=271.5,
+        )
+        assert msg.pitch_deg == pytest.approx(3.5, abs=180 / 32768)
+        assert msg.roll_deg == pytest.approx(-2.25, abs=180 / 32768)
+        assert msg.heave_m == pytest.approx(0.125)
+        assert msg.heading_deg == pytest.approx(271.5)
+
+    def test_field_is_none_when_flag_clear(self):
+        msg = _make_real_pitch_roll_msg(
+            time_s=1_700_000_000, ms_in_second=0,
+            pitch_deg=1.0, roll_deg=1.0, heave_m=0.5, heading_deg=10.0,
+            flags=PR_FLAG_PITCH | PR_FLAG_ROLL | PR_FLAG_HEADING,
+        )
+        assert msg.heave_m is None
+        assert msg.pitch_deg == pytest.approx(1.0, abs=180 / 32768)
+
+    def test_all_fields_none_when_no_flags(self):
+        msg = _make_real_pitch_roll_msg(
+            time_s=1_700_000_000, ms_in_second=0, pitch_deg=1.0, flags=0,
+        )
+        assert msg.pitch_deg is None
+        assert msg.roll_deg is None
+        assert msg.heave_m is None
+        assert msg.heading_deg is None
+
+    def test_timestamp_combines_seconds_and_ms_in_second(self):
+        msg = _make_real_pitch_roll_msg(time_s=1_700_000_000, ms_in_second=987)
+        assert msg.timestamp == pytest.approx(1_700_000_000.987, abs=1e-6)
+
+    def test_timestamp_ns_is_exact_integer(self):
+        msg = _make_real_pitch_roll_msg(time_s=1_700_000_000, ms_in_second=987)
+        assert msg.timestamp_ns == 1_700_000_000 * 10**9 + 987 * 10**6
+
+
+# ============================================================================
 # PITCH/ROLL MESSAGE TESTS
 # ============================================================================
 
@@ -193,15 +244,15 @@ class TestPitchRollMessage:
         header = JSFMessageHeader.from_bytes(sample_pitch_roll_message_header_bytes)
         message = JSFMessage.from_bytes(header, sample_pitch_roll_message_bytes)
 
-        assert message.pitch == pytest.approx(
+        assert message.pitch_deg == pytest.approx(
             sample_pitch_roll_message_dict['pitch'],
             rel=1e-6
         )
-        assert message.roll == pytest.approx(
+        assert message.roll_deg == pytest.approx(
             sample_pitch_roll_message_dict['roll'],
             rel=1e-6
         )
-        assert message.heading == pytest.approx(
+        assert message.heading_deg == pytest.approx(
             sample_pitch_roll_message_dict['heading'],
             rel=1e-6
         )
@@ -455,5 +506,5 @@ class TestMessageRoundTrip:
         message = JSFMessage.from_bytes(header, sample_pitch_roll_message_bytes)
 
         # Verify key fields are intact
-        assert message.pitch == pytest.approx(-6.70166015625, rel=1e-6)
-        assert message.roll == pytest.approx(1.2469482421875, rel=1e-6)
+        assert message.pitch_deg == pytest.approx(-6.70166015625, rel=1e-6)
+        assert message.roll_deg == pytest.approx(1.2469482421875, rel=1e-6)

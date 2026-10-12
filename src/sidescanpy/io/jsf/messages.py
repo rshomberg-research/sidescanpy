@@ -1019,6 +1019,24 @@ class NMEAZDAMessage(NMEAStringMessage, nmea_prefix="$GPZDA"):
 
 @dataclass
 class PitchRollDataMessage(JSFMessage):
+    """Attitude sensor reading (JSF message type 2020).
+
+    Body layout per the EdgeTech JSF spec (44 bytes, little endian):
+    int32 seconds since 1970, int32 milliseconds in the current second,
+    4 reserved bytes, int16 acceleration x/y/z (x 20*1.5/32768 G), int16
+    rate gyro x/y/z (x 500*1.5/32768 deg/s), int16 pitch and roll
+    (x 180/32768 deg; bow up and port up positive), int16 temperature
+    (0.1 degC), uint16 device-specific info, int16 heave (mm, positive
+    down), uint16 heading (0.01 deg), int32 validity flags, int16 yaw
+    (0.01 deg), int16 reserved.
+
+    A derived field is set only when its validity bit is set (bit 0-2
+    acceleration x/y/z, 3-5 rate x/y/z, 6 pitch, 7 roll, 8 heave,
+    9 heading, 10 temperature, 11 device info, 12 yaw); otherwise it stays
+    ``None``. Devices are known to clear bits for sensors they lack (for
+    example heave and yaw) while setting pitch, roll and heading.
+    """
+
     MESSAGE_TYPE: ClassVar[int] = 2020
     STRUCT: ClassVar[struct.Struct] = struct.Struct('<iiBBBBhhhhhhhhhHhHihh')
 
@@ -1031,27 +1049,28 @@ class PitchRollDataMessage(JSFMessage):
     _reserved03: int = field(repr=False)
     _reserved04: int = field(repr=False)
 
-    _raw_accel_x:   int = field(repr=False) # TODO: convert to m/s2
+    _raw_accel_x:   int = field(repr=False) # x (20*1.5)/32768 -> G
     _raw_accel_y:   int = field(repr=False)
     _raw_accel_z:   int = field(repr=False)
-    _raw_rate_x:    int = field(repr=False) # TODO: convert to m/s
+    _raw_rate_x:    int = field(repr=False) # x (500*1.5)/32768 -> deg/s
     _raw_rate_y:    int = field(repr=False)
     _raw_rate_z:    int = field(repr=False)
-    _raw_pitch:     int = field(repr=False) # TODO: convert to deg
+    _raw_pitch:     int = field(repr=False) # x 180/32768 -> deg
     _raw_roll:      int = field(repr=False)
 
-    _raw_temperature:   int = field(repr=False) # TODO: convert to Cel
-    _raw_diagnostics:   int = field(repr=False)   # device specific
+    _raw_temperature:   int = field(repr=False) # 0.1 deg C
+    _raw_diagnostics:   int = field(repr=False) # device specific
 
-    _raw_heave:     int = field(repr=False) # TODO: convert to meter
-    _raw_heading:   int = field(repr=False) # TODO: convert to deg
-    _data_flags:    int = field(repr=False) # TODO: break out
-    _raw_yaw:       int = field(repr=False) # ???: different from heading?
+    _raw_heave:     int = field(repr=False) # mm, positive down
+    _raw_heading:   int = field(repr=False) # 0.01 deg
+    _data_flags:    int = field(repr=False) # validity bits, see parse_validity_flags
+    _raw_yaw:       int = field(repr=False) # 0.01 deg
 
     _reserved05: int = field(repr=False)
 
     # Derived fields
-    timestamp:  float = field(init=False)   # seconds since 1970
+    timestamp:     float = field(init=False)   # seconds since 1970
+    timestamp_ns:  int = field(init=False)     # nanoseconds since 1970 (exact)
 
     pitch_deg:  Optional[float] = field(init=False, default=None) # deg positive bow up
     roll_deg:   Optional[float] = field(init=False, default=None) # deg positive port up
@@ -1090,21 +1109,12 @@ class PitchRollDataMessage(JSFMessage):
         }
 
     def __post_init__(self) -> None:
-        # TODO: add necessary values as needed
         self.timestamp = self._raw_time_seconds + self._raw_offset_ms/1e3
+        self.timestamp_ns = (
+            int(self._raw_time_seconds) * 1_000_000_000
+            + int(self._raw_offset_ms) * 1_000_000
+        )
         validity_flags = self.parse_validity_flags(self._data_flags)
-
-        # BUG: validity flags are rejecting all data on at least one device tested
-        # (one real EdgeTech JSF file). The raw values appear sensible — sonar
-        # embedded heading/roll/pitch derived from attitude data update at the
-        # expected 10 Hz rate, suggesting attitude is producing real data even when
-        # the validity flags claim otherwise. Options:
-        #   1. Fix bit positions in parse_validity_flags() if they don't match spec
-        #   2. Add an `ignore_validity` mode to messages.py for noncompliant devices
-        #   3. Trust raw values regardless of flags
-        # For now, attitude aux record may be empty-but-valid even when source
-        # messages exist; per-ping interpolation onto pings degrades gracefully via
-        # falling back to sonar_embedded.
 
         if validity_flags['accel_x']:
             self.accel_x = self._raw_accel_x * (20*1.5)/32768
@@ -1119,19 +1129,17 @@ class PitchRollDataMessage(JSFMessage):
         if validity_flags['rate_z']:
             self.rate_z = self._raw_rate_z * (500*1.5)/(32768)
         if validity_flags['pitch']:
-            self.pitch = self._raw_pitch * (180.0/32768.0)
+            self.pitch_deg = self._raw_pitch * (180.0/32768.0)
         if validity_flags['roll']:
-            self.roll = self._raw_roll * (180.0/32768.0)
+            self.roll_deg = self._raw_roll * (180.0/32768.0)
         if validity_flags['heave']:
-            self.heave = self._raw_heave / 1e3  # mm -> meters
+            self.heave_m = self._raw_heave / 1e3  # mm -> meters
         if validity_flags['heading']:
-            self.heading = self._raw_heading * 0.01     # -> deg
+            self.heading_deg = self._raw_heading * 0.01     # -> deg
         if validity_flags['temperature']:
-            self.temperature = self._raw_temperature / 10   # 1/10 deg C -> deg C
-        if validity_flags['device_info']:
-            pass    # TODO: define device info
+            self.temperature_C = self._raw_temperature / 10   # 1/10 deg C -> deg C
         if validity_flags['yaw']:
-            self.yaw = self._raw_yaw * 0.01 # -> deg
+            self.yaw_deg = self._raw_yaw * 0.01 # -> deg
 
     @classmethod
     def _parse_body(cls, _header: JSFMessageHeader, data: bytes) -> "PitchRollDataMessage":

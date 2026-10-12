@@ -388,6 +388,26 @@ def _coerce(value) -> float:    # TODO: remove need for this functions
 # ============================================================
 
 
+def _aux_times_ns(msgs: list) -> np.ndarray:
+    """Message times as integer nanoseconds since 1970.
+
+    Parameters
+    ----------
+    msgs : list
+        Messages with a ``timestamp`` attribute in float seconds since 1970.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``int64`` nanoseconds. Values are rounded to the microsecond, which
+        is exact for the millisecond resolution of JSF aux messages and
+        removes float64 representation error.
+    """
+    seconds = np.fromiter((m.timestamp for m in msgs), dtype=np.float64, count=len(msgs))
+    return np.round(seconds * 1e6).astype(np.int64) * 1000
+
+
+
 def _build_navigation_record(nmea_msgs: list[NMEAStringMessage]) -> xr.Dataset:
     """Build a navigation record from positional NMEA messages.
 
@@ -400,8 +420,7 @@ def _build_navigation_record(nmea_msgs: list[NMEAStringMessage]) -> xr.Dataset:
             continue
         lat = _coerce(getattr(m, "latitude", None))
         lon = _coerce(getattr(m, "longitude", None))
-        # ???: is this if/else correct?
-        ts = int(m.timestamp * 1e9)
+        ts = int(_aux_times_ns([m])[0])
         positional.append((ts, lat, lon))
 
     if not positional:
@@ -425,36 +444,49 @@ def _build_navigation_record(nmea_msgs: list[NMEAStringMessage]) -> xr.Dataset:
 def _build_attitude_record(att_msgs: list[PitchRollDataMessage]) -> xr.Dataset:
     """Build an attitude_record from PitchRollDataMessage instances.
 
-    SOURCE SELECTION RATIONALE:
-    Attitude is the only direct source for roll/pitch/heave. Sonar embedded
-    roll/pitch fields are mirrors of attitude data (1-message lag), so they
-    contain no independent information.
+    Parameters
+    ----------
+    att_msgs : list of PitchRollDataMessage
+        Attitude messages (JSF type 2020) in any order.
 
-    NOTE: validity flags on attitude messages may reject all data even when
-    the underlying values are valid (see messages.py TODO). When that
-    happens, this record is empty-but-valid, and downstream interpolation
-    should fall back to sonar_embedded values for roll/pitch.
+    Returns
+    -------
+    xarray.Dataset
+        Attitude record sorted by time, with ``roll_deg``, ``pitch_deg``,
+        ``heave_m`` and ``heading_deg``. ``time`` is the message's own
+        timestamp (seconds since 1970 plus milliseconds), the same
+        timebase as the sonar pings. A field whose validity bit is clear
+        in a message is NaN for that observation.
+
+    Notes
+    -----
+    Attitude messages are the only direct source of roll, pitch and heave.
+    Per-ping embedded roll/pitch/heading on sonar messages mirror this
+    stream with a lag of about one message.
     """
     if not att_msgs:
         return make_empty_attitude_record(source="pitch_roll_data_message")
 
-    sorted_msgs = sorted(att_msgs, key=lambda m: int(m.timestamp))
-    n = len(sorted_msgs)
-    times = np.fromiter(
-        (int(m.timestamp) for m in sorted_msgs), dtype="int64", count=n
-    ).astype("datetime64[ns]")
+    times_ns = _aux_times_ns(att_msgs)
+    order = np.argsort(times_ns, kind="stable")
+    sorted_msgs = [att_msgs[i] for i in order]
+    times = times_ns[order].astype("datetime64[ns]")
+
+    data = {
+        var: np.array([_coerce(getattr(m, var, None)) for m in sorted_msgs], dtype=np.float32)
+        for var in ("roll_deg", "pitch_deg", "heave_m", "heading_deg")
+    }
+    invalid = {var: int(np.isnan(a).sum()) for var, a in data.items() if np.isnan(a).any()}
+    if invalid:
+        logger.debug(
+            f"Attitude: {len(sorted_msgs)} messages; flagged invalid (NaN) per field: {invalid}"
+        )
 
     return xr.Dataset(
-        data_vars={
-            "roll_deg":  (("obs",), np.array([_coerce(m.roll_deg)  for m in sorted_msgs], dtype=np.float32)),
-            "pitch_deg": (("obs",), np.array([_coerce(m.pitch_deg) for m in sorted_msgs], dtype=np.float32)),
-            "heave_m":   (("obs",), np.array([_coerce(m.heave_m)   for m in sorted_msgs], dtype=np.float32)),
-        },
+        data_vars={var: (("obs",), a) for var, a in data.items()},
         coords={"time": (("obs",), times)},
         attrs={"source": "pitch_roll_data_message"},
     )
-
-
 
 
 def _build_dvl_record(dvl_msgs: list[DopplerVelocityLogDataMessage]) -> xr.Dataset:
@@ -462,11 +494,10 @@ def _build_dvl_record(dvl_msgs: list[DopplerVelocityLogDataMessage]) -> xr.Datas
     if not dvl_msgs:
         return make_empty_dvl_record(source="doppler_velocity_log_data_message")
 
-    sorted_msgs = sorted(dvl_msgs, key=lambda m: int(m.timestamp))
-    n = len(sorted_msgs)
-    times = np.fromiter(
-        (int(m.timestamp) for m in sorted_msgs), dtype="int64", count=n
-    ).astype("datetime64[ns]")
+    times_ns = _aux_times_ns(dvl_msgs)
+    order = np.argsort(times_ns, kind="stable")
+    sorted_msgs = [dvl_msgs[i] for i in order]
+    times = times_ns[order].astype("datetime64[ns]")
 
     return xr.Dataset(
         data_vars={
@@ -494,11 +525,10 @@ def _build_sensor_record(
         return make_empty_sensor_record(sensor_type, source="empty")
 
     if sensor_type == "pressure":
-        sorted_msgs = sorted(sensor_msgs, key=lambda m: int(m.timestamp))
-        n = len(sorted_msgs)
-        times = np.fromiter(
-            (int(m.timestamp) for m in sorted_msgs), dtype="int64", count=n
-        ).astype("datetime64[ns]")
+        times_ns = _aux_times_ns(sensor_msgs)
+        order = np.argsort(times_ns, kind="stable")
+        sorted_msgs = [sensor_msgs[i] for i in order]
+        times = times_ns[order].astype("datetime64[ns]")
 
         depth = np.array(
             [_coerce(getattr(m, "depth_m", None)) for m in sorted_msgs],

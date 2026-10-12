@@ -7,6 +7,28 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `io.jsf`: the attitude record built from `PitchRollDataMessage`
+  (type 2020) was unusable. Its times were float seconds cast straight to
+  nanoseconds, so they landed in the first seconds of 1970 and lost the
+  millisecond part (many duplicate times); and the decoded pitch, roll,
+  heave and heading were stored on attribute names the converter never
+  read, so every value was NaN. The message now sets `pitch_deg`,
+  `roll_deg`, `heave_m`, `heading_deg`, `yaw_deg`, `temperature_C` and an
+  exact `timestamp_ns`, and the record carries absolute times on the ping
+  timebase. Validity flags are still honoured per field: a field whose
+  bit is clear stays NaN (heave, on devices without a heave sensor).
+- `io.jsf`: DVL and pressure-sensor record times had the same
+  seconds-as-nanoseconds error and are now absolute. Navigation record
+  times are rounded to the microsecond instead of truncated.
+
+### Added
+
+- `io.jsf`: the JSF attitude record includes `heading_deg` from
+  message 2020. `core.schema` lists `OPTIONAL_ATT_VARS`
+  (`heading_deg`, `yaw_deg`, `temperature_c`).
+
 ## [0.7.2] — 2026-10-11
 
 ### Fixed

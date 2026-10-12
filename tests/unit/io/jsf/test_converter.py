@@ -26,6 +26,12 @@ from sidescanpy.io.jsf.converter import (
     _build_sensor_record,
     convert,
 )
+from tests.unit.io.jsf.conftest import (
+    PR_FLAG_HEADING,
+    PR_FLAG_PITCH,
+    PR_FLAG_ROLL,
+    _make_real_pitch_roll_msg,
+)
 
 # ============================================================
 # CONVERT — top-level API
@@ -532,6 +538,76 @@ class TestBuildAttitudeRecord:
     def test_time_is_datetime64_ns(self, pitch_roll_msgs):
         ds = _build_attitude_record(pitch_roll_msgs)
         assert ds["time"].dtype == np.dtype("datetime64[ns]")
+
+
+@pytest.mark.unit
+class TestBuildAttitudeRecordFromSpecBytes:
+    """Attitude record built from real (synthetic-bytes) message 2020 objects."""
+
+    T0 = 1_700_000_000
+
+    def _msgs(self, n=25, **kwargs):
+        return [
+            _make_real_pitch_roll_msg(
+                time_s=self.T0 + i // 10, ms_in_second=(i % 10) * 100,
+                pitch_deg=0.5 * i, roll_deg=-0.25 * i, heading_deg=10.0 * i,
+                **kwargs,
+            )
+            for i in range(n)
+        ]
+
+    def test_time_is_absolute_when_built_from_messages(self):
+        ds = _build_attitude_record(self._msgs())
+        expected = np.array(
+            [self.T0 * 10**9 + i * 100 * 10**6 for i in range(25)], dtype="int64"
+        ).astype("datetime64[ns]")
+        np.testing.assert_array_equal(ds["time"].values, expected)
+
+    def test_time_unique_when_messages_within_same_second(self):
+        ds = _build_attitude_record(self._msgs())
+        assert np.unique(ds["time"].values).size == ds.sizes["obs"]
+
+    def test_roll_pitch_not_nan_when_flags_valid(self):
+        ds = _build_attitude_record(self._msgs())
+        assert np.isfinite(ds["roll_deg"].values).all()
+        assert np.isfinite(ds["pitch_deg"].values).all()
+        np.testing.assert_allclose(
+            ds["pitch_deg"].values, 0.5 * np.arange(25), atol=180 / 32768
+        )
+
+    def test_heading_included_when_message_carries_it(self):
+        ds = _build_attitude_record(self._msgs())
+        assert "heading_deg" in ds.data_vars
+        np.testing.assert_allclose(ds["heading_deg"].values, 10.0 * np.arange(25))
+        ds.attitude_record.validate()
+
+    def test_heave_nan_when_heave_flag_clear(self):
+        flags = PR_FLAG_PITCH | PR_FLAG_ROLL | PR_FLAG_HEADING
+        ds = _build_attitude_record(self._msgs(flags=flags))
+        assert np.isnan(ds["heave_m"].values).all()
+        assert np.isfinite(ds["roll_deg"].values).all()
+
+
+@pytest.mark.unit
+class TestAuxRecordTimes:
+    """Aux record times are float seconds since 1970 converted to ns."""
+
+    T = 1_700_000_000.25
+
+    def test_dvl_time_absolute_when_built(self):
+        from tests.unit.io.jsf.conftest import _make_dvl_msg
+        ds = _build_dvl_record([_make_dvl_msg(timestamp=self.T)])
+        assert ds["time"].values[0] == np.datetime64(1_700_000_000_250_000_000, "ns")
+
+    def test_sensor_time_absolute_when_built(self):
+        from tests.unit.io.jsf.conftest import _make_pressure_msg
+        ds = _build_sensor_record("pressure", [_make_pressure_msg(timestamp=self.T)])
+        assert ds["time"].values[0] == np.datetime64(1_700_000_000_250_000_000, "ns")
+
+    def test_navigation_time_exact_when_ms_resolution(self):
+        from tests.unit.io.jsf.conftest import _make_nmea_rmc_msg
+        ds = _build_navigation_record([_make_nmea_rmc_msg(timestamp=1_700_000_000.123)])
+        assert ds["time"].values[0] == np.datetime64(1_700_000_000_123_000_000, "ns")
 
 
 # ============================================================

@@ -50,11 +50,10 @@ typed Python fields after `__post_init__`.
 
 ## Known device-specific issues
 
-- **Attitude validity flags.** On at least one tested device, all validity flags
-  reject every value, producing an empty `attitude_record` even when ~2000
-  attitude messages are present in the file. The underlying raw values appear
-  correct (sonar embedded heading/roll/pitch mirror the attitude stream). See
-  `docs/jsf_aux_source_selection.md` for diagnostic methodology.
+- **Attitude validity flags.** `PitchRollDataMessage` (type 2020) flags follow
+  the spec bit layout. Devices seen so far set the pitch, roll and heading bits
+  and clear heave and yaw, so `heave_m` is NaN in the `attitude_record` while
+  roll, pitch and heading are populated.
 - **Pressure-stuck-at-zero.** `PressureSensorReadingMessage` has no validity
   gate; depth/sound_speed/temperature appear stuck at 0 in current sample data.
   Likely device-specific.
@@ -71,10 +70,9 @@ typed Python fields after `__post_init__`.
 ## Future work
 
 - Standardize on `timestamp_ns: int` across all message types (currently only
-  `SonarDataMessage`).
+  `SonarDataMessage` and `PitchRollDataMessage`).
 - Replace `Optional[float] = None` with `float = nan` for fields gated by
   validity flags. Removes the `_coerce` step in the converter.
-- Fix the attitude validity flag bit positions (or add a permissive mode).
 - Add a validity gate to `PressureSensorReadingMessage`.
 - Implement `to_bytes` for round-trip testing (currently `NotImplementedError`
   for most message types). Useful for synthesizing test fixtures.

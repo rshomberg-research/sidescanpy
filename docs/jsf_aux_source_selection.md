@@ -81,10 +81,11 @@ This is what `convert()` writes to each aux record on the survey.
 | `sensors`    | `PressureSensorReadingMessage` | Pressure-derived depth, water sound speed, water temperature. Currently the only supported sensor; extensible by `sensor_type`. |
 
 The converter does **not** fall back to alternate sources when the
-primary is empty or invalid. If `PitchRollDataMessage` instances all
-fail their validity checks, the resulting `attitude_record` is empty
-but schema-valid (zero observations). The survey's `has_attitude`
-property correctly reports `False`.
+primary is empty or invalid. A field whose validity bit is clear in a
+`PitchRollDataMessage` is NaN in the `attitude_record` for that
+observation (heave on devices without a heave sensor, for example).
+With no attitude messages at all, the record is empty but schema-valid
+and the survey's `has_attitude` property reports `False`.
 
 ## Decision matrix — per-ping interpolation
 
@@ -144,11 +145,6 @@ Roll, pitch, and heading on sonar_embedded change at 10.3 Hz with
 exact — sonar embedded attitude is the previous attitude reading.
 **Use attitude for interpolation.**
 
-(Caveat: in this file, the attitude validity flags reject all data,
-so the attitude record is empty. The interpolation falls back to
-sonar_embedded. See `messages.py` TODO and the "Known issues" section
-below.)
-
 ### Altitude and depth are live
 
 Sonar embedded altitude updates at 38 Hz with 41 ms holds. No DVL
@@ -167,28 +163,11 @@ source is identified.**
 
 ## Known issues
 
-### Attitude validity flags reject valid data
+### Attitude validity flags
 
-`PitchRollDataMessage.parse_validity_flags()` reports all flags False
-for at least one tested device, even though the underlying roll/pitch/
-heading raw values appear sensible (and match what sonar_embedded
-publishes). The result is an empty `attitude_record` despite ~2000
-attitude messages in the file.
-
-Possible causes:
-- Bit positions in `parse_validity_flags()` don't match the device's
-  conventions
-- Device genuinely sends "all invalid" flags despite producing valid
-  data
-- Spec disagreement between Edgetech versions
-
-Workarounds in priority order:
-1. Verify bit positions against the JSF spec for the specific device
-2. Add a permissive mode that ignores validity flags
-3. Cross-check sonar_embedded values against raw attitude values to
-   establish ground truth
-
-See `TODO` in `sidescanpy/io/jsf/messages.py`.
+`PitchRollDataMessage.parse_validity_flags()` follows the spec bit
+layout. On the devices seen so far, pitch, roll and heading bits are
+set and heave and yaw bits are clear, so `heave_m` is NaN.
 
 ### Timing vs value alignment
 
