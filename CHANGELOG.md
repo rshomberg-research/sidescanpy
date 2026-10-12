@@ -7,6 +7,29 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `merge_window_s` on `processing.held_value_fixes` (default `None`, no
+  change in behaviour). Some recorders log one sensor update over
+  consecutive entries (the bulk change, then a small follow-up one entry
+  later), so every change became a fix, fixes landed one entry apart and
+  interpolated speed spiked. With a window, changes of one group at most
+  that far apart collapse into one update event, carrying the value after
+  its last change and timed at its first change (midpoint after a hold).
+  Hold anchors are measured from the event's last change. The window is
+  one float for every group, or a mapping by variable name (for example
+  latitude and longitude only) so faster sensors in the same record are
+  not merged.
+- `groups` and `merge_window_s` parameters on
+  `interpolate_aux_onto_pings`, `interpolate_aux_onto_dataset` and the
+  `interpolate_aux` step; a group applies to each aux record that has all
+  its variables. Both are recorded in the step's history record.
+- `processing.aux_update_events` and `AuxUpdateStats`: per group, the
+  entries, raw changes, events after merging, gap percentiles between
+  changes and between events (entries and seconds) and the fraction of
+  changes within the merge window, for choosing `groups` and
+  `merge_window_s`.
+
 ## [0.7.4] — 2026-10-12
 
 ### Changed

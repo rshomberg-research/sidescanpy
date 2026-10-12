@@ -27,7 +27,7 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 | Step | Function | Parameters |
 |---|---|---|
 | `crop_farrange` | `crop_far_range` | `cutoff_sample`, `n_bins`, `min_valid_fraction`, `rise_threshold_db`, `margin_bins` |
-| `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid`, `held_values`, `max_hold_s`, `per_ping_fallback` |
+| `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid`, `held_values`, `max_hold_s`, `per_ping_fallback`, `groups`, `merge_window_s` |
 | `tvg` | `apply_tvg` | `spreading_loss_db`, `absorption_db_per_m`, `min_range_m`, `sound_velocity_ms`, `temperature_c`, `salinity_psu`, `depth_m`, `ph` |
 | `geometric` | `compute_geometric_ranges` | `expose_unmasked_z` |
 | `range_correction` | `apply_empirical_range_correction` | `table` (required) |
@@ -140,11 +140,55 @@ with `held_value_fixes`:
   anchor at its last entry, so the track stays flat across a real stop or
   a sensor dropout instead of ramping through it.
 
+Some recorders also spread one sensor update over consecutive entries:
+the bulk change, then a small follow-up (a few cm) one entry later, then
+nothing until the next update. Every change then becomes a fix, two fixes
+land one entry apart, and the interpolated speed swings between a fraction
+of and several times the true speed. `merge_window_s` (default `None`, no
+merging) collapses changes of one group that are at most that many
+seconds apart (chained) into one update event:
+
+- the event carries the group's value after its last change;
+- it is timed like a fix at its *first* change (the midpoint after a
+  hold): the update started reaching the log there, and the follow-ups
+  complete it rather than report new motion. This gives every event the
+  same latency, whereas timing at the last change would add a delay that
+  depends on how many entries the update spread over;
+- a `max_hold_s` hold is measured from the event's last change;
+- groups merge independently, and the record's first entry is never
+  merged.
+
+Choose the window longer than the follow-up delay (one entry) and
+shorter than the gap from the follow-up to the next update; about two log
+intervals usually fits. Too long a window chains successive updates into
+one event and is far worse than no merging. A float applies to every
+group of every record, so a window sized for a ~3 Hz GPS also chains the
+changes of a ~10 Hz roll sensor; a mapping by variable name, such as
+`merge_window_s={"latitude": 0.15, "longitude": 0.15}`, merges only the
+groups holding those variables (a group takes the smallest window of its
+variables). A WARNING is logged when an event combines more than five
+changes. `aux_update_events(record, groups=..., merge_window_s=...)`
+reports, per group, the entries, raw changes, events after merging, the
+percentiles (p5–p95) of the gaps between changes and between events, in
+entries and seconds, and the fraction of changes that fall within the
+window of the previous one. Split updates show as bimodal change gaps
+(a peak at 1 entry and one at the update interval) that become unimodal
+event gaps once merged. On a line running mostly north–south one
+coordinate barely changes, so per-coordinate change counts say little
+about how updates are split; check the joint group
+(`groups=[POSITION_GROUP]`) too.
+
+The step's `groups` parameter is passed to `held_value_fixes` for each
+record, applying a group only where all its variables exist, so
+`groups=[POSITION_GROUP]` joins latitude and longitude in the navigation
+record and leaves attitude alone.
+
 When a field has no usable aux source (record absent or empty, variable
 missing or all NaN), `per_ping_fallback=True` (default) reduces the
 channel's own per-ping values the same way and interpolates those. The
 step's history record carries `held_values`, `max_hold_s`,
-`per_ping_fallback` and `per_ping_fallback_fields`. `held_values="raw"`
+`per_ping_fallback`, `per_ping_fallback_fields`, `groups` and
+`merge_window_s`. `held_values="raw"`
 interpolates the entries as logged, as in 0.7.2 and earlier.
 
 The step is skipped on files whose history already records it; re-convert,

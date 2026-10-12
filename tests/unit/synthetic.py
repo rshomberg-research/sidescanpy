@@ -223,3 +223,103 @@ def make_held_aux_scenario(
         "dropout": dropout,
         "m_per_deg_lon": m_per_deg_lon,
     }
+
+
+def make_split_update_scenario(
+    *,
+    duration_s: float = 60.0,
+    log_hz: float = 14.5,
+    update_hz: float = 3.5,
+    speed_ms: float = 1.5,
+    east_drift_ms: float = 0.01,
+    n_samples: int = 200,
+    seed: int = 0,
+) -> dict:
+    """A north-south line whose GPS updates each arrive over two log entries.
+
+    Truth: a platform at ``speed_ms`` due north with a slow eastward drift
+    (``east_drift_ms``), so longitude barely changes. Navigation is logged
+    sample-and-hold once per ping at ``log_hz``. Real updates come at
+    ``update_hz`` with a few percent of jitter (never fewer than four log
+    entries apart). Each update arrives over two consecutive entries: the
+    first entry after the update carries the new position off by 2-5 cm in
+    latitude, the next entry carries the exact position. Both coordinates
+    are quantized to 1e-7 deg (about 1 cm). Inter-change gaps are therefore
+    bimodal: 1 entry (the follow-up), then 3-4 entries (to the next
+    update).
+
+    Returns
+    -------
+    dict
+        ``survey`` (SideScanSurvey; navigation record and per-ping fields hold
+        the logged values, attitude is a constant heading 0), ``freq_key``,
+        ``t`` (ping seconds), ``lat``/``lon`` truth at the pings,
+        ``update_t`` (real update times, s), ``nav`` (the navigation record),
+        ``inner`` (pings away from the record ends) and ``m_per_deg_lon``.
+    """
+    from pathlib import Path
+
+    from sidescanpy.core.survey import SideScanSurvey
+
+    rng = np.random.default_rng(seed)
+    t0 = np.datetime64("2026-01-01T00:00:00", "ns")
+    lat0, lon0 = 41.5, -71.5
+    m_per_deg_lon = _M_PER_DEG_LAT * np.cos(np.deg2rad(lat0))
+    quantum = 1e-7
+
+    def lat_at(tt):
+        return lat0 + speed_ms * tt / _M_PER_DEG_LAT
+
+    def lon_at(tt):
+        return lon0 + east_drift_ms * tt / m_per_deg_lon
+
+    n = int(duration_s * log_hz)
+    t = np.arange(n) / log_hz
+    upd = _jittered_schedule(rng, duration_s - 0.5, 1.0 / update_hz, 0.025)
+    assert np.diff(upd).min() >= 4.0 / log_hz
+
+    offset_m = rng.uniform(0.02, 0.05, len(upd)) * rng.choice([-1.0, 1.0], len(upd))
+    offset_m[0] = 0.0                                       # the log starts on a settled fix
+    k = np.searchsorted(upd, t, side="right") - 1          # latest update per entry
+    first_entry = np.searchsorted(t, upd)                   # first entry seeing each update
+    is_first = first_entry[k] == np.arange(n)
+    lat = lat_at(upd[k]) + np.where(is_first, offset_m[k], 0.0) / _M_PER_DEG_LAT
+    lon = lon_at(upd[k])
+    lat = np.round(lat / quantum) * quantum
+    lon = np.round(lon / quantum) * quantum
+
+    times = t0 + (t * 1e9).round().astype("timedelta64[ns]")
+    navigation = xr.Dataset(
+        {"latitude": (("obs",), lat), "longitude": (("obs",), lon)},
+        coords={"time": (("obs",), times)},
+        attrs={"source": "synthetic_split_update"},
+    )
+    zeros = np.zeros(n, dtype=np.float32)
+    attitude = xr.Dataset(
+        {"heading_deg": (("obs",), zeros), "roll_deg": (("obs",), zeros),
+         "pitch_deg": (("obs",), zeros), "heave_m": (("obs",), zeros)},
+        coords={"time": (("obs",), times)},
+        attrs={"source": "synthetic_split_update"},
+    )
+    ds = make_raw_dataset(n_pings=n, n_samples=n_samples)
+    ds = ds.assign_coords(time=("ping", times))
+    ds = ds.assign(
+        latitude=("ping", lat), longitude=("ping", lon),
+        heading_deg=("ping", zeros), roll_deg=("ping", zeros), pitch_deg=("ping", zeros),
+    )
+    freq_key = "hz_200000"
+    survey = SideScanSurvey(source_files=[Path("synthetic.sdf")], source_format="SDF", survey_name="split")
+    survey.add_frequency(freq_key, ds)
+    survey.navigation = navigation
+    survey.attitude = attitude
+    return {
+        "survey": survey,
+        "freq_key": freq_key,
+        "t": t,
+        "lat": lat_at(t),
+        "lon": lon_at(t),
+        "update_t": upd,
+        "nav": navigation,
+        "inner": (t > 1.0) & (t < duration_s - 1.0),
+        "m_per_deg_lon": m_per_deg_lon,
+    }

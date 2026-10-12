@@ -14,6 +14,8 @@ Public entry points
 - :func:`held_value_fixes` — reduce a sample-and-hold aux record (the
   latest fix repeated at every ping or packet) to its real fixes; the
   ``interpolate_aux`` step does this by default.
+- :func:`aux_update_events` — change and update-event statistics of a
+  sample-and-hold record, for choosing ``groups`` and ``merge_window_s``.
 - :func:`interpolate_onto_channel` — lower-level: interpolate any
   ``xr.Dataset`` (e.g. an external GPS log) onto one channel's ping
   times.
@@ -70,7 +72,12 @@ from sidescanpy.core.history import (
     STEP_TVG,
     processing_level,
 )
-from sidescanpy.processing.aux_fixes import POSITION_GROUP, held_value_fixes
+from sidescanpy.processing.aux_fixes import (
+    POSITION_GROUP,
+    AuxUpdateStats,
+    aux_update_events,
+    held_value_fixes,
+)
 from sidescanpy.processing.bottom import (
     altitude_sample_index,
     blank_nadir_noise,
@@ -159,6 +166,8 @@ __all__ = [
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
     "held_value_fixes",
+    "aux_update_events",
+    "AuxUpdateStats",
     "POSITION_GROUP",
     "apply_tvg",
     "apply_tvg_to_amplitude",

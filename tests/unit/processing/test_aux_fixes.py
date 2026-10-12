@@ -21,14 +21,24 @@ from sidescanpy.core.schema import make_empty_attitude_record, make_empty_naviga
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
 from sidescanpy.processing import correct_file, correct_survey
-from sidescanpy.processing.aux_fixes import POSITION_GROUP, held_value_fixes
+from sidescanpy.processing.aux_fixes import (
+    POSITION_GROUP,
+    AuxUpdateStats,
+    aux_update_events,
+    held_value_fixes,
+)
 from sidescanpy.processing.interpolate import (
     DEFAULT_FIELD_SOURCES,
     interpolate_aux_onto_dataset,
     interpolate_aux_onto_pings,
     interpolate_onto_channel,
 )
-from tests.unit.synthetic import _M_PER_DEG_LAT, make_held_aux_scenario, make_raw_dataset
+from tests.unit.synthetic import (
+    _M_PER_DEG_LAT,
+    make_held_aux_scenario,
+    make_raw_dataset,
+    make_split_update_scenario,
+)
 
 T0 = np.datetime64("2026-01-01T00:00:00", "ns")
 
@@ -383,3 +393,239 @@ class TestPerPingFallback:
         for var in DEFAULT_FIELD_SOURCES:
             np.testing.assert_allclose(a[var].values, b[var].values, rtol=0, atol=0, err_msg=var)
         assert _repeat_fraction(b, scenario["moving"]) == 0.0
+
+
+# ============================================================
+# MERGING AN UPDATE SPREAD OVER CONSECUTIVE ENTRIES
+# ============================================================
+
+def _speed_spread(ds_or_fixes, sc: dict, mask: np.ndarray) -> tuple[float, np.ndarray]:
+    """(p95-p5)/mean of per-ping speed, and per-ping position error (m)."""
+    if "ping" in ds_or_fixes.dims:
+        lat, lon = ds_or_fixes["latitude"].values, ds_or_fixes["longitude"].values
+    else:
+        secs = _secs(ds_or_fixes)
+        pos = []
+        for v in ("latitude", "longitude"):
+            ok = np.isfinite(ds_or_fixes[v].values)
+            pos.append(np.interp(sc["t"], secs[ok], ds_or_fixes[v].values[ok]))
+        lat, lon = pos
+    north = (lat - sc["lat"][0]) * _M_PER_DEG_LAT
+    east = (lon - sc["lon"][0]) * sc["m_per_deg_lon"]
+    speed = np.hypot(np.diff(north), np.diff(east)) / np.diff(sc["t"])
+    speed = speed[mask[1:] & mask[:-1]]
+    err = np.hypot((lat - sc["lat"]) * _M_PER_DEG_LAT, (lon - sc["lon"]) * sc["m_per_deg_lon"])[mask]
+    p5, p95 = np.percentile(speed, [5, 95])
+    return float((p95 - p5) / speed.mean()), err
+
+
+@pytest.fixture(scope="module")
+def split():
+    return make_split_update_scenario()
+
+
+@pytest.mark.unit
+class TestMergeWindow:
+    def test_default_none_is_unchanged(self):
+        rec = _record(np.arange(10.0), v=[1, 1, 2, 2.1, 2.1, 2.1, 3, 3.1, 3.1, 3.1])
+        a = held_value_fixes(rec)
+        b = held_value_fixes(rec, merge_window_s=None)
+        xr.testing.assert_identical(a, b)
+        assert "held_value_fixes_merge_window_s" not in a.attrs
+
+    def test_close_changes_merge_into_one_event(self):
+        # 1 held, then 2 arrives at t=2 and is refined to 2.1 at t=3.
+        rec = _record(np.arange(8.0), v=[1, 1, 2, 2.1, 2.1, 2.1, 2.1, 2.1])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=np.inf)
+        np.testing.assert_array_equal(out["v"].values, [1, 2.1])
+        # Timed at the midpoint before the FIRST change of the cluster.
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5])
+        assert out.attrs["held_value_fixes_merge_window_s"] == 1.0
+
+    def test_changes_further_apart_than_window_stay_separate(self):
+        rec = _record(np.arange(8.0), v=[1, 1, 2, 2, 2.1, 2.1, 2.1, 2.1])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=np.inf)
+        np.testing.assert_array_equal(out["v"].values, [1, 2, 2.1])
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5, 3.5])
+
+    def test_chain_of_close_changes_is_one_event(self):
+        rec = _record(np.arange(8.0), v=[1, 1, 2, 3, 4, 4, 4, 4])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=np.inf)
+        np.testing.assert_array_equal(out["v"].values, [1, 4])
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5])
+
+    def test_first_entry_is_not_merged(self):
+        # The record's first entry is a start, not an observed change.
+        rec = _record(np.arange(5.0), v=[1, 2, 2, 2, 2])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=np.inf)
+        np.testing.assert_array_equal(out["v"].values, [1, 2])
+        np.testing.assert_allclose(_secs(out), [0.0, 1.0])
+
+    def test_first_change_after_change_keeps_own_time(self):
+        # 2 follows another change at t=1, so it is not after a hold.
+        rec = _record(np.arange(7.0), v=[1, 5, 2, 2.1, 2.1, 2.1, 2.1])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=np.inf)
+        # t=1 and t=2 are 1 s apart, so 5, 2 and 2.1 chain into one event at t=1.
+        np.testing.assert_array_equal(out["v"].values, [1, 2.1])
+        np.testing.assert_allclose(_secs(out), [0.0, 1.0])
+
+    def test_max_hold_anchor_measured_from_last_change(self):
+        # Event: first change t=2, last change t=3; 2.1 held to t=6 (3 s from
+        # the last change, 4 s from the first).
+        rec = _record(np.arange(8.0), v=[1, 1, 2, 2.1, 2.1, 2.1, 2.1, 3])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=3.5)
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5, 6.5])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=2.5)
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5, 6.0, 6.5])
+        np.testing.assert_array_equal(out["v"].values, [1, 2.1, 2.1, 3])
+
+    def test_groups_merge_independently(self):
+        rec = _record(np.arange(6.0), a=[0, 0, 1, 1.1, 1.1, 1.1], b=[0, 0, 0, 5, 5, 5])
+        out = held_value_fixes(rec, merge_window_s=1.0, max_hold_s=np.inf)
+        np.testing.assert_allclose(_secs(out), [0.0, 1.5, 2.5])
+        np.testing.assert_array_equal(out["a"].values, [0, 1.1, np.nan])
+        np.testing.assert_array_equal(out["b"].values, [0, np.nan, 5])
+
+    def test_mapping_merges_only_named_groups(self):
+        rec = _record(np.arange(6.0), a=[0, 0, 1, 1.1, 1.1, 1.1], b=[0, 0, 1, 1.1, 1.1, 1.1])
+        out = held_value_fixes(rec, merge_window_s={"a": 1.0}, max_hold_s=np.inf)
+        ok_a, ok_b = np.isfinite(out["a"].values), np.isfinite(out["b"].values)
+        np.testing.assert_array_equal(out["a"].values[ok_a], [0, 1.1])
+        np.testing.assert_array_equal(out["b"].values[ok_b], [0, 1, 1.1])
+        np.testing.assert_allclose(_secs(out)[ok_a], [0.0, 1.5])
+        np.testing.assert_allclose(_secs(out)[ok_b], [0.0, 1.5, 3.0])
+        assert out.attrs["held_value_fixes_merge_window_s"] == '{"a": 1.0}'
+
+    def test_mapping_group_takes_smallest_window(self):
+        rec = _record(np.arange(6.0), a=[0, 0, 1, 1.1, 1.1, 1.1], b=[0, 0, 0, 0, 0, 0])
+        out = held_value_fixes(
+            rec, groups=[("a", "b")], merge_window_s={"a": 1.0, "b": 0.5}, max_hold_s=np.inf,
+        )
+        np.testing.assert_array_equal(out["a"].values, [0, 1, 1.1])
+
+    def test_negative_merge_window_raises(self):
+        with pytest.raises(ValueError, match="merge_window_s"):
+            held_value_fixes(_record([0, 1], v=[1, 2]), merge_window_s=-0.1)
+
+
+@pytest.mark.unit
+class TestSplitUpdateScenario:
+    def test_one_event_per_real_update(self, split):
+        out = held_value_fixes(split["nav"], groups=[POSITION_GROUP], merge_window_s=0.15)
+        # Every update is seen by exactly one log entry first; the record's
+        # first entry is its own fix.
+        n_updates = int(np.sum(split["update_t"] > 0))
+        assert out.sizes["obs"] == n_updates + 1
+        # Each event is timed within one log interval of the real update.
+        lag = _secs(out)[1:] - split["update_t"][1:]
+        assert np.all(np.abs(lag) <= 1.0 / 14.5)
+
+    def test_merging_removes_speed_spikes(self, split):
+        m = split["inner"]
+        sp_none, err_none = _speed_spread(held_value_fixes(split["nav"], groups=[POSITION_GROUP]), split, m)
+        sp_merge, err_merge = _speed_spread(
+            held_value_fixes(split["nav"], groups=[POSITION_GROUP], merge_window_s=0.15), split, m,
+        )
+        assert sp_none > 1.0
+        assert sp_merge < 0.5
+        assert np.sqrt(np.mean(err_merge**2)) < 0.05
+        assert err_merge.max() < 0.1
+
+    def test_interpolate_aux_threads_merge_and_groups(self, split):
+        s = split["survey"]
+        out = interpolate_aux_onto_pings(
+            s, groups=[POSITION_GROUP], merge_window_s=0.15,
+        ).get_frequency(split["freq_key"]).dataset
+        ref = held_value_fixes(split["nav"], groups=[POSITION_GROUP], merge_window_s=0.15)
+        sp_step, _ = _speed_spread(out, split, split["inner"])
+        sp_ref, _ = _speed_spread(ref, split, split["inner"])
+        assert sp_step == pytest.approx(sp_ref)
+        rec = read_history(out)[-1]
+        assert rec["params"]["merge_window_s"] == 0.15
+        assert rec["params"]["groups"] == [["latitude", "longitude"]]
+
+    def test_history_defaults(self, split):
+        out = interpolate_aux_onto_pings(split["survey"]).get_frequency(split["freq_key"]).dataset
+        rec = read_history(out)[-1]
+        assert rec["params"]["merge_window_s"] is None
+        assert rec["params"]["groups"] is None
+
+    def test_correct_survey_step_params(self, split):
+        out = correct_survey(
+            split["survey"], ["interpolate_aux"],
+            {"interpolate_aux": {"groups": [list(POSITION_GROUP)], "merge_window_s": 0.15}},
+        )
+        rec = read_history(out.get_frequency(split["freq_key"]).dataset)[-1]
+        assert rec["params"]["merge_window_s"] == 0.15
+        assert rec["params"]["groups"] == [["latitude", "longitude"]]
+
+    def test_mapping_leaves_attitude_unmerged(self, split):
+        s = split["survey"].copy()
+        att = s.attitude.copy()
+        # A fast roll sensor: a new value at every entry (~14 Hz).
+        att["roll_deg"] = (("obs",), np.sin(np.arange(att.sizes["obs"]) / 5.0).astype(np.float32))
+        s.attitude = att
+        window = {"latitude": 0.15, "longitude": 0.15}
+        out = interpolate_aux_onto_pings(
+            s, groups=[POSITION_GROUP], merge_window_s=window,
+        ).get_frequency(split["freq_key"]).dataset
+        np.testing.assert_allclose(out["roll_deg"].values, att["roll_deg"].values, atol=1e-6)
+        sp, _ = _speed_spread(out, split, split["inner"])
+        assert sp < 0.5
+        assert read_history(out)[-1]["params"]["merge_window_s"] == window
+
+    def test_groups_missing_from_a_record_are_ignored(self, split):
+        # POSITION_GROUP is not in the attitude record: no error there.
+        out = interpolate_aux_onto_pings(
+            split["survey"], groups=[POSITION_GROUP, ("roll_deg", "pitch_deg")],
+        ).get_frequency(split["freq_key"]).dataset
+        assert np.isfinite(out["latitude"].values).all()
+
+    def test_invalid_merge_window_raises(self, split):
+        with pytest.raises(ValueError, match="merge_window_s"):
+            interpolate_aux_onto_pings(split["survey"], merge_window_s=-1.0)
+
+
+@pytest.mark.unit
+class TestAuxUpdateEvents:
+    def test_bimodal_changes_unimodal_events(self, split):
+        stats = aux_update_events(split["nav"], groups=[POSITION_GROUP], merge_window_s=0.15)
+        st = stats["latitude+longitude"]
+        assert isinstance(st, AuxUpdateStats)
+        assert st.group == ("latitude", "longitude")
+        n_updates = int(np.sum(split["update_t"] > 0))
+        assert st.entries == split["nav"].sizes["obs"]
+        assert st.changes == 2 * n_updates
+        assert st.events == n_updates
+        # Raw gaps: half are 1 entry (follow-ups), half 3-4 (to the next update).
+        assert st.change_gap_entries["p5"] == 1
+        assert st.change_gap_entries["p25"] == 1
+        assert st.change_gap_entries["p75"] >= 3
+        assert st.change_gap_entries["p95"] <= 4
+        assert st.change_gap_s["p25"] == pytest.approx(1 / 14.5, abs=1e-6)
+        # Events: every gap is 4-5 entries.
+        assert st.event_gap_entries["p5"] >= 4
+        assert st.event_gap_entries["p95"] <= 5
+        assert st.event_gap_s["p50"] == pytest.approx(1 / 3.5, rel=0.1)
+        assert st.merged_fraction == pytest.approx(0.5, abs=0.01)
+
+    def test_default_groups_and_no_merge(self):
+        rec = _record(np.arange(6.0), v=[1, 1, 2, 2, 3, 3])
+        stats = aux_update_events(rec)
+        st = stats["v"]
+        assert st.entries == 6 and st.changes == 2 and st.events == 2
+        assert st.merge_window_s is None
+        assert np.isnan(st.merged_fraction)
+        assert st.change_gap_entries["p50"] == 2
+        assert st.change_gap_s["p50"] == 2.0
+        assert st.as_dict()["group"] == ["v"]
+
+    def test_mapping_window_per_group(self, split):
+        stats = aux_update_events(split["nav"], merge_window_s={"latitude": 0.15})
+        assert stats["latitude"].merge_window_s == pytest.approx(0.15)
+        assert stats["longitude"].merge_window_s is None
+
+    def test_no_changes_gives_nan_gaps(self):
+        st = aux_update_events(_record(np.arange(4.0), v=[1, 1, 1, 1]))["v"]
+        assert st.changes == 0 and st.events == 0
+        assert np.isnan(st.change_gap_s["p50"])

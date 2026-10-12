@@ -33,6 +33,7 @@ Two layers:
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import numpy as np
@@ -41,7 +42,7 @@ import xarray as xr
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_INTERPOLATE_AUX, append_history
 from sidescanpy.core.survey import SideScanFrequencyChannel, SideScanSurvey
-from sidescanpy.processing.aux_fixes import held_value_fixes
+from sidescanpy.processing.aux_fixes import MergeWindow, _check_hold_and_merge, held_value_fixes
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,8 @@ def interpolate_aux_onto_pings(
     held_values: Literal["fixes", "raw"] = "fixes",
     max_hold_s: float = 2.0,
     per_ping_fallback: bool = True,
+    groups: Sequence[Sequence[str]] | None = None,
+    merge_window_s: MergeWindow = None,
 ) -> SideScanSurvey:
     """
     Update per-ping fields on every frequency channel by interpolating
@@ -152,6 +155,23 @@ def interpolate_aux_onto_pings(
         that never repeat are returned unchanged. The fields filled this
         way are recorded in the history entry. No effect with
         ``held_values="raw"``.
+    groups : sequence of sequence of str, optional
+        With ``held_values="fixes"``: variables that update together, passed
+        to :func:`~sidescanpy.processing.aux_fixes.held_value_fixes` for each
+        record (by aux variable name; for the per-ping fallback, by per-ping
+        field name). A group applies to a record only when all its
+        variables are in it, so ``groups=[POSITION_GROUP]`` joins latitude
+        and longitude in the navigation record and leaves attitude alone.
+        Default: every variable is its own group.
+    merge_window_s : float or mapping of str to float, optional
+        With ``held_values="fixes"``: merge changes at most this many
+        seconds apart into one update event, for recorders that log one
+        sensor update over consecutive entries. A float applies to every
+        group of every record; a mapping by aux variable name (for the
+        per-ping fallback, by per-ping field name), such as
+        ``{"latitude": 0.15, "longitude": 0.15}``, only to those variables'
+        groups. See :func:`~sidescanpy.processing.aux_fixes.held_value_fixes`.
+        Default ``None``: no merging.
 
     Returns
     -------
@@ -164,9 +184,9 @@ def interpolate_aux_onto_pings(
     ValueError
         If ``fields`` references an unknown aux record name.
         If ``extrapolation`` or ``held_values`` is not one of the supported
-        values.
+        values, or ``max_hold_s`` or ``merge_window_s`` is out of range.
     """
-    _validate_modes(extrapolation, held_values, max_hold_s)
+    _validate_modes(extrapolation, held_values, max_hold_s, merge_window_s)
 
     field_map = fields if fields is not None else dict(DEFAULT_FIELD_SOURCES)
 
@@ -192,6 +212,8 @@ def interpolate_aux_onto_pings(
             held_values=held_values,
             max_hold_s=max_hold_s,
             per_ping_fallback=per_ping_fallback,
+            groups=groups,
+            merge_window_s=merge_window_s,
         )
         target._freq_channels[freq_key] = SideScanFrequencyChannel(new_ds, freq_key=freq_key)
 
@@ -210,6 +232,8 @@ def interpolate_aux_onto_dataset(
     held_values: Literal["fixes", "raw"] = "fixes",
     max_hold_s: float = 2.0,
     per_ping_fallback: bool = True,
+    groups: Sequence[Sequence[str]] | None = None,
+    merge_window_s: MergeWindow = None,
 ) -> xr.Dataset:
     """One frequency channel dataset's per-ping fields, interpolated from
     ``aux``'s auxiliary records (the ``"interpolate_aux"`` step).
@@ -218,16 +242,16 @@ def interpolate_aux_onto_dataset(
     dataset (or a ping slice of one) with the survey supplying the aux
     records. Always appends an ``"interpolate_aux"`` history record (with
     the fields actually updated, possibly none, ``held_values``,
-    ``max_hold_s``, ``per_ping_fallback`` and the fields filled from
-    per-ping values as ``per_ping_fallback_fields``) so the step is not
-    re-run.
+    ``max_hold_s``, ``per_ping_fallback``, ``groups``, ``merge_window_s``
+    and the fields filled from per-ping values as
+    ``per_ping_fallback_fields``) so the step is not re-run.
 
     For the per-ping fallback on a ping slice, the per-ping values come
     from the matching whole channel in ``aux`` (same ``freq_hz_start``,
     same times at the slice's ``ping`` coordinates) when there is one, so
     a chunked run gives the same result as an unchunked one.
     """
-    _validate_modes(extrapolation, held_values, max_hold_s)
+    _validate_modes(extrapolation, held_values, max_hold_s, merge_window_s)
     field_map = fields if fields is not None else dict(DEFAULT_FIELD_SOURCES)
     for ping_field, (aux_name, _aux_var) in field_map.items():
         if aux_name not in _VALID_AUX_NAMES:
@@ -246,6 +270,8 @@ def interpolate_aux_onto_dataset(
         held_values=held_values,
         max_hold_s=max_hold_s,
         per_ping_fallback=per_ping_fallback,
+        groups=groups,
+        merge_window_s=merge_window_s,
     )
     return append_history(
         new_ds,
@@ -259,6 +285,8 @@ def interpolate_aux_onto_dataset(
             "max_hold_s": float(max_hold_s),
             "per_ping_fallback": bool(per_ping_fallback),
             "per_ping_fallback_fields": sorted(fallback),
+            "groups": None if groups is None else [list(g) for g in groups],
+            "merge_window_s": _merge_window_param(merge_window_s),
         },
         function="sidescanpy.processing.interpolate.interpolate_aux_onto_dataset",
         version=__version__,
@@ -358,15 +386,38 @@ def interpolate_onto_channel(
 # INTERNALS
 # ============================================================
 
-def _validate_modes(extrapolation: str, held_values: str, max_hold_s: float) -> None:
+def _validate_modes(
+    extrapolation: str, held_values: str, max_hold_s: float, merge_window_s: MergeWindow = None,
+) -> None:
     if extrapolation not in _VALID_EXTRAPOLATION:
         raise ValueError(
             f"extrapolation must be one of {_VALID_EXTRAPOLATION}, got {extrapolation!r}"
         )
     if held_values not in _VALID_HELD_VALUES:
         raise ValueError(f"held_values must be one of {_VALID_HELD_VALUES}, got {held_values!r}")
-    if np.isnan(max_hold_s) or max_hold_s < 0:
-        raise ValueError(f"max_hold_s must be >= 0 (or inf), got {max_hold_s!r}")
+    _check_hold_and_merge(max_hold_s, merge_window_s)
+
+
+def _merge_window_param(merge_window_s: MergeWindow) -> float | dict[str, float] | None:
+    """``merge_window_s`` as recorded in history."""
+    if merge_window_s is None:
+        return None
+    if isinstance(merge_window_s, Mapping):
+        return {k: float(v) for k, v in merge_window_s.items()}
+    return float(merge_window_s)
+
+
+def _groups_in(record: xr.Dataset, groups: Sequence[Sequence[str]] | None) -> list[tuple[str, ...]] | None:
+    """The groups whose variables are all in ``record``."""
+    if groups is None:
+        return None
+    kept = [tuple(g) for g in groups if all(name in record.data_vars for name in g)]
+    if len(kept) < len(groups):
+        logger.debug(
+            "interpolate_aux: groups %s not (fully) in this record, ignored for it",
+            [list(g) for g in groups if tuple(g) not in kept],
+        )
+    return kept
 
 
 def _interpolate_dataset_from_survey(
@@ -381,6 +432,8 @@ def _interpolate_dataset_from_survey(
     held_values: str = "raw",
     max_hold_s: float = 2.0,
     per_ping_fallback: bool = False,
+    groups: Sequence[Sequence[str]] | None = None,
+    merge_window_s: MergeWindow = None,
 ) -> tuple[xr.Dataset, list[str], list[str]]:
     """Interpolate one channel dataset against a survey's aux records.
 
@@ -428,7 +481,9 @@ def _interpolate_dataset_from_survey(
                     fields_touched.append(ping_field)
             continue
 
-        source = held_value_fixes(aux_ds, max_hold_s=max_hold_s) if fixes else aux_ds
+        source = held_value_fixes(
+            aux_ds, groups=_groups_in(aux_ds, groups), max_hold_s=max_hold_s, merge_window_s=merge_window_s,
+        ) if fixes else aux_ds
 
         # Standard path: interpolate each var in sub_map from the source
         for ping_field, aux_var in sub_map.items():
@@ -479,7 +534,9 @@ def _interpolate_dataset_from_survey(
             {f: (("obs",), np.asarray(whole[f].values, dtype=np.float64)) for f in pending_fallback},
             coords={"time": (("obs",), np.asarray(whole["time"].values))},
         )
-        source = held_value_fixes(per_ping, max_hold_s=max_hold_s)
+        source = held_value_fixes(
+            per_ping, groups=_groups_in(per_ping, groups), max_hold_s=max_hold_s, merge_window_s=merge_window_s,
+        )
         for ping_field in pending_fallback:
             interpolated = _interpolate_one_var(
                 source=source,
