@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-10-11
+
 ### Fixed
 
 - `processing.interpolate`: compass-angle fields (`heading_deg`, and
