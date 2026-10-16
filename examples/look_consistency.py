@@ -436,6 +436,8 @@ def look_extents(ds, look, m_s, search_m=2.0, **proposal_kw):
 def extents_figure(looks, path):
     """Across-track size vs ground range in both projections, and its spread per object."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+    axes[1].sharex(axes[0])  # highlight and shadow on one scale, so they compare directly
+    axes[1].sharey(axes[0])
     colours = {"slant": "#d95f02", "ground": "#1b9e77"}
     for ax, part in zip(axes[:2], ("highlight", "shadow")):
         for geom in GEOMETRIES:
