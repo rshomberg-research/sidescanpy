@@ -333,3 +333,67 @@ def test_project_template_steps_run_end_to_end(tmp_path):
     assert (out / "exports" / "track" / "hz_900000" / "track.png").exists()
     dataset = json.loads((out / "reports" / "05_dataset.json").read_text())["results"]
     assert dataset["n_matched"] == 3 and dataset["n_images"] > 0
+
+
+def _two_pass_survey(ss_dir: Path, objects) -> Path:
+    """The same corrected synthetic survey written as two passes two hours
+    apart, each with bright objects at the given (ping, channel, sample);
+    returns a detections CSV naming them in both passes."""
+    import pandas as pd
+    import xarray as xr
+
+    from sidescanpy.processing import correct_survey
+
+    n_pings, n_samples = 400, 400
+    rng = np.random.default_rng(0)
+    backscatter = rng.uniform(5.0, 10.0, (n_pings, 2, n_samples)).astype(np.float32)
+    for p, ch, s in objects:
+        backscatter[p - 3:p + 4, ch, s - 4:s + 5] = 60.0
+        backscatter[p - 3:p + 4, ch, s + 5:s + 25] = 0.5  # shadow
+    per_ping = {name: (["ping"], np.full(n_pings, value, dtype=np.float32)) for name, value in (
+        ("heading_deg", 45.0), ("depth_m", 5.0), ("roll_deg", 0.0), ("pitch_deg", 0.0), ("heave_m", 0.0),
+        ("altitude_m", 0.5), ("sound_vel_ms", 1500.0), ("fathometer_reading_m", 0.5),
+    )}
+    rows = []
+    for k, name in enumerate(("a", "b")):
+        ds = xr.Dataset(
+            {"backscatter_intensity": (["ping", "channel", "sample"], backscatter),
+             "latitude": (["ping"], np.linspace(41.5, 41.5004, n_pings)),
+             "longitude": (["ping"], np.linspace(-71.5, -71.4995, n_pings)), **per_ping},
+            coords={"ping_number": (["ping"], np.arange(1, n_pings + 1, dtype=np.int32)),
+                    "time": (["ping"], pd.date_range(f"2026-01-01 0{2 * k}:00", periods=n_pings, freq="100ms").values),
+                    "channel_id": (["channel"], np.array(["port", "starboard"]))},
+            attrs={"freq_hz_start": 900_000, "freq_hz_end": 900_000, "pulse_length_us": 0.5,
+                   "sample_rate_hz": 40_000.0, "processing_history": "[]"},
+        )
+        survey = SideScanSurvey(source_files=[], source_format="synthetic", survey_name="synthetic")
+        survey.add_frequency("hz_900000", ds)
+        corrected = correct_survey(survey, steps=["geometric", "georef"])
+        write_survey(corrected, ss_dir / f"{name}.ss.h5")
+        c = corrected.get_frequency("hz_900000").dataset
+        for p, ch, s in objects:
+            rows.append({"lat": float(c["latitude_per_sample"][p, ch, s]), "lon": float(c["longitude_per_sample"][p, ch, s]),
+                         "file": f"{name}.ss.h5", "ping": p, "channel": ch, "sample": s,
+                         "time": str(c["time"].values[p]), "conf": 0.9})
+    csv = ss_dir.parent / "detections.csv"
+    pd.DataFrame(rows).to_csv(csv, index=False)
+    return csv
+
+
+def test_look_consistency_pairs_the_same_object_across_passes(tmp_path):
+    ss_dir = tmp_path / "ss_h5"
+    ss_dir.mkdir()
+    detections = _two_pass_survey(ss_dir, [(120, 1, 200), (300, 0, 150)])
+    out = tmp_path / "out"
+    _run_example("look_consistency.py", ss_dir, "--detections", detections, "--frequency", "hz_900000",
+                 "--out", out, "--chip-m", "2", "--chip-px", "32", "--score-px", "16", "--max-shift-m", "0.2",
+                 "--min-ground-m", "0", "--link-m", "1", "--isolation-m", "0.5", "--no-extents",
+                 "--rotation-step", "90", "--sheets", "2")
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["objects"] == 2 and summary["looks"] == 4
+    # identical passes: the same object correlates perfectly in every geometry and frame
+    assert summary["scores"]["slant_track"]["same_median"] > 0.95
+    assert summary["scores"]["ground_north_up"]["same_median"] > 0.95
+    for f in ("similarity_summary.png", "gallery.png", "looks.csv", "pairs.csv"):
+        assert (out / f).exists()
+    assert len(list((out / "objects").glob("object_*.png"))) == 2
