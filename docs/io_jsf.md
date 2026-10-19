@@ -10,6 +10,7 @@ converts them into a `SideScanSurvey`.
 | `read_jsf(path)`                      | Eager parse, returns full `list[JSFMessage]`.      |
 | `read_jsf_iter(path)`                 | Generator over messages — for very large files.    |
 | `convert(messages, source_files=...)` | Group + dispatch messages into a `SideScanSurvey`. |
+| `write_subset(src, dst, n_pings=, start_ping=)` | Copy a run of pings to a new file, byte for byte. |
 
 The reader-converter split is intentional: the reader knows about JSF binary,
 the converter knows about the survey schema. Either can be swapped or tested
@@ -62,6 +63,9 @@ typed Python fields after `__post_init__`.
 
 - Unit tests use `Mock(spec=...)` instances. Decouples tests from binary
   parsing. See `tests/unit/io/jsf/conftest.py`.
+- `tests/unit/io/test_public_fixtures.py` runs on a public EdgeTech Discover
+  JSF cut (`tests/data/public/`, OGL v3) and checks it against the XTF files
+  Discover wrote for the same pings.
 - Integration tests run against a real fixture: `tests/data/jsf/sample.jsf`.
   Skipped by default; run with `pytest --slow`.
 - Diagnostic script: `scripts/plot_jsf_aux_streams.py` for evaluating source

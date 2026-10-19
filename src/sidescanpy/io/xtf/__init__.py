@@ -30,6 +30,7 @@ from sidescanpy.io.xtf.reader import (
     read_xtf_pings,
 )
 from sidescanpy.io.xtf.split import sample_rate_runs, split_by_sample_rate
+from sidescanpy.io.xtf.subset import write_subset
 
 __all__ = [
     "ChannelBlockStats",
@@ -49,4 +50,5 @@ __all__ = [
     "read_xtf_pings",
     "sample_rate_runs",
     "split_by_sample_rate",
+    "write_subset",
 ]

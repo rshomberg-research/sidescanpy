@@ -9,6 +9,7 @@ Public entry points
 - :func:`read_jsf` — eager read, returns ``list[JSFMessage]``.
 - :func:`read_jsf_iter` — generator over messages (use for large files).
 - :func:`convert` — dispatches a message list into a :class:`SideScanSurvey`.
+- :func:`write_subset` — copy a run of pings to a new file, byte for byte.
 
 Conventions
 -----------
@@ -41,6 +42,7 @@ from sidescanpy.io.jsf.messages import (
     SonarDataMessage,
 )
 from sidescanpy.io.jsf.reader import read_jsf, read_jsf_iter
+from sidescanpy.io.jsf.subset import write_subset
 from sidescanpy.io.jsf.targets import (
     decode_target_window,
     read_discover_targets,
@@ -66,4 +68,5 @@ __all__ = [
     "NMEAZDAMessage",
     "NMEADBTMessage",
     "NMEADPTMessage",
+    "write_subset",
 ]

@@ -3,8 +3,11 @@
 `.xtf` (eXtended Triton Format) is the most common vendor-neutral
 sidescan format: Klein, EdgeTech and others can record or export it. The
 reader follows the specification's revision 42 (Exail) and has been
-checked against EdgeTech 4200 files recorded by Isis. Only sonar packets
-are read; other packet types are counted and skipped.
+checked against EdgeTech 4200 files recorded by Isis, and against public
+files written by EdgeTech Discover 7.22, Isis 7.0.41 (Benthos SIS-1624)
+and KleinXlt 4.0 (small cuts of them are the fixtures in
+`tests/data/public/`). Only sonar packets are read; other packet types are
+counted and skipped.
 
 ```python
 from sidescanpy.io import read_and_convert, read_and_convert_segments
@@ -21,7 +24,9 @@ survey = read_and_convert([path], "xtf")      # whole file, one survey
 
 `read_xtf_header`, `iter_packets`, `count_packets` and `read_xtf_pings`
 give the file header, the raw packets and the recorded pings (samples in
-their recorded dtype) for inspection.
+their recorded dtype) for inspection. `write_subset(src, dst, n_pings=,
+start_ping=)` copies the header and a run of pings to a new file, byte for
+byte (for making small test files).
 
 ## File structure
 
