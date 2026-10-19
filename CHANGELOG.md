@@ -25,6 +25,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `.vscode/settings.json` and the `.gitmessage` commit template from the
   repository.
 
+### Fixed
+
+- `io.xtf`: samples are now multiplied by `2**-Weight` from each channel
+  header. EdgeTech Discover writes raw block-floating-point samples with
+  the JSF weighting factor in `Weight`, which can change from ping to ping,
+  so amplitudes from such files were 2^Weight too large and jumped by
+  factors of two between pings. They now equal the JSF samples for the same
+  ping. Files with `Weight` 0 (Isis- and Klein-written files seen so far)
+  are unchanged. New attributes `xtf_weight_min` / `xtf_weight_max`.
+
 ## [0.7.6] — 2026-10-12
 
 ### Changed

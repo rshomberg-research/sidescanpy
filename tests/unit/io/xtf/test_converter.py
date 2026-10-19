@@ -190,6 +190,24 @@ class TestAbsentAndPadding:
         ds = convert(read_xtf(path)).get_frequency("hz_120000").dataset
         np.testing.assert_array_equal(ds["backscatter_intensity"].values[1, 1], vals * 2)
 
+    def test_samples_scaled_by_weight_per_ping(self, tmp_path):
+        # Weight changes from ping to ping, as in EdgeTech Discover files.
+        weights = [5, 6, 0, 3]
+        pk = [_ping(i, chan_fields={"Weight": w}) for i, w in enumerate(weights)]
+        ds = convert(read_xtf(_dual(tmp_path, pk))).get_frequency("hz_100000").dataset
+        bs = ds["backscatter_intensity"].values
+        for i, w in enumerate(weights):
+            expected = ramp(N_SAMP, np.uint16, i * 4 + 1).astype(np.float32) * 2.0 ** -w
+            np.testing.assert_array_equal(bs[i, 1], expected)
+        assert ds.attrs["xtf_weight_min"] == 0
+        assert ds.attrs["xtf_weight_max"] == 6
+
+    def test_zero_weight_leaves_samples_unscaled(self, dual_survey):
+        _, survey = dual_survey
+        ds = survey.get_frequency("hz_100000").dataset
+        np.testing.assert_array_equal(ds["backscatter_intensity"].values[0, 1], ramp(N_SAMP, np.uint16, 1))
+        assert ds.attrs["xtf_weight_min"] == ds.attrs["xtf_weight_max"] == 0
+
 
 # ============================================================
 # SOUND VELOCITY, SAMPLE RATE, RANGE

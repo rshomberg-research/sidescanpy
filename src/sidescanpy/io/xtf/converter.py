@@ -20,6 +20,13 @@ validated survey shaped like the JSF and SDF ones:
   port ping's valid samples. Verified on real EdgeTech 4200 files: the
   first bottom return of the reversed port data tracks
   ``SensorPrimaryAltitude`` the way the starboard data does as stored.
+- Samples are multiplied by ``2**-Weight`` from each channel header.
+  EdgeTech Discover writes the raw block-floating-point samples and puts
+  the JSF weighting factor N in ``Weight``, which can change from ping to
+  ping; scaling makes the samples equal to the JSF ones for the same
+  ping (checked on a public Discover 7.22 recording with both files).
+  Writers that leave ``Weight`` at 0 are unaffected. The range seen is
+  recorded in ``xtf_weight_min`` / ``xtf_weight_max``.
 - Each frequency has its own ping axis. A ping holding neither channel
   of a frequency (some files' early packets carry only the low-frequency
   pair, see :mod:`sidescanpy.io.xtf.reader`) is left out of that
@@ -68,7 +75,7 @@ neither the JSF nor the SDF converter has a projected-coordinate path.
 
 Provenance attributes on every frequency dataset (``xtf_`` prefix):
 recording program and version, sonar name and type, channel numbers
-and names, whether sound velocity was doubled, and counts of reader
+and names, whether sound velocity was doubled, the ``Weight`` range, and counts of reader
 anomalies summed over the converted files (packets with fewer channel
 blocks than declared, clipped channel blocks, channel blocks without
 ChanInfo, unknown and non-sonar packets, resyncs, truncated files).
@@ -414,6 +421,7 @@ def _build_frequency_channel(
     pos = np.empty(n_total, dtype=np.int64)
     pos[keep] = np.arange(n)
     bs = np.full((n, 2, max_n), np.nan, dtype=np.float32)
+    weights: list[np.ndarray] = []
     for piece in entry.pieces:
         for side, ch in enumerate((piece.port, piece.stbd)):
             if ch is None or ch.samples.shape[1] == 0:
@@ -422,6 +430,12 @@ def _build_frequency_channel(
             dst = pos[rows + piece.offset]
             m = ch.samples.shape[1]
             block = ch.samples[rows].astype(np.float32)
+            # Block floating point: samples are scaled by 2**-Weight, as
+            # JSF samples are by their weighting factor.
+            weight = ch.headers["Weight"][rows].astype(np.int64)
+            weights.append(weight)
+            if np.any(weight != 0):
+                block *= np.exp2(-weight).astype(np.float32)[:, None]
             k = ch.num_samples[rows, None].astype(np.int64)
             j = np.arange(m)[None, :]
             block[j >= k] = np.nan
@@ -430,6 +444,14 @@ def _build_frequency_channel(
                 # samples so sample 0 is nearest the sonar on both sides.
                 block = np.take_along_axis(block, np.where(j < k, k - 1 - j, j), axis=1)
             bs[dst, side, :m] = block
+
+    weight_all = np.concatenate(weights) if weights else np.zeros(0, dtype=np.int64)
+    n_weighted = int(np.sum(weight_all != 0))
+    if n_weighted:
+        logger.debug(
+            "hz_%d: %d channel blocks scaled by 2**-Weight (Weight %d to %d)",
+            freq_hz, n_weighted, weight_all.min(), weight_all.max(),
+        )
 
     h = headers[keep]
     altitude = h["SensorPrimaryAltitude"].astype(np.float32)
@@ -452,6 +474,8 @@ def _build_frequency_channel(
         "xtf_channel_names": ",".join(sorted(entry.channel_names)),
         "xtf_pings_absent": n_absent,
         "xtf_pings_other_sample_rate": n_other,
+        "xtf_weight_min": int(weight_all.min()) if weight_all.size else 0,
+        "xtf_weight_max": int(weight_all.max()) if weight_all.size else 0,
     }
     coords = {
         "sample": (["sample"], np.arange(max_n)),
