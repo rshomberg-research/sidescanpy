@@ -28,8 +28,6 @@ Public functions
 - :func:`plot_target_position_scatter` — plain lat/lon scatter of targets.
 - :func:`contact_sheet` — grid of image thumbnails, one Figure.
 - :func:`render_target_context` — one window image with a box at a target.
-- ``along_track_distance_m`` (deprecated; moved to
-  ``sidescanpy.processing.navigation``).
 - :mod:`sidescanpy.viz.analysis` — one plot per analysis result
   (value histograms, outlier comparison, nadir zoom/waterfall, beam
   geometry, usable range, segments overview, navigation summary).
@@ -115,19 +113,3 @@ __all__ = [
     "set_fit_window_limits",
 ]
 
-
-def __getattr__(name: str):
-    # Deprecated shim, kept until 0.8.0.
-    if name == "along_track_distance_m":
-        import warnings
-
-        from sidescanpy.processing.navigation import along_track_distance_m
-
-        warnings.warn(
-            "sidescanpy.viz.along_track_distance_m has moved to "
-            "sidescanpy.processing.navigation",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return along_track_distance_m
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

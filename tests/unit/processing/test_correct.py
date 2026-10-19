@@ -85,7 +85,7 @@ class TestCorrectSteps:
         assert set(rec) == {"step", "params", "function", "version", "timestamp_utc"}
         # actual params used, defaults resolved
         assert rec["params"] == {
-            "spreading_loss_db": 40.0, "absorption_db_per_m": pytest.approx(francois_garrison_absorption_db_per_m(1_495_000)),
+            "spreading_loss_db": 30.0, "absorption_db_per_m": pytest.approx(francois_garrison_absorption_db_per_m(1_495_000)),
             "min_range_m": 0.5, "sound_velocity_ms": 1500.0,
             "temperature_c": 10.0, "salinity_psu": 35.0, "depth_m": 10.0, "ph": 8.0,
         }

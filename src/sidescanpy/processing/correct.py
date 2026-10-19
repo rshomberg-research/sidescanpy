@@ -138,7 +138,7 @@ class Step:
 def _tvg_step(
     ds: xr.Dataset,
     *,
-    spreading_loss_db: float = 40.0,
+    spreading_loss_db: float = 30.0,
     absorption_db_per_m: float | None = None,
     min_range_m: float = 0.5,
     sound_velocity_ms: float | None = None,

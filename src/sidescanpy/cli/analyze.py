@@ -87,14 +87,12 @@ from sidescanpy.analysis.tvg import fit_range_decay
 from sidescanpy.analysis.usable_range import estimate_usable_range
 from sidescanpy.cli._common import (
     add_common_args,
-    add_deprecated_alias,
     add_logging_args,
     add_plots_arg,
     require_matplotlib,
     resolve_freq_keys,
     save_plot,
     setup_logging_from_args,
-    uncorrected_alias,
     write_json,
 )
 from sidescanpy.cli._config import CLIParser, parse_args
@@ -112,14 +110,6 @@ from sidescanpy.processing import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Deprecated flag / --config key spellings -> current dest names.
-_RENAMED_OPTIONS = {
-    "stage3_bin_width_m": "usable_range_bin_width_m",
-    "stage4_bin_width_m": "decay_bin_width_m",
-    "stage4_db_reference_percentile": "decay_db_reference_percentile",
-    "stage4_fit_value_col": "decay_fit_value_col",
-}
 
 # A multiple of HDF5_CHUNK_PING (the on-disk chunk size) so lazy reads never
 # split a real HDF5 chunk.
@@ -424,7 +414,7 @@ def build_parser() -> tuple[CLIParser, Any]:
     freq_group = p_inv.add_mutually_exclusive_group()
     freq_group.add_argument("--frequency", type=str, help="e.g. hz_1495000")
     freq_group.add_argument("--all-frequencies", action="store_true")
-    p_inv.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
+    p_inv.add_argument("--value-var", default="uncorrected", help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored).")
     p_inv.add_argument("--pings", type=str, default="0:8000", help="Ping range 'start:stop' (stop empty = all)")
     p_inv.add_argument(
         "--channel", default=None,
@@ -439,10 +429,6 @@ def build_parser() -> tuple[CLIParser, Any]:
     p_inv.add_argument("--reject-outliers", action="store_true")
     p_inv.add_argument("--outlier-mad-k", type=float, default=3.5)
     p_inv.add_argument("--decay-fit-value-col", choices=["mean", "median"], default="mean")
-    add_deprecated_alias(p_inv, "--stage3-bin-width-m", "--usable-range-bin-width-m", type=float)
-    add_deprecated_alias(p_inv, "--stage4-bin-width-m", "--decay-bin-width-m", type=float)
-    add_deprecated_alias(p_inv, "--stage4-db-reference-percentile", "--decay-db-reference-percentile", type=float)
-    add_deprecated_alias(p_inv, "--stage4-fit-value-col", "--decay-fit-value-col", choices=["mean", "median"])
     p_inv.add_argument("--output-dir", required=True, type=Path)
     p_inv.set_defaults(func=run_investigate)
 
@@ -494,7 +480,7 @@ def build_parser() -> tuple[CLIParser, Any]:
     p_seg.add_argument("--gap-factor", type=float, default=8.0, help="Along-track distance jump, as a multiple of the survey's own typical ping spacing, that counts as a gap")
     p_seg.add_argument("--time-gap-factor", type=float, default=8.0, help="Raw ping-timestamp jump, as a multiple of the survey's own typical ping interval, that counts as a gap (independent of the distance check -- either can fire)")
     p_seg.add_argument("--sound-vel-rel-tol", type=float, default=0.05, help="Relative step in sound_vel_ms between consecutive pings that counts as a setting change")
-    p_seg.add_argument("--garbage-value-var", type=uncorrected_alias("backscatter_raw"), default="uncorrected")
+    p_seg.add_argument("--garbage-value-var", default="uncorrected")
     p_seg.add_argument("--garbage-min-run-pings", type=int, default=20)
     p_seg.add_argument("--garbage-degenerate-frac", type=float, default=0.999)
     p_seg.add_argument("--stability-window-pings", type=int, default=100)
@@ -516,7 +502,7 @@ def build_parser() -> tuple[CLIParser, Any]:
                  "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
         )
         p.add_argument("--pings", type=_parse_ping_range, default=(0, 8000), help="'start:stop' (stop empty = all)")
-        p.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
+        p.add_argument("--value-var", default="uncorrected", help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored).")
         p.add_argument("--output-dir", required=True, type=Path)
 
     p_nadir = subparsers.add_parser("nadir", help="Classify + locate nadir")
@@ -536,7 +522,6 @@ def build_parser() -> tuple[CLIParser, Any]:
     _common_single_channel_args(p_beam)
     p_beam.add_argument("--nadir-n-samples", type=int, default=50)
     p_beam.add_argument("--usable-range-bin-width-m", type=float, default=2.0)
-    add_deprecated_alias(p_beam, "--stage3-bin-width-m", "--usable-range-bin-width-m", type=float)
     p_beam.add_argument("--snr-threshold", type=float, default=3.0)
     p_beam.add_argument("--near-angle-max-std-deg", type=float, default=15.0)
     p_beam.add_argument("--min-valid-fraction", type=float, default=0.2)
@@ -595,7 +580,7 @@ def build_parser() -> tuple[CLIParser, Any]:
              "surveys, or a literal freq_key (e.g. 'sensor1_data1') for any other convention",
     )
     p_rec.add_argument("--pings", type=_parse_ping_range, default=(0, None), help="'start:stop' (stop empty = all -- default: the whole section)")
-    p_rec.add_argument("--value-var", default="uncorrected", type=uncorrected_alias("backscatter_raw"), help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored). 'backscatter_raw' is a deprecated alias")
+    p_rec.add_argument("--value-var", default="uncorrected", help="Variable to analyze. uncorrected = the uncorrected signal (inverted from processing_history; no raw copy is stored).")
     p_rec.add_argument("--nadir-n-samples", type=int, default=50)
     p_rec.add_argument("--bin-width-m", type=float, default=1.0, help="Shared by usable-range and the adopted TVG-fit recipe, matching tvg-fit's own default")
     p_rec.add_argument("--snr-threshold", type=float, default=3.0)
@@ -613,7 +598,7 @@ def build_parser() -> tuple[CLIParser, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser, subparsers = build_parser()
     args = parse_args(
-        parser, sys.argv[1:] if argv is None else argv, subcommands=subparsers.choices, renamed_keys=_RENAMED_OPTIONS,
+        parser, sys.argv[1:] if argv is None else argv, subcommands=subparsers.choices,
     )
     setup_logging_from_args(args)
     if getattr(args, "plots", False) and not require_matplotlib(f"sidescan-analyze {args.subcommand}"):

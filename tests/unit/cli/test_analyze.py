@@ -635,8 +635,8 @@ class TestParseHelpers:
         assert analyze._parse_numeric_or_literal("6.0") == 6.0
 
 
-class TestDeprecatedOptionSpellings:
-    """Old flag and --config key spellings keep working, with a WARNING."""
+class TestOptionSpellings:
+    """Current option spellings; the 0.6.0 stage3/stage4 spellings are gone."""
 
     def _run_main(self, monkeypatch, argv):
         captured = []
@@ -655,55 +655,31 @@ class TestDeprecatedOptionSpellings:
         assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (3.0, 4.0)
         assert (args.decay_db_reference_percentile, args.decay_fit_value_col) == (95.0, "median")
 
-    def test_old_flags_map_to_new_dests_and_warn(self, monkeypatch, tmp_path, caplog):
-        with caplog.at_level("WARNING"):
-            args = self._run_main(monkeypatch, [
-                "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path),
-                "--stage3-bin-width-m", "3", "--stage4-bin-width-m", "4",
-                "--stage4-db-reference-percentile", "95", "--stage4-fit-value-col", "median",
-            ])
-        assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (3.0, 4.0)
-        assert (args.decay_db_reference_percentile, args.decay_fit_value_col) == (95.0, "median")
-        assert "--stage3-bin-width-m is deprecated; use --usable-range-bin-width-m" in caplog.text
-        assert "--stage4-fit-value-col is deprecated; use --decay-fit-value-col" in caplog.text
-        assert not hasattr(args, "stage3_bin_width_m")
-
     def test_defaults_unchanged_without_flags(self, monkeypatch, tmp_path, caplog):
         with caplog.at_level("WARNING"):
             args = self._run_main(monkeypatch, ["investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path)])
         assert (args.usable_range_bin_width_m, args.decay_bin_width_m) == (2.0, 5.0)
         assert args.channel is None
-        assert "deprecated" not in caplog.text
 
-    def test_old_flags_hidden_from_help(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["sidescan-analyze", "investigate", "--help"])
-        with pytest.raises(SystemExit):
+    @pytest.mark.parametrize("sub, flag", [
+        ("investigate", "--stage3-bin-width-m"),
+        ("investigate", "--stage4-fit-value-col"),
+    ])
+    def test_old_stage_flags_rejected(self, monkeypatch, tmp_path, capsys, sub, flag):
+        monkeypatch.setattr("sys.argv", [
+            "sidescan-analyze", sub, "--input", "x.ss.h5", "--output-dir", str(tmp_path), flag, "3",
+        ])
+        with pytest.raises(SystemExit) as exc:
             analyze.main()
-        out = capsys.readouterr().out
-        assert "--usable-range-bin-width-m" in out
-        assert "--stage3" not in out and "--stage4" not in out
+        assert exc.value.code == 2
+        assert "unrecognized arguments" in capsys.readouterr().err
 
-    def test_old_config_keys_map_and_warn(self, monkeypatch, tmp_path, caplog):
+    def test_old_config_keys_are_unknown(self, monkeypatch, tmp_path, caplog):
         cfg = tmp_path / "cfg.yaml"
-        cfg.write_text("stage3_bin_width_m: 3.0\nstage4_fit_value_col: median\n")
+        cfg.write_text("stage3_bin_width_m: 3.0\n")
         with caplog.at_level("WARNING"):
             args = self._run_main(monkeypatch, [
                 "investigate", "--input", "x.ss.h5", "--output-dir", str(tmp_path), "--config", str(cfg),
             ])
-        assert args.usable_range_bin_width_m == 3.0
-        assert args.decay_fit_value_col == "median"
-        assert "config key 'stage3_bin_width_m' is deprecated" in caplog.text
-        assert "not recognized" not in caplog.text
-
-    def test_beam_geometry_old_flag(self, monkeypatch, tmp_path, caplog):
-        captured = []
-        monkeypatch.setattr(analyze, "run_beam_geometry", lambda args: captured.append(args) or 0)
-        monkeypatch.setattr(analyze, "setup_logging_from_args", lambda args: flush_pending_warnings())
-        monkeypatch.setattr("sys.argv", [
-            "sidescan-analyze", "beam-geometry", "--input", "x.ss.h5", "--frequency", "1",
-            "--output-dir", str(tmp_path), "--stage3-bin-width-m", "7",
-        ])
-        with caplog.at_level("WARNING"):
-            assert analyze.main() == 0
-        assert captured[0].usable_range_bin_width_m == 7.0
-        assert "deprecated" in caplog.text
+        assert args.usable_range_bin_width_m == 2.0
+        assert "not recognized" in caplog.text

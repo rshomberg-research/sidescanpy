@@ -367,15 +367,12 @@ class TestPlotWaterfallSlantRangeAxis:
         np.testing.assert_allclose(x_stbd, sr[:, 1, :])
 
 
-def test_along_track_shim_warns():
+def test_along_track_shim_removed():
     import sidescanpy.viz
     import sidescanpy.viz.waterfall as wf
-    from sidescanpy.processing.navigation import along_track_distance_m
 
-    with pytest.warns(DeprecationWarning, match="processing.navigation"):
-        assert wf.along_track_distance_m is along_track_distance_m
-    with pytest.warns(DeprecationWarning, match="processing.navigation"):
-        assert sidescanpy.viz.along_track_distance_m is along_track_distance_m
+    assert not hasattr(sidescanpy.viz, "along_track_distance_m")
+    assert not hasattr(wf, "along_track_distance_m")
 
 
 class TestInvalidCoordinates:

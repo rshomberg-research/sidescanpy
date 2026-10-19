@@ -9,7 +9,6 @@ modes. Returns the matplotlib Axes for further customization.
 """
 
 import logging
-import warnings
 from typing import Literal
 
 import matplotlib.pyplot as plt
@@ -26,19 +25,6 @@ from sidescanpy.processing.sample_axis import sample_index
 from sidescanpy.viz._cmap import resolve_cmap
 
 logger = logging.getLogger(__name__)
-
-
-def __getattr__(name: str):
-    # Deprecated shim, kept until 0.8.0.
-    if name == "along_track_distance_m":
-        warnings.warn(
-            "sidescanpy.viz.waterfall.along_track_distance_m has moved to "
-            "sidescanpy.processing.navigation",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _along_track_distance_m
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 XAxisMode = Literal["sample", "ground_range", "across_track", "slant_range"]
