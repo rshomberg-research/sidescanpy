@@ -28,13 +28,15 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 |---|---|---|
 | `crop_farrange` | `crop_far_range` | `cutoff_sample`, `n_bins`, `min_valid_fraction`, `rise_threshold_db`, `margin_bins` |
 | `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid`, `held_values`, `max_hold_s`, `per_ping_fallback`, `groups`, `merge_window_s` |
+| `bottom_track` | `altitude_from_bottom_track` | `replace`, `max_diff_m`, `min_altitude_m`, `min_return_m`, `min_return_fraction`, `smooth_window`, `threshold_fraction`, `min_run`, `smooth_pings` |
 | `tvg` | `apply_tvg` | `spreading_loss_db`, `absorption_db_per_m`, `min_range_m`, `sound_velocity_ms`, `temperature_c`, `salinity_psu`, `depth_m`, `ph` |
 | `geometric` | `compute_geometric_ranges` | `expose_unmasked_z` |
 | `range_correction` | `apply_empirical_range_correction` | `table` (required) |
 | `georef` | `compute_georeferencing` | `ellipsoid` |
 
 Steps run in the order given; respecting dependencies is the caller's job
-(`georef` and `range_correction` need `geometric`).
+(`georef` and `range_correction` need `geometric`; `bottom_track` must run
+before `geometric` to affect it). `bottom_track` is not in `DEFAULT_STEPS`.
 
 ### Rules
 
@@ -100,7 +102,31 @@ pitch-corrected) and related variables:
   `sample` coordinate, so a dataset trimmed of leading samples keeps its
   true ranges.
 - Ground range (flat bottom): `sqrt(slant² - altitude²)` where
-  `slant > altitude`, NaN in the water column.
+  `slant > altitude`, NaN in the water column. A ping with NaN altitude
+  gets NaN ground range (and no georeferenced position); altitude 0 gives
+  ground range equal to slant range. Both are logged at WARNING.
+
+### Altitude from the bottom track
+
+Some recordings have no usable altitude: no altimeter, no bottom lock, or
+a recorder that writes 0. `altitude_from_bottom_track` (the
+`bottom_track` step) measures it from the data: the onset of the bottom
+return on each channel (`detect_first_bottom_return` on the uncorrected
+amplitude, refined to the half-rise sample), the nearer channel, in
+metres of slant range. By default it fills only pings whose `altitude_m`
+is NaN or <= 0; `max_diff_m` also replaces recorded values that disagree
+with the track by more than that (a lost lock that still writes a value),
+and `replace="all"` replaces every ping.
+
+The return must stay above threshold for `min_return_m` (default 5 m) of
+slant range, of which `min_return_fraction` (default 70 %) must be above:
+a transmit burst lasts a metre or two, a seabed return tens of metres, and
+the fraction lets shadows in a rough seabed through. On public test files
+with a recorded altimeter (Benthos SIS-1624, about 30 m altitude) the
+tracked value agreed to within 0.2 m for 90 % of pings. The first return
+comes from the beam's near edge, so on sloping or very shallow seabed the
+tracked value is the slant range to the nearest bottom point, a little
+above the true altitude (+0.6 m at 1.7 m altitude on a Klein 3000 file).
 
 ### Georeferencing
 
@@ -215,6 +241,7 @@ Slicing keeps `processing_history`.
 | Function | What it does |
 |---|---|
 | `detect_first_bottom_return` | per-(ping, channel) sample where the bottom echo starts |
+| `altitude_from_bottom_track` | `altitude_m` from the first bottom return (the `bottom_track` step) |
 | `mask_nadir_gap` | NaN everything before the first bottom return |
 | `detect_nadir_noise_extent`, `blank_nadir_noise` | find and zero an electronic noise burst at nadir |
 | `smooth_boundary_across_pings` | rolling median of a per-ping boundary |

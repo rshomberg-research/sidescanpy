@@ -379,6 +379,7 @@ class TestCorrectFile:
     @pytest.mark.parametrize("steps", [
         DEFAULT_STEPS,
         ("crop_farrange", "interpolate_aux", "tvg", "geometric", "range_correction", "georef"),
+        ("interpolate_aux", "bottom_track", "tvg", "geometric", "georef"),
     ])
     def test_chunked_equals_unchunked(self, ss_h5, tmp_path, steps):
         params = {"range_correction": {"table": _rc_table()}} if "range_correction" in steps else None
@@ -454,6 +455,7 @@ def test_preparation_steps_are_not_levels():
 
     assert "crop_farrange" not in PROCESSING_LEVELS
     assert "interpolate_aux" not in PROCESSING_LEVELS
+    assert "bottom_track" not in PROCESSING_LEVELS
     assert PROCESSING_LEVELS[0] == "raw"
 
 

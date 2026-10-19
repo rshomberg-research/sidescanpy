@@ -1,11 +1,11 @@
 """
-``sidescan-correct``: apply far-range crop / TVG / geometric / range
-correction / georef to a directory of ``.ss.h5`` files, in place.
+``sidescan-correct``: apply far-range crop / bottom track / TVG / geometric /
+range correction / georef to a directory of ``.ss.h5`` files, in place.
 
 A thin loop over :func:`sidescanpy.processing.correct_file`: each file is
 read once, every requested step not already recorded in its
 ``processing_history`` is applied (in canonical order: crop_farrange,
-interpolate_aux, tvg, geometric, range_correction, georef), and the file is
+interpolate_aux, bottom_track, tvg, geometric, range_correction, georef), and the file is
 rewritten atomically. Aux interpolation runs whenever tvg/geometric/
 range_correction/georef is requested. Already-applied steps are skipped,
 so re-running is a no-op. No raw copy is kept (a legacy ``backscatter_raw``
@@ -44,6 +44,7 @@ from pathlib import Path
 from sidescanpy.cli._common import add_common_args, setup_logging_from_args, ss_h5_files
 from sidescanpy.cli._config import CLIParser, parse_args
 from sidescanpy.processing import (
+    STEP_BOTTOM_TRACK,
     STEP_CROP_FARRANGE,
     STEP_GEOMETRIC,
     STEP_GEOREF,
@@ -58,6 +59,7 @@ logger = logging.getLogger(__name__)
 
 _FLAG_STEPS = (
     ("crop_farrange", STEP_CROP_FARRANGE),
+    ("bottom_track", STEP_BOTTOM_TRACK),
     ("tvg", STEP_TVG),
     ("geometric", STEP_GEOMETRIC),
     ("range_correction", STEP_RANGE_CORRECTION),
@@ -107,6 +109,10 @@ def build_parser() -> CLIParser:
     parser = CLIParser(prog="sidescan-correct", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ss-h5-dir", required=True, type=Path, help="Directory of .ss.h5 files, edited in place")
     parser.add_argument("--crop-farrange", action="store_true", help="Detect and crop far-range noise")
+    parser.add_argument(
+        "--bottom-track", action="store_true",
+        help="Set altitude from the first bottom return where it is missing (NaN or <= 0)",
+    )
     parser.add_argument("--tvg", action="store_true", help="Apply radiometric (TVG) correction")
     parser.add_argument("--geometric", action="store_true", help="Apply geometric range correction")
     parser.add_argument(

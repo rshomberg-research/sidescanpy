@@ -103,6 +103,15 @@ def compute_geometric_ranges(
     sample_interval_per_ping = sample_interval_m(ds)
 
     altitude = ds["altitude_m"].values.astype(np.float64)
+    n_no_alt = int(np.sum(~np.isfinite(altitude)))
+    n_zero_alt = int(np.sum(altitude <= 0))
+    if n_no_alt or n_zero_alt:
+        logger.warning(
+            "%d of %d pings have NaN altitude_m (their ground range is NaN) and %d have "
+            "altitude_m <= 0 (ground range = slant range); the 'bottom_track' step can fill "
+            "them from the first bottom return",
+            n_no_alt, altitude.size, n_zero_alt,
+        )
     pitch_deg = ds["pitch_deg"].values.astype(np.float64)
     depth = ds["depth_m"].values.astype(np.float64)
     pitch_rad = np.deg2rad(pitch_deg)

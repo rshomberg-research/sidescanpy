@@ -8,7 +8,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from sidescanpy.core.history import read_history
 from sidescanpy.processing.bottom import (
+    altitude_from_bottom_track,
     blank_nadir_noise,
     detect_first_bottom_return,
     detect_nadir_noise_extent,
@@ -535,3 +537,141 @@ class TestUniformExclusionBoundary:
         # smooth decay instead of a selection-biased spike.
         uniform_nonempty = uniform_binned[uniform_binned["count"] > 0].reset_index(drop=True)
         assert uniform_nonempty["mean"].is_monotonic_decreasing
+
+
+# 1000 Hz at 1500 m/s: 0.75 m of slant range per sample.
+_DR = 0.75
+
+
+def _tracked_dataset(onsets, altitude=None, stbd_offset=0, burst=3):
+    """Dataset whose bottom return starts at ``onsets[i]`` (port) per ping,
+    with a transmit burst in the first ``burst`` samples of every ping."""
+    n_pings, n_samples = len(onsets), 200
+    bs = np.full((n_pings, 2, n_samples), 0.01, dtype=np.float32)
+    for i, k in enumerate(onsets):
+        bs[i, 0, k:] = 1.0
+        bs[i, 1, k + stbd_offset:] = 1.0
+    bs[:, :, :burst] = 50.0  # transmit burst, nearer than min_altitude_m
+    ds = _make_raw_dataset(backscatter=bs)
+    if altitude is not None:
+        ds["altitude_m"] = ("ping", np.asarray(altitude, dtype=np.float32))
+    return ds
+
+
+class TestAltitudeFromBottomTrack:
+    def test_fills_nan_and_zero_altitude(self):
+        onsets = [40, 42, 44, 46]
+        ds = _tracked_dataset(onsets, altitude=[np.nan, 0.0, -1.0, np.nan])
+        out = altitude_from_bottom_track(ds, min_altitude_m=3.0)
+        np.testing.assert_allclose(out["altitude_m"].values, np.array(onsets) * _DR, atol=_DR)
+
+    def test_keeps_valid_recorded_altitude_by_default(self):
+        ds = _tracked_dataset([40, 40, 40], altitude=[12.0, np.nan, 50.0])
+        out = altitude_from_bottom_track(ds, min_altitude_m=3.0)
+        alt = out["altitude_m"].values
+        assert alt[0] == pytest.approx(12.0)
+        assert alt[1] == pytest.approx(40 * _DR, abs=_DR)
+        assert alt[2] == pytest.approx(50.0)
+
+    def test_max_diff_replaces_implausible_recorded_altitude(self):
+        ds = _tracked_dataset([40, 40, 40], altitude=[30.5, 30.0, 50.0])
+        out = altitude_from_bottom_track(ds, min_altitude_m=3.0, max_diff_m=5.0)
+        alt = out["altitude_m"].values
+        assert alt[0] == pytest.approx(30.5) and alt[1] == pytest.approx(30.0)
+        assert alt[2] == pytest.approx(40 * _DR, abs=_DR)
+
+    def test_replace_all(self):
+        ds = _tracked_dataset([40, 60], altitude=[12.0, 12.0])
+        out = altitude_from_bottom_track(ds, replace="all", min_altitude_m=3.0)
+        np.testing.assert_allclose(out["altitude_m"].values, [40 * _DR, 60 * _DR], atol=_DR)
+
+    def test_uses_nearer_channel(self):
+        ds = _tracked_dataset([40, 40], altitude=[np.nan, np.nan], stbd_offset=20)
+        out = altitude_from_bottom_track(ds, min_altitude_m=3.0)
+        np.testing.assert_allclose(out["altitude_m"].values, 40 * _DR, atol=_DR)
+
+    def test_transmit_burst_is_skipped(self):
+        # A burst long enough to look like a sustained return (12 samples, 9 m).
+        ds = _tracked_dataset([40], altitude=[np.nan], burst=12)
+        skipped = altitude_from_bottom_track(ds, min_altitude_m=10.0)["altitude_m"].values[0]
+        assert skipped == pytest.approx(40 * _DR, abs=_DR)
+        burst_hit = altitude_from_bottom_track(ds, min_altitude_m=0.0)["altitude_m"].values[0]
+        assert not burst_hit == pytest.approx(40 * _DR, abs=_DR)
+
+    def test_no_return_keeps_value_and_warns(self, caplog):
+        ds = _tracked_dataset([40, 40], altitude=[np.nan, np.nan])
+        ds["backscatter_intensity"][1] = 0.01
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.bottom"):
+            out = altitude_from_bottom_track(ds, min_altitude_m=3.0)
+        assert np.isfinite(out["altitude_m"].values[0])
+        assert np.isnan(out["altitude_m"].values[1])
+        assert any("no bottom return" in r.getMessage() for r in caplog.records)
+
+    def test_history_record_and_backscatter_unchanged(self):
+        ds = _tracked_dataset([40], altitude=[np.nan])
+        out = altitude_from_bottom_track(ds, min_altitude_m=3.0)
+        record = read_history(out)[-1]
+        assert record["step"] == "bottom_track"
+        assert record["params"]["replace"] == "missing"
+        np.testing.assert_array_equal(out["backscatter_intensity"].values, ds["backscatter_intensity"].values)
+
+    def test_geometric_after_tracking_has_ground_range(self):
+        ds = _tracked_dataset([40, 40], altitude=[np.nan, np.nan])
+        assert np.isnan(compute_geometric_ranges(ds)["ground_range_m"].values).all()
+        out = compute_geometric_ranges(altitude_from_bottom_track(ds, min_altitude_m=3.0))
+        assert np.isfinite(out["ground_range_m"].values).any()
+
+    def test_bad_arguments_raise(self):
+        ds = _tracked_dataset([40])
+        with pytest.raises(ValueError, match="replace"):
+            altitude_from_bottom_track(ds, replace="sometimes")
+        with pytest.raises(ValueError, match="max_diff_m"):
+            altitude_from_bottom_track(ds, replace="all", max_diff_m=1.0)
+
+
+class TestAltitudeFromBottomTrackFineSampling:
+    """0.075 m per sample, so ``min_return_m`` spans many samples."""
+
+    DR = 0.075
+
+    def _ds(self, profile):
+        bs = np.repeat(np.asarray(profile, dtype=np.float32)[None, None, :], 2, axis=1).repeat(3, axis=0)
+        ds = _make_raw_dataset(backscatter=bs, sample_rate_hz=10_000.0)
+        ds["altitude_m"] = ("ping", np.full(3, np.nan, dtype=np.float32))
+        return ds
+
+    def test_bright_burst_after_quiet_lead_in_is_not_the_bottom(self):
+        # Quiet to 1 m, a 2 m burst as bright as the seabed, quiet, seabed from 30 m.
+        profile = np.full(1000, 0.05)
+        profile[13:40] = 1.0
+        profile[400:] = 1.0
+        out = altitude_from_bottom_track(self._ds(profile))
+        np.testing.assert_allclose(out["altitude_m"].values, 400 * self.DR, atol=2 * self.DR)
+
+    def test_gaps_in_the_return_do_not_push_the_onset_out(self):
+        profile = np.full(1000, 0.05)
+        profile[400:] = 1.0
+        for start in range(430, 1000, 60):  # 1.5 m shadows every 4.5 m
+            profile[start:start + 20] = 0.05
+        out = altitude_from_bottom_track(self._ds(profile))
+        np.testing.assert_allclose(out["altitude_m"].values, 400 * self.DR, atol=2 * self.DR)
+
+
+class TestMinRunFraction:
+    def test_default_requires_every_sample(self):
+        arr = np.full((1, 1, 300), 0.1)
+        arr[..., 100:] = 10.0
+        arr[..., 105] = 0.1  # one dip right after the onset
+        strict = detect_first_bottom_return(arr, smooth_window=1, min_run=20)
+        loose = detect_first_bottom_return(arr, smooth_window=1, min_run=20, min_run_fraction=0.9)
+        assert strict[0, 0] == 106
+        assert loose[0, 0] == 100
+
+
+def test_geometric_warns_on_missing_or_zero_altitude(caplog):
+    ds = _make_raw_dataset(n_pings=4)
+    ds["altitude_m"] = ("ping", np.array([np.nan, 0.0, 10.0, 10.0], dtype=np.float32))
+    with caplog.at_level("WARNING", logger="sidescanpy.processing.geometric"):
+        compute_geometric_ranges(ds)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("1 of 4 pings have NaN altitude_m" in m and "1 have altitude_m <= 0" in m for m in msgs)

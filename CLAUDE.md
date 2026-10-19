@@ -202,6 +202,10 @@ not in the repo; they skip without them.
   `fit_range_decay` picks one named candidate and does not fit absorption
   freely.
 - **`fathometer_reading_m`** is not attitude-corrected.
+- **Missing altitude.** Some recordings have none (some EdgeTech Discover
+  files write 0 in JSF and nothing in XTF). The opt-in `bottom_track` step
+  fills it from the first bottom return; it reads slightly high on sloping
+  or very shallow seabed (near-edge return, not vertical).
 
 ---
 

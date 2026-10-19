@@ -18,6 +18,8 @@ boundaries per (ping, channel) and blank or mask the data before them.
 - :func:`mask_nadir_gap` — NaN everything before the first bottom
   return (display/export copy).
 - :func:`mask_before_sample`, :func:`altitude_sample_index` — helpers.
+- :func:`altitude_from_bottom_track` — fill missing ``altitude_m`` from
+  the first bottom return (the ``"bottom_track"`` correction step).
 
 All detectors are vectorized over ``(ping, channel, sample)`` arrays and
 return ``(ping, channel)`` float sample indices (NaN = not found).
@@ -29,7 +31,10 @@ import warnings
 import numpy as np
 import xarray as xr
 
+from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_BOTTOM_TRACK, append_history
 from sidescanpy.processing.inversion import uncorrected_backscatter
+from sidescanpy.processing.sample_axis import sample_index, sample_interval_m
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,7 @@ def detect_first_bottom_return(
     min_sample: np.ndarray | float | None = None,
     min_sample_buffer: float = 0.0,
     peak_percentile: float = 100.0,
+    min_run_fraction: float = 1.0,
 ) -> np.ndarray:
     """Per-(ping, channel) sample index where the real bottom return starts.
 
@@ -77,6 +83,10 @@ def detect_first_bottom_return(
         Percentile of the smoothed values used as the peak reference
         (100 = max). Lower it to stop one bright residual sample from
         setting the threshold.
+    min_run_fraction : float, default 1.0
+        Fraction of the ``min_run`` samples that must be at or above the
+        threshold (the onset sample itself always must be). Below 1 a long
+        run tolerates gaps, such as shadows in a rough seabed return.
 
     Returns
     -------
@@ -119,7 +129,8 @@ def detect_first_bottom_return(
 
     csum2 = np.cumsum(np.insert(above, 0, 0, axis=-1), axis=-1)
     run_sum = csum2[..., min_run:] - csum2[..., :-min_run]
-    sustained = run_sum >= min_run
+    need = min_run if min_run_fraction >= 1.0 else max(1, int(np.ceil(min_run_fraction * min_run)))
+    sustained = (run_sum >= need) & (above[..., : run_sum.shape[-1]] == 1)
 
     has_any = sustained.any(axis=-1)
     first = np.argmax(sustained, axis=-1).astype(np.float64)
@@ -411,3 +422,172 @@ def mask_nadir_gap(
         if var in out.data_vars:
             out[var] = (out[var].dims, mask_before_sample(out[var].values, boundary))
     return out
+
+
+def _refine_onset(values: np.ndarray, first: np.ndarray, smooth_window: int, min_run: int) -> np.ndarray:
+    """Move each detected onset to the first sample reaching half the return level.
+
+    :func:`detect_first_bottom_return` reports where a ``smooth_window``
+    rolling mean crosses its threshold, which is up to ``smooth_window``
+    samples before the rise. The return level is the mean of the
+    ``min_run`` samples after the window; the refined onset is the first
+    sample in the window at or above half of it. NaN onsets stay NaN.
+    """
+    n = values.shape[-1]
+    found = np.isfinite(first)
+    start = np.nan_to_num(first, nan=0.0).astype(np.int64)[..., None]
+    window = np.clip(start + np.arange(smooth_window + 1), 0, n - 1)
+    after = np.clip(start + smooth_window + np.arange(max(min_run, 1)), 0, n - 1)
+    level = np.take_along_axis(values, after, axis=-1).mean(axis=-1, keepdims=True)
+    hit = np.take_along_axis(values, window, axis=-1) >= 0.5 * level
+    offset = np.where(hit.any(axis=-1), np.argmax(hit, axis=-1), 0)
+    return np.where(found, start[..., 0] + offset, np.nan)
+
+
+BOTTOM_TRACK_REPLACE = ("missing", "all")
+"""Accepted ``replace`` values of :func:`altitude_from_bottom_track`."""
+
+
+def altitude_from_bottom_track(
+    ds: xr.Dataset,
+    *,
+    replace: str = "missing",
+    max_diff_m: float | None = None,
+    min_altitude_m: float = 0.5,
+    min_return_m: float = 5.0,
+    min_return_fraction: float = 0.7,
+    smooth_window: int = 10,
+    threshold_fraction: float = 0.2,
+    min_run: int = 10,
+    smooth_pings: int = 1,
+) -> xr.Dataset:
+    """Set ``altitude_m`` from the first bottom return (the ``"bottom_track"`` step).
+
+    Many recordings carry no usable altitude: no altimeter, no bottom lock,
+    or a recorder that writes 0. Without it the geometric step cannot
+    compute ground range (NaN altitude) or computes it as if the towfish
+    sat on the seabed (altitude 0). This step measures altitude from the
+    data instead: per ping and channel, the onset of the bottom return
+    (:func:`detect_first_bottom_return` on the uncorrected amplitude,
+    refined to the first sample reaching half the return level that
+    follows it, since the detector's rolling mean fires up to
+    ``smooth_window`` samples early), the nearer of the two channels,
+    converted to metres of slant range.
+
+    The first return comes from the beam's near edge, which is tilted away
+    from vertical, so on sloping or rough seabed the tracked value is the
+    slant range to the nearest bottom point, at or slightly above the true
+    altitude. Recorded altitude, when valid, is the better value; the
+    default only fills pings that lack it.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        One frequency channel. Radiometric steps already applied are undone
+        for detection only; ``backscatter_intensity`` is not changed.
+    replace : {"missing", "all"}, default "missing"
+        ``"missing"``: replace pings whose ``altitude_m`` is NaN or <= 0.
+        ``"all"``: replace every ping with a detection.
+    max_diff_m : float, optional
+        With ``"missing"``, also replace pings whose recorded altitude
+        differs from the tracked one by more than this (a lost bottom lock
+        that still writes a value).
+    min_altitude_m : float, default 0.5
+        Detection ignores samples nearer than this.
+    min_return_m : float, default 5.0
+        Slant distance the return must stay above threshold, converted to
+        samples and used as the detector's ``min_run`` when longer. A
+        transmit burst (some recorders keep it; it can start after a quiet
+        lead-in and be as bright as the seabed) lasts a metre or two; the
+        seabed return lasts tens of metres.
+    min_return_fraction : float, default 0.7
+        Fraction of that distance that must be above threshold
+        (``min_run_fraction`` of the detector), so shadows and gaps in a
+        rough seabed return do not push the onset further out.
+    smooth_window, threshold_fraction, min_run
+        Passed to :func:`detect_first_bottom_return` (``min_run`` in
+        samples, raised to ``min_return_m`` when that is longer).
+    smooth_pings : int, default 1
+        Rolling median of the tracked altitude over this many pings
+        (:func:`smooth_boundary_across_pings`); 1 = none. Smoothing looks
+        across pings, so a chunked :func:`~sidescanpy.processing.correct_file`
+        run can differ from an unchunked one within ``smooth_pings // 2``
+        pings of each chunk edge.
+
+    Returns
+    -------
+    xr.Dataset
+        ``ds`` with ``altitude_m`` replaced where selected and a
+        ``"bottom_track"`` history record. Pings with no detection keep
+        their recorded value. ``fathometer_reading_m`` is not changed.
+    """
+    if replace not in BOTTOM_TRACK_REPLACE:
+        raise ValueError(f"replace must be one of {BOTTOM_TRACK_REPLACE}, got {replace!r}")
+    if max_diff_m is not None and replace != "missing":
+        raise ValueError("max_diff_m applies only with replace='missing'")
+
+    interval = sample_interval_m(ds)                       # (ping,)
+    samples = sample_index(ds)                             # absolute index per position
+    floor = np.searchsorted(samples, min_altitude_m / interval)  # (ping,) array position
+    run = max(int(min_run), int(np.ceil(min_return_m / float(np.median(interval)))))
+    values = np.nan_to_num(np.asarray(uncorrected_backscatter(ds).values, dtype=np.float64), nan=0.0)
+    first = detect_first_bottom_return(
+        values,
+        smooth_window=smooth_window,
+        threshold_fraction=threshold_fraction,
+        min_run=run,
+        min_sample=np.repeat(floor[:, None].astype(np.float64), values.shape[1], axis=1),
+        min_run_fraction=min_return_fraction if run > min_run else 1.0,
+    )
+    first = _refine_onset(values, first, smooth_window, run)
+    # A flat ping (no rise anywhere) "detects" at the floor itself: not a return.
+    first[first <= floor[:, None]] = np.nan
+    if smooth_pings > 1:
+        first = smooth_boundary_across_pings(first, window=smooth_pings)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN ping -> NaN
+        nearest = np.nanmin(first, axis=1)
+    found = np.isfinite(nearest)
+    pos = np.clip(np.nan_to_num(nearest, nan=0.0).astype(np.int64), 0, samples.size - 1)
+    tracked = np.where(found, samples[pos] * interval, np.nan)
+
+    recorded = ds["altitude_m"].values.astype(np.float64)
+    missing = ~np.isfinite(recorded) | (recorded <= 0)
+    if replace == "all":
+        selected = np.ones_like(missing)
+    else:
+        selected = missing.copy()
+        if max_diff_m is not None:
+            with np.errstate(invalid="ignore"):
+                selected |= np.abs(recorded - tracked) > max_diff_m
+    use = selected & found
+    n_unresolved = int(np.sum(selected & ~found))
+    logger.debug(
+        "bottom_track: altitude from the first return in %d of %d pings (%d selected had none)",
+        int(use.sum()), recorded.size, n_unresolved,
+    )
+    if n_unresolved:
+        logger.warning(
+            "bottom_track: no bottom return found in %d of %d selected pings; their altitude_m is unchanged",
+            n_unresolved, int(selected.sum()),
+        )
+
+    altitude = np.where(use, tracked, recorded).astype(ds["altitude_m"].dtype)
+    out = ds.assign(altitude_m=(ds["altitude_m"].dims, altitude, ds["altitude_m"].attrs))
+    return append_history(
+        out,
+        STEP_BOTTOM_TRACK,
+        {
+            "replace": replace,
+            "max_diff_m": max_diff_m,
+            "min_altitude_m": min_altitude_m,
+            "min_return_m": min_return_m,
+            "min_return_fraction": min_return_fraction,
+            "smooth_window": smooth_window,
+            "threshold_fraction": threshold_fraction,
+            "min_run": min_run,
+            "smooth_pings": smooth_pings,
+        },
+        function="sidescanpy.processing.bottom.altitude_from_bottom_track",
+        version=__version__,
+    )

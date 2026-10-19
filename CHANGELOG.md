@@ -25,6 +25,24 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `.vscode/settings.json` and the `.gitmessage` commit template from the
   repository.
 
+### Added
+
+- `"bottom_track"` correction step (`processing.altitude_from_bottom_track`,
+  `sidescan-correct --bottom-track`): sets `altitude_m` from the first
+  bottom return where it is NaN or <= 0 (optionally also where the recorded
+  value disagrees by more than `max_diff_m`, or everywhere). Without it, a
+  survey with no recorded altitude gets NaN ground range and no georeferenced
+  positions. Opt-in; not in `DEFAULT_STEPS`. The return must persist for
+  `min_return_m` (default 5 m) of slant range, 70 % of it above threshold,
+  so a transmit burst is not taken for the seabed. Not a processing level.
+- `detect_first_bottom_return` takes `min_run_fraction` (default 1.0, no
+  change): a run tolerates gaps when below 1.
+
+### Changed
+
+- The geometric step logs a WARNING when pings have NaN altitude (NaN ground
+  range) or altitude <= 0 (ground range equals slant range).
+
 ### Fixed
 
 - `io.xtf`: samples are now multiplied by `2**-Weight` from each channel
@@ -34,7 +52,6 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   factors of two between pings. They now equal the JSF samples for the same
   ping. Files with `Weight` 0 (Isis- and Klein-written files seen so far)
   are unchanged. New attributes `xtf_weight_min` / `xtf_weight_max`.
-
 - `io.jsf`: messages of types the reader does not parse (for example
   type 2000 in some EdgeTech Discover files) are skipped with one WARNING
   per file giving the count per type, instead of one WARNING per message

@@ -38,7 +38,8 @@ Public entry points
   from their history records.
 - :func:`processing_level` — derived from ``processing_history``.
 - Bottom / nadir handling (:mod:`~sidescanpy.processing.bottom`):
-  :func:`detect_first_bottom_return`, :func:`detect_nadir_noise_extent`,
+  :func:`detect_first_bottom_return`, :func:`altitude_from_bottom_track`
+  (the ``"bottom_track"`` step), :func:`detect_nadir_noise_extent`,
   :func:`blank_nadir_noise`, :func:`mask_nadir_gap`,
   :func:`uniform_exclusion_boundary` and helpers.
 - :func:`reject_range_outliers` — per-range-bin MAD outlier rejection.
@@ -64,6 +65,7 @@ See ``docs/processing.md`` for full reference.
 
 from sidescanpy.core.history import (
     BUILTIN_STEPS,
+    STEP_BOTTOM_TRACK,
     STEP_CROP_FARRANGE,
     STEP_GEOMETRIC,
     STEP_GEOREF,
@@ -79,6 +81,7 @@ from sidescanpy.processing.aux_fixes import (
     held_value_fixes,
 )
 from sidescanpy.processing.bottom import (
+    altitude_from_bottom_track,
     altitude_sample_index,
     blank_nadir_noise,
     detect_first_bottom_return,
@@ -199,6 +202,7 @@ __all__ = [
     "BUILTIN_STEPS",
     "STEP_CROP_FARRANGE",
     "STEP_INTERPOLATE_AUX",
+    "STEP_BOTTOM_TRACK",
     "STEP_TVG",
     "STEP_GEOMETRIC",
     "STEP_RANGE_CORRECTION",
@@ -214,6 +218,7 @@ __all__ = [
     "interpolate_aux_onto_dataset",
     # bottom / nadir
     "detect_first_bottom_return",
+    "altitude_from_bottom_track",
     "smooth_boundary_across_pings",
     "detect_nadir_noise_extent",
     "blank_nadir_noise",

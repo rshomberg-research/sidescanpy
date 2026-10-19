@@ -24,6 +24,13 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
     :func:`correct` skips it when no ``aux`` is given.
     Params: ``fields, method, extrapolation, drop_invalid, held_values,
     max_hold_s, per_ping_fallback, groups, merge_window_s``.
+``"bottom_track"``
+    :func:`~sidescanpy.processing.bottom.altitude_from_bottom_track`: set
+    ``altitude_m`` from the first bottom return where it is missing (NaN or
+    <= 0), before the geometric step needs it. Not in :data:`DEFAULT_STEPS`.
+    Params: ``replace, max_diff_m, min_altitude_m, min_return_m,
+    min_return_fraction, smooth_window,
+    threshold_fraction, min_run, smooth_pings``.
 ``"tvg"``
     :func:`~sidescanpy.processing.radiometric.apply_tvg`. Params:
     ``spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms``,
@@ -86,6 +93,7 @@ from sidescanpy._version import __version__
 from sidescanpy.core.history import (
     BUILTIN_STEPS,
     RADIOMETRIC_STEPS,
+    STEP_BOTTOM_TRACK,
     STEP_CROP_FARRANGE,
     STEP_GEOMETRIC,
     STEP_GEOREF,
@@ -100,6 +108,7 @@ from sidescanpy.core.history import (
 from sidescanpy.core.schema import HDF5_CHUNK_PING
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.hdf5 import read_survey, write_survey
+from sidescanpy.processing.bottom import altitude_from_bottom_track
 from sidescanpy.processing.farrange import crop_far_range, detect_far_range_cutoff_sample
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
@@ -177,6 +186,7 @@ def _interpolate_aux_step(
 _BUILTIN_FUNCTIONS: dict[str, Callable[..., xr.Dataset]] = {
     STEP_CROP_FARRANGE: crop_far_range,
     STEP_INTERPOLATE_AUX: _interpolate_aux_step,
+    STEP_BOTTOM_TRACK: altitude_from_bottom_track,
     STEP_TVG: _tvg_step,
     STEP_GEOMETRIC: compute_geometric_ranges,
     STEP_RANGE_CORRECTION: apply_empirical_range_correction,
@@ -508,6 +518,7 @@ def correct_survey(
 _DISK_GROWTH = {
     STEP_CROP_FARRANGE: 0.0,
     STEP_INTERPOLATE_AUX: 0.0,
+    STEP_BOTTOM_TRACK: 0.0,
     STEP_TVG: 2.0,
     STEP_GEOMETRIC: 2.0,
     STEP_RANGE_CORRECTION: 0.0,
