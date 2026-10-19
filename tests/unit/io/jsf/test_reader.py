@@ -466,3 +466,49 @@ class TestPickleCaching:
         if sonar_orig and sonar_loaded:
             assert sonar_orig[0].ping_number == sonar_loaded[0].ping_number
             assert sonar_orig[0].transmit_freq_start == sonar_loaded[0].transmit_freq_start
+
+
+# =============================================================================
+# Unsupported message types
+# =============================================================================
+
+def _unsupported_message(message_type: int, body: bytes = b"\x00" * 8) -> bytes:
+    from sidescanpy.io.jsf.messages import JSFMessageHeader
+
+    header = JSFMessageHeader(0x1601, 0x11, 0, message_type, 2, 0, 0, 0, 0, len(body))
+    return header.to_bytes() + body
+
+
+@pytest.fixture
+def jsf_with_unsupported(tmp_path, sample_pitch_roll_message_header_bytes, sample_pitch_roll_message_bytes):
+    pitch_roll = sample_pitch_roll_message_header_bytes + sample_pitch_roll_message_bytes
+    records = [pitch_roll, _unsupported_message(2000), _unsupported_message(2000), pitch_roll,
+               _unsupported_message(2999)]
+    path = tmp_path / "mixed.jsf"
+    path.write_bytes(b"".join(records))
+    return path
+
+
+class TestUnsupportedMessageTypes:
+    """Unknown message types are skipped with one summary warning per file."""
+
+    def test_read_jsf_skips_unsupported_with_one_warning(self, jsf_with_unsupported, caplog):
+        with caplog.at_level("WARNING", logger="sidescanpy.io.jsf.reader"):
+            messages = read_jsf(jsf_with_unsupported)
+        assert len(messages) == 2
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "skipped 3 message(s)" in warnings[0]
+        assert "2000: 2" in warnings[0] and "2999: 1" in warnings[0]
+
+    def test_read_jsf_iter_skips_unsupported_with_one_warning(self, jsf_with_unsupported, caplog):
+        with caplog.at_level("WARNING", logger="sidescanpy.io.jsf.reader"):
+            messages = list(read_jsf_iter(jsf_with_unsupported))
+        assert len(messages) == 2
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "skipped 3 message(s)" in warnings[0]
+
+    def test_read_jsf_counts_skipped_records_toward_limit(self, jsf_with_unsupported):
+        # N counts records read, as before, not only parsed messages.
+        assert len(read_jsf(jsf_with_unsupported, N=3)) == 1

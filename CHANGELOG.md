@@ -35,6 +35,11 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   ping. Files with `Weight` 0 (Isis- and Klein-written files seen so far)
   are unchanged. New attributes `xtf_weight_min` / `xtf_weight_max`.
 
+- `io.jsf`: messages of types the reader does not parse (for example
+  type 2000 in some EdgeTech Discover files) are skipped with one WARNING
+  per file giving the count per type, instead of one WARNING per message
+  (hundreds per file). Each skipped record is logged at DEBUG.
+
 ## [0.7.6] — 2026-10-12
 
 ### Changed

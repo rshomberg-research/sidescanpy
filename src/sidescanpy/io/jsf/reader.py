@@ -14,7 +14,7 @@ For analysis/conversion, use the converter module to transform to standard schem
 
 import json
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
@@ -28,6 +28,20 @@ from sidescanpy.io.jsf.messages import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_supported(message_type: int) -> bool:
+    return message_type == SonarDataMessage.MESSAGE_TYPE or message_type in JSFMessage._registry
+
+
+def _log_skipped(fpath: Path, skipped: Counter) -> None:
+    """One WARNING per file for messages of types the reader does not parse."""
+    if skipped:
+        summary = ", ".join(f"{t}: {n}" for t, n in sorted(skipped.items()))
+        logger.warning(
+            "%s: skipped %d message(s) of unsupported type(s) (type: count) %s",
+            fpath.name, sum(skipped.values()), summary,
+        )
 
 
 # =============================================================================
@@ -73,6 +87,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
     logger.debug(f"Opening JSF file: {fpath}")
     all_messages = []
     cnt = 0
+    skipped: Counter = Counter()
 
     with open(fpath, 'rb') as f:
         while (N is None or cnt < N):
@@ -94,6 +109,12 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
                 logger.warning(f"Truncated message at record {cnt}")
                 break
 
+            if not _is_supported(header.message_type):
+                skipped[header.message_type] += 1
+                logger.debug(f"Record {cnt}: unsupported message type {header.message_type}, skipped")
+                cnt += 1
+                continue
+
             try:
                 if header.message_type == SonarDataMessage.MESSAGE_TYPE:
                     message = SonarDataMessage.from_bytes(header, message_bytes)
@@ -107,6 +128,7 @@ def read_jsf(fpath: Path, N: Optional[int] = None) -> list:
 
             cnt += 1
 
+    _log_skipped(fpath, skipped)
     logger.debug(f"Successfully parsed {len(all_messages)} messages from {fpath}")
     return all_messages
 
@@ -146,31 +168,39 @@ def read_jsf_iter(fpath: Path) -> Generator[JSFMessage, None, None]:
 
     logger.debug(f"Opening JSF file (streaming): {fpath}")
     record_count = 0
+    skipped: Counter = Counter()
 
-    with open(fpath, 'rb') as f:
-        while True:
-            header_bytes = f.read(JSFMessageHeader.STRUCT.size)
-            if len(header_bytes) < JSFMessageHeader.STRUCT.size:
-                break
+    try:
+        with open(fpath, 'rb') as f:
+            while True:
+                header_bytes = f.read(JSFMessageHeader.STRUCT.size)
+                if len(header_bytes) < JSFMessageHeader.STRUCT.size:
+                    break
 
-            try:
-                header = JSFMessageHeader.from_bytes(header_bytes)
-            except Exception as e:
-                logger.warning(f"Failed to parse header at record {record_count}: {e}")
-                break
+                try:
+                    header = JSFMessageHeader.from_bytes(header_bytes)
+                except Exception as e:
+                    logger.warning(f"Failed to parse header at record {record_count}: {e}")
+                    break
 
-            message_bytes = f.read(header.message_size)
-            if len(message_bytes) < header.message_size:
-                logger.warning(f"Truncated message at record {record_count}")
-                break
+                message_bytes = f.read(header.message_size)
+                if len(message_bytes) < header.message_size:
+                    logger.warning(f"Truncated message at record {record_count}")
+                    break
 
-            try:
-                message = JSFMessage.from_bytes(header, message_bytes)
-                record_count += 1
-                yield message
-            except Exception as e:
-                logger.warning(f"Failed to parse message at record {record_count}: {e}")
-                continue
+                if not _is_supported(header.message_type):
+                    skipped[header.message_type] += 1
+                    continue
+
+                try:
+                    message = JSFMessage.from_bytes(header, message_bytes)
+                    record_count += 1
+                    yield message
+                except Exception as e:
+                    logger.warning(f"Failed to parse message at record {record_count}: {e}")
+                    continue
+    finally:
+        _log_skipped(fpath, skipped)
 
 
 # =============================================================================
