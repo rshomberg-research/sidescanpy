@@ -270,6 +270,9 @@ src/.DS_Store
 src/.DS_Store
 tests/data/sdf/sample.sdf
 tests/data/jsf/*.jsf
+# Public fixtures live outside the repo (see tests/data/public/SOURCES.md)
+tests/data/public/*
+!tests/data/public/SOURCES.md
 tests/data/sdf/*.sdf
 src/.DS_Store
 

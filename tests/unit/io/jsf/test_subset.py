@@ -1,9 +1,11 @@
 """
-Unit tests for sidescanpy.io.jsf.subset, on the public JSF fixture.
+Unit tests for sidescanpy.io.jsf.subset, on the public JSF fixture
+(skipped unless ``SIDESCANPY_PUBLIC_DATA`` points at the fixtures).
 
 2026 rshomberg@uri.edu
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +14,9 @@ import pytest
 from sidescanpy.io import read_and_convert
 from sidescanpy.io.jsf import write_subset
 
-SRC = Path(__file__).resolve().parents[3] / "data" / "public" / "jncc_wight_barfleur_20130321174522_p100-107.jsf"
+SRC = Path(os.environ.get("SIDESCANPY_PUBLIC_DATA", "/nonexistent")) / "jncc_wight_barfleur_20130321174522_p100-107.jsf"
+
+pytestmark = pytest.mark.skipif(not SRC.is_file(), reason="set SIDESCANPY_PUBLIC_DATA to the public fixture directory")
 
 
 class TestWriteSubset:

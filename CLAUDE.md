@@ -125,14 +125,20 @@ ROS2 on this machine injects `PYTHONPATH=/opt/ros/...` into every shell,
 which breaks pytest imports. Use `make` or prefix `PYTHONPATH=""`.
 
 Integration tests in `tests/integration/` need real survey files that are
-not in the repo; they skip without them.
+not in the repo; they skip without them. Small byte-for-byte cuts of
+openly licensed public recordings (JSF, and XTF from three writers) are
+listed in `tests/data/public/SOURCES.md` but also kept out of the repo:
+set `SIDESCANPY_PUBLIC_DATA` to their directory to run
+`test_public_fixtures.py`.
 
 ---
 
 ## Conventions
 
 - **Tests first** for new behavior. Synthetic fixtures with real shapes
-  (3-D, two channels, realistic sample counts); never commit survey data.
+  (3-D, two channels, realistic sample counts). Never commit survey data,
+  public or not; public test files are listed (source, licence,
+  checksum) in `tests/data/public/SOURCES.md` and live outside the repo.
   `tests/unit/synthetic.py` has the shared builders.
 - **Test names:** `test_<what>_<when>()`, grouped in classes by feature.
 - **Docstrings:** numpydoc. They are the API reference (`make docs`

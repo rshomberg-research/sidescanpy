@@ -27,6 +27,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `io.jsf.write_subset` and `io.xtf.write_subset`: copy a run of pings
+  (with the XTF file header) to a new file, byte for byte.
+- Tests on five small cuts of openly licensed recordings (UK JNCC under the
+  Open Government Licence v3, USGS public domain) covering EdgeTech
+  Discover JSF and XTF, Isis (Benthos SIS-1624) XTF and KleinXlt XTF,
+  including a check that the JSF and XTF readers agree on pings Discover
+  wrote in both formats. The files are not in the repository; they are
+  listed with sources and checksums in `tests/data/public/SOURCES.md`, and
+  the tests run when `SIDESCANPY_PUBLIC_DATA` points at them.
+
 - `"bottom_track"` correction step (`processing.altitude_from_bottom_track`,
   `sidescan-correct --bottom-track`): sets `altitude_m` from the first
   bottom return where it is NaN or <= 0 (optionally also where the recorded
