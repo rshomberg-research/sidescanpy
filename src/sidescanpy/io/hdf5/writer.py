@@ -4,7 +4,8 @@ Write a SideScanSurvey to an HDF5 (.ss.h5) file.
 File layout:
 
     /                                ← root attrs: survey_name, source_format,
-    │                                              source_files_json
+    │                                              source_files_json,
+    │                                              sidescanpy_version
     /frequencies/
         hz_<freq>/                   ← per SideScanFrequencyChannel
         ...
@@ -32,6 +33,7 @@ import h5netcdf
 import numpy as np
 import xarray as xr
 
+from sidescanpy._version import __version__
 from sidescanpy.core.schema import (
     HDF5_CHUNK_PING,
     HDF5_COMPRESSION,
@@ -135,8 +137,13 @@ def write_survey(
 # ============================================================
 
 def _write_root_attrs(path: Path, survey: SideScanSurvey) -> None:
-    """Create the file (mode='w') and set root-level survey metadata."""
+    """Create the file (mode='w') and set root-level survey metadata.
+
+    ``sidescanpy_version`` records the writer, because the on-disk layout
+    may still change before 1.0.
+    """
     with h5netcdf.File(str(path), "w") as f:
+        f.attrs["sidescanpy_version"] = __version__
         f.attrs["survey_name"]       = survey.survey_name
         f.attrs["source_format"]     = survey.source_format
         f.attrs["source_files_json"] = json.dumps(

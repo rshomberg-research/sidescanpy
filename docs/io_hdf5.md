@@ -4,6 +4,12 @@ Read and write full :class:`SideScanSurvey` objects as `.ss.h5` files.
 A single file holds all frequency channels and auxiliary records with a
 grouped layout that supports lazy/chunked loading.
 
+!!! warning "The format is not frozen"
+    The layout below may change in any 0.x release before 1.0, and a
+    file written by one 0.x version may not read in a later one. Keep the
+    raw source files and re-convert after an upgrade. The root attribute
+    `sidescanpy_version` records which version wrote a file.
+
 For single-frequency channels in standalone NetCDF, see
 [`docs/io_netcdf.md`](io_netcdf.md). For the schema each group conforms
 to, see [`docs/core.md`](core.md).
@@ -21,7 +27,8 @@ to, see [`docs/core.md`](core.md).
 ```
 survey.ss.h5
 ├── /                            ← root attrs: survey_name,
-│                                  source_format, source_files_json
+│                                  source_format, source_files_json,
+│                                  sidescanpy_version
 ├── /frequencies/
 │   ├── hz_547500/                ← SideScanFrequencyChannel.dataset
 │   └── hz_1495000/
@@ -43,6 +50,8 @@ and used uniformly by reader and writer.
   - `survey_name` (string)
   - `source_format` (string, e.g. `"JSF"`)
   - `source_files_json` (JSON-encoded list of paths)
+  - `sidescanpy_version` (the version that wrote the file; absent in
+    files from 0.7.6 and earlier)
 - **Aux records always written.** A survey with no nav messages still
   writes an empty navigation group. This keeps the file structure
   consistent across surveys regardless of source content.
@@ -103,8 +112,9 @@ h5dump -H survey.ss.h5/frequencies  # Show structure of one group
   for mosaicking workflows.
 - Consider Zarr as an alternate backend for cloud-friendly access
   (S3, GCS). Same xarray semantics, different storage.
-- Document the on-disk schema version and add a `schema_version` root
-  attribute. Useful for forward-compat as the schema evolves.
+- Freeze the layout for 1.0 and add a `schema_version` root attribute
+  that changes only when the layout does (`sidescanpy_version` records
+  the writer, not the layout).
 - Consider compression tuning per dataset based on data
   characteristics (e.g. constant-valued backscatter compresses
   to almost nothing; noisy data benefits less).

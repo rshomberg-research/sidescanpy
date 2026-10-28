@@ -2,6 +2,19 @@
 
 Read, correct, grid and export sidescan sonar data.
 
+> **Pre-release.** sidescanpy is shared by invitation before its public
+> release. Until 1.0, any 0.x release may change the `.ss.h5` file format,
+> the API and the CLI. Keep your raw sonar files, pin the version you use,
+> and expect to re-convert `.ss.h5` files after an upgrade. See
+> [`docs/prerelease.md`](docs/prerelease.md) for installing from the
+> private repository, the docs download and the test data.
+
+![Raw and corrected waterfall of a public EdgeTech line](docs/assets/gallery/correct_a_line.png)
+
+*A public EdgeTech recording (UK JNCC, Open Government Licence), raw on
+the left and after the bottom-track, TVG and slant-to-ground-range steps
+on the right.*
+
 sidescanpy converts EdgeTech JSF, Klein SDF and XTF surveys into one
 `xarray`-based model, stored as a grouped HDF5 file (`.ss.h5`). On top of
 that model it provides:
@@ -30,12 +43,16 @@ step (see [`docs/workflow.md`](docs/workflow.md)).
 
 ## Install
 
-Python 3.12 or newer.
+Python 3.12 or newer. sidescanpy is not on PyPI yet; install it from
+this repository (you need read access), pinned to a release tag:
 
 ```bash
-pip install "sidescanpy[viz]"          # library + plotting
-pip install "sidescanpy[viz,maps,geo]" # + basemaps (cartopy) + GeoTIFF (rioxarray)
+uv pip install "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"
+uv pip install "sidescanpy[viz,maps,geo] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"
 ```
+
+`pip install` takes the same argument. The second line adds basemaps
+(cartopy) and GeoTIFF output (rioxarray).
 
 From a checkout, with [uv](https://docs.astral.sh/uv/):
 
@@ -134,7 +151,19 @@ command with `--help` for its options.
 
 ## Examples
 
-[`examples/`](examples/) holds runnable scripts, each smoke-tested on
+The [documentation site](https://rshomberg-research.github.io/sidescanpy/examples/)
+has worked examples on openly licensed public recordings, each with its
+code and the figure it makes. The scripts are in
+[`examples/gallery/`](examples/gallery/); `sidescanpy.datasets.fetch()`
+downloads the data they use.
+
+![The same code on EdgeTech JSF, Benthos XTF and Klein XTF recordings](docs/assets/gallery/three_formats.png)
+
+*Three sonars and writers read and TVG-corrected with the same calls:
+EdgeTech JSF, Benthos XTF (UK JNCC, Open Government Licence) and Klein
+XTF (USGS, public domain).*
+
+[`examples/`](examples/) also holds runnable scripts, each smoke-tested on
 synthetic data: `project_template/` (a full per-step workflow), `quickstart.py`, `tvg_calibration.py`,
 `gridding_and_geotiff.py`, `build_yolo_dataset.py`,
 `investigate_dataset.py`, and figure recipes in `examples/figures/`.
@@ -144,6 +173,12 @@ synthetic data: `project_template/` (a full per-step workflow), `quickstart.py`,
 The library logs only at DEBUG and WARNING and never configures handlers.
 Call `sidescanpy.log.configure_logging("INFO")` in a script, or pass
 `-v` / `-q` / `--log-file` to any CLI command.
+
+## Documentation
+
+<https://rshomberg-research.github.io/sidescanpy/>: guide, worked
+examples and API reference. The site is public; the repository is not
+yet.
 
 ## Development
 
@@ -155,7 +190,8 @@ make docs   # documentation site (needs the docs extra: uv sync --extra docs)
 ```
 
 Integration tests under `tests/integration/` need real survey files and
-are skipped without them. See [`docs/development.md`](docs/development.md)
+are skipped without them. The public test fixtures are not in the
+repository either; see [`docs/prerelease.md`](docs/prerelease.md#test-and-example-data). See [`docs/development.md`](docs/development.md)
 and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License

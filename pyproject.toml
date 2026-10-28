@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/rshomberg-uri/sidescanpy"
+Repository = "https://github.com/rshomberg-research/sidescanpy"
 
 [project.scripts]
 sidescan-convert = "sidescanpy.cli.convert:main"

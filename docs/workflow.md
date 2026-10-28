@@ -5,7 +5,7 @@ does not decide what your survey needs. That decision is made by looking
 at the data, so the workflow lives in your own project, as scripts or
 notebooks that call the library. This page describes a layout that works
 well for real surveys, and the template in
-[`examples/project_template/`](https://github.com/rshomberg-uri/sidescanpy/tree/main/examples/project_template)
+[`examples/project_template/`](https://github.com/rshomberg-research/sidescanpy/tree/main/examples/project_template)
 implements it.
 
 ## One script per step

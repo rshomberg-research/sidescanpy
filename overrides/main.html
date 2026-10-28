@@ -1,0 +1,8 @@
+{#- Pre-release: keep the public docs out of search engines until the
+    public release (remove this override, and custom_dir in mkdocs.yml,
+    then). -#}
+{% extends "base.html" %}
+
+{% block extrahead %}
+  <meta name="robots" content="noindex, nofollow">
+{% endblock %}

@@ -8,8 +8,46 @@ range, georeferencing), slices it, grids it to rasters and GeoTIFF, and
 builds COCO/YOLO training datasets from target catalogs. Small analysis
 functions measure a dataset's units, nadir, usable range and TVG state.
 
-- **Start:** install and the quickstart are in the
-  [README](https://github.com/rshomberg-uri/sidescanpy#readme).
+!!! warning "Pre-release"
+    Until 1.0, any 0.x release may change the `.ss.h5` file format, the
+    API and the CLI. Keep your raw sonar files, pin the version you use,
+    and expect to re-convert `.ss.h5` files after an upgrade. See
+    [Pre-release status](prerelease.md).
+
+[![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/correct_a_line.md)
+
+*A public EdgeTech recording, raw (left) and after the bottom track, TVG
+and slant-to-ground-range steps (right). Code and data:
+[Correct a line](examples/correct_a_line.md).*
+
+## Quickstart
+
+```python
+from sidescanpy import datasets
+from sidescanpy.grids import grid_channel, to_geotiff
+from sidescanpy.io import read_and_convert
+from sidescanpy.io.hdf5 import write_survey
+from sidescanpy.processing import correct_survey
+
+# A public Benthos XTF line; any JSF, SDF or XTF path works the same way.
+path = datasets.fetch("jncc_mid_irish_sea_MIS11_0.xtf")
+survey = read_and_convert([path], fmt="xtf")
+
+# Navigation onto pings, TVG, slant to ground range, per-sample lat/lon.
+survey = correct_survey(survey)
+write_survey(survey, "MIS11_0.ss.h5")
+
+# Grid one frequency at 1 m and write a GeoTIFF (needs the geo extra).
+raster = grid_channel(survey.get_frequency("hz_400000").dataset, resolution_m=1.0)
+to_geotiff(raster, "MIS11_0_400khz.tif")
+```
+
+Installing is covered in [Pre-release status](prerelease.md#install).
+
+## Where to go next
+
+- **Examples:** [real data, code and results](examples/index.md), all on
+  openly licensed recordings you can download.
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),

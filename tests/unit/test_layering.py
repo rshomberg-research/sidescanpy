@@ -21,7 +21,7 @@ import sidescanpy
 
 _ORDER = ["core", "io", "processing", "analysis", "grids", "targets", "export", "viz", "cli"]
 _RANK = {name: i for i, name in enumerate(_ORDER)}
-_ROOT_CORE = {"log", "_version", "__init__"}
+_ROOT_CORE = {"log", "_version", "datasets", "__init__"}
 
 # (importing module, imported package) pairs that violate the order and are
 # known / out of scope for now. Keep as small as possible.
