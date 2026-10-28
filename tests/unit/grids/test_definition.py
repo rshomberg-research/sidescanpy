@@ -127,6 +127,34 @@ class TestGridDefinitionMetrics:
         ew_cells = grid.num_cells_ew
         assert 840 < ew_cells < 880, f"Got {ew_cells}"
 
+    @pytest.mark.parametrize(
+        "extent_m, resolution_m, expected",
+        [(400.2, 0.3, 1334), (0.9, 0.3, 3), (100.0, 0.1, 1000), (100.5, 1.0, 101)],
+    )
+    def test_cell_count_when_extent_is_whole_cells_up_to_float_error(
+        self, extent_m, resolution_m, expected
+    ):
+        """Float error in extent / resolution does not add a cell."""
+        south, west = 4_500_000.0, 300_000.0
+        grid = GridDefinition(
+            bbox=(south, west, south + extent_m, west + extent_m),
+            resolution_m=resolution_m,
+            crs=CRS.from_epsg(32619),
+        )
+        assert grid.num_cells_ns == expected
+        assert grid.num_cells_ew == expected
+        lats, lons = grid.get_grid_centers()
+        assert lats.shape == (expected, expected)
+
+    def test_cell_count_rounds_up_a_real_partial_cell(self):
+        """A partial cell beyond float error still adds a cell."""
+        grid = GridDefinition(
+            bbox=(4_500_000.0, 300_000.0, 4_500_400.201, 300_400.201),
+            resolution_m=0.3,
+            crs=CRS.from_epsg(32619),
+        )
+        assert grid.num_cells_ns == 1335
+
     def test_total_cells(self):
         """num_cells_total = num_cells_ns * num_cells_ew."""
         grid = GridDefinition(

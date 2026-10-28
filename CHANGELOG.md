@@ -167,6 +167,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `grids.resample_channel_to_grid` accepts `method` as a string
   (`"mean"`, …) as well as a `ResamplingMethod`, like `grid_channel`; a
   string raised `AttributeError`. An unknown name raises `ValueError`.
+- `grids.GridDefinition.num_cells_ns` / `num_cells_ew` no longer add a
+  cell when `extent / resolution_m` is a whole number up to float error
+  (a 400.2 m extent at 0.3 m gave 1335 cells instead of 1334). A ratio
+  within `CELL_COUNT_TOLERANCE` (1e-6 cells) of a whole number counts as
+  that number; otherwise the count is still the ceiling. Such grids lose
+  the extra row or column, and their centers are `resolution_m` apart
+  instead of slightly stretched.
 
 ## [0.7.6] — 2026-10-12
 
