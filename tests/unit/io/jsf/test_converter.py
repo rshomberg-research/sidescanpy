@@ -31,6 +31,7 @@ from tests.unit.io.jsf.conftest import (
     PR_FLAG_PITCH,
     PR_FLAG_ROLL,
     _make_real_pitch_roll_msg,
+    _make_sonar_msg,
 )
 
 # ============================================================
@@ -674,3 +675,53 @@ class TestBuildSensorRecord:
     def test_time_is_datetime64_ns(self, pressure_msgs):
         ds = _build_sensor_record("pressure", pressure_msgs)
         assert ds["time"].dtype == np.dtype("datetime64[ns]")
+
+
+# ============================================================
+# STARTING DEPTH (window offset of the first sample)
+# ============================================================
+
+def _offset_msgs(offsets, n=100):
+    """Paired pings; offsets[i] = (port, starboard) starting depth in samples."""
+    msgs = []
+    for i, (op, os_) in enumerate(offsets):
+        msgs.append(_make_sonar_msg(ping_number=i, channel=0, n_samples=n, starting_depth_samples=op))
+        msgs.append(_make_sonar_msg(ping_number=i, channel=1, n_samples=n, starting_depth_samples=os_))
+        msgs[-2].backscatter_intensity = np.arange(n, dtype=np.float32) + 1
+        msgs[-1].backscatter_intensity = np.arange(n, dtype=np.float32) + 1
+    return msgs
+
+
+@pytest.mark.unit
+class TestStartingDepth:
+    def test_zero_offset_unchanged_and_silent(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="sidescanpy"):
+            ds = _build_frequency_channel(_offset_msgs([(0, 0)] * 3), repair_mode="nan_pad")
+        np.testing.assert_array_equal(ds["sample"].values, np.arange(100))
+        assert "starting depth" not in caplog.text.lower()
+        assert "jsf_starting_depth_min" not in ds.attrs
+
+    def test_constant_offset_shifts_sample_coordinate(self, caplog):
+        from sidescanpy.processing.sample_axis import sample_index, sample_interval_m
+
+        with caplog.at_level(logging.WARNING, logger="sidescanpy"):
+            ds = _build_frequency_channel(_offset_msgs([(40, 40)] * 3), repair_mode="nan_pad")
+        np.testing.assert_array_equal(ds["sample"].values, 40 + np.arange(100))
+        assert ds.sizes["sample"] == 100
+        # Slant range of recorded sample i is (start_depth + i) x interval.
+        rng = sample_index(ds) * sample_interval_m(ds)[0]
+        assert rng[0] == pytest.approx(40 * 1500.0 / (2 * 400_000.0))
+        warnings = [r for r in caplog.records if "starting depth" in r.getMessage().lower()]
+        assert len(warnings) == 1 and warnings[0].levelname == "WARNING"
+        assert ds.attrs["jsf_starting_depth_min"] == 40
+        assert ds.attrs["jsf_starting_depth_max"] == 40
+
+    def test_varying_offset_places_each_ping_at_its_range(self):
+        ds = _build_frequency_channel(_offset_msgs([(10, 10), (30, 20), (10, 10)]), repair_mode="nan_pad")
+        np.testing.assert_array_equal(ds["sample"].values, 10 + np.arange(120))
+        v = ds["backscatter_intensity"].values
+        # Ping 1 port starts 20 samples later than ping 0, starboard 10 later.
+        assert np.isnan(v[1, 0, :20]).all() and v[1, 0, 20] == 1
+        assert np.isnan(v[1, 1, :10]).all() and v[1, 1, 10] == 1
+        assert v[0, 0, 0] == 1 and np.isnan(v[0, 0, 100:]).all()
+

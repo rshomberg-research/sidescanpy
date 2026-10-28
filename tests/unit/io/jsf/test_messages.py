@@ -156,6 +156,20 @@ class TestSonarDataMessage:
         )
         assert message.N_samples == sample_sonar_data_message_dict['N_samples']
 
+    def test_sonar_data_starting_depth(
+        self,
+        sample_sonar_data_message_header_bytes,
+        sample_sonar_data_message_bytes,
+    ):
+        """Bytes 4-7 (uint32) are the window offset of the first sample, in samples."""
+        header = JSFMessageHeader.from_bytes(sample_sonar_data_message_header_bytes)
+        message: SonarDataMessage = JSFMessage.from_bytes(header, sample_sonar_data_message_bytes)
+        assert message.starting_depth_samples == 0
+        data = bytearray(sample_sonar_data_message_bytes)
+        data[4:8] = (120).to_bytes(4, "little")
+        message = JSFMessage.from_bytes(header, bytes(data))
+        assert message.starting_depth_samples == 120
+
 
 
 
