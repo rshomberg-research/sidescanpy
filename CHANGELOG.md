@@ -94,6 +94,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   type 2000 in some EdgeTech Discover files) are skipped with one WARNING
   per file giving the count per type, instead of one WARNING per message
   (hundreds per file). Each skipped record is logged at DEBUG.
+- `grids.resample_channel_to_grid` accepts `method` as a string
+  (`"mean"`, …) as well as a `ResamplingMethod`, like `grid_channel`; a
+  string raised `AttributeError`. An unknown name raises `ValueError`.
 
 ## [0.7.6] — 2026-10-12
 
