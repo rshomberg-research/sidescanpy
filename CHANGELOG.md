@@ -110,6 +110,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   then stay the per-ping values as recorded. The skip itself is
   unchanged. It stays at DEBUG when the step was already applied to the
   dataset. `correct_survey` and `correct_file` supply `aux` and do not log it.
+- `analysis.detect_shadow_proposals` excludes the water column: samples at
+  a slant range up to the ping's `altitude_m` (before the first bottom
+  return) are treated as NaN, so a dark, unblanked water column no longer
+  yields many weak false proposals. Pings with NaN or non-positive
+  altitude are not masked (fill altitude first with the `bottom_track`
+  step). New parameter `mask_water_column` (default True; False keeps the
+  previous behaviour). The input dataset is not modified.
 
 ## [0.7.6] — 2026-10-12
 
