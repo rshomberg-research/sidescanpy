@@ -14,6 +14,25 @@ from pyproj import CRS, Geod, Transformer
 
 logger = logging.getLogger(__name__)
 
+#: Fraction of a cell within which extent / resolution counts as a whole
+#: number of cells, so float error (400.2 / 0.3 = 1334.0000000006) does not
+#: add a cell. 1e-6 cells is 0.3 um at 0.3 m resolution.
+CELL_COUNT_TOLERANCE = 1e-6
+
+
+def _cell_count(extent_m: float, resolution_m: float) -> int:
+    """Cells needed to cover extent_m: ceil(extent / resolution), tolerance-aware.
+
+    A ratio within :data:`CELL_COUNT_TOLERANCE` of a whole number is
+    rounded to it before the ceiling, so float error in the extent or the
+    division does not add a cell.
+    """
+    ratio = extent_m / resolution_m
+    nearest = np.round(ratio)
+    if nearest >= 1 and abs(ratio - nearest) <= CELL_COUNT_TOLERANCE:
+        return int(nearest)
+    return int(np.ceil(ratio))
+
 
 class GridDefinition:
     """
@@ -151,13 +170,21 @@ class GridDefinition:
 
     @property
     def num_cells_ns(self) -> int:
-        """Number of grid cells in north-south direction."""
-        return int(np.ceil(self.extent_m_ns / self.resolution_m))
+        """Number of grid cells in north-south direction.
+
+        ``ceil(extent_m_ns / resolution_m)``, except that a ratio within
+        :data:`CELL_COUNT_TOLERANCE` of a whole number counts as that number.
+        """
+        return _cell_count(self.extent_m_ns, self.resolution_m)
 
     @property
     def num_cells_ew(self) -> int:
-        """Number of grid cells in east-west direction."""
-        return int(np.ceil(self.extent_m_ew / self.resolution_m))
+        """Number of grid cells in east-west direction.
+
+        ``ceil(extent_m_ew / resolution_m)``, except that a ratio within
+        :data:`CELL_COUNT_TOLERANCE` of a whole number counts as that number.
+        """
+        return _cell_count(self.extent_m_ew, self.resolution_m)
 
     @property
     def num_cells_total(self) -> int:
@@ -193,10 +220,10 @@ class GridDefinition:
         """
         south, west, north, east = self.bbox
 
-        # Note: ceil(extent / resolution_m) centers are *stretched* across
-        # the bbox, so the real center spacing is (extent - res) / (n - 1),
-        # not resolution_m (e.g. extent 100.5 m at 1 m -> 101 cells 0.995 m
-        # apart). The 111000 m/deg constants below only set the half-cell
+        # Note: ceil(extent / resolution_m) centers (tolerance-aware, see
+        # _cell_count) are *stretched* across the bbox, so the real center
+        # spacing is (extent - res) / (n - 1), not resolution_m (e.g.
+        # extent 100.5 m at 1 m -> 101 cells 0.995 m apart). The 111000 m/deg constants below only set the half-cell
         # inset at the bbox edges (<0.6% of half a cell vs. the ellipsoid),
         # so they are not an accuracy issue.
         # TODO(lib): affine.Affine origin + n * resolution_m (rioxarray
