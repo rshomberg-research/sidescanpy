@@ -83,6 +83,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+- `viz.plot_waterfall`: the automatic colour range (`vmin_pct` /
+  `vmax_pct`) is taken from the samples that are drawn. In ground-range and
+  across-track modes the water column (no ground range) is not drawn but
+  still set `vmin`, which washed out corrected waterfalls.
+- Gallery examples: corrected data was converted to dB a second time
+  (`apply_tvg` already returns dB), which compressed the images. They now
+  plot it as is, average samples to screen resolution, fit and apply the
+  range correction, and use more varied public lines
+  (`jncc_mid_irish_sea_MIS15_2.xtf`, `usgs_grand_bay_150602133300.xtf`,
+  added to `sidescanpy.datasets`).
 - `io.xtf`: samples are now multiplied by `2**-Weight` from each channel
   header. EdgeTech Discover writes raw block-floating-point samples with
   the JSF weighting factor in `Weight`, which can change from ping to ping,

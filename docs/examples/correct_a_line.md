@@ -12,11 +12,19 @@ runs.
 
 ![Raw and corrected waterfall](../assets/gallery/correct_a_line.png)
 
-Left: raw amplitude against slant range. Right: after the bottom track,
-time-varying gain (spreading and absorption losses) and slant-to-ground
-range, against across-track and along-track distance in metres. The
-water column is gone, and the far range is no longer darker than the near
-range.
+Left: raw amplitude against slant range. Middle: after the bottom track,
+time-varying gain (TVG, spreading and absorption losses) and
+slant-to-ground range, in dB against across-track and along-track
+distance in metres; the water column is gone. Right: TVG leaves this
+line brighter at far range than near the towfish. `fit_range_correction`
+measures that leftover trend from the line itself, and the
+`range_correction` step removes it, which brings out the regular bedforms on
+both sides and the ridges port and starboard.
+
+After TVG, `backscatter_intensity` is in dB, so it is plotted as is. The
+JSF holds about 23,000 samples per side; averaging them down to about
+1000 for display (`xarray`'s `coarsen`) shows the seabed instead of the
+speckle.
 
 ```python
 --8<-- "examples/gallery/correct_a_line.py"

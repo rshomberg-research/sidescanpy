@@ -16,8 +16,9 @@ functions measure a dataset's units, nadir, usable range and TVG state.
 
 [![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/correct_a_line.md)
 
-*A public EdgeTech recording, raw (left) and after the bottom track, TVG
-and slant-to-ground-range steps (right). Code and data:
+*A public EdgeTech recording: raw (left), after the bottom track, TVG and
+slant-to-ground-range steps (middle), and after a range correction fitted
+from the line (right). Code and data:
 [Correct a line](examples/correct_a_line.md).*
 
 ## Quickstart

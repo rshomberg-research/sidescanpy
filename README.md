@@ -11,9 +11,9 @@ Read, correct, grid and export sidescan sonar data.
 
 ![Raw and corrected waterfall of a public EdgeTech line](docs/assets/gallery/correct_a_line.png)
 
-*A public EdgeTech recording (UK JNCC, Open Government Licence), raw on
-the left and after the bottom-track, TVG and slant-to-ground-range steps
-on the right.*
+*A public EdgeTech recording (UK JNCC, Open Government Licence): raw,
+after the bottom-track, TVG and slant-to-ground-range steps, and after a
+range correction fitted from the line.*
 
 sidescanpy converts EdgeTech JSF, Klein SDF and XTF surveys into one
 `xarray`-based model, stored as a grouped HDF5 file (`.ss.h5`). On top of
@@ -159,7 +159,7 @@ downloads the data they use.
 
 ![The same code on EdgeTech JSF, Benthos XTF and Klein XTF recordings](docs/assets/gallery/three_formats.png)
 
-*Three sonars and writers read and TVG-corrected with the same calls:
+*Three sonars and writers read and corrected with the same calls:
 EdgeTech JSF, Benthos XTF (UK JNCC, Open Government Licence) and Klein
 XTF (USGS, public domain).*
 

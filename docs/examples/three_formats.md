@@ -1,15 +1,24 @@
 # Three formats, one model
 
 Three sonars, three file formats or writers, the same code. Each line is
-read with `read_and_convert`, TVG-corrected with `correct_survey` and
-plotted with `plot_waterfall`; only the file name and format string
+read with `read_and_convert`, corrected with `correct_survey` (bottom
+track, TVG, ground range, range correction) and plotted with
+`plot_waterfall`; only the file name, format string and frequency
 change.
 
 ![Waterfalls from EdgeTech JSF, Benthos XTF and Klein XTF](../assets/gallery/three_formats.png)
 
-From left: EdgeTech (JSF written by Discover), Benthos SIS-1624 (XTF
-written by Isis) and Klein (XTF written by SonarPro), each in dB against
-slant range.
+From left: EdgeTech (JSF written by Discover) over bedforms and
+ridges, Benthos SIS-1624 (XTF written by Isis) over bedforms, and Klein
+(XTF written by SonarPro) along a sharp seabed edge in a shallow
+estuary, each in dB against across-track and along-track distance.
+
+The Klein file records an altitude of about 50 m in water a few metres
+deep, so `bottom_track` is told to replace any recorded altitude more
+than 5 m from the tracked one (`max_diff_m`) and to smooth the track
+over 21 pings. A few pings still track badly, which shows as white
+notches at the top of that panel; the bright horizontal dashes are in
+the recorded samples.
 
 ```python
 --8<-- "examples/gallery/three_formats.py"

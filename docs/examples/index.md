@@ -7,8 +7,8 @@ on each page is the script in `examples/gallery/`, included as is.
 | Example | What it shows | Data |
 |---|---|---|
 | [Read a file](read_a_file.md) | Convert a raw JSF file, save `.ss.h5`, plot the waterfall | JNCC Wight-Barfleur, EdgeTech |
-| [Correct a line](correct_a_line.md) | Altitude from the bottom track, TVG, slant to ground range | JNCC Wight-Barfleur, EdgeTech |
-| [Grid to a map](grid_to_a_map.md) | Gridding to UTM, GeoTIFF output | JNCC mid-Irish Sea, Benthos |
+| [Correct a line](correct_a_line.md) | Altitude from the bottom track, TVG, ground range, range correction | JNCC Wight-Barfleur, EdgeTech |
+| [Grid to a map](grid_to_a_map.md) | Range correction, gridding to UTM, GeoTIFF output | JNCC mid-Irish Sea, Benthos |
 | [Three formats, one model](three_formats.md) | The same calls on EdgeTech JSF, Benthos XTF and Klein XTF | JNCC and USGS |
 
 [![Three sonars read with the same code](../assets/gallery/three_formats.png)](three_formats.md)
@@ -50,8 +50,10 @@ going online.
 | `jncc_wight_barfleur_20130321174522L.xtf` | 13 MB | The same pings, low frequency, as XTF (Discover 7.22) |
 | `jncc_mid_irish_sea_MIS11_0.xtf` | 41 MB | Benthos SIS-1624, XTF (Isis 7.0.41), 100 + 400 kHz |
 | `jncc_mid_irish_sea_MIS13_2.xtf` | 4 MB | The same sonar, a short line |
+| `jncc_mid_irish_sea_MIS15_2.xtf` | 54 MB | The same sonar, 100 + 400 kHz, over bedforms |
 | `usgs_grand_bay_150602205800.xtf` | 5 MB | Klein, XTF (KleinXlt 4.0 / SonarPro 12), shallow estuary |
 | `usgs_grand_bay_150531200100.xtf` | 12 MB | Klein, XTF; the recorded altitude is a lost bottom track |
+| `usgs_grand_bay_150602133300.xtf` | 16 MB | Klein, XTF (SonarPro), a sharp seabed edge; recorded altitude unusable |
 
 ## Sources and licences
 
