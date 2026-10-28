@@ -20,6 +20,8 @@ hand-rolling the .jsf/.sdf/.xtf branch itself.
 """
 
 import logging
+import os
+from collections.abc import Iterable
 from pathlib import Path
 
 from sidescanpy.core.survey import SideScanSurvey
@@ -39,15 +41,22 @@ from sidescanpy.io.xtf.split import SPLIT_MIN_PINGS
 logger = logging.getLogger(__name__)
 
 
-def detect_format(input_paths: list[Path]) -> str:
+def _as_paths(input_paths: str | os.PathLike | Iterable[str | os.PathLike]) -> list[Path]:
+    """A path or an iterable of paths (str or path-like) as a list of Path."""
+    if isinstance(input_paths, (str, os.PathLike)):
+        return [Path(input_paths)]
+    return [Path(p) for p in input_paths]
+
+
+def detect_format(input_paths: str | os.PathLike | Iterable[str | os.PathLike]) -> str:
     """Detect sonar file format from extension; raise on mixed extensions.
 
     Extensions are compared case-insensitively (``.XTF`` is ``"xtf"``).
 
     Parameters
     ----------
-    input_paths : list[Path]
-        Candidate sonar files. All must share the same extension — this
+    input_paths : path or list of paths
+        Candidate sonar files (str or Path). All must share the same extension — this
         function is for the "merge these into one survey" case; batch
         callers processing files independently should call it once per
         file instead of once for a whole directory.
@@ -63,7 +72,7 @@ def detect_format(input_paths: list[Path]) -> str:
         If extensions are mixed, or the (single) extension isn't
         supported.
     """
-    extensions = {p.suffix.lower() for p in input_paths}
+    extensions = {p.suffix.lower() for p in _as_paths(input_paths)}
     if len(extensions) > 1:
         raise ValueError(
             f"All input files must have the same format. "
@@ -82,7 +91,7 @@ def detect_format(input_paths: list[Path]) -> str:
 
 
 def read_and_convert(
-    input_paths: list[Path],
+    input_paths: str | os.PathLike | Iterable[str | os.PathLike],
     fmt: str,
     survey_name: str | None = None,
     *,
@@ -92,8 +101,9 @@ def read_and_convert(
 
     Parameters
     ----------
-    input_paths : list[Path]
-        Paths to .jsf, .sdf or .xtf files (all same format).
+    input_paths : path or list of paths
+        Paths (str or Path) to .jsf, .sdf or .xtf files (all same format);
+        a single path is one file.
     fmt : str
         "jsf", "sdf" or "xtf".
     survey_name : str, optional
@@ -106,6 +116,7 @@ def read_and_convert(
     -------
     SideScanSurvey
     """
+    input_paths = _as_paths(input_paths)
     if fmt == "jsf":
         all_messages = []
         for p in input_paths:

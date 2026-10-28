@@ -157,6 +157,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   correction (they sat near -110 dB before and passed as data). Inversion
   maps them back to 0 amplitude, for files corrected before and after this
   change. Every other sample is unchanged.
+- `io.read_and_convert` and `io.detect_format` accept paths as `str` as
+  well as `Path` (a list of str raised `AttributeError` on `.stem`), and a
+  single path as well as a list.
 
 ## [0.7.6] — 2026-10-12
 
