@@ -1093,6 +1093,7 @@ def _make_sonar_msg(
     pitch_deg: float = 0.0,
     altitude_m: float = 5.0,
     sound_speed_ms: float = 1500.0,
+    starting_depth_samples: int = 0,
 ) -> Mock:
     """Mock(spec=SonarDataMessage). Sonar messages use timestamp_ns (int)."""
     if timestamp_ns is None:
@@ -1113,6 +1114,7 @@ def _make_sonar_msg(
     # overrides one or the other on purpose.
     m.sample_interval   = sample_interval if sample_interval is not None else 1.0 / sample_freq
     m.N_samples         = n_samples
+    m.starting_depth_samples = starting_depth_samples
     m.backscatter_intensity = np.full(n_samples, backscatter_val, dtype=np.float32)
 
     m.latitude     = latitude

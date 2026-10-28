@@ -133,6 +133,15 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   treated as unset (legacy) and samples are read by `BytesPerSample`, with
   one WARNING per file. Defined but unsupported formats (IBM float, 4, 6,
   7) still raise.
+- `io.jsf`: the sonar data message's starting depth (window offset, in
+  samples; new `SonarDataMessage.starting_depth_samples`) is applied to the
+  sample axis instead of ignored: recorded sample `i` gets the `sample`
+  coordinate `starting_depth + i`, so its slant range is
+  `(starting_depth + i) x interval`. Pings or sides with different offsets
+  are placed at their own offsets on a common axis (NaN elsewhere). A
+  nonzero offset logs one WARNING per frequency and is recorded in
+  `jsf_starting_depth_min` / `jsf_starting_depth_max`. Files with offset 0
+  (every file seen so far) are unchanged.
 
 ## [0.7.6] — 2026-10-12
 

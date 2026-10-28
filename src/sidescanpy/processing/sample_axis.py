@@ -1,8 +1,10 @@
 """
 Absolute sample coordinate and per-ping sample spacing helpers.
 
-Converters write an integer ``sample`` coordinate where 0 is the first
-recorded sample of the ping. Range math must use that *absolute* index,
+Converters write an integer ``sample`` coordinate counted in sample
+intervals from the transmit, so slant range is ``sample x interval``. 0 is
+normally the first recorded sample of the ping; a JSF starting depth
+(window offset) moves the first recorded sample to that offset. Range math must use that *absolute* index,
 not the local position along the (possibly sliced) sample axis, so that
 slicing leading samples never changes the computed ranges.
 

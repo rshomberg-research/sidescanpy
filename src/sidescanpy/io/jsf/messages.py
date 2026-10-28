@@ -125,7 +125,7 @@ class SonarDataMessage(JSFMessage):
 
     # Data format block
     _raw_timestamp_sec: int = field(repr=False)     # seconds since 1970
-    _starting_depth:    int = field(repr=False)     # ???: "starting dep (window offset) in samples"
+    _starting_depth:    int = field(repr=False)     # spec: "starting depth (window offset) in samples"; see starting_depth_samples
     ping_number:        int = field(repr=True)      # sequential ping number, matched for channels
 
     _reserved01:  int = field(repr=False)
@@ -311,6 +311,12 @@ class SonarDataMessage(JSFMessage):
 
     backscatter_intensity:  list[float] = field(init=False, repr=False) # Sonar trace data # ???: dB?
     N_samples:              int = field(init=False)
+    # Window offset of the first sample, in samples (bytes 4-7, "starting
+    # depth (window offset) in samples" in the JSF spec): taken to be the
+    # number of sample intervals between the transmit and the first
+    # recorded sample, so sample i is at slant range
+    # (starting_depth_samples + i) x interval. 0 in every file seen so far.
+    starting_depth_samples: int = field(init=False)
 
     @staticmethod
     def parse_validity_flags(flags: int) -> dict:
@@ -337,6 +343,7 @@ class SonarDataMessage(JSFMessage):
     def __post_init__(self) -> None:
 
         self.channel = self._header.channel
+        self.starting_depth_samples = int(self._starting_depth)
 
         # TODO: clean up timestamp fixes
 
