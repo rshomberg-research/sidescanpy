@@ -143,6 +143,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   and light and dark themes. Until the release its pages ask search engines
   not to index them. The `docs` workflow also keeps every build of
   `main` and `v*` tags as a `sidescanpy-docs` artifact.
+- XTF files with projected navigation (`NavUnits` 0, easting/northing in
+  metres) convert when the caller names the projection: `nav_crs` on
+  `io.xtf.convert`, `io.read_and_convert` and `io.read_and_convert_segments`
+  (an EPSG code, a CRS string or a `pyproj.CRS`), and
+  `sidescan-convert survey --nav-crs`. Sensor positions are converted to
+  WGS84 longitude/latitude with pyproj, an easting/northing of exactly
+  (0, 0) becomes NaN, and the CRS is recorded in the `xtf_nav_crs`
+  attribute. Without `nav_crs` such a file raises `ValueError` (it raised
+  `NotImplementedError`); the zone is not guessed. `nav_crs` is ignored
+  for files in degrees (`NavUnits` 3).
 
 ### Changed
 

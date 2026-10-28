@@ -85,6 +85,8 @@ def read_and_convert(
     input_paths: list[Path],
     fmt: str,
     survey_name: str | None = None,
+    *,
+    nav_crs=None,
 ) -> SideScanSurvey:
     """Read sonar files and convert to a SideScanSurvey.
 
@@ -96,6 +98,9 @@ def read_and_convert(
         "jsf", "sdf" or "xtf".
     survey_name : str, optional
         Survey name. Defaults to first input file's stem.
+    nav_crs : int, str or pyproj.CRS, optional
+        XTF only: projected CRS of files with ``NavUnits`` 0 (see
+        :func:`sidescanpy.io.xtf.convert`). Ignored for JSF and SDF.
 
     Returns
     -------
@@ -134,6 +139,7 @@ def read_and_convert(
             all_pings,
             source_files=input_paths,
             survey_name=survey_name or input_paths[0].stem,
+            nav_crs=nav_crs,
         )
 
     raise ValueError(f"Unknown format: {fmt}")
@@ -155,6 +161,7 @@ def read_and_convert_segments(
     *,
     survey_name: str | None = None,
     min_pings: int = SPLIT_MIN_PINGS,
+    nav_crs=None,
 ) -> list[tuple[str, SideScanSurvey]]:
     """Read one raw sonar file into one survey per constant-range segment.
 
@@ -175,6 +182,9 @@ def read_and_convert_segments(
         Base name; defaults to ``path.stem``.
     min_pings : int, default 50
         XTF and SDF: shortest run kept when a file is split.
+    nav_crs : int, str or pyproj.CRS, optional
+        XTF only: projected CRS of a file with ``NavUnits`` 0 (see
+        :func:`sidescanpy.io.xtf.convert`). Ignored for JSF and SDF.
 
     Returns
     -------
@@ -214,7 +224,7 @@ def read_and_convert_segments(
     out = []
     for i, seg in enumerate(segments, 1):
         stem = segment_stem(base, i, len(segments))
-        out.append((stem, xtf_convert(seg, source_files=[path], survey_name=stem)))
+        out.append((stem, xtf_convert(seg, source_files=[path], survey_name=stem, nav_crs=nav_crs)))
     return out
 
 
