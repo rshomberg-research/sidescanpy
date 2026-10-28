@@ -383,8 +383,13 @@ class RangeDecayResult(ResultMixin):
     criterion); ``best_free_fit_*`` are its free-scale values.
     ``r_ref_m_override`` / ``r_fit_min_m_override`` record what was
     requested (e.g. ``"auto"``); ``r_ref_m`` / ``r_fit_min_m`` what was
-    used. ``fit`` (the full :class:`TVGCandidateFitResult`) is left out of
-    ``to_dict()``; ``candidates`` summarizes it.
+    used. With ``r_fit_min_m="auto"`` resolved, ``r_fit_min_auto_search_max_m``
+    is the bound of the near-field peak search (bin centers up to it) and
+    ``r_fit_min_auto_peak_edge_m`` the peak bin's far edge, so the resolved
+    value is ``r_fit_min_auto_peak_edge_m + r_fit_min_auto_margin_m`` before
+    any clamp to ``r_ref_m``; it can lie past the search bound. ``fit`` (the
+    full :class:`TVGCandidateFitResult`) is left out of ``to_dict()``;
+    ``candidates`` summarizes it.
     """
 
     tvg_status: str | None = None
@@ -400,6 +405,8 @@ class RangeDecayResult(ResultMixin):
     r_fit_min_m: float | None = None
     r_fit_min_m_override: float | str | None = None
     r_fit_min_auto_margin_m: float | None = None
+    r_fit_min_auto_search_max_m: float | None = None
+    r_fit_min_auto_peak_edge_m: float | None = None
     r_fit_max_m: float | None = None
     n_bins_used: int | None = None
     best_candidate: str | None = None
@@ -519,8 +526,12 @@ def fit_range_decay(
         near-field peak bin's far edge plus ``r_fit_min_auto_margin_m``,
         searched up to a numeric ``r_ref_m`` or
         ``r_ref_search_fraction * usable_range_m``; falls back to
-        ``None`` with a note when it can't be resolved. If it ends up
-        beyond a numeric/"mid_swath" ``r_ref_m`` it is clamped to it.
+        ``None`` with a note when it can't be resolved. Only the peak is
+        searched for within that bound: the margin, added afterwards, can
+        carry the value past it, and the result reports both
+        (``r_fit_min_auto_search_max_m``, ``r_fit_min_auto_peak_edge_m``).
+        If it ends up beyond a numeric/"mid_swath" ``r_ref_m`` it is
+        clamped to it.
     r_fit_min_auto_margin_m : float, default 5.0
     r_ref_search_fraction : float, default 0.5
     r_ref_window_fraction : float, default 1/3
@@ -635,6 +646,8 @@ def fit_range_decay(
     r_fit_min_m_requested = r_fit_min_m
 
     r_fit_min_m_auto_note: str | None = None
+    auto_search_max_m: float | None = None
+    auto_peak_edge_m: float | None = None
     if isinstance(r_fit_min_m, str):
         if r_fit_min_m != "auto":
             raise ValueError(f"fit_range_decay: r_fit_min_m string values must be 'auto', got {r_fit_min_m!r}")
@@ -651,20 +664,26 @@ def fit_range_decay(
                 "one-sided fit window (starts at r_ref_m)."
             )
         else:
-            auto_value = _auto_near_edge_m(
+            auto_peak_edge_m = _auto_near_edge_m(
                 ds, value_var, range_var, bin_width_m,
-                search_max_m=near_edge_search_max_m, margin_m=r_fit_min_auto_margin_m,
+                search_max_m=near_edge_search_max_m, margin_m=0.0,
             )
-            if auto_value is None:
+            if auto_peak_edge_m is None:
                 r_fit_min_m_auto_note = (
                     f"r_fit_min_m='auto' found no bins within [0, {near_edge_search_max_m:.2f}m] to "
                     "search -- falling back to the prior one-sided fit window (starts at r_ref_m)."
                 )
             else:
+                auto_search_max_m = float(near_edge_search_max_m)
+                auto_value = auto_peak_edge_m + r_fit_min_auto_margin_m
+                past = (
+                    f"; the margin puts it {auto_value - auto_search_max_m:.2f}m past the search bound"
+                    if auto_value > auto_search_max_m else ""
+                )
                 r_fit_min_m_auto_note = (
-                    f"r_fit_min_m='auto' resolved to {auto_value:.2f}m "
-                    f"(near-field peak bin's far edge + {r_fit_min_auto_margin_m:.1f}m margin, "
-                    f"searched within [0, {near_edge_search_max_m:.2f}m])."
+                    f"r_fit_min_m='auto' resolved to {auto_value:.2f}m (near-field peak bin's far edge "
+                    f"{auto_peak_edge_m:.2f}m, peak searched among bin centers within "
+                    f"[0, {auto_search_max_m:.2f}m], + {r_fit_min_auto_margin_m:.1f}m margin{past})."
                 )
         r_fit_min_m = auto_value
 
@@ -756,6 +775,8 @@ def fit_range_decay(
     result.r_fit_min_m = best.r_fit_min_m
     result.r_fit_min_m_override = r_fit_min_m_requested
     result.r_fit_min_auto_margin_m = r_fit_min_auto_margin_m if r_fit_min_m_requested == "auto" else None
+    result.r_fit_min_auto_search_max_m = auto_search_max_m
+    result.r_fit_min_auto_peak_edge_m = auto_peak_edge_m
     result.r_fit_max_m = best.r_fit_max_m
     result.n_bins_used = best.n_bins_used
     result.best_candidate = best.name
