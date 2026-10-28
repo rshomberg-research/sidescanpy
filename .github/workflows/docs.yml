@@ -1,13 +1,28 @@
 # Build the documentation site on every push and pull request (strict:
-# a malformed docstring fails the build) and publish it to GitHub Pages
-# from main. Publishing is opt-in: set the repository variable
-# PUBLISH_DOCS=true and enable Pages (Settings -> Pages -> GitHub Actions).
-# Until then only the build runs.
+# a malformed docstring fails the build). Builds from main and from
+# version tags are kept as a downloadable "sidescanpy-docs" artifact
+# (repository access needed).
+#
+# Builds from main are also published to the public site
+# https://rshomberg-research.github.io/sidescanpy/. GitHub Pages can't
+# serve a private repository on the organization's free plan, so the site
+# lives in the public repository rshomberg-research/rshomberg-research.github.io
+# and this workflow pushes the built site into its sidescanpy/ folder.
+# Publishing is opt-in: it needs the repository variable PUBLISH_DOCS=true
+# and the secret DOCS_DEPLOY_KEY (the private half of a deploy key with
+# write access on the site repository). Setup: docs/development.md,
+# "Sharing before release".
+#
+# At the public release, switch to Pages on this repository instead
+# (same URL): drop the publish job, add actions/upload-pages-artifact +
+# actions/deploy-pages, remove sidescanpy/ from the site repository, and
+# drop the noindex override (overrides/, custom_dir in mkdocs.yml).
 name: docs
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -31,21 +46,41 @@ jobs:
           python-version: "3.12"
       - name: Build (strict)
         run: uv run --extra docs --extra dev mkdocs build --strict --site-dir site
-      - uses: actions/upload-pages-artifact@v3
-        if: vars.PUBLISH_DOCS == 'true' && github.ref == 'refs/heads/main'
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
+          name: sidescanpy-docs
           path: site
+          retention-days: 90
 
-  deploy:
+  publish:
     if: vars.PUBLISH_DOCS == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: docs-publish
+      cancel-in-progress: false
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sidescanpy-docs
+          path: site
+      - uses: actions/checkout@v4
+        with:
+          repository: rshomberg-research/rshomberg-research.github.io
+          ssh-key: ${{ secrets.DOCS_DEPLOY_KEY }}
+          path: pages
+      - name: Replace sidescanpy/ and push
+        run: |
+          rm -rf pages/sidescanpy
+          cp -r site pages/sidescanpy
+          cd pages
+          git add -A
+          if git diff --cached --quiet; then
+            echo "site unchanged"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "sidescanpy docs from ${GITHUB_SHA::7}"
+          git push
