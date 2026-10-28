@@ -104,6 +104,12 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   that number; otherwise the count is still the ceiling. Such grids lose
   the extra row or column, and their centers are `resolution_m` apart
   instead of slightly stretched.
+- `processing.correct` now logs a WARNING (it was DEBUG) when it skips
+  the `"interpolate_aux"` step because no `aux=` was given, for example
+  with `DEFAULT_STEPS` on a bare channel dataset: navigation and attitude
+  then stay the per-ping values as recorded. The skip itself is
+  unchanged. It stays at DEBUG when the step was already applied to the
+  dataset. `correct_survey` and `correct_file` supply `aux` and do not log it.
 
 ## [0.7.6] — 2026-10-12
 

@@ -21,7 +21,7 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
 ``"interpolate_aux"``
     :func:`~sidescanpy.processing.interpolate.interpolate_aux_onto_dataset`;
     needs the survey's aux records (``aux=`` / :func:`correct_survey`);
-    :func:`correct` skips it when no ``aux`` is given.
+    :func:`correct` skips it, with a WARNING, when no ``aux`` is given.
     Params: ``fields, method, extrapolation, drop_invalid, held_values,
     max_hold_s, per_ping_fallback, groups, merge_window_s``.
 ``"bottom_track"``
@@ -443,8 +443,10 @@ def correct(
         ``{step_name: {param: value}}`` overrides for steps in ``steps``.
     aux : SideScanSurvey, optional
         Supplies navigation/attitude records to ``"interpolate_aux"``. When
-        omitted, that step is skipped (DEBUG log) unless ``params`` gives it
-        parameters, which is an error.
+        omitted, that step is skipped unless ``params`` gives it parameters,
+        which is an error. The skip logs a WARNING (navigation and attitude
+        stay the per-ping values as recorded), or DEBUG when the step was
+        already applied to ``ds``.
     force : bool, default False
         Re-apply steps that were already applied (see module docstring).
 
@@ -469,7 +471,15 @@ def correct(
                 "params were given for step 'interpolate_aux' but no aux: pass aux=survey "
                 "(or use correct_survey / correct_file), or leave the step out"
             )
-        logger.debug("interpolate_aux skipped: no aux given")
+        if force or not has_step(ds, STEP_INTERPOLATE_AUX):
+            # Constant message, so a once-per-channel log filter folds repeats.
+            logger.warning(
+                "interpolate_aux skipped: no aux given, so navigation and attitude stay "
+                "the per-ping values as recorded; pass aux=survey (or use correct_survey "
+                "/ correct_file) to interpolate the survey's aux records onto the pings"
+            )
+        else:
+            logger.debug("interpolate_aux skipped: no aux given (already applied)")
         resolved = [r for r in resolved if r.name != STEP_INTERPOLATE_AUX]
     actions = _plan(ds, resolved, force=force)
     _check_aux(actions, aux)
