@@ -117,6 +117,12 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   altitude are not masked (fill altitude first with the `bottom_track`
   step). New parameter `mask_water_column` (default True; False keeps the
   previous behaviour). The input dataset is not modified.
+- `io.xtf`: a ChanInfo `SampleFormat` the XTF specification does not
+  define (outside 0-8; some KleinXlt 3.0 files have 0xFF in the reserved
+  bytes, `SampleFormat` included) no longer raises `ValueError`. It is
+  treated as unset (legacy) and samples are read by `BytesPerSample`, with
+  one WARNING per file. Defined but unsupported formats (IBM float, 4, 6,
+  7) still raise.
 
 ## [0.7.6] — 2026-10-12
 

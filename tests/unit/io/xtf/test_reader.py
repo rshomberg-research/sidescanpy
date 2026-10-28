@@ -240,6 +240,22 @@ class TestReadPings:
         with pytest.raises(ValueError, match="SampleFormat 1"):
             read_xtf_pings(path)
 
+    def test_unknown_sample_format_reads_as_legacy_with_one_warning(self, tmp_path, caplog):
+        # Some KleinXlt 3.0 files have 0xFF in the ChanInfo reserved bytes,
+        # SampleFormat included.
+        infos = dual_frequency_infos(bps=2, fmt=255)
+        samples = [ramp(N_SAMP, np.uint16, offset=c) for c in range(4)]
+        pk = [sonar_packet([(c, samples[c]) for c in range(4)], ping_number=i) for i in range(3)]
+        path = write_xtf(tmp_path / "ff.xtf", file_header(infos), pk)
+        with caplog.at_level(logging.WARNING, logger="sidescanpy"):
+            data = read_xtf_pings(path)
+        for c in range(4):
+            assert data.channels[c].samples.dtype == np.uint16
+            assert data.channels[c].samples[0].tobytes() == samples[c].tobytes()
+        msgs = [r for r in caplog.records if "SampleFormat" in r.getMessage()]
+        assert len(msgs) == 1
+        assert "255" in msgs[0].getMessage() and "BytesPerSample" in msgs[0].getMessage()
+
     def test_mid_file_sample_count_change_zero_pads(self, tmp_path):
         counts = [64, 64, 96, 32, 96]
         pk = [_dual_ping(i, n=n) for i, n in enumerate(counts)]
