@@ -86,7 +86,11 @@ def _undo_tvg(ds: xr.Dataset, db: xr.DataArray, record: dict) -> xr.DataArray:
     gain = xr.DataArray(tvg_gain_for_dataset(ds, params), dims=["sample"])
     uncorrected_db = db - gain.astype(db.dtype)
     linear = db_to_linear(uncorrected_db)
-    return xr.where(uncorrected_db <= FLOOR_DB + _FLOOR_TOLERANCE_DB, 0.0, linear).astype(db.dtype)
+    # Exactly FLOOR_DB: floor-clipped and left without gain by apply_tvg.
+    # Within the tolerance of the floor after undoing the gain: the same
+    # samples from files whose TVG added gain to them.
+    clipped = (db == FLOOR_DB) | (uncorrected_db <= FLOOR_DB + _FLOOR_TOLERANCE_DB)
+    return xr.where(clipped, 0.0, linear).astype(db.dtype)
 
 
 def _undo_range_correction(ds: xr.Dataset, db: xr.DataArray, record: dict) -> xr.DataArray:
@@ -100,7 +104,8 @@ def _undo_range_correction(ds: xr.Dataset, db: xr.DataArray, record: dict) -> xr
             "cannot invert this range_correction record: it does not store its correction curve "
             "(written by an older version that used a bundled default table)"
         )
-    return (db - range_correction_db(ds, range_m, correction_db)).astype(db.dtype)
+    # Floor-clipped samples were left at FLOOR_DB by the forward step.
+    return xr.where(db == FLOOR_DB, db, db - range_correction_db(ds, range_m, correction_db)).astype(db.dtype)
 
 
 _UNDO = {STEP_TVG: _undo_tvg, STEP_RANGE_CORRECTION: _undo_range_correction}

@@ -39,7 +39,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_TVG, append_history, has_step
-from sidescanpy.core.units import linear_to_db
+from sidescanpy.core.units import FLOOR_DB, linear_to_db
 from sidescanpy.processing._per_frequency import per_frequency
 from sidescanpy.processing.sample_axis import DEFAULT_SOUND_VEL_MS, sample_index
 
@@ -314,7 +314,9 @@ def apply_tvg_to_amplitude(
     range_m = idx * meters_per_sample
     range_m = np.clip(range_m, params.min_range_m, None)
     gain_db = tvg_gain_db(range_m, params)
-    return amplitude_db + gain_db
+    corrected = amplitude_db + gain_db
+    # Floor-clipped samples (exact zero amplitude) stay at FLOOR_DB, no gain.
+    return np.where(amplitude_db <= FLOOR_DB, FLOOR_DB, corrected).astype(corrected.dtype, copy=False)
 
 
 @per_frequency
@@ -341,7 +343,12 @@ def apply_tvg(
 
     Input ``backscatter_intensity`` is assumed to be linear amplitude; the
     library does not check this (what units the input data is in is the
-    caller's knowledge). Exact-zero amplitude maps to the -120 dB floor.
+    caller's knowledge). Exact-zero amplitude maps to the -120 dB floor
+    and gets no gain, so it stays exactly at
+    :data:`~sidescanpy.core.units.FLOOR_DB` after TVG and
+    :func:`~sidescanpy.core.units.mask_floor_clip` still recognizes it
+    (:func:`~sidescanpy.processing.inversion.uncorrected_backscatter` maps
+    it back to 0).
 
     The step is recorded in ``processing_history`` as ``"tvg"`` with the
     parameters actually used (defaults resolved), which is what
@@ -410,7 +417,12 @@ def apply_tvg(
     backscatter_db = linear_to_db(ds["backscatter_intensity"])
     # Keep the input dtype (float32): never upcast the big array.
     tvg_db = tvg_gain_for_dataset(ds, params).astype(backscatter_db.dtype)
-    corrected_db = backscatter_db + xr.DataArray(tvg_db, dims=["sample"])
+    # Floor-clipped samples keep the floor value, without gain (see docstring).
+    corrected_db = xr.where(
+        backscatter_db <= FLOOR_DB, backscatter_db.dtype.type(FLOOR_DB),
+        backscatter_db + xr.DataArray(tvg_db, dims=["sample"]),
+        keep_attrs=True,
+    )
 
     ds_out = ds.copy(deep=False)
     ds_out = ds_out.assign(backscatter_intensity=corrected_db)

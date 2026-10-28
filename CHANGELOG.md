@@ -220,6 +220,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   value lies past the bound; new result fields
   `r_fit_min_auto_search_max_m` and `r_fit_min_auto_peak_edge_m` (None
   unless "auto" resolved). The resolved value is unchanged.
+- Floor-clipped samples (exact-zero amplitude, -120 dB) no longer get TVG
+  gain: `processing.apply_tvg` and `apply_tvg_to_amplitude` leave them at
+  exactly `core.units.FLOOR_DB`, and the `range_correction` step leaves
+  them there too, so `core.units.mask_floor_clip` still masks them after
+  correction (they sat near -110 dB before and passed as data). Inversion
+  maps them back to 0 amplitude, for files corrected before and after this
+  change. Every other sample is unchanged.
 
 ## [0.7.6] — 2026-10-12
 
