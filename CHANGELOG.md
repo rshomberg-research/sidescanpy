@@ -212,6 +212,14 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   nonzero offset logs one WARNING per frequency and is recorded in
   `jsf_starting_depth_min` / `jsf_starting_depth_max`. Files with offset 0
   (every file seen so far) are unchanged.
+- `analysis.fit_range_decay(r_fit_min_m="auto")` reports the search it
+  actually ran: the margin is added after the near-field peak search, so
+  the resolved near edge can lie past the search bound (24 m from a search
+  within [0, 20 m]) while the note only named the bound. The note now gives
+  the peak bin's far edge, the bound and the margin, and says when the
+  value lies past the bound; new result fields
+  `r_fit_min_auto_search_max_m` and `r_fit_min_auto_peak_edge_m` (None
+  unless "auto" resolved). The resolved value is unchanged.
 
 ## [0.7.6] — 2026-10-12
 
