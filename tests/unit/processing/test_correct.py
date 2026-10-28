@@ -108,6 +108,26 @@ class TestCorrectSteps:
         assert _steps(out) == [s for s in DEFAULT_STEPS if s != "interpolate_aux"]
         assert "interpolate_aux skipped: no aux given" in caplog.text
 
+    def test_skipped_interpolate_aux_warns_when_no_aux(self, caplog):
+        with caplog.at_level("WARNING", logger="sidescanpy"):
+            correct(_ds())
+        msgs = [r for r in caplog.records if "interpolate_aux skipped" in r.getMessage()]
+        assert len(msgs) == 1
+        assert msgs[0].levelname == "WARNING"
+        assert "aux=" in msgs[0].getMessage()
+
+    def test_skipped_interpolate_aux_no_warning_when_already_applied(self, caplog):
+        survey = _survey()
+        done = correct(survey.get_frequency("hz_1495000").dataset, ["interpolate_aux"], aux=survey)
+        with caplog.at_level("WARNING", logger="sidescanpy"):
+            correct(done, ["interpolate_aux", "tvg"])
+        assert "interpolate_aux skipped" not in caplog.text
+
+    def test_no_skip_warning_when_step_not_requested(self, caplog):
+        with caplog.at_level("WARNING", logger="sidescanpy"):
+            correct(_ds(), ["crop_farrange"])
+        assert "interpolate_aux skipped" not in caplog.text
+
     def test_explicit_interpolate_aux_params_need_aux(self):
         with pytest.raises(ValueError, match="aux"):
             correct(_ds(), ["interpolate_aux", "tvg"], {"interpolate_aux": {"method": "linear"}})
@@ -406,6 +426,14 @@ class TestCorrectFile:
         msgs = [r.getMessage() for r in caplog.records if "invalid sound_vel_ms" in r.getMessage()]
         assert len(msgs) == len(survey.frequencies)  # once per channel, not once per chunk
         assert all("10 of 45 pings" in m for m in msgs)
+
+    def test_chunked_correct_file_does_not_warn_about_skipped_aux(self, tmp_path, caplog):
+        survey = _survey(n_pings=45)
+        path = tmp_path / "a.ss.h5"
+        write_survey(survey, path)
+        with caplog.at_level("WARNING", logger="sidescanpy"):
+            correct_file(path, ["tvg", "geometric"], out_path=tmp_path / "o.ss.h5", chunk_pings=7)
+        assert "interpolate_aux skipped" not in caplog.text  # the file supplies aux
 
     def test_chunked_crop_detects_on_whole_channel(self, tmp_path):
         survey = _survey(n_pings=30)
