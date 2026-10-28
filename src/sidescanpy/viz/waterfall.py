@@ -109,8 +109,10 @@ def plot_waterfall(
     cmap : str or Colormap, default "copper"
         Matplotlib colormap.
     vmin, vmax : float, optional
-        Color scale bounds. If not given, computed from finite-value
-        percentiles (``vmin_pct`` and ``vmax_pct``).
+        Color scale bounds. If not given, computed from percentiles
+        (``vmin_pct`` and ``vmax_pct``) of the finite values that are
+        drawn: samples without an x coordinate (such as the water column
+        in ground-range modes) are left out.
     vmin_pct, vmax_pct : float, default 1.0 and 99.0
         Percentiles for auto color scaling. Ignored if ``vmin`` or
         ``vmax`` is given.
@@ -163,8 +165,11 @@ def plot_waterfall(
 
 
     # ----- color scale -----
+    # Only samples that get drawn (finite x) count, so a dark water column
+    # with no ground range doesn't set vmin.
     if vmin is None or vmax is None:
-        finite = bs[np.isfinite(bs)]
+        drawn = np.stack([np.isfinite(x_port), np.isfinite(x_stbd)], axis=1)
+        finite = bs[np.isfinite(bs) & drawn]
         if finite.size == 0:
             raise ValueError("No finite values in backscatter; cannot auto-scale color")
         if vmin is None:
