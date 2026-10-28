@@ -127,6 +127,7 @@ def detect_shadow_proposals(
     weak_min_highlight: float = 0.5,
     score_height_m: float = 0.3,
     m_per_ping: float | None = None,
+    mask_water_column: bool = True,
 ) -> ShadowProposals:
     """Find objects by their acoustic shadow.
 
@@ -161,8 +162,17 @@ def detect_shadow_proposals(
     highlight. Height rather than shadow length, because the shadow of the
     same object is much shorter near nadir.
 
-    NaN cells (blanked water column, hull echo, masked pings) are never
-    shadow, and a region whose near-range side lies within 0.3 m of NaN
+    The water column is excluded: with ``mask_water_column`` (default),
+    samples at a slant range up to the ping's altitude (``sample *
+    m_per_sample <= altitude_m``, the same flat-seabed geometry as the
+    height estimate) are treated as NaN, because they come before the first
+    bottom return and their low level reads as many weak false shadows.
+    Pings with NaN or non-positive ``altitude_m`` (or a dataset without it)
+    are not masked; fill missing altitude first with the ``bottom_track``
+    correction step. ``ds`` is not modified.
+
+    NaN cells (blanked or masked water column, hull echo, masked pings) are
+    never shadow, and a region whose near-range side lies within 0.3 m of NaN
     cells on most of its pings is dropped: that is the edge of the blanked
     area, not an object.
 
@@ -196,6 +206,9 @@ def detect_shadow_proposals(
         Height that earns the full height part of the score.
     m_per_ping : float, optional
         Along-track spacing; default from the per-ping positions.
+    mask_water_column : bool, default True
+        Treat samples with slant range <= ``altitude_m`` as NaN (see above).
+        False uses every sample as given.
 
     Returns
     -------
@@ -217,13 +230,24 @@ def detect_shadow_proposals(
               "min_pings": min_pings, "max_gap_m": max_gap_m, "highlight_search_m": highlight_search_m,
               "min_height_m": min_height_m, "max_height_m": max_height_m, "max_length_m": max_length_m,
               "weak_shadow_db": weak_shadow_db, "weak_min_shadow_m": weak_min_shadow_m,
-              "weak_min_highlight": weak_min_highlight, "score_height_m": score_height_m}
+              "weak_min_highlight": weak_min_highlight, "score_height_m": score_height_m,
+              "mask_water_column": mask_water_column}
 
     altitude = ds["altitude_m"].values.astype(float) if "altitude_m" in ds else np.full(ds.sizes["ping"], np.nan)
     sample0 = int(ds["sample"].values[0]) if "sample" in ds.coords else 0
+    sample_pos = ds["sample"].values if "sample" in ds.coords else np.arange(ds.sizes["sample"])
+    water = None
+    if mask_water_column:
+        known = np.isfinite(altitude) & (altitude > 0)
+        # Slant range of each sample, as in the height estimate: sample position x m_per_sample.
+        water = known[:, None] & (sample_pos[None, :] * m_s <= np.where(known, altitude, 0.0)[:, None])
+        logger.debug("detect_shadow_proposals: water column masked on %d of %d ping(s) (%d samples)",
+                     int(known.sum()), altitude.size, int(water.sum()))
     rows, rejected, n_regions = [], {"small": 0, "edge": 0, "length": 0, "height": 0, "weak_no_highlight": 0}, 0
     for ch in channels:
-        raw = ds[value_var].isel(channel=ch).values.astype(np.float32)
+        raw = ds[value_var].isel(channel=ch).values.astype(np.float32)  # a copy
+        if water is not None:
+            raw[water] = np.nan
         cells = _cells(raw, k)
         finite = np.isfinite(cells)
         if smooth_cells != (1, 1):
