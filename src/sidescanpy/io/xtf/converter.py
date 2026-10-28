@@ -33,8 +33,9 @@ validated survey shaped like the JSF and SDF ones:
   frequency, logged at DEBUG and counted in the ``xtf_pings_absent``
   attribute.
 - Per-ping fields come from the ping header: ``SensorYcoordinate`` /
-  ``SensorXcoordinate`` → ``latitude`` / ``longitude`` (degrees,
-  ``NavUnits`` 3 only), ``SensorHeading``, ``SensorPitch`` (positive
+  ``SensorXcoordinate`` → ``latitude`` / ``longitude`` (degrees with
+  ``NavUnits`` 3; with ``NavUnits`` 0 they are northing / easting in
+  metres and are converted, see below), ``SensorHeading``, ``SensorPitch`` (positive
   nose up), ``SensorRoll`` (positive roll to starboard, i.e. port up,
   the JSF convention), ``Heave``, ``SensorDepth`` →
   ``heading_deg``, ``pitch_deg``, ``roll_deg``, ``heave_m``, ``depth_m``.
@@ -68,10 +69,20 @@ used and the pings at other rates are reported at WARNING and counted in
 of the rates. For split runs the tolerance is twice the split's
 ``rtol``, so the WARNING does not fire for them.
 
+Projected navigation
+--------------------
+With ``NavUnits`` 0 the file header says ``SensorXcoordinate`` /
+``SensorYcoordinate`` (and ``ShipXcoordinate`` / ``ShipYcoordinate``, not
+used) are easting / northing in metres, but not in which projection. The
+caller names it with ``nav_crs`` (an EPSG code, a string pyproj accepts,
+or a ``pyproj.CRS``); the sensor positions are converted to WGS84
+longitude / latitude with pyproj, a position of exactly (0, 0) becomes
+NaN (no fix), and the CRS is recorded in ``xtf_nav_crs``. Without
+``nav_crs`` such a file raises ``ValueError``: the zone is not guessed.
+``nav_crs`` is ignored for files with ``NavUnits`` 3.
+
 Not converted: ``pulse_length_us`` is not in the XTF ping or channel
 headers and is 0.0 (as for SDF); gain codes are not interpreted.
-``NavUnits`` 0 (projected coordinates) raises ``NotImplementedError``:
-neither the JSF nor the SDF converter has a projected-coordinate path.
 
 Provenance attributes on every frequency dataset (``xtf_`` prefix):
 recording program and version, sonar name and type, channel numbers
@@ -100,6 +111,7 @@ from typing import Iterable
 
 import numpy as np
 import xarray as xr
+from pyproj import CRS, Transformer
 
 from sidescanpy.core.schema import make_empty_dvl_record
 from sidescanpy.core.survey import SideScanSurvey
@@ -126,6 +138,7 @@ def convert(
     *,
     source_files: list[Path] | None = None,
     survey_name: str | None = None,
+    nav_crs: int | str | CRS | None = None,
 ) -> SideScanSurvey:
     """Convert XTF sonar pings into a validated SideScanSurvey.
 
@@ -142,6 +155,12 @@ def convert(
         ``pings``.
     survey_name : str, optional
         Survey name. Defaults to the first source file's stem.
+    nav_crs : int, str or pyproj.CRS, optional
+        Projected CRS of the coordinates in files with ``NavUnits`` 0
+        (easting / northing in metres), e.g. ``32619`` or ``"EPSG:32619"``
+        for UTM zone 19N. Required for such files; ignored for files with
+        ``NavUnits`` 3. Positions are converted to WGS84 longitude /
+        latitude (see the module docstring).
 
     Returns
     -------
@@ -153,16 +172,17 @@ def convert(
     ------
     ValueError
         If there are no sonar pings, no port/starboard channels, more
-        than one channel pair of unknown frequency, or a frequency whose
-        sample rate cannot be derived.
+        than one channel pair of unknown frequency, a frequency whose
+        sample rate cannot be derived, a file with ``NavUnits`` 0 and no
+        ``nav_crs``, or a ``nav_crs`` that is not projected.
     NotImplementedError
-        If a file's ``NavUnits`` is not 3 (latitude/longitude).
+        If a file's ``NavUnits`` is neither 0 nor 3.
     """
     files = [pings] if isinstance(pings, XtfPingData) else list(pings)
     if not files or sum(f.n_pings for f in files) == 0:
         raise ValueError("Cannot convert XTF input with no sonar pings")
-    for f in files:
-        _check_nav_units(f)
+    crs = _nav_crs(nav_crs)
+    projected = [_check_nav_units(f, crs) for f in files]
 
     if source_files is None:
         source_files = [Path(f.path) for f in files]
@@ -173,11 +193,15 @@ def convert(
         len(files), sum(f.n_pings for f in files), survey_name,
     )
 
-    headers = np.concatenate([f.ping_headers for f in files])
+    headers = np.concatenate([
+        _geographic_headers(f, crs) if proj else f.ping_headers for f, proj in zip(files, projected)
+    ])
     times = ping_times(headers)
     order = _time_order(times)
     sound_vel, doubled = _sound_velocity(files)
     provenance = _provenance(files, doubled)
+    if any(projected):
+        provenance["xtf_nav_crs"] = crs.to_string()
     rate_rtol = _rate_rtol(files)
 
     survey = SideScanSurvey(
@@ -209,19 +233,55 @@ def convert(
 # FILE-LEVEL CHECKS
 # ============================================================
 
-def _check_nav_units(data: XtfPingData) -> None:
+def _nav_crs(nav_crs: int | str | CRS | None) -> CRS | None:
+    if nav_crs is None:
+        return None
+    crs = CRS.from_user_input(nav_crs)
+    if not crs.is_projected:
+        raise ValueError(
+            f"nav_crs {crs.to_string()} is not a projected CRS; XTF NavUnits 0 "
+            "coordinates are easting/northing in metres"
+        )
+    return crs
+
+
+def _check_nav_units(data: XtfPingData, crs: CRS | None) -> bool:
+    """True if the file's coordinates are projected (NavUnits 0) and ``crs`` is set."""
     units = int(data.file_header["NavUnits"])
     if units == NAV_UNITS_LATLON:
-        return
+        if crs is not None:
+            logger.debug("%s: NavUnits 3 (degrees); nav_crs ignored", data.path)
+        return False
     if units == NAV_UNITS_METERS:
-        raise NotImplementedError(
-            f"{data.path}: NavUnits 0 (projected coordinates in metres) is not "
-            "supported; only NavUnits 3 (longitude/latitude in degrees) is converted"
-        )
+        if crs is None:
+            raise ValueError(
+                f"{data.path}: NavUnits 0 (projected easting/northing in metres) and the "
+                "file does not say which projection; pass nav_crs (an EPSG code such as "
+                "32619 for UTM zone 19N, or a pyproj CRS) to convert the positions"
+            )
+        return True
     raise NotImplementedError(
         f"{data.path}: NavUnits {units} is not defined by the XTF specification; "
-        "only NavUnits 3 (longitude/latitude in degrees) is converted"
+        "only NavUnits 0 (projected metres, with nav_crs) and 3 (degrees) are converted"
     )
+
+
+def _geographic_headers(data: XtfPingData, crs: CRS) -> np.ndarray:
+    """Copy of the ping headers with sensor easting/northing replaced by WGS84 lon/lat."""
+    h = data.ping_headers.copy()
+    east = h["SensorXcoordinate"].astype(np.float64)
+    north = h["SensorYcoordinate"].astype(np.float64)
+    no_fix = (east == 0) & (north == 0)
+    lon, lat = Transformer.from_crs(crs, CRS.from_epsg(4326), always_xy=True).transform(east, north)
+    lon, lat = np.asarray(lon, dtype=np.float64), np.asarray(lat, dtype=np.float64)
+    lon[no_fix] = np.nan
+    lat[no_fix] = np.nan
+    if no_fix.any():
+        logger.debug("%s: %d ping(s) at easting/northing (0, 0) set to NaN", data.path, int(no_fix.sum()))
+    h["SensorXcoordinate"] = lon
+    h["SensorYcoordinate"] = lat
+    logger.debug("%s: NavUnits 0 positions converted from %s to WGS84", data.path, crs.to_string())
+    return h
 
 
 def _rate_rtol(files: list[XtfPingData]) -> float:

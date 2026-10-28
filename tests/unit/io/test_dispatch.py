@@ -104,7 +104,7 @@ class TestReadAndConvert:
         def fake_read_xtf(p):
             return f"pings-from-{p.name}"
 
-        def fake_xtf_convert(pings, *, source_files, survey_name):
+        def fake_xtf_convert(pings, *, source_files, survey_name, nav_crs=None):
             return {"pings": pings, "source_files": source_files, "survey_name": survey_name}
 
         monkeypatch.setattr("sidescanpy.io.dispatch.read_xtf", fake_read_xtf)

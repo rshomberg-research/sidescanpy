@@ -80,6 +80,7 @@ def _convert_one_file(
     force: bool,
     crop_farrange: bool = True,
     min_segment_pings: int = 50,
+    nav_crs: str | None = None,
 ) -> list[dict]:
     """Convert one file into one result per output ``.ss.h5``.
 
@@ -98,7 +99,7 @@ def _convert_one_file(
         return [result(single, "skipped")]
     try:
         segments = read_and_convert_segments(
-            input_path, survey_name=input_path.stem, min_pings=min_segment_pings
+            input_path, survey_name=input_path.stem, min_pings=min_segment_pings, nav_crs=nav_crs,
         )
     except Exception as e:
         return [result(None, "failed_convert", f"{type(e).__name__}: {e}")]
@@ -146,6 +147,7 @@ def run_survey(args: argparse.Namespace) -> int:
             path, output_dir=output_dir, force=args.force,
             crop_farrange=getattr(args, "crop_farrange", True),
             min_segment_pings=getattr(args, "min_segment_pings", 50),
+            nav_crs=getattr(args, "nav_crs", None),
         )
         results.extend(file_results)
         if len(file_results) > 1 or file_results[0]["n_pings_dropped"]:
@@ -268,6 +270,11 @@ def build_parser() -> tuple[CLIParser, Any]:
         help="XTF files whose range setting changes are split into one .ss.h5 per run of constant "
              "range (<stem>_seg01, <stem>_seg02, ...); runs shorter than this many pings are dropped "
              "(default 50)",
+    )
+    p.add_argument(
+        "--nav-crs", default=None,
+        help="Projected CRS of XTF files whose positions are easting/northing in metres (NavUnits 0), "
+             "e.g. EPSG:32619; such files fail to convert without it. Ignored for other files.",
     )
     p.set_defaults(func=run_survey)
 
