@@ -36,6 +36,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_RANGE_CORRECTION, STEP_TVG, append_history, has_step
+from sidescanpy.core.units import FLOOR_DB
 from sidescanpy.processing.profiles import backscatter_vs_range
 
 logger = logging.getLogger(__name__)
@@ -280,7 +281,9 @@ def apply_empirical_range_correction(
 
         Samples with non-finite ``ground_range_m`` (masked water-column
         samples) receive a **zero** correction rather than propagating NaN
-        into previously-finite backscatter values.
+        into previously-finite backscatter values. Floor-clipped samples
+        (exactly :data:`~sidescanpy.core.units.FLOOR_DB`) are left at the
+        floor, as by :func:`~sidescanpy.processing.radiometric.apply_tvg`.
 
         If no calibrated curve matches this dataset's ``freq_hz_start``,
         logs a warning and returns ``ds`` unchanged (no history record) —
@@ -334,8 +337,10 @@ def apply_empirical_range_correction(
     correction_da = range_correction_db(ds, curve.range_m, curve.correction_db)
 
     ds_out = ds.copy(deep=False)
+    bs = ds["backscatter_intensity"]
+    # Floor-clipped samples (exactly FLOOR_DB after TVG) stay at the floor.
     ds_out = ds_out.assign(
-        backscatter_intensity=(ds["backscatter_intensity"] + correction_da).astype(ds["backscatter_intensity"].dtype),
+        backscatter_intensity=xr.where(bs == FLOOR_DB, bs, bs + correction_da, keep_attrs=True).astype(bs.dtype),
     )
     logger.debug(
         "Empirical range correction applied for freq_hz_start=%s (matched calibrated freq=%s).",

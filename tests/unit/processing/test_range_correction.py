@@ -168,6 +168,20 @@ class TestApplyEmpiricalRangeCorrection:
         table.add_curve(freq_hz, [0.0, 100.0], [3.0, 3.0])  # flat +3dB shift
         return table
 
+    def test_floor_clipped_samples_stay_at_floor(self):
+        from sidescanpy.core.units import FLOOR_DB, mask_floor_clip
+        from sidescanpy.processing import uncorrected_backscatter
+
+        ds = make_minimal_sidescan_dataset(n_pings=5, n_samples=300, freq_hz_start=1_495_000, backscatter_val=1.0)
+        ds = ds.assign(altitude_m=(["ping"], np.full(5, 0.05, dtype=np.float32)))
+        ds["backscatter_intensity"].values[:, :, 100:110] = 0.0
+        ds = compute_geometric_ranges(apply_tvg(ds))
+        out = apply_empirical_range_correction(ds, self._table_for_freq())
+        v = out["backscatter_intensity"].values
+        assert np.all(v[:, :, 100:110] == FLOOR_DB)
+        assert np.isnan(mask_floor_clip(v)[:, :, 100:110]).all()
+        assert np.all(uncorrected_backscatter(out).values[:, :, 100:110] == 0.0)
+
     def test_requires_tvg(self):
         ds = compute_geometric_ranges(make_minimal_sidescan_dataset())  # still "raw"
         with pytest.raises(ValueError, match="TVG-corrected"):
