@@ -86,13 +86,13 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - `test(grids): add fixtures for 3D channel data`
 - `docs(readme): update installation instructions`
 
-### Running Scripts
+### Running Examples
 
-Scripts in `scripts/` are CLI tools and demos.
+Scripts in `examples/` run on synthetic data and are smoke-tested in
+`tests/examples/`.
 
 ```bash
-# Example: minimal mapping demo
-python scripts/minimal_map_demo.py data/sample_jsf_georef.ss.h5
+python examples/quickstart.py
 ```
 
 ## Working with Claude Code
@@ -117,6 +117,92 @@ This project is set up for use with Claude Code.
 - **User docs:** `README.md` (installation, quick start), `docs/` (module refs)
 - **Development docs:** `docs/development.md`, `CLAUDE.md`
 - **Changelog:** `CHANGELOG.md`
+
+## Sharing before release
+
+Until the public release the repository is private and shared by
+invitation. [Pre-release status](prerelease.md) is the page for the
+people invited; this section is the maintainer's side.
+
+**Repository.** It lives in the `rshomberg-research` organization
+(moved from a personal account, where collaborators always get write
+access). Add people as outside collaborators with the **Read** role:
+Settings → Collaborators and teams. If it moves again, update `origin`
+in each clone, `[project.urls]` in `pyproject.toml`, `repo_url` in
+`mkdocs.yml`, and the links in `README.md` and `docs/`
+(`grep -rn "github.com/" README.md docs mkdocs.yml pyproject.toml`).
+
+Before inviting anyone, everything on GitHub (every branch, tag and
+commit message) is visible to them. Check it holds nothing that should
+stay private, with the names to look for in place of the placeholders:
+
+```bash
+git fetch origin --tags --force
+git log --remotes=origin --tags -p -i -G"<name>|<other name>" --format="%h %s"
+git log --remotes=origin --tags -i --grep="<name>" --format="%h %s"
+```
+
+**Docs.** The site is public at
+<https://rshomberg-research.github.io/sidescanpy/> while the code stays
+private. GitHub Pages can't serve a private repository on the
+organization's free plan, so the `docs` workflow pushes each build of
+`main` into the `sidescanpy/` folder of the public repository
+`rshomberg-research/rshomberg-research.github.io`, which Pages serves.
+The workflow also keeps every build of `main` and of `v*` tags as the
+`sidescanpy-docs` artifact (90 days).
+
+One-time setup, as an organization owner:
+
+```bash
+# 1. The public site repository: a redirect to the docs, served by Pages.
+gh repo create rshomberg-research/rshomberg-research.github.io --public \
+   --description "Public site of rshomberg-research (sidescanpy docs)"
+#    push an index.html that redirects to sidescanpy/ and an empty .nojekyll,
+#    then: Settings -> Pages -> Deploy from a branch -> main, / (root)
+
+# 2. A deploy key the docs workflow pushes with.
+ssh-keygen -t ed25519 -N "" -C "sidescanpy docs deploy" -f docs_deploy_key
+gh repo deploy-key add docs_deploy_key.pub --allow-write \
+   -R rshomberg-research/rshomberg-research.github.io --title "sidescanpy docs"
+gh secret set DOCS_DEPLOY_KEY -R rshomberg-research/sidescanpy < docs_deploy_key
+rm docs_deploy_key docs_deploy_key.pub
+
+# 3. Turn publishing on; the next push to main publishes.
+gh variable set PUBLISH_DOCS --body true -R rshomberg-research/sidescanpy
+```
+
+Everything on the site is public, including the API reference built
+from the docstrings (signatures and docstrings, not source), the example
+scripts and the development guide. Until the release the pages carry a
+`noindex` tag (`overrides/main.html`), so the link works for the people
+it is given to but search engines leave it out. At the public release,
+enable Pages on this repository instead (same URL), remove `sidescanpy/`
+from the site repository, and delete `overrides/` and `custom_dir` in
+`mkdocs.yml`.
+
+**Gallery.** `make gallery` re-runs `examples/gallery/` and refreshes
+the images in `docs/assets/gallery/` (the README uses two of them). The
+scripts download real data, so they are not run in CI; CI only checks
+that every dataset name they fetch is registered.
+
+**Test data.** The public fixtures are shared as one zip, through a
+link-shared folder that each invited person
+is added to. Rebuild it whenever a fixture or `SOURCES.md` changes:
+
+```bash
+cd /path/to/fixtures/..       # the directory holding the fixtures folder
+mkdir sidescanpy-public-fixtures
+cp fixtures/*.jsf fixtures/*.xtf /path/to/sidescanpy/tests/data/public/SOURCES.md \
+   sidescanpy-public-fixtures/
+zip -qrX sidescanpy-public-fixtures-$(date +%F).zip sidescanpy-public-fixtures
+rm -r sidescanpy-public-fixtures
+```
+
+Then run `test_public_fixtures.py` against the unzipped copy before
+uploading it. Only openly licensed data goes in the zip (see
+`SOURCES.md`). Don't mint a Zenodo DOI for the data before the public
+release: a published Zenodo record can't be withdrawn, and even a
+restricted one shows its metadata publicly.
 
 ## Release Process
 

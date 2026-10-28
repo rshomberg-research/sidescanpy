@@ -47,9 +47,37 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   so a transmit burst is not taken for the seabed. Not a processing level.
 - `detect_first_bottom_return` takes `min_run_fraction` (default 1.0, no
   change): a run tolerates gaps when below 1.
+- `.ss.h5` files record the version that wrote them in the root attribute
+  `sidescanpy_version`.
+- Pre-release documentation: a "Pre-release status" page (what may change
+  before 1.0, installing from the private repository, the docs download,
+  the test data bundle), warnings in the README, the docs home page and
+  the HDF5 page that the `.ss.h5` format is not frozen, and a maintainer
+  section on sharing before release in the development guide.
+- `sidescanpy.datasets`: `fetch(name)` returns a local copy of an openly
+  licensed public recording (UK JNCC under the Open Government Licence,
+  USGS public domain), reading just that file out of the agency's
+  multi-gigabyte zip archive with HTTP range requests, checking its
+  SHA-256 and caching it in `SIDESCANPY_DATA_DIR` or
+  `~/.cache/sidescanpy`. Also `list_datasets()`, `citation(name)` and
+  `data_dir()`. Standard library only.
+- Worked examples on public data (`examples/gallery/`, `make gallery`):
+  reading a file, correcting a line, gridding to a map and GeoTIFF, and
+  the same code on EdgeTech JSF, Benthos XTF and Klein XTF. Each has a
+  docs page with its code and figure; the README shows two of the
+  figures.
+- The documentation site is public at
+  <https://rshomberg-research.github.io/sidescanpy/> (published from
+  `main` into the organization's public site repository; the code stays
+  private), with an Examples section, a quickstart on public data, search,
+  and light and dark themes. Until the release its pages ask search engines
+  not to index them. The `docs` workflow also keeps every build of
+  `main` and `v*` tags as a `sidescanpy-docs` artifact.
 
 ### Changed
 
+- README install instructions install from the repository (sidescanpy is
+  not on PyPI yet).
 - The geometric step logs a WARNING when pings have NaN altitude (NaN ground
   range) or altitude <= 0 (ground range equals slant range).
 

@@ -1,4 +1,4 @@
-.PHONY: test test-v test-cov lint docs docs-serve
+.PHONY: test test-v test-cov lint docs docs-serve gallery
 
 # ROS2 injects PYTHONPATH system-wide; clear it so uv run sees only the venv.
 # Long-term fix: conda env for ROS, uv for this project.
@@ -25,3 +25,8 @@ docs:
 
 docs-serve:
 	$(DOCS_ENV) uv run --all-extras mkdocs serve
+
+# Re-run examples/gallery/ on the public recordings and refresh the
+# images in docs/assets/gallery/ (downloads ~140 MB the first time).
+gallery:
+	uv run --all-extras python docs/build_gallery.py

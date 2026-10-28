@@ -5,6 +5,14 @@ data (EdgeTech JSF, Klein SDF, XTF → `.ss.h5`).
 **Owner:** Russ Shomberg <rshomberg@uri.edu>
 **Version:** 0.7.6. History: `CHANGELOG.md` and `git log`.
 **Python:** 3.12+. **License:** MIT (private repo for now, publication planned).
+**Pre-release:** code shared by invitation (read access) until the
+public release; the docs site is public
+(https://rshomberg-research.github.io/sidescanpy/, pushed into the org's
+public site repo, so everything in `docs/` and every docstring is
+public). The `.ss.h5` format, API and CLI may change in any 0.x release,
+and the README and docs say so. Keep those warnings until 1.0. Sharing
+setup (site publishing, fixture zip, no Zenodo yet):
+`docs/development.md` → "Sharing before release".
 
 This file is the working guide, not a log. Session narratives belong in
 commit messages; design notes are kept outside this repo, in the parent
@@ -92,8 +100,10 @@ src/sidescanpy/
 │                orientation, augment, target_window, ml/ (coco, yolo, dataset)
 ├── viz/         waterfall, gridded, track, targets, analysis, tvg plots
 ├── cli/         sidescan-convert / -correct / -export / -analyze
+├── datasets.py  fetch() public example recordings (stdlib only, any layer may use)
 └── log.py       configure_logging, log_timing
-examples/        runnable scripts, smoke-tested in tests/examples
+examples/        runnable scripts, smoke-tested in tests/examples;
+                 gallery/ runs on fetched public data (`make gallery`, not in CI)
 docs/            mkdocs site (guide + API reference)
 ```
 
@@ -117,6 +127,7 @@ uv sync --all-extras          # environment (the dev extra alone skips viz tests
 make test                     # unit tests; clears PYTHONPATH (see below)
 make lint                     # ruff
 make docs                     # mkdocs build --strict
+make gallery                  # re-run examples/gallery, refresh docs/assets/gallery
 PYTHONPATH="" uv run pytest tests/unit/grids/test_resample.py -v
 PYTHONPATH="" uv run pytest tests/examples -q   # example smoke runs
 ```
