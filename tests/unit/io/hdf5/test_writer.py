@@ -14,6 +14,7 @@ import json
 import h5netcdf
 import pytest
 
+from sidescanpy._version import __version__
 from sidescanpy.core.schema import (
     HDF5_GROUP_ATTITUDE,
     HDF5_GROUP_AUX_STREAMS,
@@ -170,6 +171,12 @@ class TestWriteRootAttrs:
         decoded = json.loads(raw)
         # source_files is list[Path] on the survey; serialized as list of strings
         assert decoded == [str(p) for p in sample_full_survey.source_files]
+
+    def test_writer_version_in_root_attrs(self, sample_full_survey, tmp_path):
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert f.attrs["sidescanpy_version"] == __version__
 
 
 # ============================================================
