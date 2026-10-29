@@ -36,6 +36,12 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.core.schema import (
+    OPTIONAL_PER_PING_VARS,
+    POSITION_SHIP,
+    POSITION_SOURCE_ATTR,
+    POSITION_SOURCE_REASON_ATTR,
+    POSITION_TOWFISH,
+    combine_position_sources,
     make_empty_attitude_record,
     make_empty_dvl_record,
     make_empty_navigation_record,
@@ -235,6 +241,11 @@ def _build_frequency_channel(
     # heave is not in SonarDataMessage; stays NaN. Real values come later
     # from interpolation against the attitude aux stream.
     heave      = np.full(n_pings, np.nan, dtype=np.float32)
+    layback    = np.full(n_pings, np.nan, dtype=np.float32)
+    cable_out  = np.full(n_pings, np.nan, dtype=np.float32)
+    interpolated = np.zeros(n_pings, dtype=bool)
+    tow_x      = np.full(n_pings, np.nan, dtype=np.float64)
+    tow_y      = np.full(n_pings, np.nan, dtype=np.float64)
 
     for i, (port, stbd) in enumerate(paired_pings):
         anchor: SonarDataMessage = port if port is not None else stbd
@@ -267,6 +278,11 @@ def _build_frequency_channel(
         pitch[i]     = _coerce(scalar_src.pitch_deg)
         altitude[i]  = _coerce(scalar_src.altitude_m)
         sound_vel[i] = _coerce(scalar_src.sound_speed_ms)
+        layback[i]   = _coerce(scalar_src.layback_m)
+        cable_out[i] = _coerce(scalar_src.cable_out_m)
+        interpolated[i] = scalar_src.position_interpolated
+        tow_x[i]     = scalar_src.gps_offset_x
+        tow_y[i]     = scalar_src.gps_offset_y
 
     # File-level attrs taken from the first message (already verified constant)
     first = sonar_msgs[0]
@@ -285,6 +301,8 @@ def _build_frequency_channel(
         "sample_rate_hz":     1.0 / first.sample_interval,
         "processing_history": json.dumps([]),
     }
+    attrs.update(_position_source_attrs(interpolated))
+    attrs.update(_tow_point_attrs(tow_x, tow_y))
     if off_max > 0:
         logger.warning(
             "JSF %d-%d Hz: nonzero starting depth (window offset) of %d-%d samples; "
@@ -308,6 +326,8 @@ def _build_frequency_channel(
             "altitude_m":   (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll
             "sound_vel_ms": (["ping"], sound_vel),
             "fathometer_reading_m": (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll)
+            "layback_m":    (["ping"], layback, {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["layback_m"]}),
+            "cable_out_m":  (["ping"], cable_out, {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["cable_out_m"]}),
         },
         coords={
             # Absolute sample index: 0 = the transmit, so the first recorded
@@ -325,6 +345,39 @@ def _build_frequency_channel(
 # ============================================================
 # FREQUENCY CHANNEL HELPERS
 # ============================================================
+
+def _position_source_attrs(interpolated: np.ndarray) -> dict[str, str]:
+    """Position source from validity bit 13 ("position interpolated").
+
+    Set: the position is the sonar's, laid back by Discover. Clear: it is
+    the last navigation fix Discover received, with no layback applied.
+    """
+    per_ping = np.where(interpolated, POSITION_TOWFISH, POSITION_SHIP)
+    source = combine_position_sources(per_ping)
+    n_set = int(interpolated.sum())
+    reason = (
+        f"JSF validity bit 13 (position interpolated) set on {n_set} of {interpolated.size} pings: "
+        "set = sonar position with layback applied, clear = last nav fix, layback not applied"
+    )
+    return {POSITION_SOURCE_ATTR: source, POSITION_SOURCE_REASON_ATTR: reason}
+
+
+def _tow_point_attrs(tow_x: np.ndarray, tow_y: np.ndarray) -> dict[str, float]:
+    """Antenna-to-tow-point offset (bytes 76-79, starboard and aft positive).
+
+    Recorded only when non-zero; a value that changes within the file logs
+    a WARNING and its median is kept.
+    """
+    out: dict[str, float] = {}
+    for name, values in (("tow_point_starboard_m", tow_x), ("tow_point_aft_m", tow_y)):
+        finite = values[np.isfinite(values)]
+        if not finite.size or not np.any(finite != 0):
+            continue
+        if np.ptp(finite) > 0:
+            logger.warning("JSF antenna-to-tow-point offset %s varies within the file; keeping its median", name)
+        out[name] = float(np.median(finite))
+    return out
+
 
 _FILE_LEVEL_FIELDS = (
     "transmit_freq_start",

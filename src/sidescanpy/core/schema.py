@@ -54,6 +54,54 @@ REQUIRED_VARS   : set = {
     "sound_vel_ms",
     "fathometer_reading_m",
 }
+# Optional per-ping variables, written by a reader when the format provides
+# them (see each reader's docs for the source fields):
+#
+#   layback_m
+#       Horizontal distance from the tow point back to the towfish, metres,
+#       as recorded by the acquisition software. 0 can mean "not set".
+#   cable_out_m
+#       Tow cable paid out, metres.
+#   latitude_before_layback, longitude_before_layback
+#       Positions as recorded, kept by the ``layback`` step when it moves
+#       ``latitude`` / ``longitude`` so the step can be undone.
+OPTIONAL_PER_PING_VARS : dict[str, str] = {
+    "layback_m": "horizontal distance from tow point to towfish (m), as recorded",
+    "cable_out_m": "tow cable out (m), as recorded",
+    "latitude_before_layback": "latitude as recorded, before the layback step",
+    "longitude_before_layback": "longitude as recorded, before the layback step",
+}
+
+# What the per-ping latitude/longitude are the position of. Dataset attribute
+# POSITION_SOURCE_ATTR holds one of POSITION_SOURCES, and
+# POSITION_SOURCE_REASON_ATTR a short sentence on how the reader decided.
+# A missing attribute means unknown.
+#   ship     the navigation antenna (or the last nav fix) -- layback not applied
+#   towfish  the sonar, already laid back by the acquisition software
+#   mixed    differs from ping to ping
+#   unknown  the file does not say
+POSITION_SOURCE_ATTR        : str = "position_source"
+POSITION_SOURCE_REASON_ATTR : str = "position_source_reason"
+POSITION_SHIP    : str = "ship"
+POSITION_TOWFISH : str = "towfish"
+POSITION_MIXED   : str = "mixed"
+POSITION_UNKNOWN : str = "unknown"
+POSITION_SOURCES : tuple = (POSITION_SHIP, POSITION_TOWFISH, POSITION_MIXED, POSITION_UNKNOWN)
+
+
+def combine_position_sources(per_ping: np.ndarray | list[str]) -> str:
+    """One :data:`POSITION_SOURCES` value for a set of per-ping sources.
+
+    All pings the same → that value; empty → unknown; otherwise mixed.
+    """
+    values = set(np.asarray(per_ping, dtype=object).tolist())
+    if not values:
+        return POSITION_UNKNOWN
+    if len(values) == 1:
+        return str(values.pop())
+    return POSITION_MIXED
+
+
 REQUIRED_ATTRS  : set = {
     "freq_hz_start",
     "freq_hz_end",

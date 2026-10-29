@@ -627,3 +627,35 @@ class TestFilterUnknownPages:
 
         with pytest.raises(ValueError, match="no sonar"):
             convert([unknown], source_files=[Path("test.sdf")])
+
+
+@pytest.mark.unit
+class TestLaybackAndPositionSource:
+    @staticmethod
+    def _ds(pages):
+        survey = convert(pages)
+        return survey.get_frequency(survey.frequencies[0]).dataset
+
+    def test_cable_out_carried_per_ping(self):
+        ds = self._ds([make_sdf_sonar_page(ping_number=i, cable_out_m=42.5) for i in range(3)])
+        np.testing.assert_allclose(ds["cable_out_m"].values, 42.5)
+        assert "layback_m" not in ds
+
+    def test_position_source_towfish_when_fish_position_set(self):
+        pages = [
+            make_sdf_sonar_page(ping_number=i, fish_latitude_deg=44.12, fish_longitude_deg=-68.88, layback_method=0)
+            for i in range(3)
+        ]
+        ds = self._ds(pages)
+        assert ds.attrs["position_source"] == "towfish"
+        assert ds.attrs["sdf_layback_method"] == 0
+
+    def test_position_source_ship_when_fish_position_zero(self):
+        ds = self._ds([make_sdf_sonar_page(ping_number=i) for i in range(3)])
+        assert ds.attrs["position_source"] == "ship"
+
+    def test_position_source_mixed_when_fish_position_partial(self):
+        pages = [make_sdf_sonar_page(ping_number=0, fish_latitude_deg=44.12, fish_longitude_deg=-68.88)]
+        pages += [make_sdf_sonar_page(ping_number=i, timestamp=1746136205.5 + i) for i in (1, 2)]
+        ds = self._ds(pages)
+        assert ds.attrs["position_source"] == "mixed"

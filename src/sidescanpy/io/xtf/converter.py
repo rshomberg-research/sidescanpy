@@ -81,6 +81,18 @@ NaN (no fix), and the CRS is recorded in ``xtf_nav_crs``. Without
 ``nav_crs`` such a file raises ``ValueError``: the zone is not guessed.
 ``nav_crs`` is ignored for files with ``NavUnits`` 3.
 
+Layback and position source
+---------------------------
+``Layback`` → ``layback_m`` and ``CableOut`` (+ ``CableOutHundredths``)
+→ ``cable_out_m``, per ping, as written (some writers leave ``Layback``
+NaN or 0). ``position_source`` says whether ``latitude`` / ``longitude``
+already are the towfish: ``towfish`` when ``SensorX/Ycoordinate`` sit
+more than ``SHIP_SENSOR_TOL_M`` from ``ShipX/Ycoordinate`` on at least
+``SHIP_SENSOR_FRACTION`` of the pings (the writer offset them), otherwise
+``unknown``. Ship equal to Sensor does not mean the ship: EdgeTech
+Discover writes the laid-back towfish position in both fields. The
+``layback`` correction step does not move ``unknown`` positions.
+
 Not converted: ``pulse_length_us`` is not in the XTF ping or channel
 headers and is 0.0 (as for SDF); gain codes are not interpreted.
 
@@ -113,7 +125,15 @@ import numpy as np
 import xarray as xr
 from pyproj import CRS, Transformer
 
-from sidescanpy.core.schema import make_empty_dvl_record
+from sidescanpy.core.schema import (
+    OPTIONAL_PER_PING_VARS,
+    POSITION_SOURCE_ATTR,
+    POSITION_SOURCE_REASON_ATTR,
+    POSITION_TOWFISH,
+    POSITION_UNKNOWN,
+    combine_position_sources,
+    make_empty_dvl_record,
+)
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.io.xtf.reader import XtfChannel, XtfPingData, ping_times
 from sidescanpy.io.xtf.structs import HEADER_TYPE_SONAR, NAV_UNITS_LATLON, NAV_UNITS_METERS
@@ -127,6 +147,11 @@ SAMPLE_RATE_RTOL = 1e-3
 _FREQ_HZ_THRESHOLD = 10_000.0
 _SV_CROSSCHECK_RTOL = 0.05
 _NAV_SOURCE = "extracted_from_xtf_ping_headers"
+#: Sensor further than this (m) from Ship counts as a separate (towfish) position.
+SHIP_SENSOR_TOL_M = 0.5
+#: Fraction of pings with a Ship position that must be apart for "towfish".
+SHIP_SENSOR_FRACTION = 0.95
+_METRES_PER_DEGREE = 111_320.0
 
 
 # ============================================================
@@ -193,13 +218,14 @@ def convert(
         len(files), sum(f.n_pings for f in files), survey_name,
     )
 
+    position_attrs = _position_source_attrs(files, projected)
     headers = np.concatenate([
         _geographic_headers(f, crs) if proj else f.ping_headers for f, proj in zip(files, projected)
     ])
     times = ping_times(headers)
     order = _time_order(times)
     sound_vel, doubled = _sound_velocity(files)
-    provenance = _provenance(files, doubled)
+    provenance = {**_provenance(files, doubled), **position_attrs}
     if any(projected):
         provenance["xtf_nav_crs"] = crs.to_string()
     rate_rtol = _rate_rtol(files)
@@ -282,6 +308,51 @@ def _geographic_headers(data: XtfPingData, crs: CRS) -> np.ndarray:
     h["SensorYcoordinate"] = lat
     logger.debug("%s: NavUnits 0 positions converted from %s to WGS84", data.path, crs.to_string())
     return h
+
+
+def _ship_sensor_offset_m(data: XtfPingData, projected: bool) -> np.ndarray:
+    """Per-ping distance (m) from Ship to Sensor coordinates; NaN where Ship is (0, 0)."""
+    h = data.ping_headers
+    sx, sy = h["SensorXcoordinate"].astype(np.float64), h["SensorYcoordinate"].astype(np.float64)
+    shx, shy = h["ShipXcoordinate"].astype(np.float64), h["ShipYcoordinate"].astype(np.float64)
+    if projected:
+        dist = np.hypot(sx - shx, sy - shy)
+    else:
+        dist = _METRES_PER_DEGREE * np.hypot(sy - shy, (sx - shx) * np.cos(np.deg2rad(sy)))
+    dist[(shx == 0) & (shy == 0)] = np.nan
+    return dist
+
+
+def _position_source_attrs(files: list[XtfPingData], projected: list[bool]) -> dict[str, str]:
+    """What ``SensorX/Ycoordinate`` are the position of, from Ship vs Sensor.
+
+    Per file: Sensor away from Ship (more than ``SHIP_SENSOR_TOL_M``) on at
+    least ``SHIP_SENSOR_FRACTION`` of the pings with a Ship position means
+    the writer already placed the towfish (towfish). Ship equal to Sensor
+    or absent says nothing (unknown): some writers (EdgeTech Discover)
+    put the laid-back towfish position in both fields.
+    """
+    sources, notes = [], []
+    for data, proj in zip(files, projected):
+        dist = _ship_sensor_offset_m(data, proj)
+        with_ship = np.isfinite(dist)
+        n_ship = int(with_ship.sum())
+        n_apart = int((dist[with_ship] > SHIP_SENSOR_TOL_M).sum())
+        if n_ship and n_apart >= SHIP_SENSOR_FRACTION * n_ship:
+            sources.append(POSITION_TOWFISH)
+        else:
+            sources.append(POSITION_UNKNOWN)
+        median = float(np.median(dist[with_ship])) if n_ship else float("nan")
+        notes.append(
+            f"{Path(data.path).name}: Ship position in {n_ship} of {data.n_pings} pings, "
+            f"Sensor more than {SHIP_SENSOR_TOL_M:g} m from it in {n_apart} (median {median:.2f} m)"
+        )
+    source = combine_position_sources(sources)
+    reason = (
+        "XTF Sensor vs Ship coordinates (apart: Sensor is the towfish; equal or no Ship: unknown). "
+        + "; ".join(notes)
+    )
+    return {POSITION_SOURCE_ATTR: source, POSITION_SOURCE_REASON_ATTR: reason}
 
 
 def _rate_rtol(files: list[XtfPingData]) -> float:
@@ -556,6 +627,14 @@ def _build_frequency_channel(
         "altitude_m": (["ping"], altitude),
         "sound_vel_ms": (["ping"], sound_vel[keep]),
         "fathometer_reading_m": (["ping"], altitude.copy()),
+        "layback_m": (
+            ["ping"], h["Layback"].astype(np.float32),
+            {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["layback_m"]},
+        ),
+        "cable_out_m": (
+            ["ping"], (h["CableOut"] + h["CableOutHundredths"] / 100.0).astype(np.float32),
+            {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["cable_out_m"]},
+        ),
     }
     return xr.Dataset(data_vars, coords, attrs)
 

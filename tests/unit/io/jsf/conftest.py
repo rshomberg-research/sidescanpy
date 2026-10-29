@@ -1094,6 +1094,11 @@ def _make_sonar_msg(
     altitude_m: float = 5.0,
     sound_speed_ms: float = 1500.0,
     starting_depth_samples: int = 0,
+    layback_m: float = 0.0,
+    cable_out_m: float = 0.0,
+    position_interpolated: bool = False,
+    gps_offset_x: float = 0.0,
+    gps_offset_y: float = 0.0,
 ) -> Mock:
     """Mock(spec=SonarDataMessage). Sonar messages use timestamp_ns (int)."""
     if timestamp_ns is None:
@@ -1125,6 +1130,11 @@ def _make_sonar_msg(
     m.pitch_deg    = pitch_deg
     m.altitude_m   = altitude_m
     m.sound_speed_ms = sound_speed_ms
+    m.layback_m    = layback_m
+    m.cable_out_m  = cable_out_m
+    m.position_interpolated = position_interpolated
+    m.gps_offset_x = gps_offset_x
+    m.gps_offset_y = gps_offset_y
 
     return m
 
