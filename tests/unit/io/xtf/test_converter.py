@@ -485,20 +485,23 @@ class TestLaybackAndPositionSource:
         ds = self._ds(tmp_path, _geo_pings(Layback=300.0))
         assert ds.attrs["position_source"] == "unknown"
 
-    def test_position_source_ship_for_isis_with_layback_and_no_ship(self, tmp_path):
+    def test_isis_with_layback_and_no_ship_hinted_not_assumed(self, tmp_path):
         path = _dual(tmp_path, _geo_pings(Layback=300.0), RecordingProgramName=b"Isis")
         ds = convert(read_xtf(path)).get_frequency("hz_100000").dataset
-        assert ds.attrs["position_source"] == "ship"
+        assert ds.attrs["position_source"] == "unknown"
         assert "(Isis)" in ds.attrs["position_source_reason"]
+        assert "probably the ship's position" in ds.attrs["position_source_reason"]
 
-    @pytest.mark.parametrize("pings", [
-        lambda: _geo_pings(),                                    # no layback recorded
-        lambda: _geo_pings(ship_offset_deg=0.0, Layback=300.0),  # Ship written, equal to Sensor
+    @pytest.mark.parametrize("pings, program", [
+        (lambda: _geo_pings(), b"Isis"),                                    # no layback recorded
+        (lambda: _geo_pings(ship_offset_deg=0.0, Layback=300.0), b"Isis"),  # Ship written
+        (lambda: _geo_pings(Layback=300.0), b"synth"),                     # other writer
     ])
-    def test_position_source_isis_unknown_otherwise(self, tmp_path, pings):
-        path = _dual(tmp_path, pings(), RecordingProgramName=b"Isis")
+    def test_no_ship_hint_otherwise(self, tmp_path, pings, program):
+        path = _dual(tmp_path, pings(), RecordingProgramName=program)
         ds = convert(read_xtf(path)).get_frequency("hz_100000").dataset
         assert ds.attrs["position_source"] == "unknown"
+        assert "probably the ship" not in ds.attrs["position_source_reason"]
 
     def test_position_source_unknown_when_only_some_pings_apart(self, tmp_path):
         pk = _geo_pings(n=10, ship_offset_deg=0.0)
