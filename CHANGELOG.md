@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-29
+
 ### Removed
 
 - The 0.6.0 deprecation shims (breaking):
