@@ -42,6 +42,8 @@ Public entry points
   (the ``"bottom_track"`` step), :func:`detect_nadir_noise_extent`,
   :func:`blank_nadir_noise`, :func:`mask_nadir_gap`,
   :func:`uniform_exclusion_boundary` and helpers.
+- :func:`apply_layback` — move ship positions astern to the towfish (the
+  ``"layback"`` step, :mod:`~sidescanpy.processing.layback`).
 - :func:`reject_range_outliers` — per-range-bin MAD outlier rejection.
 - :func:`mask_bright_ping_rows` — mask whole outlier-bright ping rows.
 - Segments (:mod:`~sidescanpy.processing.segments`): :func:`find_segments`,
@@ -70,6 +72,7 @@ from sidescanpy.core.history import (
     STEP_GEOMETRIC,
     STEP_GEOREF,
     STEP_INTERPOLATE_AUX,
+    STEP_LAYBACK,
     STEP_RANGE_CORRECTION,
     STEP_TVG,
     processing_level,
@@ -124,6 +127,7 @@ from sidescanpy.processing.inversion import (
     uncorrected_backscatter,
     with_uncorrected_var,
 )
+from sidescanpy.processing.layback import apply_layback
 from sidescanpy.processing.navigation import (
     along_track_distance_m,
     fill_nav_stalls,
@@ -183,6 +187,7 @@ __all__ = [
     "DEFAULT_FIELD_SOURCES",
     "compute_geometric_ranges",
     "compute_georeferencing",
+    "apply_layback",
     "detect_far_range_cutoff_sample",
     "crop_far_range_noise",
     "ping_windows",
@@ -204,6 +209,7 @@ __all__ = [
     "STEP_CROP_FARRANGE",
     "STEP_INTERPOLATE_AUX",
     "STEP_BOTTOM_TRACK",
+    "STEP_LAYBACK",
     "STEP_TVG",
     "STEP_GEOMETRIC",
     "STEP_RANGE_CORRECTION",
