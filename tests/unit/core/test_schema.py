@@ -137,13 +137,13 @@ class TestValidationValid:
 class TestValidationMissingDims:
     """Test that missing dimensions raise ValueError."""
 
-    @pytest.mark.parametrize("dim_name", REQUIRED_DIMS)
+    @pytest.mark.parametrize("dim_name", sorted(REQUIRED_DIMS))
     def test_missing_dimension_raises(self, sample_dataset, dim_name):
         bad_ds = sample_dataset.drop_dims(dim_name)
         with pytest.raises(ValueError, match="Missing dimensions"):
             bad_ds.sidescan.validate()
 
-    @pytest.mark.parametrize("dim_name", REQUIRED_DIMS)
+    @pytest.mark.parametrize("dim_name", sorted(REQUIRED_DIMS))
     def test_missing_dimension_invalid(self, sample_dataset, dim_name):
         bad_ds = sample_dataset.drop_dims(dim_name)
         assert bad_ds.sidescan.is_valid() is False
@@ -167,13 +167,13 @@ class TestValidationChannelSize:
 class TestValidationMissingCoords:
     """Test that missing coordinates raise ValueError."""
 
-    @pytest.mark.parametrize("coord_name", REQUIRED_COORDS)
+    @pytest.mark.parametrize("coord_name", sorted(REQUIRED_COORDS))
     def test_missing_coordinate_raises(self, sample_dataset, coord_name):
         bad_ds = sample_dataset.drop_vars(coord_name)
         with pytest.raises(ValueError, match="Missing coordinates"):
             bad_ds.sidescan.validate()
 
-    @pytest.mark.parametrize("coord_name", REQUIRED_COORDS)
+    @pytest.mark.parametrize("coord_name", sorted(REQUIRED_COORDS))
     def test_missing_coordinate_invalid(self, sample_dataset, coord_name):
         bad_ds = sample_dataset.drop_vars(coord_name)
         assert bad_ds.sidescan.is_valid() is False
@@ -183,13 +183,13 @@ class TestValidationMissingCoords:
 class TestValidationMissingVars:
     """Test that missing variables raise ValueError."""
 
-    @pytest.mark.parametrize("var_name", REQUIRED_VARS)
+    @pytest.mark.parametrize("var_name", sorted(REQUIRED_VARS))
     def test_missing_variable_raises(self, sample_dataset, var_name):
         bad_ds = sample_dataset.drop_vars(var_name)
         with pytest.raises(ValueError, match="Missing (variables|dimensions)"):
             bad_ds.sidescan.validate()
 
-    @pytest.mark.parametrize("var_name", REQUIRED_VARS)
+    @pytest.mark.parametrize("var_name", sorted(REQUIRED_VARS))
     def test_missing_variable_invalid(self, sample_dataset, var_name):
         bad_ds = sample_dataset.drop_vars(var_name)
         assert bad_ds.sidescan.is_valid() is False
@@ -199,14 +199,14 @@ class TestValidationMissingVars:
 class TestValidationMissingAttrs:
     """Test that missing attributes raise ValueError."""
 
-    @pytest.mark.parametrize("attr_name", REQUIRED_ATTRS)
+    @pytest.mark.parametrize("attr_name", sorted(REQUIRED_ATTRS))
     def test_missing_attribute_raises(self, sample_dataset, attr_name):
         bad_ds = sample_dataset.copy()
         del bad_ds.attrs[attr_name]
         with pytest.raises(ValueError, match="Missing attributes"):
             bad_ds.sidescan.validate()
 
-    @pytest.mark.parametrize("attr_name", REQUIRED_ATTRS)
+    @pytest.mark.parametrize("attr_name", sorted(REQUIRED_ATTRS))
     def test_missing_attribute_invalid(self, sample_dataset, attr_name):
         bad_ds = sample_dataset.copy()
         del bad_ds.attrs[attr_name]
@@ -520,19 +520,19 @@ class TestNavigationEmpty:
 
 @pytest.mark.unit
 class TestNavigationMissing:
-    @pytest.mark.parametrize("var", REQUIRED_NAV_VARS)
+    @pytest.mark.parametrize("var", sorted(REQUIRED_NAV_VARS))
     def test_missing_var_raises(self, sample_navigation, var):
         bad = sample_navigation.drop_vars(var)
         with pytest.raises(ValueError, match="Navigation"):
             bad.navigation_record.validate()
 
-    @pytest.mark.parametrize("coord", REQUIRED_NAV_COORDS)
+    @pytest.mark.parametrize("coord", sorted(REQUIRED_NAV_COORDS))
     def test_missing_coord_raises(self, sample_navigation, coord):
         bad = sample_navigation.drop_vars(coord)
         with pytest.raises(ValueError, match="Navigation"):
             bad.navigation_record.validate()
 
-    @pytest.mark.parametrize("attr", REQUIRED_NAV_ATTRS)
+    @pytest.mark.parametrize("attr", sorted(REQUIRED_NAV_ATTRS))
     def test_missing_attr_raises(self, sample_navigation, attr):
         bad = sample_navigation.copy()
         del bad.attrs[attr]
@@ -568,19 +568,19 @@ class TestAttitudeValid:
 
 @pytest.mark.unit
 class TestAttitudeMissing:
-    @pytest.mark.parametrize("var", REQUIRED_ATT_VARS)
+    @pytest.mark.parametrize("var", sorted(REQUIRED_ATT_VARS))
     def test_missing_var_raises(self, sample_attitude, var):
         bad = sample_attitude.drop_vars(var)
         with pytest.raises(ValueError, match="Attitude"):
             bad.attitude_record.validate()
 
-    @pytest.mark.parametrize("coord", REQUIRED_ATT_COORDS)
+    @pytest.mark.parametrize("coord", sorted(REQUIRED_ATT_COORDS))
     def test_missing_coord_raises(self, sample_attitude, coord):
         bad = sample_attitude.drop_vars(coord)
         with pytest.raises(ValueError, match="Attitude"):
             bad.attitude_record.validate()
 
-    @pytest.mark.parametrize("attr", REQUIRED_ATT_ATTRS)
+    @pytest.mark.parametrize("attr", sorted(REQUIRED_ATT_ATTRS))
     def test_missing_attr_raises(self, sample_attitude, attr):
         bad = sample_attitude.copy()
         del bad.attrs[attr]
@@ -616,19 +616,19 @@ class TestDVLValid:
 
 @pytest.mark.unit
 class TestDVLMissing:
-    @pytest.mark.parametrize("var", REQUIRED_DVL_VARS)
+    @pytest.mark.parametrize("var", sorted(REQUIRED_DVL_VARS))
     def test_missing_var_raises(self, sample_dvl, var):
         bad = sample_dvl.drop_vars(var)
         with pytest.raises(ValueError, match="DVL"):
             bad.dvl_record.validate()
 
-    @pytest.mark.parametrize("coord", REQUIRED_DVL_COORDS)
+    @pytest.mark.parametrize("coord", sorted(REQUIRED_DVL_COORDS))
     def test_missing_coord_raises(self, sample_dvl, coord):
         bad = sample_dvl.drop_vars(coord)
         with pytest.raises(ValueError, match="DVL"):
             bad.dvl_record.validate()
 
-    @pytest.mark.parametrize("attr", REQUIRED_DVL_ATTRS)
+    @pytest.mark.parametrize("attr", sorted(REQUIRED_DVL_ATTRS))
     def test_missing_attr_raises(self, sample_dvl, attr):
         bad = sample_dvl.copy()
         del bad.attrs[attr]
@@ -664,13 +664,13 @@ class TestSensorValid:
 
 @pytest.mark.unit
 class TestSensorMissing:
-    @pytest.mark.parametrize("coord", REQUIRED_GEN_COORDS)
+    @pytest.mark.parametrize("coord", sorted(REQUIRED_GEN_COORDS))
     def test_missing_coord_raises(self, sample_sensor, coord):
         bad = sample_sensor.drop_vars(coord)
         with pytest.raises(ValueError, match="Sensor"):
             bad.sensor_record.validate()
 
-    @pytest.mark.parametrize("attr", REQUIRED_GEN_ATTRS)
+    @pytest.mark.parametrize("attr", sorted(REQUIRED_GEN_ATTRS))
     def test_missing_attr_raises(self, sample_sensor, attr):
         bad = sample_sensor.copy()
         del bad.attrs[attr]
