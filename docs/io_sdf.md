@@ -71,6 +71,11 @@ offset from 1900 (126 for 2026); years below 200 are read that way.
   can change too. `read_and_convert_segments` splits the file into runs
   of constant sample interval (runs under 50 pings are dropped);
   `read_and_convert` keeps it whole and uses the first page's rate.
+- **Pitch sign.** The specification available here does not state the
+  sign of the pitch field. The reader passes it through, and the
+  geometric step treats positive as nose up, as for JSF and XTF. If a
+  recording logs nose down as positive, its along-track offsets have the
+  wrong sign.
 - **Aux fields with variable units.** Header fields for auxiliary
   pitch, roll, depth and altitude sensors carry whatever units the
   sensor reports and are exposed without conversion.

@@ -145,8 +145,8 @@ References:
 ### Geometric ranges
 
 `compute_geometric_ranges` adds per-sample `slant_range_m`,
-`ground_range_m`, `across_track_m` (port negative, starboard positive,
-pitch-corrected) and related variables:
+`ground_range_m`, `across_track_m` (port negative, starboard positive),
+`along_track_m` (forward positive) and related variables:
 
 - Slant range: `sample * sound_vel / (2 * sample_rate)`, from the absolute
   `sample` coordinate, so a dataset trimmed of leading samples keeps its
@@ -155,6 +155,19 @@ pitch-corrected) and related variables:
   `slant > altitude`, NaN in the water column. A ping with NaN altitude
   gets NaN ground range (and no georeferenced position); altitude 0 gives
   ground range equal to slant range. Both are logged at WARNING.
+- Pitch (flat bottom, fan beam perpendicular to the body x-axis, pitch θ
+  positive nose up, altitude h): the fan plane tilts forward by θ and
+  meets the seafloor on a line `h·tan θ` ahead of nadir. Every seafloor
+  sample of the ping gets `along_track_m = h·tan θ` and
+  `across_track_m = ±sqrt(slant² − (h / cos θ)²)`; samples with
+  `slant <= h / cos θ` are water column and NaN in both. The horizontal
+  distance from nadir, `sqrt(along² + across²)`, equals `ground_range_m`,
+  which does not depend on pitch. NaN pitch is taken as 0 and logged at
+  WARNING. Pitch shifts a ping forward or aft by a constant; it does not
+  rotate the swath. Files made by 0.7.6 and earlier used
+  `along = ground·sin θ` (an offset growing with range, about 8.7 m at
+  100 m and 5°); their `geometric` history record lacks `pitch_model`.
+  Roll and yaw are not modelled.
 
 ### Altitude from the bottom track
 

@@ -199,20 +199,6 @@ class TestAcrossTrackMath:
         valid = ~np.isnan(ground)
         np.testing.assert_allclose(np.abs(across[valid]), ground[valid], atol=1e-5)
 
-    def test_across_track_pitch_correction(self):
-        """across_track_m = ±ground_range_m × cos(pitch_rad)."""
-        pitch_deg_val = 15.0
-        ds = _make_test_dataset(
-            n_samples=50, altitude_m=10.0, pitch_deg=pitch_deg_val,
-        )
-        result = compute_geometric_ranges(ds)
-        ground = result["ground_range_m"].values
-        across = result["across_track_m"].values
-        valid = ~np.isnan(ground)
-        cos_factor = np.cos(np.deg2rad(pitch_deg_val))
-        expected_magnitude = ground[valid] * cos_factor
-        np.testing.assert_allclose(np.abs(across[valid]), expected_magnitude, atol=1e-5)
-
     def test_across_track_port_negative(self):
         ds = _make_test_dataset(n_samples=50, altitude_m=10.0)
         result = compute_geometric_ranges(ds)
@@ -269,20 +255,6 @@ class TestAlongTrackMath:
         valid = ~np.isnan(along)
         assert np.all(along[valid] <= 0)
         assert np.any(along[valid] < 0)
-
-    def test_along_track_pitch_correction_formula(self):
-        """along_track_m = +ground_range_m × sin(pitch_rad)."""
-        pitch_deg_val = 5.0
-        ds = _make_test_dataset(
-            n_samples=50, altitude_m=10.0, pitch_deg=pitch_deg_val,
-        )
-        result = compute_geometric_ranges(ds)
-        ground = result["ground_range_m"].values
-        along = result["along_track_m"].values
-        valid = ~np.isnan(ground)
-        sin_factor = np.sin(np.deg2rad(pitch_deg_val))
-        expected = ground[valid] * sin_factor
-        np.testing.assert_allclose(along[valid], expected, atol=1e-5)
 
     def test_along_track_nan_propagation(self):
         ds = _make_test_dataset(n_samples=50, altitude_m=10.0)
@@ -409,6 +381,124 @@ class TestPitchSymmetry:
 
 
 # ============================================================
+# PITCHED FAN BEAM (flat bottom)
+# ============================================================
+
+@pytest.mark.unit
+class TestPitchedFanBeam:
+    """A fan beam perpendicular to the body x-axis, pitched by θ at
+    altitude h, meets a flat seafloor along a line h·tan θ ahead of nadir."""
+
+    ALT = 10.0
+
+    def _run(self, pitch_deg, n_samples=200):
+        ds = _make_test_dataset(
+            n_samples=n_samples, altitude_m=self.ALT, pitch_deg=pitch_deg,
+        )
+        return compute_geometric_ranges(ds)
+
+    @pytest.mark.parametrize("pitch", [-8.0, -2.5, 3.0, 5.0, 12.0])
+    def test_along_track_constant_within_ping_when_pitched(self, pitch):
+        result = self._run(pitch)
+        along = result["along_track_m"].values.astype(np.float64)
+        expected = self.ALT * np.tan(np.deg2rad(pitch))
+        valid = np.isfinite(along)
+        assert valid.sum() > 100
+        np.testing.assert_allclose(along[valid], expected, rtol=1e-6, atol=1e-6)
+        # Same value at every range of the ping
+        for p in range(along.shape[0]):
+            row = along[p][np.isfinite(along[p])]
+            assert np.ptp(row) < 1e-6
+
+    @pytest.mark.parametrize("pitch", [-8.0, 5.0, 12.0])
+    def test_horizontal_distance_is_ground_range_when_pitched(self, pitch):
+        result = self._run(pitch)
+        slant = result["slant_range_m"].values.astype(np.float64)
+        across = result["across_track_m"].values.astype(np.float64)
+        along = result["along_track_m"].values.astype(np.float64)
+        ground = result["ground_range_m"].values.astype(np.float64)
+        valid = np.isfinite(across)
+        np.testing.assert_allclose(
+            across[valid] ** 2 + along[valid] ** 2,
+            slant[valid] ** 2 - self.ALT ** 2,
+            rtol=1e-5, atol=1e-3,
+        )
+        np.testing.assert_allclose(
+            np.hypot(across[valid], along[valid]), ground[valid],
+            rtol=1e-5, atol=1e-3,
+        )
+
+    @pytest.mark.parametrize("pitch", [-8.0, 5.0, 12.0])
+    def test_valid_mask_uses_fan_limit_when_pitched(self, pitch):
+        result = self._run(pitch)
+        slant = result["slant_range_m"].values.astype(np.float64)
+        across = result["across_track_m"].values
+        along = result["along_track_m"].values
+        limit = self.ALT / np.cos(np.deg2rad(pitch))
+        expected_valid = slant > limit
+        np.testing.assert_array_equal(np.isfinite(across), expected_valid)
+        np.testing.assert_array_equal(np.isfinite(along), expected_valid)
+        # Samples between h and h/cos θ have a ground range but no position
+        between = (slant > self.ALT) & (slant <= limit)
+        assert np.all(np.isfinite(result["ground_range_m"].values[between]))
+        assert np.all(np.isnan(across[between]))
+
+    @pytest.mark.parametrize("pitch", [3.0, 7.5])
+    def test_positive_and_negative_pitch_symmetric(self, pitch):
+        up = self._run(pitch)
+        down = self._run(-pitch)
+        np.testing.assert_array_equal(
+            up["across_track_m"].values, down["across_track_m"].values,
+        )
+        np.testing.assert_allclose(
+            up["along_track_m"].values, -down["along_track_m"].values,
+        )
+
+    def test_zero_pitch_matches_pre_fix_output_exactly(self):
+        """At zero pitch the old model (across = ±ground, along = 0) holds."""
+        result = self._run(0.0)
+        ground = result["ground_range_m"].values
+        sign = np.array([-1.0, 1.0])[None, :, None]
+        old_across = (sign * ground.astype(np.float64)).astype(np.float32)
+        old_along = np.where(np.isnan(ground), np.nan, 0.0).astype(np.float32)
+        np.testing.assert_array_equal(result["across_track_m"].values, old_across)
+        np.testing.assert_array_equal(result["along_track_m"].values, old_along)
+
+    def test_point_offset_same_at_every_range(self):
+        """Old model grew the along offset with range (8.7 m at 100 m and 5°)."""
+        ds = _make_test_dataset(
+            n_samples=200, sample_rate_hz=750.0, altitude_m=self.ALT, pitch_deg=5.0,
+        )
+        result = compute_geometric_ranges(ds)
+        slant = result["slant_range_m"].values[0, 1]
+        along = result["along_track_m"].values[0, 1]
+        near = int(np.argmax(np.isfinite(along)))
+        far = int(np.argmin(np.abs(slant - 100.0)))
+        assert along[near] == pytest.approx(along[far], abs=1e-6)
+        assert along[far] == pytest.approx(self.ALT * np.tan(np.deg2rad(5.0)), rel=1e-6)
+
+    def test_nan_pitch_treated_as_zero_with_warning(self, caplog):
+        pitches = np.array([np.nan, 5.0, 0.0, np.nan, -5.0], dtype=np.float32)
+        ds = _make_test_dataset(n_samples=50, altitude_m=self.ALT, pitch_deg=pitches)
+        zero = compute_geometric_ranges(
+            _make_test_dataset(n_samples=50, altitude_m=self.ALT, pitch_deg=0.0)
+        )
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.geometric"):
+            result = compute_geometric_ranges(ds)
+        assert "2 of 5 pings have NaN pitch_deg" in caplog.text
+        for p in (0, 3):
+            np.testing.assert_array_equal(
+                result["across_track_m"].values[p], zero["across_track_m"].values[p],
+            )
+            np.testing.assert_array_equal(
+                result["along_track_m"].values[p], zero["along_track_m"].values[p],
+            )
+        rec = json.loads(result.attrs["processing_history"])[-1]
+        assert rec["params"]["pitch_model"] == "fan_beam_flat_bottom"
+        assert rec["params"]["n_nan_pitch_as_zero"] == 2
+
+
+# ============================================================
 # PER-PING ATTITUDE VARIATION
 # ============================================================
 
@@ -419,25 +509,22 @@ class TestPerPingAttitude:
         ds = _make_test_dataset(n_pings=5, n_samples=100, altitude_m=10.0,
                                 pitch_deg=pitches)
         result = compute_geometric_ranges(ds)
-        ground = result["ground_range_m"].values
         across = result["across_track_m"].values
         along = result["along_track_m"].values
 
+        slant = result["slant_range_m"].values.astype(np.float64)
         for p in range(5):
-            valid = ~np.isnan(ground[p, 0, :])
             cos_p = np.cos(np.deg2rad(pitches[p]))
-            sin_p = np.sin(np.deg2rad(pitches[p]))
+            valid_fan = slant[p, 0, :] > 10.0 / cos_p
 
-            # Port across_track: -ground × cos(pitch)
+            # Pitched fan beam: across = ±sqrt(R² − (h/cos θ)²), along = h·tan θ
             np.testing.assert_allclose(
-                across[p, 0, valid],
-                -ground[p, 0, valid] * cos_p,
+                across[p, 0, valid_fan],
+                -np.sqrt(slant[p, 0, valid_fan] ** 2 - (10.0 / cos_p) ** 2),
                 atol=1e-4,
             )
-            # Along track: +ground × sin(pitch)
             np.testing.assert_allclose(
-                along[p, 0, valid],
-                ground[p, 0, valid] * sin_p,
+                along[p, 0, valid_fan], 10.0 * np.tan(np.deg2rad(pitches[p])),
                 atol=1e-4,
             )
 
