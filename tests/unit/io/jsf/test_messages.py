@@ -522,3 +522,41 @@ class TestMessageRoundTrip:
         # Verify key fields are intact
         assert message.pitch_deg == pytest.approx(-6.70166015625, rel=1e-6)
         assert message.roll_deg == pytest.approx(1.2469482421875, rel=1e-6)
+
+
+@pytest.mark.unit
+class TestSonarDataLayback:
+    """Bytes 228-231 layback (float m), 236-239 cable out (decimetres), bit 13."""
+
+    @staticmethod
+    def _patched(body: bytes, *, layback: float, cable_dm: int, flags_or: int) -> bytes:
+        import struct
+
+        b = bytearray(body)
+        struct.pack_into("<f", b, 228, layback)
+        struct.pack_into("<H", b, 236, cable_dm)
+        flags = struct.unpack_from("<H", b, 30)[0] | flags_or
+        struct.pack_into("<H", b, 30, flags)
+        return bytes(b)
+
+    def test_cable_out_decimetres_when_parsed(
+        self, sample_sonar_data_message_header_bytes, sample_sonar_data_message_bytes,
+    ):
+        header = JSFMessageHeader.from_bytes(sample_sonar_data_message_header_bytes)
+        body = self._patched(sample_sonar_data_message_bytes, layback=125.9, cable_dm=1300, flags_or=1 << 13)
+        message = SonarDataMessage.from_bytes(header, body)
+        assert message.cable_out_m == pytest.approx(130.0)
+        assert message.layback_m == pytest.approx(125.9, rel=1e-6)
+        assert message.position_interpolated is True
+
+    def test_position_interpolated_false_when_bit_13_clear(
+        self, sample_sonar_data_message_header_bytes, sample_sonar_data_message_bytes,
+    ):
+        import struct
+
+        header = JSFMessageHeader.from_bytes(sample_sonar_data_message_header_bytes)
+        b = bytearray(sample_sonar_data_message_bytes)
+        flags = struct.unpack_from("<H", b, 30)[0] & ~(1 << 13)
+        struct.pack_into("<H", b, 30, flags)
+        message = SonarDataMessage.from_bytes(header, bytes(b))
+        assert message.position_interpolated is False
