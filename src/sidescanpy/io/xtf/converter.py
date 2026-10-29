@@ -88,14 +88,17 @@ Layback and position source
 NaN or 0). ``position_source`` says whether ``latitude`` / ``longitude``
 already are the towfish: ``towfish`` when ``SensorX/Ycoordinate`` sit
 more than ``SHIP_SENSOR_TOL_M`` from ``ShipX/Ycoordinate`` on at least
-``SHIP_SENSOR_FRACTION`` of the pings (the writer offset them); ``ship``
-when the recording program is Triton Isis (``SHIP_POSITION_PROGRAMS``),
-no Ship coordinates are written and ``Layback`` is positive on at least
-``SHIP_SENSOR_FRACTION`` of the pings (Isis records the layback but
-writes the navigation position, leaving the offset to processing);
-otherwise ``unknown``. Ship equal to Sensor does not mean the ship:
-EdgeTech Discover writes the laid-back towfish position in both fields.
-The ``layback`` correction step moves only ``ship`` positions.
+``SHIP_SENSOR_FRACTION`` of the pings (the writer offset them), otherwise
+``unknown``. The reader never infers ``ship``: neither the format nor the
+writers document it, so the call is left to a user who knows the system
+as deployed (pass ``position_source="ship"`` to the ``layback`` step).
+Ship equal to Sensor does not mean the ship: EdgeTech Discover writes the
+laid-back towfish position in both fields. Files that look like ship
+positions (written by a ``SHIP_POSITION_PROGRAMS`` program, no Ship
+coordinates, ``Layback`` > 0 on at least ``SHIP_SENSOR_FRACTION`` of the
+pings: Triton Isis records the layback without applying it) say so in
+``position_source_reason`` but stay ``unknown``. The ``layback``
+correction step moves only ``ship`` positions.
 
 Not converted: ``pulse_length_us`` is not in the XTF ping or channel
 headers and is 0.0 (as for SDF); gain codes are not interpreted.
@@ -131,7 +134,6 @@ from pyproj import CRS, Transformer
 
 from sidescanpy.core.schema import (
     OPTIONAL_PER_PING_VARS,
-    POSITION_SHIP,
     POSITION_SOURCE_ATTR,
     POSITION_SOURCE_REASON_ATTR,
     POSITION_TOWFISH,
@@ -157,7 +159,8 @@ SHIP_SENSOR_TOL_M = 0.5
 #: Fraction of pings with a Ship position that must be apart for "towfish".
 SHIP_SENSOR_FRACTION = 0.95
 #: Recording programs (lower-case name prefixes) whose Sensor coordinates,
-#: with no Ship coordinates and a recorded layback, are the ship's position.
+#: with no Ship coordinates and a recorded layback, look like the ship's
+#: position. Reported in position_source_reason only, never assumed.
 SHIP_POSITION_PROGRAMS = ("isis",)
 _METRES_PER_DEGREE = 111_320.0
 
@@ -336,11 +339,12 @@ def _position_source_attrs(files: list[XtfPingData], projected: list[bool]) -> d
 
     Per file: Sensor away from Ship (more than ``SHIP_SENSOR_TOL_M``) on at
     least ``SHIP_SENSOR_FRACTION`` of the pings with a Ship position means
-    the writer already placed the towfish (towfish). No Ship position,
-    a ``SHIP_POSITION_PROGRAMS`` writer and ``Layback`` > 0 on at least
-    ``SHIP_SENSOR_FRACTION`` of the pings means the ship. Otherwise Ship
-    equal to Sensor or absent says nothing (unknown): some writers
-    (EdgeTech Discover) put the laid-back towfish position in both fields.
+    the writer already placed the towfish (towfish). Otherwise Ship equal
+    to Sensor or absent says nothing (unknown): some writers (EdgeTech
+    Discover) put the laid-back towfish position in both fields. No Ship
+    position, a ``SHIP_POSITION_PROGRAMS`` writer and ``Layback`` > 0 on
+    at least ``SHIP_SENSOR_FRACTION`` of the pings is noted in the reason
+    as probably the ship, but stays unknown.
     """
     sources, notes = [], []
     for data, proj in zip(files, projected):
@@ -353,24 +357,33 @@ def _position_source_attrs(files: list[XtfPingData], projected: list[bool]) -> d
             n_layback = int((data.ping_headers["Layback"] > 0).sum())
         if n_ship and n_apart >= SHIP_SENSOR_FRACTION * n_ship:
             sources.append(POSITION_TOWFISH)
-        elif (
-            not n_ship
-            and program.lower().startswith(SHIP_POSITION_PROGRAMS)
-            and n_layback >= SHIP_SENSOR_FRACTION * data.n_pings
-        ):
-            sources.append(POSITION_SHIP)
         else:
             sources.append(POSITION_UNKNOWN)
         median = float(np.median(dist[with_ship])) if n_ship else float("nan")
-        notes.append(
+        note = (
             f"{Path(data.path).name} ({program or 'no program name'}): Ship position in {n_ship} of "
             f"{data.n_pings} pings, Sensor more than {SHIP_SENSOR_TOL_M:g} m from it in {n_apart} "
             f"(median {median:.2f} m), Layback > 0 in {n_layback}"
         )
+        # TODO(position-source): Isis writing the ship's position is inferred, not
+        # documented. One public Isis line registers against its Isis mosaic only
+        # after the recorded layback is applied (338 m); others are unchecked, and
+        # an Isis line with no layback recorded was already at the towfish. Find
+        # what Isis writes to SensorX/Y (manual, or more lines with products)
+        # before reporting anything stronger than a hint.
+        if (
+            not n_ship
+            and program.lower().startswith(SHIP_POSITION_PROGRAMS)
+            and n_layback >= SHIP_SENSOR_FRACTION * data.n_pings
+        ):
+            note += (
+                "; probably the ship's position (writer records the layback without applying it), "
+                "not assumed: pass position_source='ship' to the layback step if the system as deployed confirms it"
+            )
+        notes.append(note)
     source = combine_position_sources(sources)
     reason = (
-        "XTF Sensor vs Ship coordinates (apart: Sensor is the towfish; no Ship, an Isis writer "
-        "and a recorded layback: the ship; otherwise unknown). "
+        "XTF Sensor vs Ship coordinates (apart: Sensor is the towfish; otherwise unknown). "
         + "; ".join(notes)
     )
     return {POSITION_SOURCE_ATTR: source, POSITION_SOURCE_REASON_ATTR: reason}

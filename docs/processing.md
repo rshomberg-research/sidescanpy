@@ -153,8 +153,19 @@ per-ping `latitude` / `longitude` are the position of in the
 | Format | `towfish` | `ship` | otherwise |
 |---|---|---|---|
 | JSF | validity bit 13 (position interpolated) set: Discover laid it back | bit 13 clear: the last nav fix, no layback | `mixed` |
-| XTF | `SensorX/Y` more than 0.5 m from `ShipX/Y` on 95 % of pings | written by Isis, no `ShipX/Y`, `Layback` > 0 on 95 % of pings | `unknown` (including Ship equal to Sensor: Discover writes the laid-back position in both fields) |
+| XTF | `SensorX/Y` more than 0.5 m from `ShipX/Y` on 95 % of pings | never inferred (see below) | `unknown` (including Ship equal to Sensor: Discover writes the laid-back position in both fields) |
 | SDF | computed fish position (fields 39/40) set and used | fell back to the ship position (fields 37/38) | `mixed` |
+
+Readers report `ship` or `towfish` only where the format documents it
+(a validity bit, a field the writer fills only when it laid the fish
+back). Anything else is `unknown`, and the layback step leaves it alone:
+whether recorded positions are the ship's is a fact about the system as
+deployed, so it is the user's call. Where a file looks like ship
+positions, the reason says so without acting on it. For example, Triton
+Isis XTF with no `ShipX/Y` and a recorded `Layback`: on a public Isis
+line the georeferenced image lines up with the Isis mosaic only after
+the recorded layback is applied, but nothing documents it. Pass
+`position_source="ship"` when you know.
 
 They also carry per-ping `layback_m` (JSF bytes 228-231, XTF `Layback`)
 and `cable_out_m` (JSF, in decimetres in the file; XTF `CableOut`; SDF
