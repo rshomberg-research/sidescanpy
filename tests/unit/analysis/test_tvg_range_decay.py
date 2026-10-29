@@ -15,6 +15,26 @@ from sidescanpy.processing.radiometric import TVGParams, absorption_for_frequenc
 from tests.unit.synthetic import make_raw_dataset as _make_raw_dataset
 
 
+def _assert_close_nested(a, b, path="result"):
+    """Equal structure and non-float values; floats within 1e-9 relative (NaN == NaN).
+
+    The two fits run the same arithmetic but summation order can differ in
+    the last bit, so exact float equality is not a stable expectation.
+    """
+    if isinstance(a, dict):
+        assert isinstance(b, dict) and a.keys() == b.keys(), path
+        for k in a:
+            _assert_close_nested(a[k], b[k], f"{path}[{k!r}]")
+    elif isinstance(a, (list, tuple)):
+        assert isinstance(b, (list, tuple)) and len(a) == len(b), path
+        for i, (x, y) in enumerate(zip(a, b)):
+            _assert_close_nested(x, y, f"{path}[{i}]")
+    elif isinstance(a, float) or isinstance(b, float):
+        assert a == pytest.approx(b, rel=1e-9, abs=1e-12, nan_ok=True), path
+    else:
+        assert a == b, path
+
+
 class TestFitRangeDecay:
     def test_full_physics_curve_classified_as_none(self):
         """Raw data that follows the uncompensated physics model
@@ -232,7 +252,7 @@ class TestFitRangeDecay:
         default = fit_range_decay(ds, bin_width_m=2.0)
         explicit_zero = fit_range_decay(ds, bin_width_m=2.0, exclude_first_n_bins=0)
 
-        assert default.to_dict() == explicit_zero.to_dict()
+        _assert_close_nested(default.to_dict(), explicit_zero.to_dict())
         assert default.tvg_status == explicit_zero.tvg_status
         assert default.exclude_first_n_bins == 0
         assert default.n_bins_excluded_after_bottom == 0
