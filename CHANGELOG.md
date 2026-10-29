@@ -108,7 +108,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - Readers carry per-ping `layback_m` (JSF, XTF) and `cable_out_m` (JSF,
   XTF, SDF), and set the `position_source` / `position_source_reason`
   attributes: JSF from validity bit 13, XTF from Sensor vs Ship
-  coordinates, SDF from which position the reader used. JSF also records
+  coordinates (and `ship` for Isis files with no Ship coordinates and a
+  recorded layback: on a public Isis line, along-track registration
+  against the Isis product peaks at the recorded 336 m layback without
+  the step and at 2 m with it), SDF from which position the reader used. JSF also records
   `tow_point_aft_m` / `tow_point_starboard_m` when set, SDF
   `sdf_layback_method`.
 - `io.jsf.write_subset` and `io.xtf.write_subset`: copy a run of pings

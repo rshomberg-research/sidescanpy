@@ -203,7 +203,7 @@ per-ping `latitude` / `longitude` are the position of in the
 | Format | `towfish` | `ship` | otherwise |
 |---|---|---|---|
 | JSF | validity bit 13 (position interpolated) set: Discover laid it back | bit 13 clear: the last nav fix, no layback | `mixed` |
-| XTF | `SensorX/Y` more than 0.5 m from `ShipX/Y` on 95 % of pings | never (Discover writes the laid-back position in both fields) | `unknown` |
+| XTF | `SensorX/Y` more than 0.5 m from `ShipX/Y` on 95 % of pings | written by Isis, no `ShipX/Y`, `Layback` > 0 on 95 % of pings | `unknown` (including Ship equal to Sensor: Discover writes the laid-back position in both fields) |
 | SDF | computed fish position (fields 39/40) set and used | fell back to the ship position (fields 37/38) | `mixed` |
 
 They also carry per-ping `layback_m` (JSF bytes 228-231, XTF `Layback`)
