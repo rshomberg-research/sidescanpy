@@ -93,6 +93,22 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+- `processing.geometric.compute_geometric_ranges`: pitch geometry
+  (breaking for pitched data). The old model rotated the ground vector by
+  pitch (`along = ground·sin θ`, `across = ±ground·cos θ`), so the
+  along-track offset grew with range, about 8.7 m at 100 m range and 5°.
+  A pitched fan beam on a flat bottom is now modelled: every seafloor
+  sample of a ping gets `along_track_m = altitude·tan θ` and
+  `across_track_m = ±sqrt(slant² − (altitude / cos θ)²)`, valid where
+  `slant > altitude / cos θ`. `ground_range_m` is unchanged, and so is
+  every output at zero pitch. NaN pitch is now taken as 0 with a WARNING
+  instead of giving NaN geometry. The `geometric` history record gains
+  `pitch_model` and `n_nan_pitch_as_zero`; records without `pitch_model`
+  were made by the old model. **Georeferenced outputs (per-sample
+  latitude/longitude, georeferenced grids, GeoTIFFs, geo windows) from
+  earlier versions of pings with non-zero pitch are wrong and should be
+  regenerated**; swath-frame products use only `across_track_m` and change
+  by a fraction of a percent.
 - `io.xtf`: samples are now multiplied by `2**-Weight` from each channel
   header. EdgeTech Discover writes raw block-floating-point samples with
   the JSF weighting factor in `Weight`, which can change from ping to ping,
