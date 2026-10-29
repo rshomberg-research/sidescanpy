@@ -485,6 +485,21 @@ class TestLaybackAndPositionSource:
         ds = self._ds(tmp_path, _geo_pings(Layback=300.0))
         assert ds.attrs["position_source"] == "unknown"
 
+    def test_position_source_ship_for_isis_with_layback_and_no_ship(self, tmp_path):
+        path = _dual(tmp_path, _geo_pings(Layback=300.0), RecordingProgramName=b"Isis")
+        ds = convert(read_xtf(path)).get_frequency("hz_100000").dataset
+        assert ds.attrs["position_source"] == "ship"
+        assert "(Isis)" in ds.attrs["position_source_reason"]
+
+    @pytest.mark.parametrize("pings", [
+        lambda: _geo_pings(),                                    # no layback recorded
+        lambda: _geo_pings(ship_offset_deg=0.0, Layback=300.0),  # Ship written, equal to Sensor
+    ])
+    def test_position_source_isis_unknown_otherwise(self, tmp_path, pings):
+        path = _dual(tmp_path, pings(), RecordingProgramName=b"Isis")
+        ds = convert(read_xtf(path)).get_frequency("hz_100000").dataset
+        assert ds.attrs["position_source"] == "unknown"
+
     def test_position_source_unknown_when_only_some_pings_apart(self, tmp_path):
         pk = _geo_pings(n=10, ship_offset_deg=0.0)
         pk[3] = _ping(3, ShipXcoordinate=-73.7 + 3e-5 + 5e-5, ShipYcoordinate=-46.3 - 3e-5)
