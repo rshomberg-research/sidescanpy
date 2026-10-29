@@ -18,7 +18,7 @@ fig.savefig("waterfall.png")
 |---|---|---|
 | `sample` (default) | sample index, port mirrored | nothing |
 | `ground_range` | across-bottom distance, signed by side | `geometric` |
-| `across_track` | signed across-track distance, pitch-corrected | `geometric` |
+| `across_track` | signed across-track distance (pitched fan beam) | `geometric` |
 
 | y_axis | Meaning |
 |---|---|

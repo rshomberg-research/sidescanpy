@@ -8,12 +8,13 @@ etc.) handle resampling onto regular grids on demand.
 
 Outputs (all shape (ping, channel, sample)):
     slant_range_m       attitude-invariant time-of-flight range
-    ground_range_m      sqrt(slant^2 - altitude^2), unsigned (flat-bottom,
-                        no pitch correction)
-    across_track_m      signed Y component, pitch-corrected
+    ground_range_m      sqrt(slant^2 - altitude^2), unsigned: horizontal
+                        distance from the nadir point (flat bottom; the
+                        same with or without pitch)
+    across_track_m      signed Y component in the platform frame
                         (negative = port, positive = starboard)
-    along_track_m       signed X component, pitch-induced offset
-                        (positive = forward of nadir, negative = aft)
+    along_track_m       signed X component in the platform frame, the
+                        pitch-induced offset (positive = forward of nadir)
     vertical_offset_m   Z component from platform = altitude_m for flat
                         bottom (broadcast). Future: extends to bathymetry.
     depth_per_sample_m  absolute water depth at sample location
@@ -21,11 +22,25 @@ Outputs (all shape (ping, channel, sample)):
 
 Sign conventions:
     - across_track_m: port channel negative, starboard positive
-    - along_track_m: positive forward of nadir (pitch-up reflects forward)
+    - along_track_m: positive forward of nadir (nose up puts samples forward)
 
-Pitch-correction math:
-    across_track_m = ±ground_range_m * cos(pitch_rad)
-    along_track_m  = +ground_range_m * sin(pitch_rad)
+Pitch model (flat bottom, fan beam perpendicular to the body x-axis):
+    With the vehicle pitched by theta (positive nose up) at vertical
+    altitude h, the fan plane tilts forward by theta. A sample at slant
+    range R hits the seafloor at
+
+        along_track_m  = h * tan(theta)                (every sample of the ping)
+        across_track_m = ±sqrt(R^2 - (h / cos(theta))^2)
+
+    and is on the seafloor only when R > h / cos(theta); nearer samples
+    are water column and NaN in across_track_m and along_track_m. The
+    horizontal distance from nadir, sqrt(along^2 + across^2), equals
+    sqrt(R^2 - h^2) = ground_range_m. Pitch therefore shifts the whole
+    ping forward or aft by a constant and shortens the across-track
+    distance slightly; it does not rotate the swath.
+
+    NaN pitch_deg is treated as 0 (no pitch correction) with a warning,
+    as NaN sound velocity falls back to 1500 m/s.
 
 Roll's effect on altitude is intentionally not modeled here. Future
 work: when DVL altitude is available it's pre-corrected; when only
@@ -54,6 +69,11 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_SOUND_VEL_MS = DEFAULT_SOUND_VEL_MS
+
+#: Recorded in the ``geometric`` history record. Records without this key
+#: (sidescanpy 0.7.6 and earlier) were made by a model that rotated the
+#: ground vector by pitch (along = ground·sin θ), wrong for pitched pings.
+PITCH_MODEL = "fan_beam_flat_bottom"
 
 
 def compute_geometric_ranges(
@@ -87,9 +107,13 @@ def compute_geometric_ranges(
       - NaN altitude_m for a ping → all per-sample geometry NaN for that
         ping (slant_range_m is unaffected; it's altitude-independent).
       - NaN sound_vel_ms for a ping → falls back to 1500 m/s with warning.
-      - Water-column samples (slant <= altitude) → NaN in ground_range_m,
-        across_track_m, along_track_m, and (by default) vertical_offset_m
-        and depth_per_sample_m.
+      - NaN pitch_deg for a ping → taken as 0 with warning.
+      - Water-column samples (slant <= altitude) → NaN in ground_range_m
+        and (by default) vertical_offset_m and depth_per_sample_m.
+        across_track_m and along_track_m use the pitched-fan limit
+        slant <= altitude / cos(pitch), so on pitched pings a few samples
+        just past the altitude have a ground range but no across/along
+        position.
     """
     ds.sidescan.validate()
 
@@ -113,6 +137,14 @@ def compute_geometric_ranges(
             n_no_alt, altitude.size, n_zero_alt,
         )
     pitch_deg = ds["pitch_deg"].values.astype(np.float64)
+    n_nan_pitch = int(np.sum(~np.isfinite(pitch_deg)))
+    if n_nan_pitch:
+        logger.warning(
+            "%d of %d pings have NaN pitch_deg; their pitch is taken as 0 "
+            "(no along-track offset)",
+            n_nan_pitch, pitch_deg.size,
+        )
+        pitch_deg = np.where(np.isfinite(pitch_deg), pitch_deg, 0.0)
     depth = ds["depth_m"].values.astype(np.float64)
     pitch_rad = np.deg2rad(pitch_deg)
 
@@ -137,26 +169,29 @@ def compute_geometric_ranges(
     # NaN mask used for masking the dependent variables
     valid_mask = ~np.isnan(ground_range)
 
-    # ----- across-track and along-track (pitch-corrected) -----
+    # ----- across-track and along-track (pitched fan beam, flat bottom) -----
+    # Body-down in the world frame is (sin θ, 0, cos θ) for nose-up θ, so
+    # the fan plane meets the seafloor at along = h·tan θ, and the slant
+    # distance to that line is h / cos θ.
     cos_pitch = np.cos(pitch_rad)[:, None, None]
-    sin_pitch = np.sin(pitch_rad)[:, None, None]
+    tan_pitch = np.tan(pitch_rad)[:, None, None]
 
     # Channel sign: port = -1, starboard = +1.  Channel index 0 = port.
     channel_sign = np.array([-1.0, 1.0], dtype=np.float64)[None, :, None]
 
-    across_track = (
-        channel_sign * ground_range.astype(np.float64) * cos_pitch
-    ).astype(np.float32)
-
-    along_track = (
-        ground_range.astype(np.float64) * sin_pitch
-    ).astype(np.float32)
-    # Broadcast along_track to (ping, channel, sample) — same value for
-    # both channels, since pitch is platform-level.
-    along_track = np.broadcast_to(
-        along_track,
-        (n_pings, n_channels, n_samples),
-    ).astype(np.float32)
+    with np.errstate(invalid="ignore"):
+        fan_diff = (
+            slant_range.astype(np.float64) ** 2 - (altitude_b / cos_pitch) ** 2
+        )
+        seafloor = (fan_diff > 0) & ~np.isnan(altitude_b)
+        across_track = np.where(
+            seafloor,
+            channel_sign * np.sqrt(np.maximum(fan_diff, 0.0)),
+            np.nan,
+        ).astype(np.float32)
+        along_track = np.where(
+            seafloor, altitude_b * tan_pitch, np.nan,
+        ).astype(np.float32)
 
     # ----- vertical offset and depth per sample -----
     # For flat bottom: vertical_offset_m == altitude_m, broadcast.
@@ -201,20 +236,23 @@ def compute_geometric_ranges(
     out["ground_range_m"].attrs = {
         "units": "m",
         "long_name": "ground range (across the seafloor)",
-        "description": "Horizontal distance assuming flat bottom and zero "
-                       "pitch. Unsigned.",
+        "description": "Horizontal distance from the nadir point "
+                       "assuming a flat bottom, sqrt(slant^2 - altitude^2). "
+                       "Unsigned; the same with or without pitch.",
     }
     out["across_track_m"].attrs = {
         "units": "m",
         "long_name": "across-track distance from platform, signed",
         "description": "Y component in platform frame. Negative = port, "
-                       "positive = starboard. Pitch-corrected.",
+                       "positive = starboard. Pitched fan beam: "
+                       "sqrt(slant^2 - (altitude / cos(pitch))^2).",
     }
     out["along_track_m"].attrs = {
         "units": "m",
         "long_name": "along-track offset from nadir, signed",
         "description": "X component in platform frame. Positive = forward "
-                       "of nadir (pitch-up reflects forward).",
+                       "of nadir. Pitched fan beam: altitude * tan(pitch), "
+                       "the same for every seafloor sample of a ping.",
     }
     out["vertical_offset_m"].attrs = {
         "units": "m",
@@ -236,6 +274,8 @@ def compute_geometric_ranges(
         {
             "expose_unmasked_z": expose_unmasked_z,
             "default_sound_vel_ms": _DEFAULT_SOUND_VEL_MS,
+            "pitch_model": PITCH_MODEL,
+            "n_nan_pitch_as_zero": n_nan_pitch,
         },
         function="sidescanpy.processing.geometric.compute_geometric_ranges",
         version=__version__,

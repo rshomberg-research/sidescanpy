@@ -103,6 +103,14 @@ Klein doesn't record sound velocity in the page header. Surveys have
 `sound_vel_ms` set to NaN. The pipeline falls back to 1500 m/s in
 `compute_geometric_ranges`.
 
+### Pitch sign
+
+The SDF notes available here do not state the sign of `pitch_deg` (field
+29, from the towfish compass). The reader passes it through unchanged and
+`compute_geometric_ranges` treats positive as nose up, as for JSF and XTF.
+If a recording's convention is nose down positive, its along-track offsets
+have the wrong sign.
+
 ### Aux fields with variable units
 
 Fields 46-49 (`aux_pitch`, `aux_roll`, `aux_depth`, `aux_altitude`)
