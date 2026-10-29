@@ -725,3 +725,38 @@ class TestStartingDepth:
         assert np.isnan(v[1, 1, :10]).all() and v[1, 1, 10] == 1
         assert v[0, 0, 0] == 1 and np.isnan(v[0, 0, 100:]).all()
 
+
+
+@pytest.mark.unit
+class TestLaybackAndPositionSource:
+    def _convert(self, **kw):
+        msgs = [
+            _make_sonar_msg(ping_number=p, channel=c, **kw)
+            for p in range(3) for c in (0, 1)
+        ]
+        survey = convert(msgs, source_files=[Path("test.jsf")])
+        return survey.get_frequency(survey.frequencies[0]).dataset
+
+    def test_layback_and_cable_out_carried_per_ping(self):
+        ds = self._convert(layback_m=125.9, cable_out_m=130.0)
+        np.testing.assert_allclose(ds["layback_m"].values, 125.9, rtol=1e-6)
+        np.testing.assert_allclose(ds["cable_out_m"].values, 130.0)
+        assert ds["layback_m"].attrs["units"] == "m"
+
+    def test_position_source_towfish_when_bit_13_set(self):
+        ds = self._convert(position_interpolated=True)
+        assert ds.attrs["position_source"] == "towfish"
+        assert "bit 13" in ds.attrs["position_source_reason"]
+
+    def test_position_source_ship_when_bit_13_clear(self):
+        ds = self._convert(position_interpolated=False)
+        assert ds.attrs["position_source"] == "ship"
+
+    def test_tow_point_offset_recorded_when_nonzero(self):
+        ds = self._convert(gps_offset_x=1.5, gps_offset_y=-4.0)
+        assert ds.attrs["tow_point_starboard_m"] == pytest.approx(1.5)
+        assert ds.attrs["tow_point_aft_m"] == pytest.approx(-4.0)
+
+    def test_tow_point_offset_absent_when_zero(self):
+        ds = self._convert()
+        assert "tow_point_aft_m" not in ds.attrs

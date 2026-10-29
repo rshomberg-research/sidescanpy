@@ -426,6 +426,8 @@ def make_sdf_sonar_page(
     fish_latitude_deg: float = 0.0,
     fish_longitude_deg: float = 0.0,
     center_freq_hz: int = 455_000,
+    cable_out_m: float = 0.0,
+    layback_method: int = 0,
 ):
     """Build a synthetic SDFSonarPage for testing.
 
@@ -490,6 +492,8 @@ def make_sdf_sonar_page(
         fish_longitude_rad=math.radians(fish_longitude_deg),
         altitude_m=altitude_m,
         sonar_freq_khz=center_freq_hz // 1000,
+        cable_out_m=cable_out_m,
+        layback_method=layback_method,
     )
 
     # Parse it back into a header

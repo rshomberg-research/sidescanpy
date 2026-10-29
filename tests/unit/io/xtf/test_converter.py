@@ -442,3 +442,58 @@ class TestProjectedNavigation:
             ds = survey.get_frequency(survey.frequencies[0]).dataset
             np.testing.assert_allclose(ds["longitude"].values, lons, atol=1e-8)
 
+
+
+# ============================================================
+# LAYBACK AND POSITION SOURCE
+# ============================================================
+
+def _geo_pings(n=4, ship_offset_deg=None, **kw):
+    """Pings at the default Sensor positions; Ship = Sensor + offset (None: no Ship)."""
+    out = []
+    for i in range(n):
+        fields = dict(kw)
+        if ship_offset_deg is not None:
+            fields["ShipXcoordinate"] = -73.7 + i * 1e-5 + ship_offset_deg
+            fields["ShipYcoordinate"] = -46.3 - i * 1e-5
+        out.append(_ping(i, **fields))
+    return out
+
+
+@pytest.mark.unit
+class TestLaybackAndPositionSource:
+    def _ds(self, tmp_path, pings, **conv):
+        survey = convert(read_xtf(_dual(tmp_path, pings)), **conv)
+        return survey.get_frequency(survey.frequencies[0]).dataset
+
+    def test_layback_and_cable_out_carried_per_ping(self, tmp_path):
+        ds = self._ds(tmp_path, _geo_pings(Layback=29.5, CableOut=30, CableOutHundredths=25))
+        np.testing.assert_allclose(ds["layback_m"].values, 29.5)
+        np.testing.assert_allclose(ds["cable_out_m"].values, 30.25, rtol=1e-6)
+
+    def test_position_source_towfish_when_sensor_away_from_ship(self, tmp_path):
+        # 5e-4 deg of longitude at 46 S is about 39 m
+        ds = self._ds(tmp_path, _geo_pings(ship_offset_deg=5e-4))
+        assert ds.attrs["position_source"] == "towfish"
+        assert "median 38." in ds.attrs["position_source_reason"]
+
+    def test_position_source_unknown_when_ship_equals_sensor(self, tmp_path):
+        ds = self._ds(tmp_path, _geo_pings(ship_offset_deg=0.0, Layback=126.0))
+        assert ds.attrs["position_source"] == "unknown"
+
+    def test_position_source_unknown_without_ship_position(self, tmp_path):
+        ds = self._ds(tmp_path, _geo_pings(Layback=300.0))
+        assert ds.attrs["position_source"] == "unknown"
+
+    def test_position_source_unknown_when_only_some_pings_apart(self, tmp_path):
+        pk = _geo_pings(n=10, ship_offset_deg=0.0)
+        pk[3] = _ping(3, ShipXcoordinate=-73.7 + 3e-5 + 5e-5, ShipYcoordinate=-46.3 - 3e-5)
+        ds = self._ds(tmp_path, pk)
+        assert ds.attrs["position_source"] == "unknown"
+
+    def test_position_source_projected_compares_in_metres(self, tmp_path):
+        pk, _, _ = _projected_pings()  # Ship 7 m from Sensor
+        survey = convert(read_xtf(_dual(tmp_path, pk, nav_units=0)), nav_crs=_UTM19N)
+        ds = survey.get_frequency(survey.frequencies[0]).dataset
+        assert ds.attrs["position_source"] == "towfish"
+        assert "median 7.07" in ds.attrs["position_source_reason"]

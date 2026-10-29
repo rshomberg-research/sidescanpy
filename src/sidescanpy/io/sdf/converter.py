@@ -11,6 +11,14 @@ builds a validated SideScanSurvey with:
 - Attitude aux record from per-page (timestamp, heading, pitch, roll)
 - Empty DVL record (Klein doesn't have DVL)
 - No sensor records (Klein doesn't have ancillary sensor streams)
+- ``cable_out_m`` per ping from field 50. SDF has no layback distance, so
+  no ``layback_m``. ``position_source`` is ``towfish`` where the computed
+  fish position (fields 39/40) is set and used for ``latitude`` /
+  ``longitude``, ``ship`` where the reader fell back to the ship position
+  (fields 37/38), ``mixed`` if both occur. The layback-computed fish
+  position (fields 71/72) is not used. ``sdf_layback_method`` records
+  field 70 (0 Pythagorean, 1 hull mount). Not checked on a real file with
+  a non-zero cable out.
 
 The reader yields both SDFSonarPage (sonar versions 3501/3502) and
 SDFUnknownPage (everything else). The converter filters to sonar pages
@@ -52,6 +60,7 @@ Klein-specific design decisions:
 
 import json
 import logging
+import math
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -60,6 +69,12 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.core.schema import (
+    OPTIONAL_PER_PING_VARS,
+    POSITION_SHIP,
+    POSITION_SOURCE_ATTR,
+    POSITION_SOURCE_REASON_ATTR,
+    POSITION_TOWFISH,
+    combine_position_sources,
     make_empty_attitude_record,
     make_empty_dvl_record,
     make_empty_navigation_record,
@@ -236,6 +251,8 @@ def _build_channel_dataset(
         [p.fathometer_reading_m for p in pages], dtype=np.float32
     )
 
+    cable_out = np.array([p.header.cable_out_m for p in pages], dtype=np.float32)
+
     # depth_m is NaN: Klein stores depth in Volts, requires INI calibration
     depths = np.full(n_pings, np.nan, dtype=np.float32)
 
@@ -255,6 +272,7 @@ def _build_channel_dataset(
         "sample_rate_hz": float(sample_rate_hz),
         "pulse_length_us": 0.0,
         "processing_history": json.dumps([]),
+        **_position_source_attrs(pages),
     }
 
     coords = {
@@ -279,9 +297,39 @@ def _build_channel_dataset(
         "fathometer_reading_m": (["ping"], fathometer),
         "heave_m": (["ping"], heave),
         "sound_vel_ms": (["ping"], sound_vel),
+        "cable_out_m": (
+            ["ping"], cable_out, {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["cable_out_m"]},
+        ),
     }
 
     return xr.Dataset(data_vars, coords, attrs)
+
+
+def _uses_fish_position(page: SDFSonarPage) -> bool:
+    """True when ``page.latitude`` is the computed towfish position (fields 39/40)."""
+    fish = page.header.fish_latitude_deg
+    return fish != 0.0 and not math.isnan(fish)
+
+
+def _position_source_attrs(pages: list[SDFSonarPage]) -> dict:
+    """Position source: the computed fish position (fields 39/40) when set, else the ship's.
+
+    ``layback_method`` (field 70: 0 Pythagorean, 1 hull mount) is recorded
+    as ``sdf_layback_method`` when every page has the same value.
+    """
+    fish = np.array([_uses_fish_position(p) for p in pages], dtype=bool)
+    source = combine_position_sources(np.where(fish, POSITION_TOWFISH, POSITION_SHIP))
+    out = {
+        POSITION_SOURCE_ATTR: source,
+        POSITION_SOURCE_REASON_ATTR: (
+            f"SDF towfish position (fields 39/40) set in {int(fish.sum())} of {fish.size} pages "
+            "and used; elsewhere the ship position (fields 37/38)"
+        ),
+    }
+    methods = {int(p.header.layback_method) for p in pages}
+    if len(methods) == 1:
+        out["sdf_layback_method"] = methods.pop()
+    return out
 
 
 def _compute_sample_rate(
