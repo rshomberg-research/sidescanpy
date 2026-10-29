@@ -3,7 +3,8 @@ Undo recorded corrections, driven by ``processing_history``.
 
 No uncorrected copy of the backscatter is stored: radiometric steps are
 inverted exactly from the parameters recorded in their history records, and
-geometric/georef steps are undone by dropping the variables they added.
+geometric/georef steps are undone by dropping the variables they added, and
+``layback`` by restoring the positions it kept.
 
 - :func:`uncorrected_backscatter` -- the pre-radiometric signal as a
   DataArray (nothing else touched). Works lazily on dask-backed data.
@@ -32,6 +33,7 @@ from sidescanpy.core.history import (
     RADIOMETRIC_STEPS,
     STEP_GEOMETRIC,
     STEP_GEOREF,
+    STEP_LAYBACK,
     STEP_OUTPUT_VARS,
     STEP_RANGE_CORRECTION,
     STEP_TVG,
@@ -41,12 +43,13 @@ from sidescanpy.core.history import (
     remove_history_records,
 )
 from sidescanpy.core.units import FLOOR_DB, db_to_linear
+from sidescanpy.processing.layback import undo_layback
 from sidescanpy.processing.radiometric import tvg_gain_for_dataset, tvg_params_from_record
 from sidescanpy.processing.range_correction import range_correction_db
 
 logger = logging.getLogger(__name__)
 
-INVERTIBLE_STEPS: tuple[str, ...] = (STEP_TVG, STEP_RANGE_CORRECTION, STEP_GEOMETRIC, STEP_GEOREF)
+INVERTIBLE_STEPS: tuple[str, ...] = (STEP_LAYBACK, STEP_TVG, STEP_RANGE_CORRECTION, STEP_GEOMETRIC, STEP_GEOREF)
 
 UNCORRECTED_VAR = "uncorrected"
 """Name of the in-memory variable holding the uncorrected signal (never stored on disk)."""
@@ -176,13 +179,15 @@ def invert(ds: xr.Dataset, steps: Iterable[str] | None = None) -> xr.Dataset:
         ``range_correction``). Undoing ``geometric`` also undoes ``georef``
         (it is derived from the geometric variables) and requires
         ``range_correction`` to be undone too if it was applied (it needs
-        ``ground_range_m``). Steps that were never applied are ignored.
+        ``ground_range_m``). Undoing ``layback`` restores the recorded
+        positions and also undoes ``georef`` (computed from the moved
+        positions). Steps that were never applied are ignored.
 
     Returns
     -------
     xr.Dataset
         New dataset: ``backscatter_intensity`` restored, geometric/georef
-        output variables dropped, and the undone steps' history records
+        output variables dropped, layback positions restored, and the undone steps' history records
         removed. Records of non-invertible steps (``crop_farrange``,
         ``interpolate_aux``, custom steps) are kept.
 
@@ -196,7 +201,7 @@ def invert(ds: xr.Dataset, steps: Iterable[str] | None = None) -> xr.Dataset:
     unknown = requested - set(INVERTIBLE_STEPS)
     if unknown:
         raise ValueError(f"cannot invert {sorted(unknown)}; invertible steps: {INVERTIBLE_STEPS}")
-    if STEP_GEOMETRIC in requested:
+    if STEP_GEOMETRIC in requested or STEP_LAYBACK in requested:
         requested.add(STEP_GEOREF)
 
     out = ds
@@ -234,6 +239,14 @@ def invert(ds: xr.Dataset, steps: Iterable[str] | None = None) -> xr.Dataset:
             logger.debug("invert: dropping %s variables %s", step, drop)
             out = out.drop_vars(drop)
         remove |= {i for i, r in enumerate(read_history(ds)) if canonical_step(str(r.get("step", ""))) == step}
+
+    if STEP_LAYBACK in requested:
+        history = read_history(ds)
+        layback = [i for i, r in enumerate(history) if canonical_step(str(r.get("step", ""))) == STEP_LAYBACK]
+        if layback:
+            logger.debug("invert: restoring positions recorded before layback")
+            out = undo_layback(out, history[layback[-1]])
+            remove |= set(layback)
 
     if remove or legacy is not None:
         out = remove_history_records(out, remove)

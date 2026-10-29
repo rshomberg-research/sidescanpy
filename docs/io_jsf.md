@@ -49,6 +49,14 @@ typed Python fields after `__post_init__`.
   most newer fields. A few older fields still lack suffixes; see "Future work"
   below.
 
+- **Layback.** `layback_m` (bytes 228-231) and `cable_out_m` (bytes 236-237,
+  decimetres in the file) are carried per ping. Validity bit 13 ("position
+  interpolated") sets `position_source`: set, the position is the sonar's
+  with layback applied by Discover; clear, it is the last navigation fix
+  received, without layback. The cable-counter validity bit is clear in the
+  Discover files seen so far although the cable out is plausible; the value
+  is kept.
+
 ## Known device-specific issues
 
 - **Attitude validity flags.** `PitchRollDataMessage` (type 2020) flags follow

@@ -27,6 +27,20 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `"layback"` correction step (`processing.apply_layback`, `sidescan-correct
+  --layback`, not in `DEFAULT_STEPS`): moves ship positions astern along the
+  heading by the recorded layback plus the antenna-to-tow-point offset, with
+  a Pythagorean cable-out estimate where no layback is recorded. It only
+  moves positions whose new `position_source` attribute is `ship`, so a
+  layback the acquisition software already applied is never applied again.
+  Keeps the recorded positions in `latitude_before_layback` /
+  `longitude_before_layback`; `invert(ds, ["layback"])` restores them.
+- Readers carry per-ping `layback_m` (JSF, XTF) and `cable_out_m` (JSF,
+  XTF, SDF), and set the `position_source` / `position_source_reason`
+  attributes: JSF from validity bit 13, XTF from Sensor vs Ship
+  coordinates, SDF from which position the reader used. JSF also records
+  `tow_point_aft_m` / `tow_point_starboard_m` when set, SDF
+  `sdf_layback_method`.
 - `io.jsf.write_subset` and `io.xtf.write_subset`: copy a run of pings
   (with the XTF file header) to a new file, byte for byte.
 - Tests on five small cuts of openly licensed recordings (UK JNCC under the
@@ -93,6 +107,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+- `io.jsf`: `SonarDataMessage.cable_out_m` was the raw field / 1000; the
+  field is in decimetres, so it is now / 10 (130 m, not 1.3 m, on a public
+  Discover file with a 125.9 m layback).
 - `processing.geometric.compute_geometric_ranges`: pitch geometry
   (breaking for pitched data). The old model rotated the ground vector by
   pitch (`along = ground·sin θ`, `across = ±ground·cos θ`), so the

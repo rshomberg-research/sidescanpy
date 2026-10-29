@@ -52,6 +52,8 @@ and that channel's samples.
 | `sound_vel_ms` | `SoundVelocity`, doubled when below 1000 m/s (see below) |
 | `sample_rate_hz` | `NumSamples / TimeDuration` |
 | `time` | `Year` … `Second` + `HSeconds` (10 ms resolution) |
+| `layback_m`, `cable_out_m` | `Layback`, `CableOut` + `CableOutHundredths` / 100 |
+| `position_source` attribute | `towfish` when `SensorX/Y` sit away from `ShipX/Y`, else `unknown` (see processing → Layback) |
 | navigation / attitude records | every ping header (`source = extracted_from_xtf_ping_headers`) |
 
 `pulse_length_us` is not in the XTF headers and is 0.0. Gain codes are

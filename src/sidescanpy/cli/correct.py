@@ -49,6 +49,7 @@ from sidescanpy.processing import (
     STEP_GEOMETRIC,
     STEP_GEOREF,
     STEP_INTERPOLATE_AUX,
+    STEP_LAYBACK,
     STEP_RANGE_CORRECTION,
     STEP_TVG,
     correct_file,
@@ -60,6 +61,7 @@ logger = logging.getLogger(__name__)
 _FLAG_STEPS = (
     ("crop_farrange", STEP_CROP_FARRANGE),
     ("bottom_track", STEP_BOTTOM_TRACK),
+    ("layback", STEP_LAYBACK),
     ("tvg", STEP_TVG),
     ("geometric", STEP_GEOMETRIC),
     ("range_correction", STEP_RANGE_CORRECTION),
@@ -112,6 +114,11 @@ def build_parser() -> CLIParser:
     parser.add_argument(
         "--bottom-track", action="store_true",
         help="Set altitude from the first bottom return where it is missing (NaN or <= 0)",
+    )
+    parser.add_argument(
+        "--layback", action="store_true",
+        help="Move ship positions astern to the towfish by the recorded layback (only files whose "
+             "position_source is 'ship'; others are left as they are, with a warning)",
     )
     parser.add_argument("--tvg", action="store_true", help="Apply radiometric (TVG) correction")
     parser.add_argument("--geometric", action="store_true", help="Apply geometric range correction")

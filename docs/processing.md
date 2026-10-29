@@ -29,6 +29,7 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 | `crop_farrange` | `crop_far_range` | `cutoff_sample`, `n_bins`, `min_valid_fraction`, `rise_threshold_db`, `margin_bins` |
 | `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid`, `held_values`, `max_hold_s`, `per_ping_fallback`, `groups`, `merge_window_s` |
 | `bottom_track` | `altitude_from_bottom_track` | `replace`, `max_diff_m`, `min_altitude_m`, `min_return_m`, `min_return_fraction`, `smooth_window`, `threshold_fraction`, `min_run`, `smooth_pings` |
+| `layback` | `apply_layback` | `layback_m`, `tow_point_aft_m`, `tow_point_starboard_m`, `position_source`, `use_cable_out`, `ellipsoid` |
 | `tvg` | `apply_tvg` | `spreading_loss_db`, `absorption_db_per_m`, `min_range_m`, `sound_velocity_ms`, `temperature_c`, `salinity_psu`, `depth_m`, `ph` |
 | `geometric` | `compute_geometric_ranges` | `expose_unmasked_z` |
 | `range_correction` | `apply_empirical_range_correction` | `table` (required) |
@@ -36,7 +37,8 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 
 Steps run in the order given; respecting dependencies is the caller's job
 (`georef` and `range_correction` need `geometric`; `bottom_track` must run
-before `geometric` to affect it). `bottom_track` is not in `DEFAULT_STEPS`.
+before `geometric` to affect it, and `layback` before `georef`).
+`bottom_track` and `layback` are not in `DEFAULT_STEPS`.
 
 ### Rules
 
@@ -140,6 +142,43 @@ tracked value agreed to within 0.2 m for 90 % of pings. The first return
 comes from the beam's near edge, so on sloping or very shallow seabed the
 tracked value is the slant range to the nearest bottom point, a little
 above the true altitude (+0.6 m at 1.7 m altitude on a Klein 3000 file).
+
+### Layback
+
+A towed sonar sits behind the navigation antenna. Readers record what the
+per-ping `latitude` / `longitude` are the position of in the
+`position_source` attribute, with how they decided in
+`position_source_reason`:
+
+| Format | `towfish` | `ship` | otherwise |
+|---|---|---|---|
+| JSF | validity bit 13 (position interpolated) set: Discover laid it back | bit 13 clear: the last nav fix, no layback | `mixed` |
+| XTF | `SensorX/Y` more than 0.5 m from `ShipX/Y` on 95 % of pings | never (Discover writes the laid-back position in both fields) | `unknown` |
+| SDF | computed fish position (fields 39/40) set and used | fell back to the ship position (fields 37/38) | `mixed` |
+
+They also carry per-ping `layback_m` (JSF bytes 228-231, XTF `Layback`)
+and `cable_out_m` (JSF, in decimetres in the file; XTF `CableOut`; SDF
+field 50), and for JSF the antenna-to-tow-point offset as
+`tow_point_aft_m` / `tow_point_starboard_m` when it is set.
+
+`apply_layback` (the `layback` step) moves each ping astern along its
+`heading_deg` by `tow_point_aft_m + layback_m` and to starboard by
+`tow_point_starboard_m`, on the WGS84 ellipsoid: a fixed offset astern
+from the recorded layback and lever arms, as MB-System applies it. Where
+`layback_m` is NaN it falls back to `sqrt(cable_out_m² − depth_m²)`
+(`use_cable_out`). It moves positions only when `position_source` is
+`ship`; for `towfish`, `mixed` or `unknown` it changes nothing and logs a
+WARNING, so a layback is never applied twice. A caller who knows the
+positions are the ship's passes `position_source="ship"`. The recorded
+positions are kept in `latitude_before_layback` /
+`longitude_before_layback`, and `invert(ds, ["layback"])` restores them
+(it also drops `georef`, which was computed from the moved positions).
+`apply_layback` refuses a dataset that is already georeferenced.
+
+Not modelled: course made good (the heading is used), the fish lagging
+the ship's track in turns (the tractrix model of Swath), tow-point height,
+and the `navigation` aux record (only per-ping positions move; run
+`interpolate_aux` before `layback`, as the canonical order does).
 
 ### Georeferencing
 
