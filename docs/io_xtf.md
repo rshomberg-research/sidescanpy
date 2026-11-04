@@ -1,4 +1,4 @@
-# XTF format
+# XTF
 
 `.xtf` (eXtended Triton Format) is the most common vendor-neutral
 sidescan format: Klein, EdgeTech and others can record or export it. The
@@ -72,7 +72,7 @@ anomalies.
   port/starboard channel keeps its rate (`NumSamples / TimeDuration`,
   relative tolerance `rtol`, default 1 %, measured against the run's
   first ping); pings where a channel is absent never cause a cut. Runs
-  shorter than `min_pings` (default 50) are dropped — a change often
+  shorter than `min_pings` (default 50) are dropped, since a change often
   leaves a few pings at an intermediate setting. Each run is a view of
   the file's arrays and converts to its own survey, with attributes
   `xtf_segment_index`, `xtf_segment_count`, `xtf_segment_ping_start`,
@@ -91,3 +91,18 @@ anomalies.
   own ping axis) and counted in `xtf_pings_absent`.
 - **Projected coordinates** (`NavUnits` 0) are not supported and raise
   `NotImplementedError`.
+- **Sample scaling.** Samples are scaled by `2**-Weight` from the channel
+  header. Some older files carry meaningless `Weight` values (for example
+  -8408), which make every sample unusable. If a converted file's samples
+  are all infinite, NaN or zero, check `xtf_weight_min` and
+  `xtf_weight_max` in the dataset attributes.
+- **Older KleinXlt files.** Some KleinXlt 3.0 files leave the channel
+  `SampleFormat` at 255, which the reader rejects with `ValueError`.
+- **Recorder gain.** Gain codes are read but not interpreted, and nothing
+  in the file says whether the recorder applied TVG. Measure it with
+  `analysis.fit_range_decay` before correcting
+  ([Limitations](limitations.md#radiometric-correction)).
+
+## Reference
+
+Exail (formerly Triton Imaging), *XTF File Format*, revision 42.
