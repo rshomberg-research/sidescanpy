@@ -42,16 +42,18 @@ raster = grid_channel(survey.get_frequency("hz_400000").dataset, resolution_m=1.
 to_geotiff(raster, "MIS11_0_400khz.tif")
 ```
 
-Installing is covered in [Pre-release status](prerelease.md#install).
+[Install](install.md) covers the install and its extras. [Getting started](getting_started.md)
+walks through this code step by step, with the output of each step.
 
 ## Where to go next
 
+- **Start here:** [Install](install.md), [Getting started](getting_started.md).
 - **Examples:** [real data, code and results](examples/index.md), all on
   openly licensed recordings you can download.
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
-  [Command line](cli.md), [Logging](logging.md).
-- **Formats:** [JSF](io_jsf.md), [SDF](io_sdf.md), [XTF](io_xtf.md), [HDF5](io_hdf5.md),
+  [Command line](cli.md), [Logging](logging.md), [Limitations](limitations.md).
+- **Formats:** [overview](formats.md), [JSF](io_jsf.md), [SDF](io_sdf.md), [XTF](io_xtf.md), [HDF5](io_hdf5.md),
   [NetCDF](io_netcdf.md).
 - **Reference:** [API reference](reference/index.md), one page per module, generated from the docstrings.

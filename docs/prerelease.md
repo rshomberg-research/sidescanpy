@@ -50,21 +50,10 @@ public and can be shared freely.
 
 ## Install
 
-sidescanpy is not on PyPI yet. Install it from the repository, pinned to
-a release tag (or `main` for the latest fixes), with an SSH key or a
-`gh auth login` session that GitHub accepts for your account:
-
-```bash
-uv pip install "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"
-# or over HTTPS
-uv pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@main"
-```
-
-In a uv project, `uv add "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"`
-records the pin in `pyproject.toml` and `uv.lock`. The extras are listed
-in the [README](https://github.com/rshomberg-research/sidescanpy#install).
-
-To work on the code itself, clone it and run `uv sync --all-extras`.
+sidescanpy is not on PyPI yet. [Install](install.md) gives the commands
+to install from the repository, pinned to a release tag (or `main` for
+the latest fixes). You need an SSH key or a `gh auth login` session that
+GitHub accepts for your account.
 
 ## Documentation
 
