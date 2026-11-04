@@ -1,8 +1,9 @@
 """
 The gallery scripts in ``examples/gallery/`` download real recordings,
-so CI doesn't run them (``make gallery`` does). This checks what can be
-checked offline: each script parses, fetches only registered datasets,
-and has a docs page that includes it and the image it writes.
+so the unit suite doesn't run them (the docs build does, through
+sphinx-gallery). This checks what can be checked offline: each script
+parses, fetches only registered datasets, and starts with the titled
+docstring sphinx-gallery needs.
 
 2026 rshomberg@uri.edu
 """
@@ -16,7 +17,7 @@ import pytest
 from sidescanpy import datasets
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = sorted((ROOT / "examples" / "gallery").glob("*.py"))
+SCRIPTS = sorted((ROOT / "examples" / "gallery").glob("plot_*.py"))
 
 
 def _fetched_names(script: Path) -> list[str]:
@@ -32,8 +33,9 @@ def _fetched_names(script: Path) -> list[str]:
     return names
 
 
-def test_gallery_has_scripts():
+def test_gallery_has_scripts_and_header():
     assert SCRIPTS
+    assert (ROOT / "examples" / "gallery" / "GALLERY_HEADER.rst").exists()
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.stem)
@@ -44,9 +46,8 @@ def test_gallery_script_fetches_registered_datasets(script):
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.stem)
-def test_gallery_script_has_docs_page_and_image(script):
-    page = ROOT / "docs" / "examples" / f"{script.stem}.md"
-    assert page.exists()
-    text = page.read_text()
-    assert f'--8<-- "examples/gallery/{script.name}"' in text
-    assert (ROOT / "docs" / "assets" / "gallery" / f"{script.stem}.png").exists()
+def test_gallery_script_docstring_has_title(script):
+    doc = ast.get_docstring(ast.parse(script.read_text()), clean=True)
+    assert doc, f"{script.name} has no module docstring"
+    title, underline = doc.splitlines()[:2]
+    assert title and set(underline) == {"="} and len(underline) >= len(title)

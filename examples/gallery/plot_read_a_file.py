@@ -1,22 +1,26 @@
 """
-Read a raw sonar file and look at it.
+Read a file
+===========
 
-Downloads one EdgeTech JSF line (40 MB) from the UK JNCC Wight-Barfleur
-Reef survey, converts it to sidescanpy's data model, saves it as .ss.h5,
-and plots the raw waterfall of both frequencies.
+Convert one raw EdgeTech JSF line to sidescanpy's data model, save it as
+``.ss.h5``, and look at it. :func:`~sidescanpy.io.read_and_convert` reads JSF,
+Klein SDF and XTF into the same structure: a
+:class:`~sidescanpy.core.SideScanSurvey` holding one :class:`xarray.Dataset`
+per frequency, with backscatter shaped ``(ping, channel, sample)``
+(channel 0 is port, 1 starboard) plus the navigation and attitude
+records.
 
-Usage:
-    python examples/gallery/read_a_file.py [output_dir]
+Data: JNCC Wight-Barfleur Reef, Open Government Licence v3.0 (see
+:doc:`/example_data`).
 
-2026 rshomberg@uri.edu
+Usage: ``python examples/gallery/plot_read_a_file.py [output_dir]``
 """
+
+# 2026 rshomberg@uri.edu
 
 import sys
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sidescanpy import datasets
@@ -30,16 +34,29 @@ out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("INFO")
 
-# Download (once) and convert. read_and_convert takes JSF, SDF or XTF.
+# %%
+# Download (once) and convert. The reader logs two warnings worth knowing
+# about: this file records no sound velocity (1500 m/s is used) and no
+# altitude. :ref:`sphx_glr_examples_plot_correct_a_line.py` fills the
+# altitude in.
+
 path = datasets.fetch("jncc_wight_barfleur_20130321174522.jsf")
 survey = read_and_convert([path], fmt="jsf")
 write_survey(survey, out / "wight_barfleur.ss.h5", overwrite=True)
 
+# %%
 # One xarray Dataset per frequency: backscatter is (ping, channel, sample),
 # channel 0 = port, 1 = starboard.
+
 for freq_key in sorted(survey.frequencies):
     ds = survey.get_frequency(freq_key).dataset
     print(freq_key, dict(ds.sizes))
+
+# %%
+# The two frequencies of the same pings, raw amplitude against slant
+# range. The dark band in the middle is the water column under the
+# towfish; the seabed starts where it ends, about 18 m out on each side.
+# A linear seabed feature runs along the starboard side at about 50 m.
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 for ax, freq_key in zip(axes, sorted(survey.frequencies)):

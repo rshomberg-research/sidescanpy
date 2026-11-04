@@ -1,28 +1,6 @@
-# Examples
+# Example data
 
-Each example runs sidescanpy on a real, openly licensed recording that
-anyone can download, and shows the code and the image it makes. The code
-on each page is the script in `examples/gallery/`, included as is.
-
-| Example | What it shows | Data |
-|---|---|---|
-| [Read a file](read_a_file.md) | Convert a raw JSF file, save `.ss.h5`, plot the waterfall | JNCC Wight-Barfleur, EdgeTech |
-| [Correct a line](correct_a_line.md) | Altitude from the bottom track, TVG, slant to ground range | JNCC Wight-Barfleur, EdgeTech |
-| [Grid to a map](grid_to_a_map.md) | Gridding to UTM, GeoTIFF output | JNCC mid-Irish Sea, Benthos |
-| [Three formats, one model](three_formats.md) | The same calls on EdgeTech JSF, Benthos XTF and Klein XTF | JNCC and USGS |
-
-[![Three sonars read with the same code](../assets/gallery/three_formats.png)](three_formats.md)
-
-## Running them
-
-```bash
-python examples/gallery/correct_a_line.py out/
-```
-
-Each script writes its figure to the directory you give it (the current
-one by default). `make gallery` runs them all and refreshes the images
-on these pages. Plotting needs the `viz` extra and the GeoTIFF in
-[Grid to a map](grid_to_a_map.md) the `geo` extra.
+The [examples](examples/index.rst) and [Getting started](getting_started.md) run on real, openly licensed recordings that anyone can download.
 
 ## The example data
 
