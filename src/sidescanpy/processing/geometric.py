@@ -6,7 +6,8 @@ the dataset. Does NOT resample backscatter — original sample positions
 and values are preserved. Downstream tools (xarray.interp, rioxarray,
 etc.) handle resampling onto regular grids on demand.
 
-Outputs (all shape (ping, channel, sample)):
+Outputs (all shape (ping, channel, sample))::
+
     slant_range_m       attitude-invariant time-of-flight range
     ground_range_m      sqrt(slant^2 - altitude^2), unsigned (flat-bottom,
                         no pitch correction)

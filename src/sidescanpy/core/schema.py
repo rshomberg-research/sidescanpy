@@ -112,6 +112,7 @@ class SideScanAccessor:
         Validate dataset against SideScanPy schema.
 
         Checks (in order):
+
         1. All required dimensions present and channel size == 2
         2. All required coordinates present
         3. All required variables present

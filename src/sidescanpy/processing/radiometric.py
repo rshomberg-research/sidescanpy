@@ -331,7 +331,7 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
 
     The step is recorded in ``processing_history`` as ``"tvg"`` with the
     parameters actually used (defaults resolved), which is what
-    :func:`sidescanpy.processing.correct.invert` reads to undo it.
+    :func:`sidescanpy.processing.inversion.invert` reads to undo it.
 
     Parameters
     ----------

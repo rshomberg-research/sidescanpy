@@ -169,10 +169,12 @@ class RangeCorrectionTable:
         return table
 
     def save(self, path: str) -> None:
+        """Write the table to a JSON file (see `to_dict`)."""
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
 
     @classmethod
     def load(cls, path: str) -> "RangeCorrectionTable":
+        """Read a table written by `save`."""
         return cls.from_dict(json.loads(Path(path).read_text()))
 
 

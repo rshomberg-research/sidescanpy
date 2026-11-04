@@ -13,6 +13,7 @@ float64 (8 bytes, taking 2 slots). All values are little-endian.
 Spec source: Klein SDF/SDFX Data Page Definitions Specification.
 
 Conventions encoded here:
+
 - Latitude/longitude stored as float64 in radians; converted to
   degrees via @property
 - Heading/pitch/roll stored as float32 in degrees; no conversion

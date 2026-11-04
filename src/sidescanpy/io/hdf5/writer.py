@@ -1,7 +1,7 @@
 """
 Write a SideScanSurvey to an HDF5 (.ss.h5) file.
 
-File layout:
+File layout::
 
     /                                ← root attrs: survey_name, source_format,
     │                                              source_files_json,
@@ -16,7 +16,7 @@ File layout:
         sensors/                     ← only if survey has at least one sensor
             <sensor_type>/
 
-One encoding policy (:func:`_encoding_for`) applies to every frequency
+One encoding policy (``_encoding_for``) applies to every frequency
 data variable with ndim >= 2: gzip level 4 + shuffle, chunked along ping.
 float64 variables are stored as float32 except those in
 :data:`FLOAT64_KEEP` (lat/lon need ~1e-7 deg precision). Aux records are
@@ -177,7 +177,7 @@ def _encoding_for(var: str, da: xr.DataArray) -> dict | None:
 
 
 def _build_frequency_encoding(ds: xr.Dataset) -> dict[str, dict]:
-    """Encoding dict for a frequency-channel dataset (see :func:`_encoding_for`)."""
+    """Encoding dict for a frequency-channel dataset (see ``_encoding_for``)."""
     encoding: dict[str, dict] = {}
     for name, da in ds.data_vars.items():
         enc = _encoding_for(str(name), da)
