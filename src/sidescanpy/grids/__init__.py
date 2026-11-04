@@ -1,4 +1,12 @@
-"""SideScanPy gridding module."""
+"""
+Gridding: resample georeferenced backscatter onto a regular raster.
+
+Needs per-sample positions (the ``georef`` correction step).
+:func:`grid_channel` grids one channel on a UTM grid fitted to the data;
+:func:`resample_channel_to_grid` takes any :class:`GridDefinition`.
+The result is a :class:`SideScanGriddedRaster`, which :func:`to_geotiff`
+writes as a GeoTIFF (needs the ``geo`` extra).
+"""
 
 from sidescanpy.grids.definition import (
     GridDefinition,
