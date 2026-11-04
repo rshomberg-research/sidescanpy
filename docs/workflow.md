@@ -3,10 +3,11 @@
 sidescanpy is a library: it converts, corrects, grids and exports, but it
 does not decide what your survey needs. That decision is made by looking
 at the data, so the workflow lives in your own project, as scripts or
-notebooks that call the library. This page describes a layout that works
-well for real surveys, and the template in
+notebooks that call the library. This page describes the layout the
+template in
 [`examples/project_template/`](https://github.com/rshomberg-research/sidescanpy/tree/main/examples/project_template)
-implements it.
+implements: one script per step, one config per survey, and a report
+after each step.
 
 ## One script per step
 
@@ -22,8 +23,7 @@ Run them one at a time. Several steps take a long time on real data, and
 each one's output decides the next one's settings: the decay fit in step
 2 tells you which TVG terms to apply in step 3; the corrected overview
 from step 3 tells you whether the export settings in step 4 make sense.
-A single "run everything" driver hides exactly the moments you need to
-look.
+Check each report before starting the next step.
 
 Each step:
 
@@ -98,6 +98,6 @@ It is recorded in history like a built-in step.
 
 ## Notebooks
 
-The same calls work interactively. A notebook is a good place to decide
-a recipe; the step scripts are a good place to apply it to a whole
-survey once decided, repeatably.
+The same calls work interactively. Use a notebook to try recipes on one
+line, then put the recipe in the config and run the step scripts over
+the whole survey.

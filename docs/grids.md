@@ -12,7 +12,7 @@ raster = grid_channel(ds, resolution_m=res, method="median")
 to_geotiff(raster, "survey.tif")          # needs the [geo] extra
 ```
 
-## Pieces
+## Functions and types
 
 | Object | Purpose |
 |---|---|
@@ -41,3 +41,5 @@ geographic grids use `latitude` / `longitude`.
   than a zone puts its edges in a neighbouring zone's frame.
 - `bbox_from_channel_dataset` pads by a fixed amount in degrees, which is
   negligible for a survey but large for a very small test dataset.
+- [Grid to a map](examples/grid_to_a_map.md) grids a public line with
+  inverse-distance weighting and writes the GeoTIFF.

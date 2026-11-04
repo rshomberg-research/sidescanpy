@@ -2,7 +2,9 @@
 
 `sidescanpy.processing` corrects, slices and measures frequency-channel
 datasets. Every function takes and returns an `xr.Dataset`; the input is
-never modified.
+never modified. [Getting started](getting_started.md) runs the default
+correction on a public line, and [Correct a line](examples/correct_a_line.md)
+adds the bottom track.
 
 ## Corrections
 
@@ -188,13 +190,17 @@ seconds apart (chained) into one update event:
 Choose the window longer than the follow-up delay (one entry) and
 shorter than the gap from the follow-up to the next update; about two log
 intervals usually fits. Too long a window chains successive updates into
-one event and is far worse than no merging. A float applies to every
+one event, which is far worse than no merging.
+
+A float applies to every
 group of every record, so a window sized for a ~3 Hz GPS also chains the
 changes of a ~10 Hz roll sensor; a mapping by variable name, such as
 `merge_window_s={"latitude": 0.15, "longitude": 0.15}`, merges only the
 groups holding those variables (a group takes the smallest window of its
 variables). A WARNING is logged when an event combines more than five
-changes. `aux_update_events(record, groups=..., merge_window_s=...)`
+changes.
+
+To choose the window, `aux_update_events(record, groups=..., merge_window_s=...)`
 reports, per group, the entries, raw changes, events after merging, the
 percentiles (p5–p95) of the gaps between changes and between events, in
 entries and seconds, and the fraction of changes that fall within the
