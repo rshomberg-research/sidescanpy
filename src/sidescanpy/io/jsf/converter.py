@@ -212,6 +212,7 @@ def _build_frequency_channel(
     )
 
     # Determine n_samples — must be constant; verified per pair below
+    paired_pings = _drop_truncated_tail(paired_pings)
     n_samples = _determine_n_samples(paired_pings)
 
     n_pings = len(paired_pings)
@@ -440,6 +441,39 @@ def _pair_pings_by_number(
         paired.append((port, stbd))
 
     return paired
+
+
+_MAX_TRUNCATED_TAIL_PINGS = 2
+
+
+def _pair_n_samples(pair: tuple[SonarDataMessage | None, SonarDataMessage | None]) -> set[int]:
+    return {int(m.N_samples) for m in pair if m is not None}
+
+
+def _drop_truncated_tail(
+    paired_pings: list[tuple[SonarDataMessage | None, SonarDataMessage | None]],
+) -> list[tuple[SonarDataMessage | None, SonarDataMessage | None]]:
+    """Drop the last ping(s) when only they disagree with the file's sample count.
+
+    A recording stopped mid-ping can end with a shorter final ping. When
+    every ping except the last ``_MAX_TRUNCATED_TAIL_PINGS`` or fewer shares
+    one sample count, those trailing pings are dropped with a WARNING.
+    Any other mix of sample counts is left for ``_determine_n_samples``
+    to reject.
+    """
+    counts = [_pair_n_samples(pair) for pair in paired_pings]
+    if len(set().union(*counts)) <= 1:
+        return paired_pings
+    for n_tail in range(1, _MAX_TRUNCATED_TAIL_PINGS + 1):
+        body = set().union(*counts[:-n_tail])
+        if len(counts) > n_tail and len(body) == 1:
+            tail = sorted(set().union(*counts[-n_tail:]))
+            logger.warning(
+                f"Dropped {n_tail} truncated final ping(s) with sample count(s) {tail}; "
+                f"the rest of the file has {body.pop()}"
+            )
+            return paired_pings[:-n_tail]
+    return paired_pings
 
 
 def _determine_n_samples(

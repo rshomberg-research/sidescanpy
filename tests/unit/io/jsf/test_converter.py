@@ -760,3 +760,41 @@ class TestLaybackAndPositionSource:
     def test_tow_point_offset_absent_when_zero(self):
         ds = self._convert()
         assert "tow_point_aft_m" not in ds.attrs
+class TestDropTruncatedTail:
+    """A recording stopped mid-ping can end with one shorter ping."""
+
+    @staticmethod
+    def _pairs(counts):
+        from types import SimpleNamespace
+
+        return [(SimpleNamespace(N_samples=n), SimpleNamespace(N_samples=n)) for n in counts]
+
+    def test_short_final_ping_is_dropped(self, caplog):
+        from sidescanpy.io.jsf.converter import _determine_n_samples, _drop_truncated_tail
+
+        kept = _drop_truncated_tail(self._pairs([4792] * 10 + [4780]))
+        assert len(kept) == 10
+        assert _determine_n_samples(kept) == 4792
+        assert "truncated final ping" in caplog.text
+
+    def test_consistent_file_is_unchanged(self):
+        from sidescanpy.io.jsf.converter import _drop_truncated_tail
+
+        pairs = self._pairs([4792] * 10)
+        assert _drop_truncated_tail(pairs) is pairs
+
+    def test_change_mid_file_is_not_dropped(self):
+        import pytest
+
+        from sidescanpy.io.jsf.converter import _determine_n_samples, _drop_truncated_tail
+
+        pairs = self._pairs([4792] * 5 + [3896] * 5)
+        assert len(_drop_truncated_tail(pairs)) == 10
+        with pytest.raises(ValueError, match="Inconsistent sample counts"):
+            _determine_n_samples(_drop_truncated_tail(pairs))
+
+    def test_more_than_two_short_pings_are_not_dropped(self):
+        from sidescanpy.io.jsf.converter import _drop_truncated_tail
+
+        pairs = self._pairs([4792] * 10 + [4780] * 3)
+        assert len(_drop_truncated_tail(pairs)) == 13
