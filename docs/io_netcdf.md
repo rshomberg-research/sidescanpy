@@ -1,64 +1,25 @@
-# NetCDF IO
+# NetCDF
 
-Read and write individual :class:`SideScanFrequencyChannel` datasets as
-standalone `.nc` files. Use this when you want to share or process a
-single frequency in isolation without the survey-level wrapper.
+`sidescanpy.io.netcdf` writes one frequency channel on its own, as a
+standalone NetCDF-4 file (`.nc`), without the survey wrapper or the aux
+records. Use it to hand one frequency to a tool or a colleague that
+expects a single dataset. For a whole survey, use [`.ss.h5`](io_hdf5.md).
 
-For full multi-frequency surveys with auxiliary records, see
-[`docs/io_hdf5.md`](io_hdf5.md).
+```python
+from sidescanpy.io.netcdf import read_frequency_channel, write_frequency_channel
 
-## Entry points
+channel = survey.get_frequency("hz_400000")
+write_frequency_channel(channel, "line_001_400khz.nc")
+channel = read_frequency_channel("line_001_400khz.nc")
+channel = read_frequency_channel("line_001_400khz.nc", chunks={"ping": 256})  # lazy
+```
 
-| Function | Use case |
-|---|---|
-| `write_frequency_channel(channel, path)` | Write a channel to disk. |
-| `read_frequency_channel(path)` | Read back as a validated channel. |
-| `read_frequency_channel(path, chunks={"ping": N})` | Lazy/dask-backed loading. |
+The file holds the same variables and attributes as one
+`frequencies/hz_<Hz>` group of an `.ss.h5` file, `processing_history`
+included, with the same encoding: gzip 4 with shuffle on variables with
+two or more dimensions, chunks of 256 pings, float64 stored as float32
+except latitude and longitude. It reads back identical to what was
+written, apart from that float32 rounding.
 
-## Conventions
-
-- **Engine.** `h5netcdf`. Standardized across the project.
-- **Encoding.** The same policy as `.ss.h5` (see [HDF5 IO](io_hdf5.md)):
-  gzip 4 + shuffle on every variable with two or more dimensions, float64
-  stored as float32 except latitude/longitude, per-ping fields
-  uncompressed.
-- **Chunking on disk.** `(chunk_ping=256, n_channels=2, n_samples=full)`
-  by default. Aligns with the dominant access pattern (per-ping reads).
-- **Chunking on read.** Pass `chunks={"ping": N}` to return dask-backed
-  arrays. None (default) loads eagerly.
-- **String coords.** `channel_id` round-trips as native Python strings
-  (`["port", "starboard"]`). The reader normalizes byte-strings if the
-  engine returns them.
-
-## Round-trip guarantee
-
-After `write_frequency_channel(ch, path); read_frequency_channel(path)`,
-the loaded dataset is `xr.testing.assert_identical` to the original:
-
-- All data values exact (including NaN preservation), except float64
-  variables other than latitude/longitude, which round-trip at float32
-  precision
-- All coords with original dtype
-- All attrs including `processing_history`
-- Per-ping fields and dimensions preserved
-
-This is enforced by ~31 unit tests in `tests/unit/io/netcdf/test_round_trip.py`.
-
-## Performance notes
-
-- Eager read of a 50-ping × 2000-sample fixture file: <100 ms typical.
-- Lazy read with `chunks={"ping": 256}`: subsequent value access forces
-  on-demand decompression of only the requested chunks.
-- For large surveys, prefer the HDF5 module — it preserves frequency
-  channels and aux records together in one file with the same lazy
-  loading semantics.
-
-## Future work
-
-- Verify behavior with non-default chunk sizes on read (e.g.
-  `chunks={"ping": 50}` against a 256-ping on-disk chunk size). Currently
-  works but emits a "chunks separate the stored chunks" warning.
-- Add a multi-channel NetCDF writer that bundles multiple
-  `SideScanFrequencyChannel` datasets into one `.nc` with groups (the
-  HDF5 writer already does this; the NetCDF version would be a
-  convenience).
+`xr.open_dataset("line_001_400khz.nc", engine="h5netcdf")` opens it
+without sidescanpy.
