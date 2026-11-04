@@ -21,7 +21,7 @@ print(datasets.citation("jncc_mid_irish_sea_MIS11_0.xtf"))
 `fetch` downloads the 41 MB file once, checks its SHA-256 and caches it
 in `~/.cache/sidescanpy` (or `SIDESCANPY_DATA_DIR`). Later calls return
 the cached path without going online. `datasets.list_datasets()` names
-every recording it can fetch; [Examples](examples/index.md#the-example-data)
+every recording it can fetch; [Examples](example_data.md#the-example-data)
 lists them with their sources and licences.
 
 ## Convert to the data model
@@ -76,7 +76,7 @@ The waterfall shows raw amplitude against slant range, port mirrored to
 the left. The dark band in the middle is the water column: nothing comes
 back until the pulse reaches the seabed, about 32 m below the towfish.
 `compute_geometric_ranges` only adds range variables here; it does not
-change the backscatter. [Read a file](examples/read_a_file.md) shows a
+change the backscatter. [Read a file](examples/plot_read_a_file.rst) shows a
 waterfall like this one.
 
 ## Check the gain before correcting
@@ -151,7 +151,7 @@ survey = correct_survey(
 Steps already in a dataset's history are skipped, so a second run only
 does what is missing. `force=True` re-applies a step; a TVG step is
 undone from its recorded parameters first, so the new parameters replace
-the old ones. [Correct a line](examples/correct_a_line.md) adds a
+the old ones. [Correct a line](examples/plot_correct_a_line.rst) adds a
 `bottom_track` step for files that record no altitude.
 
 ## Grid and write a GeoTIFF
@@ -172,7 +172,7 @@ SideScanGriddedRaster(channel_name='400 kHz', shape=(1048, 544), coverage=55.9%,
 and averages the samples that fall near each 1 m cell. Port and starboard
 samples are gridded as separate observations, never averaged first. The
 GeoTIFF opens in QGIS or any GIS. [Gridding](grids.md) covers the
-methods and search radius, and [Grid to a map](examples/grid_to_a_map.md)
+methods and search radius, and [Grid to a map](examples/plot_grid_to_a_map.rst)
 fills the gaps between pings with inverse-distance weighting.
 
 ## The same from the command line
@@ -194,4 +194,4 @@ The CLI runs the same library calls on whole folders of files; see
 - [API reference](reference/index.md): every function and its parameters.
 
 Data: JNCC mid-Irish Sea, Open Government Licence v3.0 (see
-[the example data](examples/index.md#sources-and-licences)).
+[the example data](example_data.md#sources-and-licences)).

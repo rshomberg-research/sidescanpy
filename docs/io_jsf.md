@@ -66,7 +66,7 @@ explains which message each per-ping value is taken from and why.
 - **No sound velocity or altitude.** Some Discover files write 0 for
   both. Sound velocity then falls back to 1500 m/s, and the
   `bottom_track` correction step measures altitude from the data
-  ([Correct a line](examples/correct_a_line.md)).
+  ([Correct a line](examples/plot_correct_a_line.rst)).
 
 ## Reference
 

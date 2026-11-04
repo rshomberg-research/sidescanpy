@@ -81,7 +81,7 @@ The repository holds code only, no survey data.
     Without the variable those tests skip. The fixtures are also handy
     as small real files to try the readers on.
 
-- **Examples.** The [worked examples](examples/index.md) download public
+- **Examples.** The [worked examples](examples/index.rst) download public
   recordings with `sidescanpy.datasets.fetch()`, which needs no access
   to anything private. The other scripts in `examples/` run on synthetic
   data. An archived copy of the example data with a DOI is planned for

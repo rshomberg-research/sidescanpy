@@ -24,7 +24,7 @@ for stem, survey in read_and_convert_segments("line_001.xtf"):  # split at range
 "Tested with" means real files from that source have been converted and
 inspected. The public EdgeTech line was written by Discover both as JSF
 and as XTF, and the two readers return identical samples
-([Three formats, one model](examples/three_formats.md)).
+([Three formats, one model](examples/plot_three_formats.rst)).
 Other sonars and writers of the same formats often work; if one does
 not, see [Reporting a problem](limitations.md#reporting-a-problem).
 
@@ -75,3 +75,14 @@ formats:
 
 Many vendor tools export XTF, which is often the quickest way in for a
 format sidescanpy does not read.
+
+```{toctree}
+:hidden:
+
+JSF <io_jsf>
+JSF navigation sources <jsf_aux_source_selection>
+SDF <io_sdf>
+XTF <io_xtf>
+HDF5 (.ss.h5) <io_hdf5>
+NetCDF <io_netcdf>
+```

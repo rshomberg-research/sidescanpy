@@ -3,7 +3,7 @@
 `sidescanpy.processing` corrects, slices and measures frequency-channel
 datasets. Every function takes and returns an `xr.Dataset`; the input is
 never modified. [Getting started](getting_started.md) runs the default
-correction on a public line, and [Correct a line](examples/correct_a_line.md)
+correction on a public line, and [Correct a line](examples/plot_correct_a_line.rst)
 adds the bottom track.
 
 ## Corrections

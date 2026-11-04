@@ -5,11 +5,13 @@ in one HDF5 file with the extension `.ss.h5`. Each group is a NetCDF-4
 group written with h5netcdf, so any HDF5 or NetCDF tool can read it, and
 xarray can open each group without sidescanpy.
 
-!!! warning "The format is not frozen"
-    The layout below may change in any 0.x release before 1.0, and a
-    file written by one 0.x version may not read in a later one. Keep the
-    raw source files and re-convert after an upgrade. The root attribute
-    `sidescanpy_version` records which version wrote a file.
+:::{admonition} The format is not frozen
+:class: warning
+The layout below may change in any 0.x release before 1.0, and a
+file written by one 0.x version may not read in a later one. Keep the
+raw source files and re-convert after an upgrade. The root attribute
+`sidescanpy_version` records which version wrote a file.
+:::
 
 ```python
 from sidescanpy.io.hdf5 import read_survey, read_survey_pings, write_survey

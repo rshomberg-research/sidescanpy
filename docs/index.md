@@ -8,17 +8,19 @@ range, georeferencing), slices it, grids it to rasters and GeoTIFF, and
 builds COCO/YOLO training datasets from target catalogs. Small analysis
 functions measure a dataset's units, nadir, usable range and TVG state.
 
-!!! warning "Pre-release"
-    Until 1.0, any 0.x release may change the `.ss.h5` file format, the
-    API and the CLI. Keep your raw sonar files, pin the version you use,
-    and expect to re-convert `.ss.h5` files after an upgrade. See
-    [Pre-release status](prerelease.md).
+:::{admonition} Pre-release
+:class: warning
+Until 1.0, any 0.x release may change the `.ss.h5` file format, the
+API and the CLI. Keep your raw sonar files, pin the version you use,
+and expect to re-convert `.ss.h5` files after an upgrade. See
+[Pre-release status](prerelease.md).
+:::
 
-[![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/correct_a_line.md)
+[![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/plot_correct_a_line.rst)
 
 *A public EdgeTech recording, raw (left) and after the bottom track, TVG
 and slant-to-ground-range steps (right). Code and data:
-[Correct a line](examples/correct_a_line.md).*
+[Correct a line](examples/plot_correct_a_line.rst).*
 
 ## Quickstart
 
@@ -48,7 +50,7 @@ walks through this code step by step, with the output of each step.
 ## Where to go next
 
 - **Start here:** [Install](install.md), [Getting started](getting_started.md).
-- **Examples:** [real data, code and results](examples/index.md), all on
+- **Examples:** [real data, code and results](examples/index.rst), all on
   openly licensed recordings you can download.
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
@@ -57,3 +59,16 @@ walks through this code step by step, with the output of each step.
 - **Formats:** [overview](formats.md), [JSF](io_jsf.md), [SDF](io_sdf.md), [XTF](io_xtf.md), [HDF5](io_hdf5.md),
   [NetCDF](io_netcdf.md).
 - **Reference:** [API reference](reference/index.md), one page per module, generated from the docstrings.
+
+```{toctree}
+:hidden:
+
+Install <install>
+Getting started <getting_started>
+Examples <examples/index>
+Guide <guide>
+Formats <formats>
+API reference <reference/index>
+Development <development>
+Pre-release status <prerelease>
+```

@@ -278,3 +278,9 @@ src/.DS_Store
 
 # mkdocs build output
 site/
+
+# Sphinx build output (generated)
+docs/_build/
+docs/examples/
+docs/reference/generated/
+docs/sg_execution_times.rst
