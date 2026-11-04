@@ -18,9 +18,10 @@ so the plotting, GeoTIFF and docs code is tested too.
 |---|---|
 | `make test` | the unit tests, with `PYTHONPATH` cleared |
 | `make lint` | ruff |
-| `make docs` | this site, strict: a malformed docstring fails the build |
-| `make docs-serve` | this site at <http://127.0.0.1:8000>, rebuilt on save |
-| `make gallery` | the scripts in `examples/gallery/`, refreshing the images in `docs/assets/gallery/` (downloads about 140 MB the first time) |
+| `make docs` | this site in `docs/_build/html`, running the example scripts (downloads about 140 MB the first time); any warning, such as a malformed docstring or a broken cross-reference, fails the build |
+| `make docs-fast` | the same without running the example scripts (no figures) |
+| `make docs-serve` | builds the site, then serves it at <http://127.0.0.1:8000> |
+| `make docs-clean` | removes the build and the generated API and example pages |
 
 `uv run pytest tests/integration --slow` runs the integration tests,
 which need real survey files that are not in the repository and skip
@@ -75,9 +76,9 @@ people invited; this section is the maintainer's side.
 (moved from a personal account, where collaborators always get write
 access). Add people as outside collaborators with the **Read** role:
 Settings → Collaborators and teams. If it moves again, update `origin`
-in each clone, `[project.urls]` in `pyproject.toml`, `repo_url` in
-`mkdocs.yml`, and the links in `README.md` and `docs/`
-(`grep -rn "github.com/" README.md docs mkdocs.yml pyproject.toml`).
+in each clone, `[project.urls]` in `pyproject.toml`, `github_url` in
+`docs/conf.py` (once set), and the links in `README.md` and `docs/`
+(`grep -rn "github.com/" README.md docs pyproject.toml`).
 
 Before inviting anyone, everything on GitHub (every branch, tag and
 commit message) is visible to them. Check it holds nothing that should
@@ -121,16 +122,19 @@ gh variable set PUBLISH_DOCS --body true -R rshomberg-research/sidescanpy
 Everything on the site is public, including the API reference built
 from the docstrings (signatures and docstrings, not source), the example
 scripts and the development guide. Until the release the pages carry a
-`noindex` tag (`overrides/main.html`), so the link works for the people
-it is given to but search engines leave it out. At the public release,
-enable Pages on this repository instead (same URL), remove `sidescanpy/`
-from the site repository, and delete `overrides/` and `custom_dir` in
-`mkdocs.yml`.
+`noindex` tag, so the link works for the people it is given to but
+search engines leave it out. At the public release, enable Pages on
+this repository instead (same URL), remove `sidescanpy/` from the site
+repository, and set `sidescanpy_noindex = False` in `docs/conf.py`.
 
-**Gallery.** `make gallery` re-runs `examples/gallery/` and refreshes
-the images in `docs/assets/gallery/` (the README uses two of them). The
-scripts download real data, so they are not run in CI; CI only checks
-that every dataset name they fetch is registered.
+**Gallery.** The example pages are built by
+[sphinx-gallery](https://sphinx-gallery.github.io/), which runs every
+`examples/gallery/plot_*.py` script during the docs build, locally and
+in CI, and shows its code, printed output and figures. The scripts
+download real data; CI caches it between runs. The README shows two of
+the figures from `docs/assets/gallery/`; `make readme-images` refreshes
+them from the last `make docs`. The unit suite checks offline that every
+dataset name a script fetches is registered.
 
 **Test data.** The public fixtures are shared as one zip, through a
 link-shared folder that each invited person

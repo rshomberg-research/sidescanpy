@@ -36,7 +36,7 @@ datasets. Plots, basemaps and GeoTIFF output are optional:
 | `viz` | matplotlib | `sidescanpy.viz`, figures from `sidescan-export` and `sidescan-analyze` |
 | `maps` | cartopy | land and locator basemaps behind georeferenced plots |
 | `geo` | rioxarray | `grids.to_geotiff`, `sidescan-export grid --geotiff` |
-| `docs` | mkdocs and plugins | building this site |
+| `docs` | Sphinx, the pydata theme, MyST, numpydoc, sphinx-gallery | building this site |
 | `dev` | pytest, ruff | running the tests and linters |
 
 Combine them in the brackets: `sidescanpy[viz,maps,geo]`. The `maps`

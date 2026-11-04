@@ -103,8 +103,10 @@ src/sidescanpy/
 ├── datasets.py  fetch() public example recordings (stdlib only, any layer may use)
 └── log.py       configure_logging, log_timing
 examples/        runnable scripts, smoke-tested in tests/examples;
-                 gallery/ runs on fetched public data (`make gallery`, not in CI)
-docs/            mkdocs site (guide + API reference)
+                 gallery/ plot_*.py run on fetched public data by sphinx-gallery
+                 during `make docs` (and in CI)
+docs/            Sphinx site: MyST guide pages, conf.py, _ext/ (API page
+                 generator, cross-reference fallback, noindex)
 ```
 
 ### Data model
@@ -126,8 +128,8 @@ forward positive; heading compass bearing clockwise from north.
 uv sync --all-extras          # environment (the dev extra alone skips viz tests)
 make test                     # unit tests; clears PYTHONPATH (see below)
 make lint                     # ruff
-make docs                     # mkdocs build --strict
-make gallery                  # re-run examples/gallery, refresh docs/assets/gallery
+make docs                     # Sphinx -W -n, runs the gallery (~140 MB first time)
+make docs-fast                # same, gallery not executed
 PYTHONPATH="" uv run pytest tests/unit/grids/test_resample.py -v
 PYTHONPATH="" uv run pytest tests/examples -q   # example smoke runs
 ```
@@ -153,7 +155,7 @@ set `SIDESCANPY_PUBLIC_DATA` to their directory to run
   `tests/unit/synthetic.py` has the shared builders.
 - **Test names:** `test_<what>_<when>()`, grouped in classes by feature.
 - **Docstrings:** numpydoc. They are the API reference (`make docs`
-  fails on a malformed section). State behavior, parameters and caveats
+  fails on a malformed section or an unresolved `:func:`/`:class:` role). State behavior, parameters and caveats
   that are still true; no session history.
 - **Schema first:** add a variable to `core/schema.py` before a step
   produces it.

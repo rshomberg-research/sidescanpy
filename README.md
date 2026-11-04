@@ -186,7 +186,7 @@ yet.
 uv sync --all-extras
 make test   # unit tests (clears PYTHONPATH)
 make lint   # ruff
-make docs   # documentation site (needs the docs extra: uv sync --extra docs)
+make docs   # documentation site, runs the gallery (needs every extra: uv sync --all-extras)
 ```
 
 Integration tests under `tests/integration/` need real survey files and
