@@ -43,3 +43,53 @@ class TestFillNavStalls:
         filled = along_track_distance_m(ds, fill_nav_stalls=True)
         assert np.diff(raw)[30] == 0
         assert np.diff(filled).min() > 0
+
+
+def _track(lat, lon):
+    from tests.unit.synthetic import make_raw_dataset
+
+    ds = make_raw_dataset(n_pings=len(lat))
+    return ds.assign(latitude=("ping", np.asarray(lat, dtype=np.float64)),
+                     longitude=("ping", np.asarray(lon, dtype=np.float64)))
+
+
+class TestCourseOverGround:
+    """GPS course as a stand-in heading for an unreliable towfish compass."""
+
+    def test_northbound_track_is_zero(self):
+        from sidescanpy.processing.navigation import course_over_ground
+
+        ds = _track(41.5 + np.arange(60) * 1e-5, np.full(60, -71.4))
+        course = course_over_ground(ds)
+        assert np.all(np.minimum(course, 360 - course) < 0.5)
+
+    def test_eastbound_track_is_ninety(self):
+        from sidescanpy.processing.navigation import course_over_ground
+
+        ds = _track(np.full(60, 41.5), -71.4 + np.arange(60) * 1e-5)
+        np.testing.assert_allclose(course_over_ground(ds), 90.0, atol=0.5)
+
+    def test_turn_through_north_has_no_jump(self):
+        from sidescanpy.processing.navigation import course_over_ground
+
+        # heading 350 deg, then 10 deg: the course passes through north, not 180
+        steps = np.r_[np.full(30, -10.0), np.full(30, 10.0)]
+        lat = 41.5 + np.cumsum(np.cos(np.radians(steps))) * 1e-5
+        lon = -71.4 + np.cumsum(np.sin(np.radians(steps))) * 1e-5
+        course = course_over_ground(_track(lat, lon), half_window_s=2.0)
+        assert np.all(np.minimum(course, 360 - course) < 12)
+
+    def test_nan_positions_are_interpolated(self):
+        from sidescanpy.processing.navigation import course_over_ground
+
+        lat = 41.5 + np.arange(60) * 1e-5
+        lat[20:25] = np.nan
+        course = course_over_ground(_track(lat, np.full(60, -71.4)))
+        assert np.all(np.isfinite(course))
+
+    def test_stationary_track_is_nan(self, caplog):
+        from sidescanpy.processing.navigation import course_over_ground
+
+        course = course_over_ground(_track(np.full(20, 41.5), np.full(20, -71.4)))
+        assert np.all(np.isnan(course))
+        assert "never change" in caplog.text

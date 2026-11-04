@@ -6,6 +6,9 @@ Navigation-derived ping geometry: along-track distance and nav-stall repair.
   stalls filled.
 - :func:`fill_nav_stalls` -- replace short runs of stalled position
   steps with the local median ping step.
+- :func:`course_over_ground` -- per-ping course (degrees true) from the
+  positions a few seconds before and after each ping, for use as the
+  heading when a towfish compass is unreliable.
 
 Pure array/dataset functions; no plotting.
 
@@ -16,6 +19,7 @@ import logging
 
 import numpy as np
 import xarray as xr
+from pyproj import Geod
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +103,56 @@ def _along_track_distance(ds: xr.Dataset) -> np.ndarray:
 # ``along_track_distance_m`` has a ``fill_nav_stalls`` keyword that shadows the
 # function inside its body, so it calls through this alias.
 _fill_nav_stalls_impl = fill_nav_stalls
+
+
+def course_over_ground(ds: xr.Dataset, *, half_window_s: float = 4.0) -> np.ndarray:
+    """Per-ping course over ground, degrees true (compass bearing, [0, 360)).
+
+    The bearing from the ping's position ``half_window_s`` earlier to its
+    position ``half_window_s`` later (WGS84 geodesic), taken from the
+    per-ping ``latitude``/``longitude`` and ``time``. Near the ends of the
+    dataset the window is cut short. Pings without a finite position, or
+    whose window has no movement, get the course interpolated from their
+    neighbours (on the unwrapped angle, so no jump at north).
+
+    Use it in place of ``heading_deg`` when the towfish compass is not
+    trusted, e.g. a heading-dependent compass deviation that shears the
+    georeferenced swath. It assumes the towfish follows the vessel track
+    (no crab angle), and it lags in tight turns by about ``half_window_s``.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Frequency-channel dataset with per-ping ``time``, ``latitude`` and
+        ``longitude``, pings in time order.
+    half_window_s : float, default 4.0
+        Half the time window over which the course is measured. Longer
+        smooths GPS noise; shorter follows turns more closely.
+
+    Returns
+    -------
+    np.ndarray
+        Course in degrees, one per ping; all NaN when fewer than two pings
+        have distinct finite positions.
+    """
+    t = ds["time"].values.astype("datetime64[ns]").astype(np.int64) / 1e9
+    lat = np.asarray(ds["latitude"].values, dtype=np.float64)
+    lon = np.asarray(ds["longitude"].values, dtype=np.float64)
+    out = np.full(t.shape, np.nan)
+    ok = np.isfinite(lat) & np.isfinite(lon)
+    if ok.sum() < 2:
+        logger.warning("course_over_ground: fewer than two finite positions; course is NaN")
+        return out
+    tt, la, lo = t[ok], lat[ok], lon[ok]
+    i0 = np.clip(np.searchsorted(tt, tt - half_window_s, side="left"), 0, len(tt) - 1)
+    i1 = np.clip(np.searchsorted(tt, tt + half_window_s, side="right") - 1, 0, len(tt) - 1)
+    az, _, dist = Geod(ellps="WGS84").inv(lo[i0], la[i0], lo[i1], la[i1])
+    moving = np.asarray(dist) > 0
+    if moving.sum() < 1:
+        logger.warning("course_over_ground: positions never change; course is NaN")
+        return out
+    unwrapped = np.degrees(np.unwrap(np.radians(np.asarray(az)[moving])))
+    out = np.interp(t, tt[moving], unwrapped) % 360.0
+    if (~moving).any() or (~ok).any():
+        logger.debug(f"course_over_ground: {int((~moving).sum() + (~ok).sum())} ping(s) interpolated")
+    return out

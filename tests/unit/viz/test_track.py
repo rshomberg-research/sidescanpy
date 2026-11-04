@@ -48,7 +48,7 @@ class TestPlotTrackAndScanlines:
             assert fig is not None
             assert ax is not None
             assert len(ax.lines) >= 1  # track line at minimum
-            assert len(ax.collections) == 1  # scan-line LineCollection
+            assert len(ax.collections) == 2  # port and starboard LineCollections
         finally:
             plt.close(fig)
 
@@ -124,6 +124,52 @@ class TestPlotTrackAndScanlines:
         )
         try:
             assert len(ax.texts) == 0
+        finally:
+            plt.close(fig)
+
+
+class TestPortStarboardColors:
+    def test_halves_use_side_colors(self):
+        from matplotlib.colors import to_rgba
+
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so, port_color="red", starboard_color="green")
+        try:
+            colors = [tuple(c.get_colors()[0]) for c in ax.collections]
+            assert to_rgba("red", 0.6) in colors
+            assert to_rgba("green", 0.6) in colors
+        finally:
+            plt.close(fig)
+
+    def test_legend_names_both_sides(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so)
+        try:
+            labels = [t.get_text() for t in ax.get_legend().get_texts()]
+            assert "Port swath" in labels
+            assert "Starboard swath" in labels
+        finally:
+            plt.close(fig)
+
+    def test_rungs_split_at_midpoint_by_default(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so, crs=CRS.from_epsg(4326))
+        try:
+            port_seg = ax.collections[0].get_segments()[0]
+            np.testing.assert_allclose(port_seg[0], [(po[0] + so[0]) / 2, (pl[0] + sl[0]) / 2])
+            np.testing.assert_allclose(port_seg[1], [po[0], pl[0]])
+        finally:
+            plt.close(fig)
+
+    def test_rungs_split_at_given_nadir(self):
+        lat, lon, pl, po, sl, so = _make_track()
+        nlat, nlon = pl + 0.0002, po + 0.0001  # off-center nadir
+        fig, ax = plot_track_and_scanlines(lat, lon, pl, po, sl, so, crs=CRS.from_epsg(4326),
+                                           scan_nadir_lat=nlat, scan_nadir_lon=nlon)
+        try:
+            stbd_seg = ax.collections[1].get_segments()[0]
+            np.testing.assert_allclose(stbd_seg[0], [nlon[0], nlat[0]])
+            np.testing.assert_allclose(stbd_seg[1], [so[0], sl[0]])
         finally:
             plt.close(fig)
 

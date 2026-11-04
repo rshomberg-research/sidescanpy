@@ -130,6 +130,7 @@ from sidescanpy.processing.inversion import (
 from sidescanpy.processing.layback import apply_layback
 from sidescanpy.processing.navigation import (
     along_track_distance_m,
+    course_over_ground,
     fill_nav_stalls,
 )
 from sidescanpy.processing.outliers import mask_bright_ping_rows, reject_range_outliers
@@ -171,6 +172,7 @@ __all__ = [
     "build_survey_track",
     "along_track_distance_m",
     "fill_nav_stalls",
+    "course_over_ground",
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
     "held_value_fixes",

@@ -3,7 +3,9 @@ Survey track + scan-line plotting.
 
 Full-survey overview: the vessel's nadir track plus periodic "rungs"
 showing the port/starboard scan-line (swath edge) positions, in a
-projected coordinate system (UTM by default). Distinct from
+projected coordinate system (UTM by default). Each rung is split at
+nadir and its two halves are colored by side (port red, starboard
+green by default, the navigation-light convention). Distinct from
 plot_waterfall (per-ping backscatter imagery) and plot_gridded_raster
 (resampled backscatter raster) — this shows geometry/coverage only, no
 backscatter values.
@@ -51,10 +53,16 @@ def plot_track_and_scanlines(
     show_land: bool = False,
     show_locator: bool = False,
     show_scale_bar: bool = True,
+    scan_nadir_lat: Optional[np.ndarray] = None,
+    scan_nadir_lon: Optional[np.ndarray] = None,
+    port_color: str = "tab:red",
+    starboard_color: str = "tab:green",
 ) -> Tuple[plt.Figure, plt.Axes]:
     """
     Plot a survey's nadir track plus periodic port/starboard scan-line
-    "rungs", in a projected coordinate system.
+    "rungs", in a projected coordinate system. Each rung is drawn as two
+    halves, nadir to port edge and nadir to starboard edge, colored by
+    side.
 
     Parameters
     ----------
@@ -88,6 +96,13 @@ def plot_track_and_scanlines(
         for a projected ``crs`` (the default) -- a caller-supplied
         geographic CRS is skipped, not drawn wrong, since meters-per-
         degree isn't a single constant this function can infer.
+    scan_nadir_lat, scan_nadir_lon : array, optional
+        Nadir position at each rung (WGS84 degrees), index-aligned with
+        the scan arrays (``SurveyTrack.scan_nadir_*``). Where the rung
+        splits into its two halves. Defaults to the midpoint of each
+        rung, which is right when both sides have the same range.
+    port_color, starboard_color : str, default "tab:red", "tab:green"
+        Matplotlib colors for the port and starboard halves.
 
     Returns
     -------
@@ -117,15 +132,19 @@ def plot_track_and_scanlines(
 
     n_rungs = len(port_x)
     if n_rungs > 0:
-        segments = np.stack(
-            [np.column_stack([port_x, port_y]), np.column_stack([stbd_x, stbd_y])],
-            axis=1,
-        )
-        lc = LineCollection(
-            segments, colors="steelblue", linewidths=0.6, alpha=0.6,
-            zorder=1, label="Scan line (port–starboard)",
-        )
-        ax.add_collection(lc)
+        if scan_nadir_lat is not None and scan_nadir_lon is not None:
+            nadir_x, nadir_y = _project(scan_nadir_lat, scan_nadir_lon, crs)
+        else:
+            nadir_x, nadir_y = (port_x + stbd_x) / 2.0, (port_y + stbd_y) / 2.0
+        nadir = np.column_stack([nadir_x, nadir_y])
+        for edge_x, edge_y, color, label in (
+            (port_x, port_y, port_color, "Port swath"),
+            (stbd_x, stbd_y, starboard_color, "Starboard swath"),
+        ):
+            halves = np.stack([nadir, np.column_stack([edge_x, edge_y])], axis=1)
+            ax.add_collection(LineCollection(
+                halves, colors=color, linewidths=0.6, alpha=0.6, zorder=1, label=label,
+            ))
         # LineCollection doesn't update axis data limits on its own.
         ax.plot(port_x, port_y, alpha=0, zorder=1)
         ax.plot(stbd_x, stbd_y, alpha=0, zorder=1)

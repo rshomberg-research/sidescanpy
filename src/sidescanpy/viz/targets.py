@@ -119,6 +119,7 @@ def plot_track_with_targets(
         track.scan_stbd_lat, track.scan_stbd_lon,
         crs=crs, fig=fig, ax=ax,
         show_land=show_land, show_locator=show_locator,
+        scan_nadir_lat=track.scan_nadir_lat, scan_nadir_lon=track.scan_nadir_lon,
     )
 
     t_lat = [t.latitude for t in targets if t.latitude is not None and t.longitude is not None]
