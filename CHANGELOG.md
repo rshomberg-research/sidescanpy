@@ -7,6 +7,18 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The correction functions `crop_far_range`, `altitude_from_bottom_track`,
+  `apply_tvg`, `compute_geometric_ranges`,
+  `range_correction.apply_empirical_range_correction` and
+  `compute_georeferencing` also take a `SideScanSurvey`: every frequency
+  is corrected and a new survey is returned. With
+  `interpolate_aux_onto_pings`, a survey can be corrected one explicit call
+  at a time, the style the docs and examples now use.
+- `apply_tvg` takes the `TVGParams` fields as keyword arguments
+  (`apply_tvg(ds, spreading_loss_db=40)`).
+
 ## [0.8.0] — 2026-10-29
 
 ### Removed

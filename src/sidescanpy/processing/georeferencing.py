@@ -29,6 +29,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_GEOREF, append_history
+from sidescanpy.processing._per_frequency import per_frequency
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_ELLIPSOID = "WGS84"
 
 
+@per_frequency
 def compute_georeferencing(
     ds: xr.Dataset,
     *,
@@ -46,17 +48,20 @@ def compute_georeferencing(
 
     Parameters
     ----------
-    ds : xr.Dataset
+    ds : xr.Dataset or SideScanSurvey
         Validated sidescan dataset with `across_track_m` and
         `along_track_m` already attached (from `compute_geometric_ranges`).
+        A :class:`~sidescanpy.core.survey.SideScanSurvey` is corrected
+        frequency by frequency with the same arguments; a new survey is
+        returned and the input is not modified.
     ellipsoid : str, default "WGS84"
         Ellipsoid name passed to `pyproj.Geod`. Other common values:
         `"GRS80"`, `"clrk66"`, `"intl"`. Most users want WGS84.
 
     Returns
     -------
-    xr.Dataset
-        New dataset (input not modified) with two added per-sample data
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: a new dataset (input not modified) with two added per-sample data
         variables:
 
         - `latitude_per_sample` (float64, degrees_north)

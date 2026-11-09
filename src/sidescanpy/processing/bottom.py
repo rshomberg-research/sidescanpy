@@ -33,6 +33,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_BOTTOM_TRACK, append_history
+from sidescanpy.processing._per_frequency import per_frequency
 from sidescanpy.processing.inversion import uncorrected_backscatter
 from sidescanpy.processing.sample_axis import sample_index, sample_interval_m
 
@@ -448,6 +449,7 @@ BOTTOM_TRACK_REPLACE = ("missing", "all")
 """Accepted ``replace`` values of :func:`altitude_from_bottom_track`."""
 
 
+@per_frequency
 def altitude_from_bottom_track(
     ds: xr.Dataset,
     *,
@@ -482,9 +484,12 @@ def altitude_from_bottom_track(
 
     Parameters
     ----------
-    ds : xr.Dataset
+    ds : xr.Dataset or SideScanSurvey
         One frequency channel. Radiometric steps already applied are undone
         for detection only; ``backscatter_intensity`` is not changed.
+        A :class:`~sidescanpy.core.survey.SideScanSurvey` is corrected
+        frequency by frequency with the same arguments; a new survey is
+        returned and the input is not modified.
     replace : {"missing", "all"}, default "missing"
         ``"missing"``: replace pings whose ``altitude_m`` is NaN or <= 0.
         ``"all"``: replace every ping with a detection.
@@ -516,8 +521,8 @@ def altitude_from_bottom_track(
 
     Returns
     -------
-    xr.Dataset
-        ``ds`` with ``altitude_m`` replaced where selected and a
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: ``ds`` with ``altitude_m`` replaced where selected and a
         ``"bottom_track"`` history record. Pings with no detection keep
         their recorded value. ``fathometer_reading_m`` is not changed.
     """

@@ -40,6 +40,7 @@ import xarray as xr
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_TVG, append_history, has_step
 from sidescanpy.core.units import linear_to_db
+from sidescanpy.processing._per_frequency import per_frequency
 from sidescanpy.processing.sample_axis import DEFAULT_SOUND_VEL_MS, sample_index
 
 logger = logging.getLogger(__name__)
@@ -316,7 +317,20 @@ def apply_tvg_to_amplitude(
     return amplitude_db + gain_db
 
 
-def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
+@per_frequency
+def apply_tvg(
+    ds: xr.Dataset,
+    params: TVGParams | None = None,
+    *,
+    spreading_loss_db: float | None = None,
+    absorption_db_per_m: float | None = None,
+    min_range_m: float | None = None,
+    sound_velocity_ms: float | None = None,
+    temperature_c: float | None = None,
+    salinity_psu: float | None = None,
+    depth_m: float | None = None,
+    ph: float | None = None,
+) -> xr.Dataset:
     """
     Apply time-varying gain (TVG) correction to ``backscatter_intensity``.
 
@@ -335,18 +349,29 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
 
     Parameters
     ----------
-    ds : xr.Dataset
+    ds : xr.Dataset or SideScanSurvey
         Frequency channel dataset; needs ``backscatter_intensity``,
         ``sound_vel_ms`` and the ``freq_hz_start``/``sample_rate_hz`` attrs.
+        A :class:`~sidescanpy.core.survey.SideScanSurvey` is corrected
+        frequency by frequency with the same arguments; a new survey is
+        returned and the input is not modified.
     params : TVGParams, optional
         If None, defaults with ``absorption_db_per_m`` derived from
         ``freq_hz_start`` and ``sound_velocity_ms`` from the mean per-ping
         ``sound_vel_ms``. The caller's object is never modified.
+    spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms : float, optional
+        Override the matching :class:`TVGParams` field (of ``params``, or of
+        the defaults), so ``apply_tvg(ds, spreading_loss_db=40)`` needs no
+        ``TVGParams``. See :class:`TVGParams` for their meaning.
+    temperature_c, salinity_psu, depth_m, ph : float, optional
+        Francois-Garrison water conditions, used only when
+        ``absorption_db_per_m`` is not set; override the matching fields
+        like the arguments above.
 
     Returns
     -------
-    xr.Dataset
-        New dataset with TVG-corrected dB ``backscatter_intensity`` and the
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: a new dataset with TVG-corrected dB ``backscatter_intensity`` and the
         ``"tvg"`` history record appended.
 
     Raises
@@ -358,6 +383,22 @@ def apply_tvg(ds: xr.Dataset, params: TVGParams | None = None) -> xr.Dataset:
     if has_step(ds, STEP_TVG):
         raise ValueError("TVG has already been applied to this dataset (found in processing_history).")
 
+    overrides = {
+        name: value
+        for name, value in {
+            "spreading_loss_db": spreading_loss_db,
+            "absorption_db_per_m": absorption_db_per_m,
+            "min_range_m": min_range_m,
+            "sound_velocity_ms": sound_velocity_ms,
+            "temperature_c": temperature_c,
+            "salinity_psu": salinity_psu,
+            "depth_m": depth_m,
+            "ph": ph,
+        }.items()
+        if value is not None
+    }
+    if overrides:
+        params = replace(params if params is not None else TVGParams(), **overrides)
     params = resolve_tvg_params(ds, params)
     logger.debug(
         "Applying TVG: freq=%s Hz, spreading=%.1f dB/dec, absorption=%.4f dB/m, "
