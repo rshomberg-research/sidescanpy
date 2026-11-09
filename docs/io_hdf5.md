@@ -47,7 +47,10 @@ Root attributes:
 
 | Attribute | Content |
 |---|---|
+| `format_name` | `sidescanpy-ss` (absent before 0.9.0) |
+| `format_version` | version of this layout, separate from the package version: `0.1` until the layout is frozen as 1.0 (absent before 0.9.0). A file newer than the reader knows is read with a warning. |
 | `sidescanpy_version` | version that wrote the file (absent before 0.8.0) |
+| `date_created` | when the file was written, ISO 8601 UTC (absent before 0.9.0) |
 | `survey_name` | defaults to the first source file's stem |
 | `source_format` | `jsf`, `sdf` or `xtf` |
 | `source_files_json` | JSON list of the source file paths |

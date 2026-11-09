@@ -76,6 +76,12 @@ HDF5_GROUP_SENSORS      : str = f"{HDF5_GROUP_AUX_STREAMS}/sensors"
 HDF5_GROUP_FREQUENCIES  : str = "frequencies"
 HDF5_FREQ_PREFIX        : str = "hz_"
 
+# .ss.h5 format identity (root attributes). The format version is
+# separate from the package version and changes only when the on-disk
+# layout does; 0.x until the layout is frozen as 1.0.
+SS_FORMAT_NAME          : str = "sidescanpy-ss"
+SS_FORMAT_VERSION       : str = "0.1"
+
 # CONSTANTS: I/O configuration
 HDF5_CHUNK_PING         : int = 256
 HDF5_COMPRESSION        : str = 'gzip'

@@ -178,6 +178,16 @@ class TestWriteRootAttrs:
         with h5netcdf.File(str(p), "r") as f:
             assert f.attrs["sidescanpy_version"] == __version__
 
+    def test_format_identity_in_root_attrs(self, sample_full_survey, tmp_path):
+        from sidescanpy.core.schema import SS_FORMAT_NAME, SS_FORMAT_VERSION
+
+        p = tmp_path / "survey.ss.h5"
+        write_survey(sample_full_survey, p)
+        with h5netcdf.File(str(p), "r") as f:
+            assert f.attrs["format_name"] == SS_FORMAT_NAME
+            assert f.attrs["format_version"] == SS_FORMAT_VERSION
+            assert str(f.attrs["date_created"]).endswith("Z")
+
 
 # ============================================================
 # PER-VARIABLE ENCODING (COMPRESSION)

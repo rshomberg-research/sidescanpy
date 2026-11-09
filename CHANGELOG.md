@@ -18,6 +18,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   at a time, the style the docs and examples now use.
 - `apply_tvg` takes the `TVGParams` fields as keyword arguments
   (`apply_tvg(ds, spreading_loss_db=40)`).
+- `.ss.h5` files record `format_name`, `format_version` (`0.1`, separate
+  from the package version until the layout is frozen as 1.0) and
+  `date_created`. Reading a file with a newer format version logs a
+  warning.
 
 ## [0.8.0] — 2026-10-29
 
