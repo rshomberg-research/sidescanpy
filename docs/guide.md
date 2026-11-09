@@ -13,6 +13,7 @@ Data model <core>
 Processing <processing>
 Gridding <grids>
 Targets and datasets <datasets>
+Target recognition <atr>
 Analysis <analysis>
 Visualization <viz>
 Command line <cli>
