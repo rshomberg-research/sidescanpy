@@ -10,8 +10,9 @@ like COCO/YOLO describe it).
 The data model itself lives in :mod:`sidescanpy.core.target` (re-exported
 here). Format-specific catalog readers live next to that format's other IO
 code (e.g. ``sidescanpy.io.jsf.targets``); this package holds target JSON/CSV
-IO, window decoding and display helpers, and position correlation against
-converted surveys. ML annotation writers (COCO/YOLO) are in
+IO, window decoding and display helpers, position correlation against
+converted surveys, and scoring of candidate targets against a catalog
+(:func:`~sidescanpy.targets.score.match_targets`). ML annotation writers (COCO/YOLO) are in
 :mod:`sidescanpy.export.ml`.
 
 2026 rshomberg@uri.edu
@@ -24,6 +25,7 @@ from sidescanpy.targets.io import (
     write_targets_csv,
     write_targets_json,
 )
+from sidescanpy.targets.score import TargetMatch, match_targets
 
 __all__ = [
     "Target",
@@ -34,4 +36,6 @@ __all__ = [
     "write_targets_json",
     "read_targets_csv",
     "write_targets_csv",
+    "TargetMatch",
+    "match_targets",
 ]
