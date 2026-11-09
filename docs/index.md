@@ -29,14 +29,21 @@ from sidescanpy import datasets
 from sidescanpy.grids import grid_channel, to_geotiff
 from sidescanpy.io import read_and_convert
 from sidescanpy.io.hdf5 import write_survey
-from sidescanpy.processing import correct_survey
+from sidescanpy.processing import (
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+)
 
 # A public Benthos XTF line; any JSF, SDF or XTF path works the same way.
 path = datasets.fetch("jncc_mid_irish_sea_MIS11_0.xtf")
 survey = read_and_convert([path], fmt="xtf")
 
-# Navigation onto pings, TVG, slant to ground range, per-sample lat/lon.
-survey = correct_survey(survey)
+survey = interpolate_aux_onto_pings(survey)   # navigation onto the pings
+survey = apply_tvg(survey)                    # time-varying gain
+survey = compute_geometric_ranges(survey)     # slant to ground range
+survey = compute_georeferencing(survey)       # latitude and longitude per sample
 write_survey(survey, "MIS11_0.ss.h5")
 
 # Grid one frequency at 1 m and write a GeoTIFF (needs the geo extra).

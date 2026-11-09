@@ -27,7 +27,12 @@ from sidescanpy.core.target import Target
 from sidescanpy.export.ml import DatasetSpec, build_target_dataset
 from sidescanpy.io.hdf5 import write_survey
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import correct_survey
+from sidescanpy.processing import (
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+)
 from sidescanpy.targets.io import read_targets_json
 
 logger = logging.getLogger("build_yolo_dataset")
@@ -64,7 +69,10 @@ def synthetic_survey(out_dir: Path) -> tuple[Path, list[Target]]:
     survey.add_frequency("hz_900000", ds)
     ss_dir = out_dir / "ss_h5"
     ss_dir.mkdir(parents=True, exist_ok=True)
-    write_survey(correct_survey(survey), ss_dir / "synthetic.ss.h5", overwrite=True)
+    survey = interpolate_aux_onto_pings(survey)
+    survey = apply_tvg(survey)
+    survey = compute_georeferencing(compute_geometric_ranges(survey))
+    write_survey(survey, ss_dir / "synthetic.ss.h5", overwrite=True)
     catalog = [
         Target(target_id=f"{i:04d}", source_format="synthetic", catalog_source="example", latitude=float(lat[p]),
                longitude=float(lon[p]), channel=ch, sample=s, position_confidence="verified")

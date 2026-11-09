@@ -4,7 +4,7 @@ Three formats, one model
 
 Three sonars, three file formats or writers, the same code. Each line is
 read with :func:`~sidescanpy.io.read_and_convert`, TVG-corrected with
-:func:`~sidescanpy.processing.correct_survey` and plotted with
+:func:`~sidescanpy.processing.apply_tvg` and plotted with
 :func:`~sidescanpy.viz.plot_waterfall`; only the file name and format string
 change.
 
@@ -27,7 +27,7 @@ from sidescanpy import datasets
 from sidescanpy.core.units import linear_to_db
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import compute_geometric_ranges, correct_survey
+from sidescanpy.processing import apply_tvg, compute_geometric_ranges
 from sidescanpy.viz import plot_waterfall
 
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -47,7 +47,7 @@ lines = [
 fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
 for ax, (name, fmt, freq_key, label) in zip(axes, lines):
     survey = read_and_convert([datasets.fetch(name)], fmt=fmt)
-    survey = correct_survey(survey, steps=["tvg"])
+    survey = apply_tvg(survey)
     ds = compute_geometric_ranges(survey.get_frequency(freq_key).dataset)
     ds = ds.assign(backscatter_db=linear_to_db(ds["backscatter_intensity"]))
     plot_waterfall(ds, x_axis="slant_range", value_var="backscatter_db",

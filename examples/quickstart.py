@@ -25,7 +25,13 @@ from sidescanpy.grids import (
 )
 from sidescanpy.io.hdf5 import read_survey
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import correct, slice_by_pings
+from sidescanpy.processing import (
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_dataset,
+    slice_by_pings,
+)
 from sidescanpy.viz import plot_gridded_raster, plot_waterfall
 
 logger = logging.getLogger("quickstart")
@@ -48,12 +54,15 @@ def main() -> None:
     ds = slice_by_pings(survey.get_frequency(freq_key).dataset, stop=args.pings).load()
     logger.info("%s / %s: %d pings x %d samples", args.input.name, freq_key, ds.sizes["ping"], ds.sizes["sample"])
 
-    # 2. Correct: TVG, then slant -> ground range, then per-sample lat/lon.
-    #    Steps already recorded in processing_history are skipped, so this
-    #    is safe on a file that sidescan-correct already processed.
-    #    (correct_survey also runs "interpolate_aux" from the survey's
-    #    navigation records.)
-    ds = correct(ds, ["tvg", "geometric", "georef"])
+    # 2. Correct: navigation onto the pings, TVG, slant -> ground range,
+    #    then per-sample lat/lon. Each call records itself in
+    #    processing_history; a file sidescan-correct already processed is
+    #    used as it is.
+    if processing_level(ds) == "raw":
+        ds = interpolate_aux_onto_dataset(ds, survey)
+        ds = apply_tvg(ds)
+        ds = compute_geometric_ranges(ds)
+        ds = compute_georeferencing(ds)
     logger.info("processing level: %s", processing_level(ds))
 
     # 3. Grid onto a UTM raster fitted to the data.

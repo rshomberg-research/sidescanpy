@@ -7,8 +7,8 @@ Once every sample has a latitude and longitude (the ``georef`` step),
 grid and :func:`~sidescanpy.grids.to_geotiff` writes it for a GIS.
 
 The line is from a Benthos SIS-1624 survey in the Irish Sea (XTF written
-by Isis), which records altitude and navigation, so the default
-correction steps are enough. The GeoTIFF needs the ``geo`` extra
+by Isis), which records altitude and navigation, so the standard
+corrections are enough. The GeoTIFF needs the ``geo`` extra
 (``rioxarray``).
 
 Data: JNCC mid-Irish Sea, Open Government Licence v3.0 (see
@@ -28,7 +28,13 @@ from sidescanpy import datasets
 from sidescanpy.grids import grid_channel, to_geotiff
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import correct_survey, slice_by_range
+from sidescanpy.processing import (
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+    slice_by_range,
+)
 from sidescanpy.viz import plot_gridded_raster
 
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -37,12 +43,16 @@ configure_logging("INFO")
 
 # %%
 # Navigation in this file is sample-and-hold: each position repeats for
-# several pings until the next fix arrives. The ``interpolate_aux`` step
-# interpolates between the real fixes, not the repeated entries, which
+# several pings until the next fix arrives.
+# :func:`~sidescanpy.processing.interpolate_aux_onto_pings` interpolates
+# between the real fixes, not the repeated entries, which
 # puts the pings about 0.65 m apart.
 
 survey = read_and_convert([datasets.fetch("jncc_mid_irish_sea_MIS11_0.xtf")], fmt="xtf")
-survey = correct_survey(survey)  # interpolate_aux, tvg, geometric, georef
+survey = interpolate_aux_onto_pings(survey)
+survey = apply_tvg(survey)
+survey = compute_geometric_ranges(survey)
+survey = compute_georeferencing(survey)
 
 # %%
 # Grid each frequency at 1 m, leaving out the water column. Heading

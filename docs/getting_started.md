@@ -111,15 +111,23 @@ settled about recorder gain.
 
 ## Correct
 
-`correct_survey` applies a list of correction steps to every frequency
-and records each one, with its parameters, in the dataset's
-`processing_history`:
+Each correction is a function that takes the survey and returns a
+corrected copy, recording itself, with its parameters, in each
+frequency's `processing_history`:
 
 ```python
 from sidescanpy.core.history import applied_steps
-from sidescanpy.processing import correct_survey
+from sidescanpy.processing import (
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+)
 
-survey = correct_survey(survey)
+survey = interpolate_aux_onto_pings(survey)   # navigation and attitude onto the pings
+survey = apply_tvg(survey)                    # 30 log R spreading + Francois-Garrison absorption
+survey = compute_geometric_ranges(survey)     # slant and ground range
+survey = compute_georeferencing(survey)       # latitude and longitude per sample
 print(applied_steps(survey.get_frequency("hz_400000").dataset))
 write_survey(survey, "MIS11_0.corrected.ss.h5")
 ```
@@ -128,31 +136,32 @@ write_survey(survey, "MIS11_0.corrected.ss.h5")
 ['interpolate_aux', 'tvg', 'geometric', 'georef']
 ```
 
-The default steps interpolate navigation and attitude onto the pings
-(`interpolate_aux`), apply TVG with 30 log R spreading and
-Francois-Garrison absorption (`tvg`), compute slant and ground range
-(`geometric`) and give every sample a latitude and longitude (`georef`).
-To follow the gain check above instead, start again from the converted
-file and turn off the terms the recorder already applied, per frequency
-(a term set to 0 is not applied):
+Leave a call out to skip that correction. To follow the gain check above
+instead, start again from the converted file and turn off the terms the
+recorder already applied, per frequency (a term set to 0 is not
+applied):
 
 ```python
 from sidescanpy.io.hdf5 import read_survey
 
-survey = correct_survey(
-    read_survey("MIS11_0.ss.h5"),
-    frequency_params={
-        "hz_100000": {"tvg": {"spreading_loss_db": 0.0}},
-        "hz_400000": {"tvg": {"spreading_loss_db": 0.0, "absorption_db_per_m": 0.0}},
-    },
-)
+survey = interpolate_aux_onto_pings(read_survey("MIS11_0.ss.h5"))
+tvg = {
+    "hz_100000": {"spreading_loss_db": 0.0},
+    "hz_400000": {"spreading_loss_db": 0.0, "absorption_db_per_m": 0.0},
+}
+for freq_key, terms in tvg.items():
+    ds = survey.get_frequency(freq_key).dataset
+    survey.add_frequency(freq_key, apply_tvg(ds, **terms))
+survey = compute_georeferencing(compute_geometric_ranges(survey))
 ```
 
-Steps already in a dataset's history are skipped, so a second run only
-does what is missing. `force=True` re-applies a step; a TVG step is
-undone from its recorded parameters first, so the new parameters replace
-the old ones. [Correct a line](examples/plot_correct_a_line.rst) adds a
-`bottom_track` step for files that record no altitude.
+`apply_tvg` refuses to run twice on the same data, so gains never stack;
+`invert` undoes a recorded TVG if you want to try another recipe.
+[Correct a line](examples/plot_correct_a_line.rst) adds
+`altitude_from_bottom_track` for files that record no altitude, and
+[Processing](processing.md#running-steps-by-name) shows the same
+corrections run from a list of step names, for config files and large
+files.
 
 ## Grid and write a GeoTIFF
 

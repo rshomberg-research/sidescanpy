@@ -16,7 +16,7 @@ Until version 1.0, any 0.x release can change:
 - **The Python API and the CLI.** Functions, parameters, defaults, flags
   and config keys can be renamed or removed.
 - **Default processing parameters**, such as the TVG spreading term, and
-  so the numbers a default `correct_survey` run produces.
+  so the numbers the default corrections produce.
 
 Breaking changes are listed in [`CHANGELOG.md`](https://github.com/rshomberg-research/sidescanpy/blob/main/CHANGELOG.md)
 under the release that makes them.

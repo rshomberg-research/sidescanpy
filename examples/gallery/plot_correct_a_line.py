@@ -2,14 +2,16 @@
 Correct a line
 ==============
 
-:func:`~sidescanpy.processing.correct_survey` applies an ordered list of
-correction steps. Each step is optional, can be replaced by your own
-function, and is recorded with its parameters in the dataset's
-``processing_history``, so a corrected file says how it was made.
+Each correction is one function call on the survey. Every call is
+recorded with its parameters in each frequency's ``processing_history``,
+so a corrected file says how it was made; leave a call out to skip that
+correction, or put your own function in the chain.
 
 This JNCC line records no altitude above the seabed, which the
-slant-to-ground-range step needs. The ``bottom_track`` step picks it from
-the first seabed return in each ping before ``geometric`` runs.
+slant-to-ground-range step needs.
+:func:`~sidescanpy.processing.altitude_from_bottom_track` picks it from
+the first seabed return in each ping before
+:func:`~sidescanpy.processing.compute_geometric_ranges` runs.
 
 Data: JNCC Wight-Barfleur Reef, Open Government Licence v3.0 (see
 :doc:`/example_data`).
@@ -28,7 +30,14 @@ from sidescanpy import datasets
 from sidescanpy.core.units import linear_to_db
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import compute_geometric_ranges, correct_survey, slice_by_range
+from sidescanpy.processing import (
+    altitude_from_bottom_track,
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+    slice_by_range,
+)
 from sidescanpy.viz import plot_waterfall
 
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -40,13 +49,14 @@ raw = compute_geometric_ranges(survey.get_frequency("hz_521000").dataset.copy(de
 raw = slice_by_range(raw, max_m=150)
 
 # %%
-# Each step is optional and recorded in ``processing_history`` with its
-# parameters. Leave a step out to skip it, or pass your own function.
+# The corrections, in order. Each returns a new survey and leaves its
+# input unchanged.
 
-survey = correct_survey(
-    survey,
-    steps=["interpolate_aux", "bottom_track", "tvg", "geometric", "georef"],
-)
+survey = interpolate_aux_onto_pings(survey)   # navigation and attitude onto the pings
+survey = altitude_from_bottom_track(survey)   # altitude from the first seabed return
+survey = apply_tvg(survey)                    # spreading and absorption losses
+survey = compute_geometric_ranges(survey)     # slant to ground range
+survey = compute_georeferencing(survey)       # latitude and longitude per sample
 corrected = slice_by_range(survey.get_frequency("hz_521000").dataset, max_m=150)
 print(f"altitude from bottom track: {float(corrected['altitude_m'].median()):.1f} m (median)")
 
