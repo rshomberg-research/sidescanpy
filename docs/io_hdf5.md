@@ -1,120 +1,148 @@
-# HDF5 IO
+# HDF5 (.ss.h5)
 
-Read and write full :class:`SideScanSurvey` objects as `.ss.h5` files.
-A single file holds all frequency channels and auxiliary records with a
-grouped layout that supports lazy/chunked loading.
+sidescanpy stores a whole survey (every frequency and every aux record)
+in one HDF5 file with the extension `.ss.h5`. Each group is a NetCDF-4
+group written with h5netcdf, so any HDF5 or NetCDF tool can read it, and
+xarray can open each group without sidescanpy.
 
-!!! warning "The format is not frozen"
-    The layout below may change in any 0.x release before 1.0, and a
-    file written by one 0.x version may not read in a later one. Keep the
-    raw source files and re-convert after an upgrade. The root attribute
-    `sidescanpy_version` records which version wrote a file.
+:::{admonition} The format is not frozen
+:class: warning
+The layout below may change in any 0.x release before 1.0, and a
+file written by one 0.x version may not read in a later one. Keep the
+raw source files and re-convert after an upgrade. The root attribute
+`sidescanpy_version` records which version wrote a file.
+:::
 
-For single-frequency channels in standalone NetCDF, see
-[`docs/io_netcdf.md`](io_netcdf.md). For the schema each group conforms
-to, see [`docs/core.md`](core.md).
+```python
+from sidescanpy.io.hdf5 import read_survey, read_survey_pings, write_survey
 
-## Entry points
+write_survey(survey, "line_001.ss.h5")
+survey = read_survey("line_001.ss.h5")
+survey = read_survey("line_001.ss.h5", chunks={"ping": 256})   # lazy, dask-backed
+survey = read_survey_pings("line_001.ss.h5", start=0, stop=500) # a run of pings
+```
 
-| Function | Use case |
-|---|---|
-| `write_survey(survey, path)` | Write a survey to disk. |
-| `read_survey(path)` | Read back as a validated survey. |
-| `read_survey(path, chunks={"ping": N})` | Lazy loading for frequency channels. |
+`write_survey` refuses to overwrite an existing file unless
+`overwrite=True`. `processing.correct_file` corrects a file in place,
+writing to a temporary file and renaming it so an interrupted run never
+leaves a half-written survey.
 
-## File layout
+## Layout
 
 ```
-survey.ss.h5
-├── /                            ← root attrs: survey_name,
-│                                  source_format, source_files_json,
-│                                  sidescanpy_version
-├── /frequencies/
-│   ├── hz_547500/                ← SideScanFrequencyChannel.dataset
-│   └── hz_1495000/
-└── /aux_streams/
-    ├── navigation/               ← always written (empty if unset)
-    ├── attitude/                 ← always written (empty if unset)
-    ├── dvl/                      ← always written (empty if unset)
-    └── sensors/                  ← only if any sensors present
+line_001.ss.h5
+├── /                        root attributes (below)
+├── frequencies/
+│   ├── hz_100000/           one group per frequency: a SideScanFrequencyChannel
+│   └── hz_400000/
+└── aux_streams/
+    ├── navigation/          always written, empty if the file had none
+    ├── attitude/            always written, empty if the file had none
+    ├── dvl/                 always written, empty if the file had none
+    └── sensors/             only if the survey has sensor records
         └── pressure/
 ```
 
-Group constants are defined in `sidescanpy.core.schema` (`HDF5_GROUP_*`)
-and used uniformly by reader and writer.
+Root attributes:
 
-## Conventions
+| Attribute | Content |
+|---|---|
+| `format_name` | `sidescanpy-ss` (absent before 0.9.0) |
+| `format_version` | version of this layout, separate from the package version: `0.1` until the layout is frozen as 1.0 (absent before 0.9.0). A file newer than the reader knows is read with a warning. |
+| `sidescanpy_version` | version that wrote the file (absent before 0.8.0) |
+| `date_created` | when the file was written, ISO 8601 UTC (absent before 0.9.0) |
+| `survey_name` | defaults to the first source file's stem |
+| `source_format` | `jsf`, `sdf` or `xtf` |
+| `source_files_json` | JSON list of the source file paths |
 
-- **Engine.** `h5netcdf`.
-- **Survey metadata.** Stored in root-level attrs:
-  - `survey_name` (string)
-  - `source_format` (string, e.g. `"JSF"`)
-  - `source_files_json` (JSON-encoded list of paths)
-  - `sidescanpy_version` (the version that wrote the file; absent in
-    files from 0.7.6 and earlier)
-- **Aux records always written.** A survey with no nav messages still
-  writes an empty navigation group. This keeps the file structure
-  consistent across surveys regardless of source content.
-- **Sensors group is conditional.** If a survey has zero sensors, the
-  `aux_streams/sensors/` parent group is omitted entirely. The reader
-  handles its absence.
-- **Encoding.** Every frequency-channel variable with two or more
-  dimensions is written with gzip level 4 + shuffle, chunked along
-  `ping`. float64 variables are stored as float32, except latitude and
-  longitude (float32 resolves only ~0.4 m there). Per-ping 1-D fields are
-  uncompressed. Files from 0.5.0 that also carry `backscatter_raw` still
-  read; `correct_file` drops that variable on rewrite.
-- **Chunking on disk.** `HDF5_CHUNK_PING = 256` along the ping axis for
-  frequency channel data.
-- **Lazy loading.** `chunks={"ping": N}` on read returns dask-backed
-  arrays for frequency channel data. Aux records always load eagerly
-  (they're tiny).
+## Frequency groups
 
-## Round-trip guarantee
+Each `frequencies/hz_<Hz>` group holds dimensions `ping`, `channel`
+(always 2: `port`, `starboard`) and `sample`. A freshly converted file
+has:
 
-After `write_survey(survey, path); read_survey(path)`, the loaded survey
-matches the original:
+| Variable | Dimensions | Type | Meaning |
+|---|---|---|---|
+| `backscatter_intensity` | ping, channel, sample | float32 | amplitude as recorded (scaled by the format's weighting); corrected in place by radiometric steps |
+| `valid_samples` | ping, channel | int32 | samples actually recorded in each ping; the rest is NaN padding |
+| `time` | ping | datetime64 | ping time as recorded |
+| `ping_number` | ping | int32 | ping number from the file |
+| `sample` | sample | int64 | absolute sample index; slicing keeps it, so ranges stay right |
+| `channel_id` | channel | string | `port`, `starboard` |
+| `latitude`, `longitude` | ping | float64 | position, degrees (WGS84) |
+| `heading_deg` | ping | float64 | heading, degrees clockwise from north |
+| `roll_deg`, `pitch_deg` | ping | float64 | attitude, degrees |
+| `heave_m` | ping | float64 | heave, metres |
+| `depth_m` | ping | float32 | sensor depth below the surface, metres |
+| `altitude_m` | ping | float32 | height above the seabed, metres |
+| `fathometer_reading_m` | ping | float32 | altimeter reading as recorded, metres |
+| `sound_vel_ms` | ping | float32 | sound velocity, m/s (NaN or 0 when not recorded) |
 
-- Same frequency channels (validated as `SideScanFrequencyChannel`)
-- Same aux records (`xr.testing.assert_identical`)
-- Same survey metadata (`survey_name`, `source_format`, `source_files`)
-- Same processing history per channel
-- Bit-exact backscatter values, including NaN and dtype preservation
+The `geometric` and `georef` correction steps add per-sample variables
+on `(ping, channel, sample)`, each with `units` and `long_name`
+attributes:
 
-Enforced by ~57 unit tests across `tests/unit/io/hdf5/test_writer.py`,
-`test_reader.py`, and `test_round_trip.py`, plus integration tests
-against real JSF data.
+| Variable | Added by | Meaning |
+|---|---|---|
+| `slant_range_m` | `geometric` | slant range from the transducer |
+| `ground_range_m` | `geometric` | range across the seabed; NaN in the water column |
+| `across_track_m` | `geometric` | signed across-track distance, port negative |
+| `along_track_m` | `geometric` | along-track offset from nadir (pitch) |
+| `vertical_offset_m` | `geometric` | vertical distance from the transducer to the sample |
+| `depth_per_sample_m` | `geometric` | water depth at the sample |
+| `latitude_per_sample`, `longitude_per_sample` | `georef` | position of the sample, degrees (float64) |
 
-## Performance notes
+Group attributes:
 
-- For typical surveys (10k pings × 2 channels × 2000 samples), file
-  sizes after gzip compression are roughly 30-50% of raw payload size.
-- Lazy reads with `chunks={"ping": 256}` align with on-disk chunks for
-  zero-overhead access. Smaller chunk sizes work but emit a warning
-  about misaligned reads.
-- Aux records (typically a few KB to a few MB) load eagerly and don't
-  affect lazy-loading performance for the main backscatter arrays.
+| Attribute | Content |
+|---|---|
+| `freq_hz_start`, `freq_hz_end` | transmit frequency band, Hz |
+| `sample_rate_hz` | sample rate, Hz |
+| `pulse_length_us` | pulse length, µs (0 when the format does not record it) |
+| `processing_history` | JSON list of applied correction steps ([Processing](processing.md#rules)) |
+| `xtf_*`, ... | reader provenance: recording program, sonar name, channel numbers, counts of skipped or repaired packets |
 
-## Inspecting files manually
+Per-ping variables carry their units in the name suffix (`_deg`, `_m`,
+`_ms`) rather than a `units` attribute.
 
-For debugging or quick inspection without loading into Python:
+## Aux groups
 
-```bash
-h5ls survey.ss.h5                   # List top-level groups
-h5ls -r survey.ss.h5                # Recursive listing
-h5dump -A survey.ss.h5              # Root attributes only
-h5dump -H survey.ss.h5/frequencies  # Show structure of one group
+Aux records have their own `time` on an `obs` dimension, independent of
+the pings, because sensors update on their own schedules.
+
+| Group | Variables |
+|---|---|
+| `navigation` | `latitude`, `longitude`, and where recorded `heading_deg`, `speed_knots` |
+| `attitude` | `roll_deg`, `pitch_deg`, `heave_m`, and where recorded `heading_deg` |
+| `dvl` | `altitude_m` |
+| `sensors/<type>` | sensor-specific; `pressure` holds depth, sound speed and temperature |
+
+Each group has a `source` attribute naming where its values came from
+(for example `extracted_from_xtf_ping_headers`).
+
+## Encoding
+
+- Variables with two or more dimensions are gzip level 4 with shuffle,
+  chunked 256 pings at a time. Per-ping variables are uncompressed.
+- float64 is stored as float32, except latitude and longitude, where
+  float32 resolves only about 0.4 m.
+- `read_survey(path, chunks={"ping": 256})` matches the on-disk chunks;
+  other chunk sizes work but read more than they need. Aux records
+  always load into memory (they are small).
+- Files from 0.5.0 may also carry `backscatter_raw`; they still read,
+  and `correct_file` drops that variable when it rewrites the file.
+
+## Reading without sidescanpy
+
+```python
+import xarray as xr
+
+ds = xr.open_dataset("line_001.ss.h5", group="frequencies/hz_400000", engine="h5netcdf")
+nav = xr.open_dataset("line_001.ss.h5", group="aux_streams/navigation", engine="h5netcdf")
 ```
 
-## Future work
+From the shell, `h5ls -r line_001.ss.h5` lists every group and variable
+and `h5dump -A line_001.ss.h5` prints the attributes.
 
-- Add a multi-survey container format (multiple surveys in one file)
-  for mosaicking workflows.
-- Consider Zarr as an alternate backend for cloud-friendly access
-  (S3, GCS). Same xarray semantics, different storage.
-- Freeze the layout for 1.0 and add a `schema_version` root attribute
-  that changes only when the layout does (`sidescanpy_version` records
-  the writer, not the layout).
-- Consider compression tuning per dataset based on data
-  characteristics (e.g. constant-valued backscatter compresses
-  to almost nothing; noisy data benefits less).
+For one frequency on its own, as a plain NetCDF file, see
+[NetCDF](io_netcdf.md).

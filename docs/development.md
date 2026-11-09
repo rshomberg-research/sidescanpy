@@ -1,122 +1,70 @@
-# Development Guide
+# Development
 
 ## Setup
 
-### Prerequisites
-- Python 3.12+
-- `uv` for package management (recommended) or `pip`
-- Git
-
-### Initial Setup
+You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/) and git.
 
 ```bash
-# Clone repo
-git clone <repo-url>
+git clone https://github.com/rshomberg-research/sidescanpy.git
 cd sidescanpy
-
-# Create virtual environment with uv
-uv venv
-source .venv/bin/activate
-
-# Install in editable mode with dev dependencies
-uv pip install -e ".[dev]"
-
-# Verify installation
-pytest tests/unit/ -v
+uv sync --all-extras
+make test
 ```
 
-## Project Structure
+`uv sync --all-extras` builds `.venv/` with every optional dependency,
+so the plotting, GeoTIFF and docs code is tested too.
 
-See `CLAUDE.md` for detailed architecture overview.
+| Command | Runs |
+|---|---|
+| `make test` | the unit tests, with `PYTHONPATH` cleared |
+| `make lint` | ruff |
+| `make docs` | this site in `docs/_build/html`, running the example scripts (downloads about 140 MB the first time); any warning, such as a malformed docstring or a broken cross-reference, fails the build |
+| `make docs-fast` | the same without running the example scripts (no figures) |
+| `make docs-serve` | builds the site, then serves it at <http://127.0.0.1:8000> |
+| `make docs-clean` | removes the build and the generated API and example pages |
 
-## Development Workflow
+`uv run pytest tests/integration --slow` runs the integration tests,
+which need real survey files that are not in the repository and skip
+without them. The public test fixtures are listed in
+`tests/data/public/SOURCES.md`; set `SIDESCANPY_PUBLIC_DATA` to the
+folder holding them to run `tests/unit/io/test_public_fixtures.py`.
 
-### Making Changes
+## Layout
 
-1. **Read `CLAUDE.md`** — Project context and current focus
-2. **Write a design note** first if it's a big change (kept outside the repo)
-3. **Write tests first** — TDD is preferred
-4. **Implement** — Small, focused changes
-5. **Run tests** — `pytest tests/unit/ -v`
-6. **Commit** — Conventional Commits format
-7. **Update `CLAUDE.md`** — If current focus or architecture changed
+| Package | Holds |
+|---|---|
+| `core` | the data model, schema accessors, processing history |
+| `io` | the JSF, SDF and XTF readers, `.ss.h5` and NetCDF I/O, target catalogs |
+| `processing` | correction steps, slicing, bottom and noise detection, segments |
+| `analysis` | measurements that return result dataclasses |
+| `grids` | gridding and GeoTIFF output |
+| `targets` | target catalogs and matching targets to pings |
+| `export` | image windows, chips and COCO/YOLO datasets |
+| `viz` | plotting helpers |
+| `cli` | the `sidescan-*` commands |
 
-### Testing
+Imports go one way, `core ← io ← processing ← analysis ← grids ← targets
+← export ← viz ← cli`, and only `viz` imports matplotlib. A unit test
+(`tests/unit/test_layering.py`) enforces this.
 
-```bash
-# Fast unit tests
-pytest tests/unit/ -v
+## Conventions
 
-# Integration tests (requires fixtures)
-pytest tests/integration/ -v --slow
-
-# Coverage
-pytest tests/unit/ --cov=sidescanpy --cov-report=html
-
-# Specific test
-pytest tests/unit/grids/test_resample.py::TestResampleChannelToGrid3DValidation -v
-```
-
-### Code Style
-
-- **Type hints:** Use for public APIs
-- **Docstrings:** NumPy style for functions/classes
-- **Line length:** 100 characters (soft limit)
-- **Imports:** Standard library first, then third-party, then local
-
-### Commit Messages
-
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-<type>(<scope>): <description>
-
-[optional body]
-
-[optional footer]
-```
-
-**Types:** `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, `chore`
-
-**Scopes:** Use hyphenated module paths (e.g., `io/sdf`, `grids/resample`)
-
-**Examples:**
-- `feat(grids): add resample_channel_to_grid for 3D data`
-- `fix(io/jsf): correct navigation timestamp parsing`
-- `test(grids): add fixtures for 3D channel data`
-- `docs(readme): update installation instructions`
-
-### Running Examples
-
-Scripts in `examples/` run on synthetic data and are smoke-tested in
-`tests/examples/`.
-
-```bash
-python examples/quickstart.py
-```
-
-## Working with Claude Code
-
-This project is set up for use with Claude Code.
-
-- **Project context:** `CLAUDE.md` (read automatically at session start)
-- **Prompts:** `.claude/prompts/` (feature planning, TDD, refactoring templates)
-- **Settings:** `.claude/settings.local.json` (personal, not committed)
-
-### Recommended Session Flow
-
-1. Claude Code reads `CLAUDE.md` — includes current work focus
-2. Plan work (a design note outside the repo if complex)
-3. Implement with TDD approach
-4. Run tests after each change
-5. Suggest commits (user approves and commits manually)
-6. Update `CLAUDE.md` at session end if focus changed
-
-## Docs Organization
-
-- **User docs:** `README.md` (installation, quick start), `docs/` (module refs)
-- **Development docs:** `docs/development.md`, `CLAUDE.md`
-- **Changelog:** `CHANGELOG.md`
+- **Library, not workflow.** Library functions take and return datasets
+  and do one thing. Orchestration, run-everything scripts and multi-panel
+  figures belong in `examples/` or in your own project.
+- **Tests first** for new behaviour, on synthetic data with real shapes
+  (three dimensions, two channels, realistic sample counts);
+  `tests/unit/synthetic.py` has the builders. Never commit survey data.
+- **Docstrings** are numpydoc and are the API reference.
+- **Logging.** Every module has `logger = logging.getLogger(__name__)`
+  and logs only at DEBUG and WARNING. No `print()` in library code.
+- **New schema variables** go in `core/schema.py` before a step produces
+  them.
+- **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/)
+  with the module path as scope: `feat(io/sdf): ...`,
+  `fix(grids/resample): ...`, `docs(processing): ...`.
+- **Versions** follow SemVer. Until 1.0, a minor release may break the
+  API or the `.ss.h5` format; `CHANGELOG.md` lists every break.
 
 ## Sharing before release
 
@@ -128,9 +76,9 @@ people invited; this section is the maintainer's side.
 (moved from a personal account, where collaborators always get write
 access). Add people as outside collaborators with the **Read** role:
 Settings → Collaborators and teams. If it moves again, update `origin`
-in each clone, `[project.urls]` in `pyproject.toml`, `repo_url` in
-`mkdocs.yml`, and the links in `README.md` and `docs/`
-(`grep -rn "github.com/" README.md docs mkdocs.yml pyproject.toml`).
+in each clone, `[project.urls]` in `pyproject.toml`, `github_url` in
+`docs/conf.py` (once set), and the links in `README.md` and `docs/`
+(`grep -rn "github.com/" README.md docs pyproject.toml`).
 
 Before inviting anyone, everything on GitHub (every branch, tag and
 commit message) is visible to them. Check it holds nothing that should
@@ -174,16 +122,19 @@ gh variable set PUBLISH_DOCS --body true -R rshomberg-research/sidescanpy
 Everything on the site is public, including the API reference built
 from the docstrings (signatures and docstrings, not source), the example
 scripts and the development guide. Until the release the pages carry a
-`noindex` tag (`overrides/main.html`), so the link works for the people
-it is given to but search engines leave it out. At the public release,
-enable Pages on this repository instead (same URL), remove `sidescanpy/`
-from the site repository, and delete `overrides/` and `custom_dir` in
-`mkdocs.yml`.
+`noindex` tag, so the link works for the people it is given to but
+search engines leave it out. At the public release, enable Pages on
+this repository instead (same URL), remove `sidescanpy/` from the site
+repository, and set `sidescanpy_noindex = False` in `docs/conf.py`.
 
-**Gallery.** `make gallery` re-runs `examples/gallery/` and refreshes
-the images in `docs/assets/gallery/` (the README uses two of them). The
-scripts download real data, so they are not run in CI; CI only checks
-that every dataset name they fetch is registered.
+**Gallery.** The example pages are built by
+[sphinx-gallery](https://sphinx-gallery.github.io/), which runs every
+`examples/gallery/plot_*.py` script during the docs build, locally and
+in CI, and shows its code, printed output and figures. The scripts
+download real data; CI caches it between runs. The README shows two of
+the figures from `docs/assets/gallery/`; `make readme-images` refreshes
+them from the last `make docs`. The unit suite checks offline that every
+dataset name a script fetches is registered.
 
 **Test data.** The public fixtures are shared as one zip, through a
 link-shared folder that each invited person
@@ -204,45 +155,12 @@ uploading it. Only openly licensed data goes in the zip (see
 release: a published Zenodo record can't be withdrawn, and even a
 restricted one shows its metadata publicly.
 
-## Release Process
+## Releasing
 
-Rough flow:
-1. All work committed on feature branch
-2. All tests passing
-3. `CHANGELOG.md` updated
-4. Version bumped in `pyproject.toml`
-5. Merge to main
-6. Tag: `git tag v0.X.0`
-7. Update `CLAUDE.md` — new "Current Work" state
-8. Push tag: `git push origin v0.X.0`
-
-### Pre-tag checklist
-
-Before running `git tag vX.Y.Z`:
-
-**Documentation**
-- [ ] `CHANGELOG.md` has a dated section for the new version
-- [ ] New features documented in `docs/`
-- [ ] `README.md` reflects supported formats and current capabilities
-- [ ] `CLAUDE.md` "Current Work Focus" updated to new state
-
-**Code quality**
-- [ ] No stray `print()` debug statements
-- [ ] Logging levels appropriate (DEBUG / INFO / WARNING)
-- [ ] TODOs related to this version resolved or explicitly deferred
-
-**Tests**
-- [ ] `pytest tests/unit -v` all green
-- [ ] `pytest tests/integration -v --slow` all green
-- [ ] No accidentally-skipped tests
-
-**Build & packaging**
-- [ ] Version bumped in `pyproject.toml`
-- [ ] Version bumped in `sidescanpy/__init__.py` if `__version__` exists
-- [ ] `python -m build` succeeds
-- [ ] Fresh-venv install of the wheel works
-
-**Git hygiene**
-- [ ] All work committed
-- [ ] Working tree clean
-- [ ] Branch up to date with main
+1. Update `CHANGELOG.md` with a dated section and the version in
+   `pyproject.toml`.
+2. Run `make test`, `make lint`, `make docs` and the integration tests
+   on real data; all pass.
+3. Build and check the wheel: `uv build`, then install it in a fresh
+   environment and run [Getting started](getting_started.md).
+4. Merge to `main`, tag `vX.Y.Z` and push the tag.

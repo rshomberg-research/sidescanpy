@@ -1,24 +1,72 @@
 # Processing
 
 `sidescanpy.processing` corrects, slices and measures frequency-channel
-datasets. Every function takes and returns an `xr.Dataset`; the input is
-never modified.
+datasets. Every function takes and returns an `xr.Dataset` (the corrections also
+take a whole survey); the input is never modified. [Getting started](getting_started.md) runs the default
+correction on a public line, and [Correct a line](examples/plot_correct_a_line.rst)
+adds the bottom track.
 
 ## Corrections
 
-One API applies an ordered list of steps:
+Each correction is a function. Call them in order on a whole survey
+(every frequency is corrected and a new survey returned) or on one
+frequency dataset:
+
+```python
+from sidescanpy.processing import (
+    altitude_from_bottom_track,
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+)
+
+survey = interpolate_aux_onto_pings(survey)        # navigation and attitude onto pings
+survey = altitude_from_bottom_track(survey)        # only if the file has no altitude
+survey = apply_tvg(survey, spreading_loss_db=30)   # spreading and absorption
+survey = compute_geometric_ranges(survey)          # slant and ground range
+survey = compute_georeferencing(survey)            # latitude and longitude per sample
+```
+
+| Function | Does | Needs first |
+|---|---|---|
+| `crop_far_range` | crops far-range noise past a detected cutoff | |
+| `interpolate_aux_onto_pings` | interpolates the survey's navigation and attitude records onto every ping (`interpolate_aux_onto_dataset` for one dataset) | |
+| `altitude_from_bottom_track` | fills missing altitude from the first bottom return | |
+| `apply_tvg` | time-varying gain, linear amplitude to dB | |
+| `compute_geometric_ranges` | slant range, ground range, across- and along-track distance per sample | altitude |
+| `range_correction.apply_empirical_range_correction` | subtracts a fitted range curve | `apply_tvg`, `compute_geometric_ranges` |
+| `compute_georeferencing` | latitude and longitude per sample | `compute_geometric_ranges` |
+
+Every call records itself in the dataset's `processing_history` with the
+parameters it used, and the input is never modified. Leave a call out to
+skip that correction, or put your own function in the chain. The
+radiometric corrections (`apply_tvg`, the range correction) refuse to run
+twice on the same data, because their gains would stack; to change a TVG
+recipe, `invert` the dataset first. The other functions recompute when
+called again.
+
+### Running steps by name
+
+The same corrections can be run from a list of step names, which suits a
+config file or the command line (`sidescan-correct --steps`):
 
 | Function | Applies steps to |
 |---|---|
 | `correct(ds, steps, params, aux=None, force=False)` | one frequency channel |
-| `correct_survey(survey, steps, params, force=False)` | every channel of a survey (feeds the survey's navigation/attitude records to `interpolate_aux`) |
+| `correct_survey(survey, steps, params, frequency_params=None, force=False)` | every channel of a survey (feeds the survey's navigation/attitude records to `interpolate_aux`) |
 | `correct_file(path, steps, params, out_path=None, chunk_pings=None)` | a `.ss.h5` file, written atomically (in place by default), optionally in ping chunks to bound memory |
 
 ```python
-from sidescanpy.processing import correct
+from sidescanpy.processing import correct_survey
 
-ds = correct(ds, ["tvg", "geometric"], params={"tvg": {"spreading_loss_db": 30.0}})
+survey = correct_survey(survey, ["interpolate_aux", "tvg", "geometric", "georef"],
+                        params={"tvg": {"spreading_loss_db": 30.0}})
 ```
+
+Use `correct_file` for files too large for memory, and for adding
+several steps to a file: it applies them in one pass, which is much
+faster than writing the file after each step.
 
 ### Built-in steps
 
@@ -39,6 +87,8 @@ Steps run in the order given; respecting dependencies is the caller's job
 before `geometric` to affect it). `bottom_track` is not in `DEFAULT_STEPS`.
 
 ### Rules
+
+These apply to step lists (`correct`, `correct_survey`, `correct_file`).
 
 - **Skip** a step by leaving it out. `params` may only name steps that
   are in `steps`; a typo raises `ValueError`, and an unknown parameter
@@ -188,13 +238,17 @@ seconds apart (chained) into one update event:
 Choose the window longer than the follow-up delay (one entry) and
 shorter than the gap from the follow-up to the next update; about two log
 intervals usually fits. Too long a window chains successive updates into
-one event and is far worse than no merging. A float applies to every
+one event, which is far worse than no merging.
+
+A float applies to every
 group of every record, so a window sized for a ~3 Hz GPS also chains the
 changes of a ~10 Hz roll sensor; a mapping by variable name, such as
 `merge_window_s={"latitude": 0.15, "longitude": 0.15}`, merges only the
 groups holding those variables (a group takes the smallest window of its
 variables). A WARNING is logged when an event combines more than five
-changes. `aux_update_events(record, groups=..., merge_window_s=...)`
+changes.
+
+To choose the window, `aux_update_events(record, groups=..., merge_window_s=...)`
 reports, per group, the entries, raw changes, events after merging, the
 percentiles (p5–p95) of the gaps between changes and between events, in
 entries and seconds, and the fraction of changes that fall within the

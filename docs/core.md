@@ -1,118 +1,106 @@
-# Core schema and survey
+# Data model
 
-The `core` module defines the data contract used everywhere else in
-SideScanPy and provides the top-level types user code interacts with.
+Every reader produces the same structure, and every correction, grid
+and export function works on it. This page describes that structure and
+its conventions. [HDF5](io_hdf5.md) lists the variables as they are
+stored in a file.
 
-## The two-layer model
+## Survey and frequency channels
 
 ```
-SideScanSurvey                                     ← multi-frequency container
-├── freq_channels: dict[str, SideScanFrequencyChannel]
-│       │
-│       └── dataset: xr.Dataset                    ← validated single-frequency
-│               ├─ dims: ping × channel × sample
-│               ├─ coords: ping_number, time, channel_id
-│               └─ vars: backscatter_*, lat, lon, heading, ...
-│
-└── aux records (xr.Datasets)
-    ├── navigation                                 ← ds.navigation_record
-    ├── attitude                                   ← ds.attitude_record
-    ├── dvl                                        ← ds.dvl_record
-    └── sensors: dict[str, xr.Dataset]             ← ds.sensor_record
+SideScanSurvey
+├── frequencies: one SideScanFrequencyChannel per frequency, keyed "hz_<Hz>"
+│   └── .dataset: xr.Dataset, dims (ping, channel, sample)
+│       ├── backscatter_intensity (ping, channel, sample)
+│       ├── per-ping variables: latitude, longitude, heading_deg, altitude_m, ...
+│       └── attrs: sample_rate_hz, freq_hz_start, freq_hz_end, processing_history
+├── navigation   xr.Dataset on its own time axis (obs)
+├── attitude     xr.Dataset on its own time axis (obs)
+├── dvl          xr.Dataset on its own time axis (obs)
+└── sensors      {"pressure": xr.Dataset, ...}
 ```
 
-A frequency channel is a single ping-time-indexed dataset for one acoustic
-frequency. A survey holds one or more channels plus auxiliary streams
-(navigation, attitude, DVL, sensors) that are sampled on their own
-timestamps — independent of pings — and shared across all frequencies.
+A **frequency channel** is one acoustic frequency: an `xarray.Dataset`
+indexed by ping, with both sides of the swath. A dual-frequency sonar
+gives two channels, each with its own ping axis, because the two
+frequencies need not ping together.
 
-Aux records live at the survey level (not the channel level) because
-they describe the platform, not the sonar. The same GPS fixes apply to
-every frequency the towfish was pinging at the same time.
+The **aux records** (navigation, attitude, DVL, sensors) hold the
+platform's sensor streams on their own timestamps. They belong to the
+survey rather than to a frequency because they describe the towfish or
+vehicle, and the same GPS fixes apply to every frequency. The
+`interpolate_aux` correction step interpolates them onto each channel's
+ping times.
 
-## Schema validation
-
-Every dataset is validated by an xarray accessor on construction or
-assignment. A dataset that doesn't conform raises `ValueError` with a
-message naming the missing piece.
-
-| Accessor | Used on | Required vars |
-|---|---|---|
-| `ds.sidescan` | Single-frequency channel | `backscatter_intensity`, `latitude`, `longitude`, `heading_deg`, `depth_m`, `roll_deg`, `pitch_deg`, `heave_m`, `altitude_m`, `sound_vel_ms`, `fathometer_reading_m` |
-| `ds.navigation_record` | Navigation aux | `latitude`, `longitude` |
-| `ds.attitude_record` | Attitude aux | `roll_deg`, `pitch_deg`, `heave_m` |
-| `ds.dvl_record` | DVL aux | `altitude_m` |
-| `ds.sensor_record` | Generic sensor aux | (none, sensor-dependent) |
-
-Required dims, coords, and attrs are listed in `schema.py`. The
-sidescan schema enforces `channel` size 2 (port + starboard). The
-processing level (`raw`, `tvg`,
-`geometric`, `range_correction`, `georef`) is derived from the recorded
-steps by `core.history.processing_level()`, not stored separately.
-
-### Validation is eager
-
-`SideScanFrequencyChannel.__init__` runs `ds.sidescan.validate()`.
-Aux record setters on `SideScanSurvey` validate before assigning. Bad
-data fails fast with a specific message — there's no "you can stuff
-anything in and it'll fail later" mode.
-
-### Empty-but-valid aux records
-
-Aux records can be empty (zero `obs`) and still pass validation. This
-matters for round-trip serialization: surveys without nav messages
-still write a nav group on disk, which loads back as an empty record.
-The `is_empty()` method on each aux accessor reports this. The
-`SideScanSurvey.has_navigation` (etc.) shortcut returns `False` for
-both `None` and empty.
-
-The `make_empty_*_record()` helpers in `schema.py` build these
-zero-obs datasets when needed.
-
-## Survey container
-
-`SideScanSurvey` is a thin container with a few useful conventions:
-
-- **Frequencies** are added by string key (e.g. `"hz_1495000"`) via
-  `add_frequency(key, dataset)`. Overwriting warns.
-- **Aux records** are exposed as `@property` + `@setter` pairs:
-  setting `survey.navigation = ds` validates and assigns; setting it to
-  `None` clears.
-- **Sensors** are keyed by `sensor_type` and accessed via
-  `add_sensor(type, ds)` and `get_sensor(type)`.
-- **Derived properties** (`time_range`, `bounding_box`,
-  `frequency_hz_list`, etc.) compute on demand. The bounding box prefers
-  the navigation aux record when populated, falling back to per-ping
-  lat/lon arrays otherwise.
+```python
+survey.frequencies                        # ['hz_100000', 'hz_400000']
+ds = survey.get_frequency("hz_400000").dataset
+survey.navigation                         # xr.Dataset or None
+survey.has_navigation                     # False when absent or empty
+survey.get_sensor("pressure")              # KeyError if the file had none
+survey.time_range                         # (first, last) ping time
+survey.bounding_box                       # (lat_min, lat_max, lon_min, lon_max)
+```
 
 ## Conventions
 
-- All time coords are `datetime64[ns]`. Builders that produce time
-  arrays from pandas may need `.astype("datetime64[ns]")` because
-  pandas 2.x defaults to `[us]`.
-- `processing_level` advances through the pipeline: raw → radiometric →
-  geometric → georeferenced. Functions assert their expected input level
-  and update the attribute on output.
-- `processing_history` is a JSON-encoded list. Each entry has `step`,
-  `timestamp_utc`, `params`, `function`, `version`. Use
-  `ds.sidescan.append_to_history(...)` rather than building entries by
-  hand.
-- The `channel_id` coord is always `["port", "starboard"]` as native
-  Python strings (the HDF5/NetCDF readers normalize byte-strings back
-  to native strings).
+- **Channels.** `channel` always has size 2: index 0 is port and 1 is
+  starboard (`channel_id` = `["port", "starboard"]`). Port and starboard
+  samples are separate observations and are never averaged together.
+- **Samples.** Sample 0 is nearest the sonar on both sides. `sample` is
+  an absolute coordinate: a dataset sliced to drop near-range samples
+  keeps its true sample numbers, so ranges computed from it stay right.
+- **Signs.** Across-track distance is negative to port and positive to
+  starboard. Along-track is positive forward. Heading is a compass
+  bearing, degrees clockwise from north.
+- **Units.** Per-ping variable names carry their unit: `_deg` degrees,
+  `_m` metres, `_ms` metres per second. Positions are WGS84 degrees.
+- **Time.** All `time` coordinates are `datetime64[ns]`.
+- **Missing values** are NaN. An aux record can be empty (zero
+  observations) and still be valid; it is written to file as an empty
+  group.
 
-## Future work
+## Validation
 
-- Add tests for the aux stream accessors (currently only the main
-  `sidescan` accessor has dedicated tests; aux validation is covered
-  indirectly through round-trip and converter tests).
-- Add a `SideScanSurvey.replace_frequency(key, ds)` method so callers
-  don't have to reach into `_freq_channels` for in-place channel
-  updates.
-- Add a `SideScanSurvey.clone()` method for deep copying when needed
-  (currently `interpolate.py::_shallow_copy_survey` does this manually).
-- Optional: add `processing_level` validation that prevents going
-  backwards (e.g. raw → radiometric is allowed; radiometric → raw is
-  not).
-- Document the `HDF5_*` constants in their own section once `docs/io_hdf5.md`
-  exists, then remove the duplication here.
+A dataset is checked when it becomes a channel or an aux record, and a
+dataset that does not fit raises `ValueError` naming what is missing.
+The checks are done by xarray accessors you can call yourself:
+
+| Accessor | Checks | Required variables |
+|---|---|---|
+| `ds.sidescan` | a frequency channel | `backscatter_intensity`, `latitude`, `longitude`, `heading_deg`, `depth_m`, `roll_deg`, `pitch_deg`, `heave_m`, `altitude_m`, `sound_vel_ms`, `fathometer_reading_m` |
+| `ds.navigation_record` | navigation | `latitude`, `longitude` |
+| `ds.attitude_record` | attitude | `roll_deg`, `pitch_deg`, `heave_m` |
+| `ds.dvl_record` | DVL | `altitude_m` |
+| `ds.sensor_record` | any sensor | none (needs `time` and the attributes `source`, `sensor_type`) |
+
+A channel also needs the dimensions `ping`, `channel` (size 2) and
+`sample`, the coordinates `ping_number`, `time` and `channel_id`, and the
+attributes `freq_hz_start`, `freq_hz_end`, `pulse_length_us` and
+`sample_rate_hz`. `ds.sidescan.validate()` raises on the first problem;
+`ds.sidescan.is_valid()` returns a bool.
+
+To build a survey from your own data, make datasets that pass these
+checks and add them:
+
+```python
+from pathlib import Path
+from sidescanpy.core import SideScanSurvey
+
+survey = SideScanSurvey(source_files=[Path("my_line.raw")], source_format="custom",
+                        survey_name="my_line")
+survey.add_frequency("hz_400000", ds)     # validates ds
+survey.navigation = nav                   # validates nav; None clears it
+```
+
+## Processing history
+
+Each correction step appends a record to the channel's
+`processing_history` attribute (a JSON list) with the step name, the
+parameters actually used, the function, the sidescanpy version and a UTC
+timestamp. The processing level (`raw`, `tvg`, `geometric`,
+`range_correction`, `georef`) is derived from that list by
+`core.history.processing_level(ds)`; it is not stored separately. Steps
+already in the history are skipped on a re-run, and radiometric steps
+can be undone from their recorded parameters. See
+[Processing](processing.md#rules).

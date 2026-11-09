@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sidescanpy"
-version = "0.7.6"
+version = "0.8.0"
 description = "Read, correct, grid and export sidescan sonar data"
 readme = "README.md"
 license = "MIT"
@@ -17,8 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
 ]
-authors = [{name = "Russ Shomberg"}]
+authors = [{name = "Russ Shomberg", email = "rshomberg@uri.edu"}]
 requires-python = ">=3.12"
 dependencies = [
     "xarray>=2023.0",
@@ -37,7 +38,10 @@ dependencies = [
 ]
 
 [project.urls]
+Documentation = "https://rshomberg-research.github.io/sidescanpy/"
 Repository = "https://github.com/rshomberg-research/sidescanpy"
+Issues = "https://github.com/rshomberg-research/sidescanpy/issues"
+Changelog = "https://github.com/rshomberg-research/sidescanpy/blob/main/CHANGELOG.md"
 
 [project.scripts]
 sidescan-convert = "sidescanpy.cli.convert:main"
@@ -82,19 +86,17 @@ geo = [
     "rioxarray>=0.15",
 ]
 docs = [
-    # The documentation site (mkdocs.yml): guide pages in docs/ plus API
-    # reference generated from the numpydoc docstrings. Build-time only.
-    # mkdocs<2: MkDocs 2.0 drops the plugin system mkdocstrings needs.
-    # gen-files + literate-nav generate one API page per module
-    # (docs/gen_ref_pages.py); they pull in properdocs, the MkDocs 1.x
-    # continuation by its maintainers.
-    "mkdocs>=1.6,<2",
-    "mkdocs-gen-files>=0.5",
-    "mkdocs-literate-nav>=0.6",
-    "mkdocs-material>=9.5",
-    "mkdocstrings[python]>=0.26",
-    # mkdocstrings formats the rendered signatures with ruff when present.
-    "ruff>=0.6",
+    # The documentation site (docs/conf.py), build-time only: Sphinx with
+    # the pydata theme, guide pages in Markdown (MyST), the API reference
+    # from the numpydoc docstrings (autodoc + numpydoc), the examples
+    # gallery (sphinx-gallery, which runs examples/gallery/ and so also
+    # needs the viz and geo extras) and copy buttons on code blocks.
+    "sphinx>=8",
+    "pydata-sphinx-theme>=0.16",
+    "myst-parser>=4",
+    "numpydoc>=1.8",
+    "sphinx-gallery>=0.18",
+    "sphinx-copybutton>=0.5",
 ]
 
 [tool.ruff]
@@ -116,7 +118,7 @@ ignore = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-sidescanpy = ["assets/natural_earth/**/*"]
+sidescanpy = ["assets/natural_earth/**/*", "py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

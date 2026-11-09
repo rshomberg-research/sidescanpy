@@ -16,7 +16,7 @@ Until version 1.0, any 0.x release can change:
 - **The Python API and the CLI.** Functions, parameters, defaults, flags
   and config keys can be renamed or removed.
 - **Default processing parameters**, such as the TVG spreading term, and
-  so the numbers a default `correct_survey` run produces.
+  so the numbers the default corrections produce.
 
 Breaking changes are listed in [`CHANGELOG.md`](https://github.com/rshomberg-research/sidescanpy/blob/main/CHANGELOG.md)
 under the release that makes them.
@@ -50,21 +50,10 @@ public and can be shared freely.
 
 ## Install
 
-sidescanpy is not on PyPI yet. Install it from the repository, pinned to
-a release tag (or `main` for the latest fixes), with an SSH key or a
-`gh auth login` session that GitHub accepts for your account:
-
-```bash
-uv pip install "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"
-# or over HTTPS
-uv pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@main"
-```
-
-In a uv project, `uv add "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"`
-records the pin in `pyproject.toml` and `uv.lock`. The extras are listed
-in the [README](https://github.com/rshomberg-research/sidescanpy#install).
-
-To work on the code itself, clone it and run `uv sync --all-extras`.
+sidescanpy is not on PyPI yet. [Install](install.md) gives the commands
+to install from the repository, pinned to a release tag (or `main` for
+the latest fixes). You need an SSH key or a `gh auth login` session that
+GitHub accepts for your account.
 
 ## Documentation
 
@@ -92,7 +81,7 @@ The repository holds code only, no survey data.
     Without the variable those tests skip. The fixtures are also handy
     as small real files to try the readers on.
 
-- **Examples.** The [worked examples](examples/index.md) download public
+- **Examples.** The [worked examples](examples/index.rst) download public
   recordings with `sidescanpy.datasets.fetch()`, which needs no access
   to anything private. The other scripts in `examples/` run on synthetic
   data. An archived copy of the example data with a DOI is planned for

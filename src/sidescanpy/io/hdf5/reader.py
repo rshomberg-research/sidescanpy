@@ -21,6 +21,7 @@ from sidescanpy.core.schema import (
     HDF5_GROUP_FREQUENCIES,
     HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_SENSORS,
+    SS_FORMAT_VERSION,
 )
 from sidescanpy.core.survey import SideScanSurvey
 
@@ -28,6 +29,53 @@ logger = logging.getLogger(__name__)
 
 
 _HDF5_ENGINE = "h5netcdf"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in str(version).split("."))
+
+
+def check_format_version(root_attrs: dict, path: Path | str = "") -> str | None:
+    """Check a ``.ss.h5`` file's ``format_version`` root attribute.
+
+    Parameters
+    ----------
+    root_attrs : dict
+        The file's root attributes.
+    path : Path or str, optional
+        Used in log messages only.
+
+    Returns
+    -------
+    str or None
+        The file's format version, or None for a file written before the
+        attribute existed (sidescanpy 0.8 and earlier), which is logged at
+        DEBUG and read as is.
+
+    Notes
+    -----
+    A file whose version is newer than this sidescanpy knows
+    (:data:`~sidescanpy.core.schema.SS_FORMAT_VERSION`) is read anyway and
+    logs a WARNING, because a newer layout may hold variables this reader
+    does not understand.
+    """
+    version = root_attrs.get("format_version")
+    if version is None:
+        logger.debug("%s: no format_version attribute (written by sidescanpy 0.8 or earlier)", path)
+        return None
+    version = str(version)
+    try:
+        newer = _version_tuple(version) > _version_tuple(SS_FORMAT_VERSION)
+    except ValueError:
+        logger.warning("%s: unrecognised format_version %r", path, version)
+        return version
+    if newer:
+        logger.warning(
+            "%s: format_version %s is newer than this sidescanpy reads (%s); "
+            "upgrade sidescanpy if anything is missing",
+            path, version, SS_FORMAT_VERSION,
+        )
+    return version
 
 
 def read_survey(
@@ -73,6 +121,8 @@ def read_survey(
         aux_groups = f.get("aux_streams")
         if aux_groups is not None and "sensors" in aux_groups.groups:
             sensor_types = sorted(aux_groups["sensors"].groups)
+
+    check_format_version(root_attrs, p)
 
     # 2. Construct survey shell from root attrs.
     survey_name   = str(root_attrs.get("survey_name", p.stem))

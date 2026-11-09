@@ -30,6 +30,7 @@ from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_CROP_FARRANGE, append_history, read_history
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.core.units import linear_to_db, mask_floor_db
+from sidescanpy.processing._per_frequency import per_frequency
 from sidescanpy.processing.inversion import uncorrected_backscatter
 from sidescanpy.processing.sample_axis import (
     invalid_sound_vel_warning_suppressed,
@@ -199,6 +200,7 @@ def _cutoff_inside_water_column(ds: xr.Dataset, cutoff_sample: int) -> bool:
     return True
 
 
+@per_frequency
 def crop_far_range(
     ds: xr.Dataset,
     *,
@@ -219,6 +221,10 @@ def crop_far_range(
 
     Not invertible: cropped samples are gone (re-convert from the source
     file to get them back).
+
+    ``ds`` may also be a :class:`~sidescanpy.core.survey.SideScanSurvey`:
+    each frequency is cropped at its own detected cutoff and a new survey
+    is returned (the input is not modified).
     """
     n_samples = ds.sizes["sample"]
     if cutoff_sample is None:

@@ -1,16 +1,14 @@
 """
 Klein Marine Systems SDF (Sonar Data File) reader.
 
-Parses Edgetech-style SDF files: a sequence of fixed-format pages, each
-with a 4-byte sync marker followed by a 512-byte header and variable-
-length sonar data.
+Parses Klein SDF files: a sequence of fixed-format pages, each with a
+4-byte sync marker followed by a 512-byte header and variable-length
+sonar data.
 
 This module provides:
 
 - :class:`SDFSonarPage` — typed dataclass for sonar data pages
   (versions 3501 and 3502; low- and high-frequency channels).
-- :func:`parse_page_header` — parse 516 bytes of header into a typed
-  page, dispatching by page version.
 - :func:`read_sdf` / :func:`read_sdf_iter` — read pages from a file.
 - :func:`convert` — convert pages into a SideScanSurvey.
 
@@ -25,7 +23,7 @@ Klein conventions captured here:
 - Year is normally 4-digit (e.g. 2026); some firmware stores
   offset-from-1900. Auto-detected via < 200 check.
 
-See ``docs/io_sdf.md`` for full reference.
+The SDF page of the documentation describes the field mapping and quirks.
 
 2026 rshomberg@uri.edu
 """

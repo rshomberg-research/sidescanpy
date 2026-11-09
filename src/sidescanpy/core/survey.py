@@ -92,6 +92,7 @@ class SideScanSurvey:
     Container for a sidescan sonar survey.
 
     Holds:
+
     - One or more SideScanFrequencyChannel datasets (different freqs cannot
       share a single xr.Dataset because n_samples may differ).
     - Optional navigation, attitude, and DVL auxiliary streams (one each).

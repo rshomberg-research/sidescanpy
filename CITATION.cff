@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use sidescanpy in your work, please cite it as below."
+title: "sidescanpy: read, correct, grid and export sidescan sonar data"
+type: software
+authors:
+  - family-names: Shomberg
+    given-names: Russ
+    email: rshomberg@uri.edu
+    affiliation: University of Rhode Island
+license: MIT
+repository-code: "https://github.com/rshomberg-research/sidescanpy"
+url: "https://rshomberg-research.github.io/sidescanpy/"
+keywords:
+  - sidescan sonar
+  - XTF
+  - JSF
+  - SDF
+  - xarray
+  - marine geophysics
+version: 0.8.0
+date-released: 2026-10-29

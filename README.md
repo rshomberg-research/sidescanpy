@@ -47,8 +47,8 @@ Python 3.12 or newer. sidescanpy is not on PyPI yet; install it from
 this repository (you need read access), pinned to a release tag:
 
 ```bash
-uv pip install "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"
-uv pip install "sidescanpy[viz,maps,geo] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.7.6"
+uv pip install "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.8.0"
+uv pip install "sidescanpy[viz,maps,geo] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.8.0"
 ```
 
 `pip install` takes the same argument. The second line adds basemaps
@@ -86,15 +86,23 @@ from pathlib import Path
 from sidescanpy.grids import grid_channel, to_geotiff
 from sidescanpy.io import read_and_convert
 from sidescanpy.io.hdf5 import read_survey, write_survey
-from sidescanpy.processing import correct_survey, slice_by_range
+from sidescanpy.processing import (
+    apply_tvg,
+    compute_geometric_ranges,
+    compute_georeferencing,
+    interpolate_aux_onto_pings,
+    slice_by_range,
+)
 
 # Convert raw files to one .ss.h5 survey.
 survey = read_and_convert([Path("line_001.jsf")], fmt="jsf")
 write_survey(survey, "line_001.ss.h5")
 
-# Interpolate navigation onto pings, apply TVG, compute ground range and
-# per-sample lat/lon. Steps already applied are skipped on a re-run.
-survey = correct_survey(read_survey("line_001.ss.h5"))
+# Each correction is one call, recorded in processing_history.
+survey = interpolate_aux_onto_pings(read_survey("line_001.ss.h5"))
+survey = apply_tvg(survey, spreading_loss_db=30)
+survey = compute_geometric_ranges(survey)
+survey = compute_georeferencing(survey)
 write_survey(survey, "line_001.corrected.ss.h5", overwrite=True)
 
 # Keep 5-60 m of slant range on one frequency and grid it at 0.5 m.
@@ -104,11 +112,11 @@ raster = grid_channel(ds, resolution_m=0.5)
 to_geotiff(raster, "line_001.tif")  # needs the [geo] extra
 ```
 
-For files too large for memory, `processing.correct_file(path,
-chunk_pings=2000)` corrects in place, chunk by chunk. A single dataset can
-be corrected with `processing.correct(ds, steps, params)`; steps can be
-built-in names, your own callables, or left out to skip them. See
-`processing.correct` for the step names and their parameters.
+Every correction also works on a single frequency dataset. To run them
+from a config file, `processing.correct_survey(survey, steps, params)`
+takes the same corrections as a list of step names; for files too large
+for memory, `processing.correct_file(path, steps, chunk_pings=2000)`
+corrects in place, chunk by chunk.
 
 ### Training dataset from a target catalog
 
@@ -186,7 +194,7 @@ yet.
 uv sync --all-extras
 make test   # unit tests (clears PYTHONPATH)
 make lint   # ruff
-make docs   # documentation site (needs the docs extra: uv sync --extra docs)
+make docs   # documentation site, runs the gallery (needs every extra: uv sync --all-extras)
 ```
 
 Integration tests under `tests/integration/` need real survey files and

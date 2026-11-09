@@ -1,84 +1,73 @@
-# JSF IO
+# JSF
 
-Parses Edgetech `.jsf` binary survey files. Produces typed message instances and
-converts them into a `SideScanSurvey`.
+EdgeTech sonars and the Discover acquisition software record JSF
+(`.jsf`): a stream of messages, each a 16-byte header followed by a
+typed payload. sidescanpy reads the sidescan sonar data messages and the
+navigation, attitude and sensor messages around them, and converts them
+into one `SideScanSurvey`.
 
-## Entry points
+```python
+from sidescanpy.io import read_and_convert
 
-| Function                              | Use case                                           |
-| ------------------------------------- | -------------------------------------------------- |
-| `read_jsf(path)`                      | Eager parse, returns full `list[JSFMessage]`.      |
-| `read_jsf_iter(path)`                 | Generator over messages — for very large files.    |
-| `convert(messages, source_files=...)` | Group + dispatch messages into a `SideScanSurvey`. |
-| `write_subset(src, dst, n_pings=, start_ping=)` | Copy a run of pings to a new file, byte for byte. |
-
-The reader-converter split is intentional: the reader knows about JSF binary,
-the converter knows about the survey schema. Either can be swapped or tested
-independently.
-
-## Message hierarchy
-
-```
-JSFMessage (base)
-├── SonarDataMessage              (per-ping sidescan data)
-├── PitchRollDataMessage          (attitude: roll, pitch, heave)
-├── DopplerVelocityLogDataMessage (DVL: bottom dist, water vel.)
-├── PressureSensorReadingMessage  (pressure, temp, sound speed)
-├── NMEAStringMessage             (parent for NMEA sentences)
-│   ├── NMEARMCMessage            (lat/lon/speed/course)
-│   ├── NMEAGLLMessage            (lat/lon)
-│   ├── NMEAGGAMessage            (lat/lon/fix quality)
-│   ├── NMEAVTGMessage            (course/speed)
-│   ├── NMEAZDAMessage            (date/time)
-│   ├── NMEADBTMessage            (depth below transducer)
-│   └── NMEADPTMessage            (depth + offset)
-└── (other types: parsed but not yet routed by converter)
+survey = read_and_convert(["line_001.jsf"], fmt="jsf")
 ```
 
-Each subclass implements `from_bytes(header, payload)` for parsing and exposes
-typed Python fields after `__post_init__`.
+For lower-level work, `io.jsf.read_jsf(path)` returns every message as a
+typed object, `read_jsf_iter(path)` yields them one at a time for large
+files, and `io.jsf.convert(messages, source_files=...)` builds the survey
+from a message list. `write_subset(src, dst, n_pings=, start_ping=)`
+copies a run of pings, with the messages between them, into a new file
+byte for byte.
 
-## Conventions
+## Messages read
 
-- **Timestamps.** Sonar messages: `timestamp_ns: int`. Aux messages: `timestamp:
-  float` (epoch seconds). The converter handles both via type-aware dispatch.
-  All output `time` coords are `datetime64[ns]`.
-- **Invalid fields.** When validity flags reject a value, current message
-  classes use `None`. The converter coerces to `np.nan`.
-- **Field naming.** Schema-aligned suffixes (`_deg`, `_m`, `_ms`) are used on
-  most newer fields. A few older fields still lack suffixes; see "Future work"
-  below.
+| Message | Type | Becomes |
+|---|---|---|
+| Sonar data | 80 | backscatter for one channel of one ping, plus the per-ping position, attitude, altitude, depth and sound velocity embedded in its header |
+| NMEA strings (RMC, GLL, GGA, VTG, ZDA, DBT, DPT) | 2002 | the `navigation` record (RMC, GLL and GGA positions) |
+| Pitch/roll data | 2020 | the `attitude` record |
+| Pressure sensor reading | 2060 | the `pressure` sensor record |
+| Doppler velocity log | 2080 | the `dvl` record |
 
-## Known device-specific issues
+Other message types are either parsed into a typed object and not
+converted (system information, navigation offsets, file timestamps,
+situation, cable counter) or skipped, with one summary warning per file
+listing the unsupported types.
 
-- **Attitude validity flags.** `PitchRollDataMessage` (type 2020) flags follow
-  the spec bit layout. Devices seen so far set the pitch, roll and heading bits
-  and clear heave and yaw, so `heave_m` is NaN in the `attitude_record` while
-  roll, pitch and heading are populated.
-- **Pressure-stuck-at-zero.** `PressureSensorReadingMessage` has no validity
-  gate; depth/sound_speed/temperature appear stuck at 0 in current sample data.
-  Likely device-specific.
+## Mapping to the model
 
-## Testing
+- **Frequencies.** Sonar messages are grouped by their transmit start
+  and end frequency, one `hz_<Hz>` dataset per group. Channel 0 of a
+  subsystem is port and channel 1 starboard.
+- **Pairing.** Port and starboard messages are paired by ping number.
+  A ping with only one side is kept with the other side NaN by default
+  (`repair_mode="nan_pad"`); `"drop"` drops it and `"abort"` raises.
+- **Samples.** Envelope samples are scaled by the message's weighting
+  factor (2^-N) and stored as float32 `backscatter_intensity`. The per-ping gain
+  factor is read but not applied (see [Limitations](limitations.md)).
+- **Time.** Ping time is the sonar message timestamp in nanoseconds;
+  aux messages carry their own timestamps. All `time` coordinates are
+  `datetime64[ns]`.
+- **Invalid values.** Fields whose validity flag is clear become NaN.
 
-- Unit tests use `Mock(spec=...)` instances. Decouples tests from binary
-  parsing. See `tests/unit/io/jsf/conftest.py`.
-- `tests/unit/io/test_public_fixtures.py` runs on a public EdgeTech Discover
-  JSF cut (`tests/data/public/`, OGL v3) and checks it against the XTF files
-  Discover wrote for the same pings.
-- Integration tests run against a real fixture: `tests/data/jsf/sample.jsf`.
-  Skipped by default; run with `pytest --slow`.
-- Diagnostic script: `scripts/plot_jsf_aux_streams.py` for evaluating source
-  quality and overlap on a real file.
+[JSF navigation and attitude sources](jsf_aux_source_selection.md)
+explains which message each per-ping value is taken from and why.
 
-## Future work
+## Known quirks
 
-- Standardize on `timestamp_ns: int` across all message types (currently only
-  `SonarDataMessage` and `PitchRollDataMessage`).
-- Replace `Optional[float] = None` with `float = nan` for fields gated by
-  validity flags. Removes the `_coerce` step in the converter.
-- Add a validity gate to `PressureSensorReadingMessage`.
-- Implement `to_bytes` for round-trip testing (currently `NotImplementedError`
-  for most message types). Useful for synthesizing test fixtures.
-- Add NMEA types as needed: HDT (true heading), GSV (satellite info).
-- Integration test for `read_jsf_iter` once it's used in production.
+- **Heave is NaN.** On the devices seen so far, pitch/roll messages
+  (2020) mark pitch, roll and heading valid and heave invalid, so
+  `heave_m` is NaN in the `attitude` record.
+- **Pressure fields can read 0.** Pressure messages (2060) have no
+  validity flags. Devices that do not populate depth, sound speed or
+  temperature write 0, which reads as a real value.
+- **DVL validity flags reject everything** on the devices seen so far;
+  the per-ping values embedded in the sonar messages are used instead.
+- **No sound velocity or altitude.** Some Discover files write 0 for
+  both. Sound velocity then falls back to 1500 m/s, and the
+  `bottom_track` correction step measures altitude from the data
+  ([Correct a line](examples/plot_correct_a_line.rst)).
+
+## Reference
+
+EdgeTech JSF file format specification, revision 2.x.

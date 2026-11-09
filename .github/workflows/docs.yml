@@ -1,5 +1,8 @@
-# Build the documentation site on every push and pull request (strict:
-# a malformed docstring fails the build). Builds from main and from
+# Build the documentation site on every push and pull request with
+# Sphinx (-W -n: any warning, such as a malformed docstring or an
+# unresolved cross-reference, fails the build). The build runs the
+# examples/gallery/ scripts through sphinx-gallery; the public recordings
+# they download (~140 MB) are cached between runs. Builds from main and from
 # version tags are kept as a downloadable "sidescanpy-docs" artifact
 # (repository access needed).
 #
@@ -16,7 +19,7 @@
 # At the public release, switch to Pages on this repository instead
 # (same URL): drop the publish job, add actions/upload-pages-artifact +
 # actions/deploy-pages, remove sidescanpy/ from the site repository, and
-# drop the noindex override (overrides/, custom_dir in mkdocs.yml).
+# set sidescanpy_noindex = False in docs/conf.py.
 name: docs
 
 on:
@@ -37,20 +40,26 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      DISABLE_MKDOCS_2_WARNING: "true"
-      NO_MKDOCS_2_WARNING: "1"
+      SIDESCANPY_DATA_DIR: ${{ github.workspace }}/.sidescanpy-data
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Build (strict)
-        run: uv run --extra docs --extra dev mkdocs build --strict --site-dir site
+      # The registry (names, URLs, checksums) lives in datasets.py, so a
+      # change there starts a fresh cache; fetch() re-checks every file.
+      - uses: actions/cache@v4
+        with:
+          path: .sidescanpy-data
+          key: sidescanpy-data-${{ hashFiles('src/sidescanpy/datasets.py') }}
+          restore-keys: sidescanpy-data-
+      - name: Build (warnings are errors, gallery executed)
+        run: make docs
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
           name: sidescanpy-docs
-          path: site
+          path: docs/_build/html
           retention-days: 90
 
   publish:

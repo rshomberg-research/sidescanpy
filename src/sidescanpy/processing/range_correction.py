@@ -36,6 +36,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_RANGE_CORRECTION, STEP_TVG, append_history, has_step
+from sidescanpy.processing._per_frequency import per_frequency
 from sidescanpy.processing.profiles import backscatter_vs_range
 
 logger = logging.getLogger(__name__)
@@ -169,10 +170,12 @@ class RangeCorrectionTable:
         return table
 
     def save(self, path: str) -> None:
+        """Write the table to a JSON file (see `to_dict`)."""
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
 
     @classmethod
     def load(cls, path: str) -> "RangeCorrectionTable":
+        """Read a table written by `save`."""
         return cls.from_dict(json.loads(Path(path).read_text()))
 
 
@@ -253,6 +256,7 @@ def fit_range_correction(
     return range_centers.tolist(), correction_db.tolist(), fit_metadata
 
 
+@per_frequency
 def apply_empirical_range_correction(
     ds: xr.Dataset, table: "RangeCorrectionTable | str | Path | None" = None
 ) -> xr.Dataset:
@@ -262,10 +266,13 @@ def apply_empirical_range_correction(
 
     Parameters
     ----------
-    ds : xr.Dataset
+    ds : xr.Dataset or SideScanSurvey
         TVG-corrected (``"tvg"`` in processing_history) with a
         ``ground_range_m`` variable — i.e. already run through the
         ``"tvg"`` and ``"geometric"`` steps.
+        A :class:`~sidescanpy.core.survey.SideScanSurvey` is corrected
+        frequency by frequency with the same arguments; a new survey is
+        returned and the input is not modified.
     table : RangeCorrectionTable or path
         Required. The calibration to apply, or the path of a JSON file
         written by :meth:`RangeCorrectionTable.save`. The library has no
@@ -273,8 +280,8 @@ def apply_empirical_range_correction(
 
     Returns
     -------
-    xr.Dataset
-        New dataset with ``backscatter_intensity`` shifted by the fitted
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: a new dataset with ``backscatter_intensity`` shifted by the fitted
         curve and a ``"range_correction"`` history record holding the
         curve actually applied (so it can be inverted without the table).
 

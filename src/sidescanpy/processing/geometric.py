@@ -6,7 +6,8 @@ the dataset. Does NOT resample backscatter — original sample positions
 and values are preserved. Downstream tools (xarray.interp, rioxarray,
 etc.) handle resampling onto regular grids on demand.
 
-Outputs (all shape (ping, channel, sample)):
+Outputs (all shape (ping, channel, sample))::
+
     slant_range_m       attitude-invariant time-of-flight range
     ground_range_m      sqrt(slant^2 - altitude^2), unsigned (flat-bottom,
                         no pitch correction)
@@ -44,6 +45,7 @@ import xarray as xr
 
 from sidescanpy._version import __version__
 from sidescanpy.core.history import STEP_GEOMETRIC, append_history
+from sidescanpy.processing._per_frequency import per_frequency
 from sidescanpy.processing.sample_axis import (
     DEFAULT_SOUND_VEL_MS,
     sample_index,
@@ -56,6 +58,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SOUND_VEL_MS = DEFAULT_SOUND_VEL_MS
 
 
+@per_frequency
 def compute_geometric_ranges(
     ds: xr.Dataset,
     *,
@@ -66,8 +69,11 @@ def compute_geometric_ranges(
 
     Parameters
     ----------
-    ds : xr.Dataset
+    ds : xr.Dataset or SideScanSurvey
         Validated sidescan dataset.
+        A :class:`~sidescanpy.core.survey.SideScanSurvey` is corrected
+        frequency by frequency with the same arguments; a new survey is
+        returned and the input is not modified.
     expose_unmasked_z : bool, default False
         If True, vertical_offset_m and depth_per_sample_m are written as
         per-ping values broadcast to (ping, channel, sample) without
@@ -77,8 +83,8 @@ def compute_geometric_ranges(
 
     Returns
     -------
-    xr.Dataset
-        New dataset (input not modified) with six added per-sample data
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: a new dataset (input not modified) with six added per-sample data
         variables and a ``"geometric"`` processing_history record.
 
     Notes

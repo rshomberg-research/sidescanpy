@@ -1,22 +1,25 @@
 """
-One data model, any format: the same code on three sonars and writers.
+Three formats, one model
+========================
 
-EdgeTech JSF (Discover), Benthos XTF (Isis) and Klein XTF (SonarPro),
-each read, TVG-corrected and plotted with identical calls. The JNCC line
-was also written by Discover as XTF; both readers return the same samples.
+Three sonars, three file formats or writers, the same code. Each line is
+read with :func:`~sidescanpy.io.read_and_convert`, TVG-corrected with
+:func:`~sidescanpy.processing.apply_tvg` and plotted with
+:func:`~sidescanpy.viz.plot_waterfall`; only the file name and format string
+change.
 
-Usage:
-    python examples/gallery/three_formats.py [output_dir]
+Data: JNCC Wight-Barfleur Reef and mid-Irish Sea (Open Government
+Licence v3.0) and USGS Grand Bay (U.S. public domain); see
+:doc:`/example_data`.
 
-2026 rshomberg@uri.edu
+Usage: ``python examples/gallery/plot_three_formats.py [output_dir]``
 """
+
+# 2026 rshomberg@uri.edu
 
 import sys
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -24,12 +27,17 @@ from sidescanpy import datasets
 from sidescanpy.core.units import linear_to_db
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import compute_geometric_ranges, correct_survey
+from sidescanpy.processing import apply_tvg, compute_geometric_ranges
 from sidescanpy.viz import plot_waterfall
 
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("INFO")
+
+# %%
+# From left: EdgeTech (JSF written by Discover), Benthos SIS-1624 (XTF
+# written by Isis) and Klein (XTF written by SonarPro), each in dB against
+# slant range.
 
 lines = [
     ("jncc_wight_barfleur_20130321174522.jsf", "jsf", "hz_218740", "EdgeTech JSF (Discover)"),
@@ -39,14 +47,17 @@ lines = [
 fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
 for ax, (name, fmt, freq_key, label) in zip(axes, lines):
     survey = read_and_convert([datasets.fetch(name)], fmt=fmt)
-    survey = correct_survey(survey, steps=["tvg"])
+    survey = apply_tvg(survey)
     ds = compute_geometric_ranges(survey.get_frequency(freq_key).dataset)
     ds = ds.assign(backscatter_db=linear_to_db(ds["backscatter_intensity"]))
     plot_waterfall(ds, x_axis="slant_range", value_var="backscatter_db",
                    vmin_pct=10, vmax_pct=99.5, ax=ax, title=f"{label}, {freq_key}")
 fig.savefig(out / "three_formats.png", dpi=110)
 
-# The same pings, written by EdgeTech Discover once as JSF and once as XTF.
+# %%
+# The same pings, written by EdgeTech Discover once as JSF and once as
+# XTF. The two readers return identical samples.
+
 jsf = read_and_convert([datasets.fetch("jncc_wight_barfleur_20130321174522.jsf")], fmt="jsf")
 xtf = read_and_convert([datasets.fetch("jncc_wight_barfleur_20130321174522H.xtf")], fmt="xtf")
 a = jsf.get_frequency("hz_521000").dataset["backscatter_intensity"]

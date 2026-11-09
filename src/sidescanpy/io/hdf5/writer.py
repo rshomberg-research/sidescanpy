@@ -1,7 +1,7 @@
 """
 Write a SideScanSurvey to an HDF5 (.ss.h5) file.
 
-File layout:
+File layout::
 
     /                                ← root attrs: survey_name, source_format,
     │                                              source_files_json,
@@ -16,7 +16,7 @@ File layout:
         sensors/                     ← only if survey has at least one sensor
             <sensor_type>/
 
-One encoding policy (:func:`_encoding_for`) applies to every frequency
+One encoding policy (``_encoding_for``) applies to every frequency
 data variable with ndim >= 2: gzip level 4 + shuffle, chunked along ping.
 float64 variables are stored as float32 except those in
 :data:`FLOAT64_KEEP` (lat/lon need ~1e-7 deg precision). Aux records are
@@ -27,6 +27,7 @@ stored uncompressed.
 
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 import h5netcdf
@@ -43,6 +44,8 @@ from sidescanpy.core.schema import (
     HDF5_GROUP_FREQUENCIES,
     HDF5_GROUP_NAVIGATION,
     HDF5_GROUP_SENSORS,
+    SS_FORMAT_NAME,
+    SS_FORMAT_VERSION,
     make_empty_attitude_record,
     make_empty_dvl_record,
     make_empty_navigation_record,
@@ -139,11 +142,16 @@ def write_survey(
 def _write_root_attrs(path: Path, survey: SideScanSurvey) -> None:
     """Create the file (mode='w') and set root-level survey metadata.
 
-    ``sidescanpy_version`` records the writer, because the on-disk layout
-    may still change before 1.0.
+    ``format_name`` and ``format_version`` identify the on-disk layout
+    (:data:`~sidescanpy.core.schema.SS_FORMAT_VERSION`);
+    ``sidescanpy_version`` records the writer and ``date_created`` when
+    the file was written (ISO 8601, UTC).
     """
     with h5netcdf.File(str(path), "w") as f:
+        f.attrs["format_name"]       = SS_FORMAT_NAME
+        f.attrs["format_version"]    = SS_FORMAT_VERSION
         f.attrs["sidescanpy_version"] = __version__
+        f.attrs["date_created"]      = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         f.attrs["survey_name"]       = survey.survey_name
         f.attrs["source_format"]     = survey.source_format
         f.attrs["source_files_json"] = json.dumps(
@@ -177,7 +185,7 @@ def _encoding_for(var: str, da: xr.DataArray) -> dict | None:
 
 
 def _build_frequency_encoding(ds: xr.Dataset) -> dict[str, dict]:
-    """Encoding dict for a frequency-channel dataset (see :func:`_encoding_for`)."""
+    """Encoding dict for a frequency-channel dataset (see ``_encoding_for``)."""
     encoding: dict[str, dict] = {}
     for name, da in ds.data_vars.items():
         enc = _encoding_for(str(name), da)

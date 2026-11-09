@@ -69,7 +69,7 @@ def plot_value_histograms(
     axes: tuple[Axes, Axes] | None = None,
     title: str | None = None,
 ) -> tuple[Figure, tuple[Axes, Axes]]:
-    """Dual-panel histogram: linear scale (left) and log10(|x|) scale (right)."""
+    """Dual-panel histogram: linear scale (left) and ``log10(|x|)`` scale (right)."""
     arr = np.asarray(ds[value_var].values, dtype=np.float64).ravel()
     finite = arr[np.isfinite(arr)]
 

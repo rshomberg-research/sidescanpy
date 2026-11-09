@@ -1,128 +1,84 @@
-# Klein SDF format
+# Klein SDF
 
-`.sdf` files are produced by Klein side-scan sonar systems (Klein 4900
-and other UUV-3500-series). The format is binary, big-endian-aware, and
-documented in the Klein "SDF/SDFX Data Page Definitions" spec.
+Klein sidescan systems record SDF (`.sdf`): a sequence of pages, each a
+4-byte marker (`0xFFFFFFFF`), a 512-byte header and a body of sonar
+samples. sidescanpy reads the sonar pages of the UUV-3500 layout (page
+versions 3501 and 3502, low and high frequency), as written by the
+Klein 4900, and converts them into one `SideScanSurvey`.
 
-## File structure
+```python
+from sidescanpy.io import read_and_convert, read_and_convert_segments
 
-A Klein SDF file is a sequence of pages. Each page contains:
-
+survey = read_and_convert(["line_001.sdf"], fmt="sdf")
+for stem, survey in read_and_convert_segments("line_001.sdf"):  # split at range changes
+    ...
 ```
-[4 bytes: marker (always 0xFFFFFFFF)]
-[512 bytes: typed header]
-[variable bytes: body — sonar samples or reserved data]
-```
 
-Pages can be of different types, identified by `page_version`:
+`io.sdf.read_sdf(path)` returns every page as a typed object
+(`SDFSonarPage` for sonar pages, `SDFUnknownPage` for the rest),
+`read_sdf_iter(path)` yields them one at a time, and `io.sdf.convert`
+builds the survey from a page list.
 
-| Version | Description |
-|---|---|
-| 3501 | UUV-3500 Low Frequency sonar data |
-| 3502 | UUV-3500 High Frequency sonar data |
-| 3000-3001 | System 3000 (older) |
-| 3500 | UUV-3500 (obsolete) |
-| Other | Various non-sonar page types |
+There is no public SDF example yet. If you can share a short SDF file
+under an open licence, please get in touch.
 
-The reader yields both sonar pages (`SDFSonarPage`) and non-sonar pages
-(`SDFUnknownPage`). The converter filters to sonar pages only.
+## Page versions
 
-## Header structure
-
-The 512-byte header has 128 uint32-equivalent slots covering 100+ named
-fields plus 26 reserved uint32 slots. See `SDFPageHeader` in
-`sidescanpy.io.sdf.pages` for the full field list.
-
-Key fields:
-
-| Field | Type | Notes |
+| Version | Pages | Read |
 |---|---|---|
-| `page_size` | U32 | Bytes from after marker to end of page |
-| `page_version` | U32 | Page type identifier |
-| `ping_number` | U32 | Increments per ping |
-| `num_samples` | U32 | Sample count per channel |
-| `range_m` | U32 | Sonar range setting (meters) |
-| `speed_cms` | U32 | Towfish speed (cm/s); use `.speed_ms` for m/s |
-| `heading_deg`, `pitch_deg`, `roll_deg` | float32 | Towfish attitude |
-| `altitude_m` | float32 | Altimeter reading (meters) |
-| `depth_volts` | float32 | Depth sensor (Volts; needs calibration) |
-| `ship_latitude_rad`, `ship_longitude_rad` | double | Ship GPS in radians |
-| `fish_latitude_rad`, `fish_longitude_rad` | double | Towfish position in radians |
-| `sonar_freq_khz` | U32 | Operating frequency (kHz); use `.sonar_freq_hz` for Hz |
-| `_reserved` | tuple[U32; 26] | Forward-compatibility slots |
+| 3501 | UUV-3500 low frequency | yes |
+| 3502 | UUV-3500 high frequency | yes |
+| 3500 | UUV-3500 (obsolete) | no |
+| 3000, 3001 | System 3000 | no |
+| others | non-sonar pages | skipped |
 
-## Klein conventions
+## Mapping to the model
 
-- **Latitude/longitude in radians**: All position fields are stored as
-  float64 radians. Use the `.ship_latitude_deg`, `.fish_latitude_deg`
-  etc. properties for degrees.
+| Survey | SDF header |
+|---|---|
+| frequency key `hz_<Hz>` | `sonar_freq_khz` (kHz) |
+| `backscatter_intensity` | port and starboard samples, low 16 bits (see below), float32 |
+| `latitude`, `longitude` | towfish position (`fish_latitude`, `fish_longitude`, radians); the ship position when the towfish position is 0 |
+| `heading_deg`, `pitch_deg`, `roll_deg` | towfish heading, pitch, roll |
+| `altitude_m`, `fathometer_reading_m` | altimeter reading |
+| `depth_m` | NaN (see below) |
+| `sound_vel_ms`, `heave_m` | NaN (not recorded) |
+| `sample_rate_hz` | from the first page's sample count and range, at 1500 m/s |
+| `time` | header date and time, with `fseconds` as the fractional part |
+| navigation and attitude records | one entry per page |
 
-- **Speed in cm/s**: `speed_cms` field is centimeters per second.
-  Use `.speed_ms` for meters per second.
+The header stores speed and sound speed in cm/s and frequency in kHz;
+the page objects expose them in m/s and Hz as well (`speed_ms`,
+`sound_speed_ms`, `sonar_freq_hz`). Older firmware stores the year as an
+offset from 1900 (126 for 2026); years below 200 are read that way.
 
-- **Sound speed in cm/s**: Same conversion. Use `.sound_speed_ms`.
+## Known quirks
 
-- **Frequency in kHz**: `sonar_freq_khz` is kilohertz. Use
-  `.sonar_freq_hz` for hertz.
+- **Depth is a voltage.** The header's depth field is a sensor voltage,
+  and its calibration lives in a separate INI file that is not read.
+  `depth_m` is NaN. If you have the calibration, set `depth_m` yourself
+  after converting.
+- **No sound velocity.** Range is computed at 1500 m/s.
+- **Bit 17 in the samples.** Samples are stored as 32-bit values with
+  16 bits of amplitude. On Klein 4900 data about 0.001 % of samples also
+  have bit 17 set, which shows as isolated bright pixels. The reader
+  keeps the low 16 bits. This masking is empirical; the specification
+  does not document the bit.
+- **Pings of different lengths.** Within one file, shorter pings are
+  padded with NaN to the longest, and `valid_samples` records each ping's
+  true length.
+- **Range changes.** When the range setting changes, the sample interval
+  can change too. `read_and_convert_segments` splits the file into runs
+  of constant sample interval (runs under 50 pings are dropped);
+  `read_and_convert` keeps it whole and uses the first page's rate.
+- **Aux fields with variable units.** Header fields for auxiliary
+  pitch, roll, depth and altitude sensors carry whatever units the
+  sensor reports and are exposed without conversion.
+- **A dead channel looks like noise.** If one frequency shows only a
+  noise floor and sparse spikes while the other shows the seabed, the
+  reader is working and the transducer is not; check the header's
+  `error_flags`.
 
-- **Year handling**: Older Klein firmware stores year as offset from
-  1900 (e.g. 126 means 2026). Newer firmware uses 4-digit years (2026).
-  The dataclass auto-detects via `_year < 200` check.
+## Reference
 
-- **Time precision**: Klein records `hSecond` (hundredths) as field 24
-  for backward compatibility, but `fseconds` (field 51) is the
-  authoritative fractional component. The dataclass uses `fseconds`
-  for timestamp computation.
-
-## Sample data masking
-
-Klein stores sample amplitudes as uint32 even though only 16 bits of
-amplitude are used. Bit 17 is occasionally set (~0.001% of samples in
-observed Klein 4900 data) as undocumented metadata.
-
-The reader masks samples to the low 16 bits via `& 0xFFFF`. This
-removes spurious bright pixels in waterfall visualizations. Masking is
-logged at DEBUG level.
-
-If you need access to the raw uint32 (including the metadata bits), use
-`SDFPageHeader.from_bytes()` and `_parse_sonar_body()` directly to read
-without masking.
-
-## Known limitations
-
-### Depth sensor calibration
-
-The Klein `depth` field is stored in Volts and requires per-survey
-calibration data from the INI file (which we don't parse). Surveys
-converted from SDF have `depth_m` set to NaN. Users with calibration
-data should override the `depth_m` variable manually.
-
-### Sound velocity
-
-Klein doesn't record sound velocity in the page header. Surveys have
-`sound_vel_ms` set to NaN. The pipeline falls back to 1500 m/s in
-`compute_geometric_ranges`.
-
-### Aux fields with variable units
-
-Fields 46-49 (`aux_pitch`, `aux_roll`, `aux_depth`, `aux_altitude`)
-are described in the spec as "variable units" — they're carry-through
-fields from auxiliary sensors that may report in degrees, meters, or
-sensor-specific units. The dataclass exposes them as float32 values
-without unit conversion.
-
-### 455 kHz channel reliability
-
-In one test survey, the 455 kHz transducer was non-functional;
-data appeared as noise floor + sparse spikes. This is a hardware
-condition, not a parsing issue. If you see similar patterns, check:
-- The transducer hardware
-- The `error_flags` field in the header for compass/sensor errors
-- Whether 900 kHz data shows clear seafloor returns (confirming the
-  reader is parsing correctly)
-
-## See also
-
-- Klein SDF/SDFX Data Page Definitions specification
-- `tests/integration/test_sdf_to_survey.py` for end-to-end examples
-- `scripts/batch_convert_and_plot.py` for batch processing workflow
+Klein Associates, *SDF/SDFX Data Page Definitions*.
