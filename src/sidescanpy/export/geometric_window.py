@@ -343,8 +343,8 @@ def extract_geometric_window_binned(
     ``cKDTree.query_ball_point`` loop over every output cell.
 
     2026-09-29, real user request, following this file's own
-    established-libraries-first convention (see ``sidescanpy/CLAUDE.md``'s
-    "Dependencies" section): once per-axis pixel resolution existed
+    established-libraries-first convention (see the "Rules" section of
+    ``AGENTS.md``): once per-axis pixel resolution existed
     (``along_resolution_m``/``across_resolution_m`` above), each output
     cell is really just "the mean of every real sample whose
     (along, across) position falls inside this cell's rectangle" — an

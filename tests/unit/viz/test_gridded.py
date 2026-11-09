@@ -138,7 +138,7 @@ class TestPlotGriddedRasterPercentiles:
 
 
 class TestMaskFloorClip:
-    """Floor-clip artifact values (sidescanpy/CLAUDE.md Known Issue #5) are
+    """Floor-clip artifact values (``core.units.FLOOR_DB``) are
     not real backscatter returns and should be masked to NaN, not treated
     as legitimate low-end data, matching viz/waterfall.py's handling."""
 
