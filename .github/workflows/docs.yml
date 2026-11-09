@@ -4,22 +4,15 @@
 # examples/gallery/ scripts through sphinx-gallery; the public recordings
 # they download (~140 MB) are cached between runs. Builds from main and from
 # version tags are kept as a downloadable "sidescanpy-docs" artifact
-# (repository access needed).
+# (90 days).
 #
-# Builds from main are also published to the public site
-# https://rshomberg-research.github.io/sidescanpy/. GitHub Pages can't
-# serve a private repository on the organization's free plan, so the site
-# lives in the public repository rshomberg-research/rshomberg-research.github.io
-# and this workflow pushes the built site into its sidescanpy/ folder.
+# Builds from main are also published to
+# https://rshomberg-research.github.io/sidescanpy/ by pushing the built
+# site into the sidescanpy/ folder of rshomberg-research.github.io.
 # Publishing is opt-in: it needs the repository variable PUBLISH_DOCS=true
 # and the secret DOCS_DEPLOY_KEY (the private half of a deploy key with
 # write access on the site repository). Setup: docs/development.md,
-# "Sharing before release".
-#
-# At the public release, switch to Pages on this repository instead
-# (same URL): drop the publish job, add actions/upload-pages-artifact +
-# actions/deploy-pages, remove sidescanpy/ from the site repository, and
-# set sidescanpy_noindex = False in docs/conf.py.
+# "Publishing".
 name: docs
 
 on:

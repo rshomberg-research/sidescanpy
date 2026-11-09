@@ -2,12 +2,12 @@
 
 Read, correct, grid and export sidescan sonar data.
 
-> **Pre-release.** sidescanpy is shared by invitation before its public
-> release. Until 1.0, any 0.x release may change the `.ss.h5` file format,
-> the API and the CLI. Keep your raw sonar files, pin the version you use,
-> and expect to re-convert `.ss.h5` files after an upgrade. See
-> [`docs/prerelease.md`](docs/prerelease.md) for installing from the
-> private repository, the docs download and the test data.
+**Documentation:** <https://rshomberg-research.github.io/sidescanpy/>
+
+> **Beta.** Until 1.0, any 0.x release may change the `.ss.h5` file
+> format, the API and the CLI. Keep your raw sonar files, pin the version
+> you use, and expect to re-convert `.ss.h5` files after an upgrade. See
+> [`docs/status.md`](docs/status.md).
 
 ![Raw and corrected waterfall of a public EdgeTech line](docs/assets/gallery/correct_a_line.png)
 
@@ -44,14 +44,14 @@ step (see [`docs/workflow.md`](docs/workflow.md)).
 ## Install
 
 Python 3.12 or newer. sidescanpy is not on PyPI yet; install it from
-this repository (you need read access), pinned to a release tag:
+this repository, pinned to a release tag:
 
 ```bash
-uv pip install "sidescanpy[viz] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.8.0"
-uv pip install "sidescanpy[viz,maps,geo] @ git+ssh://git@github.com/rshomberg-research/sidescanpy.git@v0.8.0"
+pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
+pip install "sidescanpy[viz,maps,geo] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
 ```
 
-`pip install` takes the same argument. The second line adds basemaps
+`uv pip install` and `uv add` take the same argument. The second line adds basemaps
 (cartopy) and GeoTIFF output (rioxarray).
 
 From a checkout, with [uv](https://docs.astral.sh/uv/):
@@ -199,7 +199,7 @@ make docs   # documentation site, runs the gallery (needs every extra: uv sync -
 
 Integration tests under `tests/integration/` need real survey files and
 are skipped without them. The public test fixtures are not in the
-repository either; see [`docs/prerelease.md`](docs/prerelease.md#test-and-example-data). See [`docs/development.md`](docs/development.md)
+repository either; see [`docs/status.md`](docs/status.md#test-and-example-data). See [`docs/development.md`](docs/development.md)
 and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License

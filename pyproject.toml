@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sidescanpy"
-version = "0.8.0"
+version = "0.9.0"
 description = "Read, correct, grid and export sidescan sonar data"
 readme = "README.md"
 license = "MIT"

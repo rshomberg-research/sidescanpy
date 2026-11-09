@@ -1,7 +1,8 @@
 """Small Sphinx helpers for the sidescanpy docs.
 
 - ``sidescanpy_noindex``: when true, every page gets
-  ``<meta name="robots" content="noindex, nofollow">`` (pre-release).
+  ``<meta name="robots" content="noindex, nofollow">``, to keep a site out of
+  search engines.
 - Python cross-references that don't resolve as written are retried by
   name: ``:func:`read_and_convert``` or ``sidescanpy.io.read_and_convert``
   (a re-export) link to the one documented object of that name. Names

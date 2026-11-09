@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-09
+
 ### Added
 
 - The correction functions `crop_far_range`, `altitude_from_bottom_track`,
@@ -22,6 +24,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   from the package version until the layout is frozen as 1.0) and
   `date_created`. Reading a file with a newer format version logs a
   warning.
+
+### Changed
+
+- The repository is public. Installs from GitHub no longer need repository
+  access, and the docs drop the pre-release access and sharing notes: the
+  "Pre-release status" page is now "Project status" (`status.md`), and
+  the site is no longer marked `noindex`.
 
 ### Fixed
 

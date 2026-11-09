@@ -7,24 +7,23 @@ with Python 3.12; other platforms are expected to work but are not yet
 tested in CI.
 
 <!-- TODO(release): replace the git installs below with
-     `pip install "sidescanpy[viz]"` once 0.8 is on PyPI. -->
+     `pip install "sidescanpy[viz]"` once it is on PyPI. -->
 
 sidescanpy is not on PyPI yet. Until it is, install from the GitHub
 repository, pinned to a release tag:
 
 ```bash
-pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.8.0"
+pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
 ```
 
 With [uv](https://docs.astral.sh/uv/), in a project:
 
 ```bash
-uv add "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.8.0"
+uv add "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
 ```
 
-`uv add` records the pin in `pyproject.toml` and `uv.lock`. While the
-repository is private you need read access to it; see
-[Pre-release status](prerelease.md#access).
+`uv add` records the pin in `pyproject.toml` and `uv.lock`. Use `@main`
+in place of the tag for the latest fixes.
 
 ## Extras
 
