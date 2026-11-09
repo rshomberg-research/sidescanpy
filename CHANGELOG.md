@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-11-09
+
 ### Added
 
 - The correction functions `crop_far_range`, `altitude_from_bottom_track`,
