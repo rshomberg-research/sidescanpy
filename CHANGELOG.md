@@ -23,6 +23,12 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   `date_created`. Reading a file with a newer format version logs a
   warning.
 
+### Fixed
+
+- `datasets.fetch` retries a failed download twice (5 s and 20 s apart)
+  before raising, so a briefly misbehaving archive server no longer
+  fails an example or a docs build.
+
 ## [0.8.0] — 2026-10-29
 
 ### Removed

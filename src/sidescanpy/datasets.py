@@ -26,6 +26,7 @@ import io
 import logging
 import os
 import shutil
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 _USER_AGENT = "Mozilla/5.0 (compatible; sidescanpy dataset fetch)"
 _RANGE_BUFFER = 4 * 1024 * 1024
 _TIMEOUT_S = 60
+# Archive servers occasionally answer a range request with something else
+# (rate limiting, a gateway error page); wait and try the whole download
+# again before giving up.
+_RETRY_DELAYS_S = (5.0, 20.0)
 
 
 @dataclass(frozen=True)
@@ -197,7 +202,8 @@ def fetch(name: str, *, directory: str | Path | None = None) -> Path:
         If ``name`` is not registered.
     OSError
         If the download fails or the downloaded file's size or SHA-256
-        does not match the registry (the partial file is removed).
+        does not match the registry, after two retries (5 s and 20 s
+        apart, each logged as a WARNING). The partial file is removed.
     """
     entry = _entry(name)
     root = Path(directory).expanduser() if directory is not None else data_dir()
@@ -209,6 +215,22 @@ def fetch(name: str, *, directory: str | Path | None = None) -> Path:
         logger.warning("Cached %s has the wrong checksum; downloading it again", path)
 
     root.mkdir(parents=True, exist_ok=True)
+    delays = (*_RETRY_DELAYS_S, None)
+    for attempt, delay in enumerate(delays, start=1):
+        try:
+            _download(name, entry, path)
+            return path
+        except (OSError, zipfile.BadZipFile) as exc:
+            if delay is None:
+                raise OSError(f"{name}: download failed after {attempt} attempts: {exc}") from exc
+            logger.warning("%s: download attempt %d failed (%s); retrying in %.0f s",
+                           name, attempt, exc, delay)
+            time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def _download(name: str, entry: "RemoteFile", path: Path) -> None:
+    """Extract one archive member to ``path``, checking size and SHA-256."""
     tmp = path.with_name(path.name + ".part")
     logger.debug("Fetching %s from %s (member %s)", name, entry.archive_url, entry.member)
     try:
@@ -225,7 +247,6 @@ def fetch(name: str, *, directory: str | Path | None = None) -> Path:
         tmp.replace(path)
     finally:
         tmp.unlink(missing_ok=True)
-    return path
 
 
 def _entry(name: str) -> RemoteFile:

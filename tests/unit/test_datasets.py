@@ -104,9 +104,36 @@ class TestFetch:
         assert path.read_bytes() == PAYLOAD
         assert len(registered) == 1
 
+    def test_fetch_retries_when_archive_read_fails(self, registered, archive, monkeypatch, tmp_path):
+        monkeypatch.setattr(datasets, "_RETRY_DELAYS_S", (0.0, 0.0))
+        attempts = []
+
+        def flaky_open(url):
+            attempts.append(url)
+            if len(attempts) < 3:
+                raise zipfile.BadZipFile("File is not a zip file")
+            return zipfile.ZipFile(archive)
+
+        monkeypatch.setattr(datasets, "_open_remote_zip", flaky_open)
+        path = datasets.fetch("test_line.xtf", directory=tmp_path)
+        assert path.read_bytes() == PAYLOAD
+        assert len(attempts) == 3
+
+    def test_fetch_raises_oserror_when_every_attempt_fails(self, registered, monkeypatch, tmp_path):
+        monkeypatch.setattr(datasets, "_RETRY_DELAYS_S", (0.0, 0.0))
+
+        def broken_open(url):
+            raise zipfile.BadZipFile("File is not a zip file")
+
+        monkeypatch.setattr(datasets, "_open_remote_zip", broken_open)
+        with pytest.raises(OSError, match="after 3 attempts"):
+            datasets.fetch("test_line.xtf", directory=tmp_path)
+        assert not list(tmp_path.glob("*.part"))
+
     def test_fetch_raises_and_cleans_up_when_checksum_differs(
         self, registered, monkeypatch, tmp_path
     ):
+        monkeypatch.setattr(datasets, "_RETRY_DELAYS_S", (0.0, 0.0))
         bad = dataclasses.replace(datasets.REGISTRY["test_line.xtf"], sha256="0" * 64)
         monkeypatch.setitem(datasets.REGISTRY, "test_line.xtf", bad)
         cache = tmp_path / "cache"
