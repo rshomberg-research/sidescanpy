@@ -91,17 +91,14 @@ html_title = f"sidescanpy {release}"
 html_static_path = []
 html_show_sourcelink = False
 html_theme_options = {
-    # The repository is private until the public release, so no GitHub
-    # icon or edit links yet. At release add:
-    # "github_url": "https://github.com/rshomberg-research/sidescanpy",
+    "github_url": "https://github.com/rshomberg-research/sidescanpy",
     "navigation_with_keys": False,
     "show_toc_level": 2,
     "header_links_before_dropdown": 6,
     "secondary_sidebar_items": ["page-toc"],
 }
-html_sidebars = {"index": [], "install": [], "getting_started": [], "prerelease": []}
+html_sidebars = {"index": [], "install": [], "getting_started": [], "status": []}
 
-# Pre-release: keep the public site out of search engines (the
-# sidescanpy_docs extension adds a noindex meta tag). Set False at the
-# public release.
-sidescanpy_noindex = True
+# True adds a noindex meta tag to every page (sidescanpy_docs extension),
+# keeping a site out of search engines.
+sidescanpy_noindex = False

@@ -23,6 +23,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   `date_created`. Reading a file with a newer format version logs a
   warning.
 
+### Changed
+
+- The repository is public. Installs from GitHub no longer need repository
+  access, and the docs drop the pre-release access and sharing notes: the
+  "Pre-release status" page is now "Project status" (`status.md`), and
+  the site is no longer marked `noindex`.
+
 ### Fixed
 
 - `datasets.fetch` retries a failed download twice (5 s and 20 s apart)

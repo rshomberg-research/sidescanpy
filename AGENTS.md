@@ -4,15 +4,13 @@
 data (EdgeTech JSF, Klein SDF, XTF → `.ss.h5`).
 **Owner:** Russ Shomberg <rshomberg@uri.edu>
 **Version:** 0.8.0. History: `CHANGELOG.md` and `git log`.
-**Python:** 3.12+. **License:** MIT (private repo for now, publication planned).
-**Pre-release:** code shared by invitation (read access) until the
-public release; the docs site is public
-(https://rshomberg-research.github.io/sidescanpy/, pushed into the org's
-public site repo, so everything in `docs/` and every docstring is
-public). The `.ss.h5` format, API and CLI may change in any 0.x release,
-and the README and docs say so. Keep those warnings until 1.0. Sharing
-setup (site publishing, fixture zip, no Zenodo yet):
-`docs/development.md` → "Sharing before release".
+**Python:** 3.12+. **License:** MIT. **Repository:**
+https://github.com/rshomberg-research/sidescanpy (public).
+**Docs:** https://rshomberg-research.github.io/sidescanpy/, built from
+`main`. Everything in the repository, `docs/` and every docstring is
+public. **Status:** beta. The `.ss.h5` format, API and CLI may change in
+any 0.x release, and the README and docs say so; keep those warnings
+until 1.0. Publishing setup: `docs/development.md` → "Publishing".
 
 This file is the working guide for anyone changing the code, by hand or
 with a coding agent. It is not a log: history belongs in commit
@@ -103,7 +101,7 @@ examples/        runnable scripts, smoke-tested in tests/examples;
                  gallery/ plot_*.py run on fetched public data by sphinx-gallery
                  during `make docs` (and in CI)
 docs/            Sphinx site: MyST guide pages, conf.py, _ext/ (API page
-                 generator, cross-reference fallback, noindex)
+                 generator, cross-reference fallback)
 ```
 
 ### Data model

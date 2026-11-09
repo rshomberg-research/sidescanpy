@@ -66,36 +66,14 @@ Imports go one way, `core ← io ← processing ← analysis ← grids ← targe
 - **Versions** follow SemVer. Until 1.0, a minor release may break the
   API or the `.ss.h5` format; `CHANGELOG.md` lists every break.
 
-## Sharing before release
+## Publishing
 
-Until the public release the repository is private and shared by
-invitation. [Pre-release status](prerelease.md) is the page for the
-people invited; this section is the maintainer's side.
-
-**Repository.** It lives in the `rshomberg-research` organization
-(moved from a personal account, where collaborators always get write
-access). Add people as outside collaborators with the **Read** role:
-Settings → Collaborators and teams. If it moves again, update `origin`
-in each clone, `[project.urls]` in `pyproject.toml`, `github_url` in
-`docs/conf.py` (once set), and the links in `README.md` and `docs/`
-(`grep -rn "github.com/" README.md docs pyproject.toml`).
-
-Before inviting anyone, everything on GitHub (every branch, tag and
-commit message) is visible to them. Check it holds nothing that should
-stay private, with the names to look for in place of the placeholders:
-
-```bash
-git fetch origin --tags --force
-git log --remotes=origin --tags -p -i -G"<name>|<other name>" --format="%h %s"
-git log --remotes=origin --tags -i --grep="<name>" --format="%h %s"
-```
-
-**Docs.** The site is public at
-<https://rshomberg-research.github.io/sidescanpy/> while the code stays
-private. GitHub Pages can't serve a private repository on the
-organization's free plan, so the `docs` workflow pushes each build of
-`main` into the `sidescanpy/` folder of the public repository
-`rshomberg-research/rshomberg-research.github.io`, which Pages serves.
+**Docs.** The site is at
+<https://rshomberg-research.github.io/sidescanpy/>. The `docs` workflow
+pushes each build of `main` into the `sidescanpy/` folder of the
+repository `rshomberg-research/rshomberg-research.github.io`, which
+GitHub Pages serves. (This setup dates from when the code repository
+was private; Pages on this repository at the same URL would replace it.)
 The workflow also keeps every build of `main` and of `v*` tags as the
 `sidescanpy-docs` artifact (90 days).
 
@@ -119,14 +97,6 @@ rm docs_deploy_key docs_deploy_key.pub
 gh variable set PUBLISH_DOCS --body true -R rshomberg-research/sidescanpy
 ```
 
-Everything on the site is public, including the API reference built
-from the docstrings (signatures and docstrings, not source), the example
-scripts and the development guide. Until the release the pages carry a
-`noindex` tag, so the link works for the people it is given to but
-search engines leave it out. At the public release, enable Pages on
-this repository instead (same URL), remove `sidescanpy/` from the site
-repository, and set `sidescanpy_noindex = False` in `docs/conf.py`.
-
 **Gallery.** The example pages are built by
 [sphinx-gallery](https://sphinx-gallery.github.io/), which runs every
 `examples/gallery/plot_*.py` script during the docs build, locally and
@@ -136,9 +106,9 @@ the figures from `docs/assets/gallery/`; `make readme-images` refreshes
 them from the last `make docs`. The unit suite checks offline that every
 dataset name a script fetches is registered.
 
-**Test data.** The public fixtures are shared as one zip, through a
-link-shared folder that each invited person
-is added to. Rebuild it whenever a fixture or `SOURCES.md` changes:
+**Test data.** The public fixtures are kept outside the repository and
+handed out as one zip. Rebuild it whenever a fixture or `SOURCES.md`
+changes:
 
 ```bash
 cd /path/to/fixtures/..       # the directory holding the fixtures folder
@@ -150,10 +120,9 @@ rm -r sidescanpy-public-fixtures
 ```
 
 Then run `test_public_fixtures.py` against the unzipped copy before
-uploading it. Only openly licensed data goes in the zip (see
-`SOURCES.md`). Don't mint a Zenodo DOI for the data before the public
-release: a published Zenodo record can't be withdrawn, and even a
-restricted one shows its metadata publicly.
+sharing it. Only openly licensed data goes in the zip (see
+`SOURCES.md`). A published Zenodo record can't be withdrawn, so check
+the zip before archiving it there.
 
 ## Releasing
 

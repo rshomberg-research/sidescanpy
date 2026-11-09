@@ -8,12 +8,12 @@ range, georeferencing), slices it, grids it to rasters and GeoTIFF, and
 builds COCO/YOLO training datasets from target catalogs. Small analysis
 functions measure a dataset's units, nadir, usable range and TVG state.
 
-:::{admonition} Pre-release
+:::{admonition} Beta
 :class: warning
 Until 1.0, any 0.x release may change the `.ss.h5` file format, the
 API and the CLI. Keep your raw sonar files, pin the version you use,
 and expect to re-convert `.ss.h5` files after an upgrade. See
-[Pre-release status](prerelease.md).
+[Project status](status.md).
 :::
 
 [![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/plot_correct_a_line.rst)
@@ -77,5 +77,5 @@ Guide <guide>
 Formats <formats>
 API reference <reference/index>
 Development <development>
-Pre-release status <prerelease>
+Project status <status>
 ```
