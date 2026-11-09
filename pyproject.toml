@@ -17,8 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
 ]
-authors = [{name = "Russ Shomberg"}]
+authors = [{name = "Russ Shomberg", email = "rshomberg@uri.edu"}]
 requires-python = ">=3.12"
 dependencies = [
     "xarray>=2023.0",
@@ -37,7 +38,10 @@ dependencies = [
 ]
 
 [project.urls]
+Documentation = "https://rshomberg-research.github.io/sidescanpy/"
 Repository = "https://github.com/rshomberg-research/sidescanpy"
+Issues = "https://github.com/rshomberg-research/sidescanpy/issues"
+Changelog = "https://github.com/rshomberg-research/sidescanpy/blob/main/CHANGELOG.md"
 
 [project.scripts]
 sidescan-convert = "sidescanpy.cli.convert:main"
@@ -114,7 +118,7 @@ ignore = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-sidescanpy = ["assets/natural_earth/**/*"]
+sidescanpy = ["assets/natural_earth/**/*", "py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"

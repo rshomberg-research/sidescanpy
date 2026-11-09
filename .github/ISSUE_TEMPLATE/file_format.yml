@@ -1,0 +1,34 @@
+name: File format problem
+description: A JSF, SDF or XTF file doesn't read, or reads wrongly.
+labels: [format]
+body:
+  - type: input
+    id: source
+    attributes:
+      label: Sonar and acquisition software
+      description: e.g. "EdgeTech 4125, Discover 7.x" or "Klein 3900, SonarPro 12".
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What goes wrong
+      description: The error, or what looks wrong (port and starboard swapped, wrong range, missing navigation, ...).
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: DEBUG log of the conversion
+      description: Run with `sidescanpy.log.configure_logging("DEBUG")`.
+      render: text
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample file
+      description: >
+        A short file (a few hundred pings) is the fastest way to a fix. If you
+        can share one, give a download link and the licence it is shared
+        under. `sidescanpy.io.jsf.write_subset` and `sidescanpy.io.xtf.write_subset`
+        cut a short piece out of a long file. Only share data you have the right
+        to release.

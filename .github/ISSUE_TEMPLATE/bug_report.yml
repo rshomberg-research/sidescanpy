@@ -1,0 +1,29 @@
+name: Bug report
+description: Something gives an error or a wrong result.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code to reproduce it
+      render: python
+  - type: textarea
+    id: log
+    attributes:
+      label: Log or traceback
+      description: With `sidescanpy.log.configure_logging("DEBUG")` if the problem is in reading or correcting a file.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: sidescanpy version, Python version and operating system.
+    validations:
+      required: true
