@@ -7,6 +7,21 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `export.ml.write_swath_tiles`, `read_tile_index`, `read_coco_boxes` and
+  `boxes_to_targets`: swath tiles for annotation or detection, and boxes
+  drawn on them (COCO from FiftyOne, CVAT, Label Studio, or detector
+  output) turned back into targets with file, ping, side, sample and
+  position.
+- `targets.match_targets`: score candidate targets against a catalog by
+  geodesic distance (hits, false alarms, misses, precision, recall).
+- Docs: a "Target recognition" guide page; gallery examples for swath
+  tiles, target chips at several corrections and resolutions, and a
+  training dataset with backgrounds; and a target-recognition section
+  (detector, classifier, review, evaluation) trained on a public
+  labelled image set.
+
 ## [0.9.0] — 2026-11-09
 
 ### Added
