@@ -214,6 +214,14 @@ REGISTRY: dict[str, RemoteFile] = {
         description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
                     "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
     ),
+    "bgs_london_gateway_dynamo_88.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_88_2007_219_133426_oic.xtf",
+        size=14354912,
+        sha256="4d1ff5815714b9184d31f0d0da85e36f2770b1ca194299b7386fe94be6ab5cfc",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
     "bgs_london_gateway_dynamo_90.xtf": RemoteFile(
         source="bgs_london_gateway", archive_url=_BGS_LG_2007,
         member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_90_2007_219_135010_oic.xtf",

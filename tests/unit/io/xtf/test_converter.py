@@ -530,3 +530,63 @@ class TestLaybackAndPositionSource:
         ds = survey.get_frequency(survey.frequencies[0]).dataset
         assert ds.attrs["position_source"] == "towfish"
         assert "median 7.07" in ds.attrs["position_source_reason"]
+
+
+def _offset_pings(course_deg=60.0, heading=0.0, offset_en=(-1.8, -12.5), n=10, length_m=200.0, jitter=0.0, **kw):
+    """Projected pings along ``course_deg`` (UTM 19N): Ship on the track, Sensor
+    = Ship + a fixed east/north ``offset_en`` (a tow-point offset rotated by
+    heading 0), ``SensorHeading`` = ``heading``."""
+    east0, north0 = 300_000.0, 4_600_000.0
+    s = np.linspace(0.0, length_m, n)
+    ship_e = east0 + s * np.sin(np.radians(course_deg))
+    ship_n = north0 + s * np.cos(np.radians(course_deg))
+    rng = np.random.default_rng(0)
+    de = offset_en[0] + jitter * rng.standard_normal(n)
+    dn = offset_en[1] + jitter * rng.standard_normal(n)
+    pk = [_ping(i, SensorXcoordinate=ship_e[i] + de[i], SensorYcoordinate=ship_n[i] + dn[i],
+                ShipXcoordinate=ship_e[i], ShipYcoordinate=ship_n[i], SensorHeading=heading, **kw)
+          for i in range(n)]
+    return pk, ship_e, ship_n
+
+
+@pytest.mark.unit
+class TestOffsetRotatedByZeroHeading:
+    """Some writers apply their tow-point offset rotated by the recorded
+    heading; with no heading recorded (0) the Sensor position is the ship's
+    shifted by a fixed east/north vector, whatever the course."""
+
+    def _ds(self, tmp_path, pk):
+        survey = convert(read_xtf(_dual(tmp_path, pk, nav_units=0)), nav_crs=_UTM19N)
+        return survey.get_frequency(survey.frequencies[0]).dataset
+
+    def test_ship_position_used_and_offset_recorded(self, tmp_path):
+        from pyproj import Transformer
+
+        pk, ship_e, ship_n = _offset_pings()
+        ds = self._ds(tmp_path, pk)
+        lon, lat = Transformer.from_crs(_UTM19N, 4326, always_xy=True).transform(ship_e, ship_n)
+        np.testing.assert_allclose(ds["longitude"].values, lon, atol=1e-8)
+        np.testing.assert_allclose(ds["latitude"].values, lat, atol=1e-8)
+        assert ds.attrs["position_source"] == "ship"
+        assert "heading 0" in ds.attrs["position_source_reason"]
+        assert ds.attrs["tow_point_aft_m"] == pytest.approx(12.5, abs=0.01)
+        assert ds.attrs["tow_point_starboard_m"] == pytest.approx(-1.8, abs=0.01)
+
+    def test_recorded_layback_taken_out_of_the_tow_point(self, tmp_path):
+        pk, _, _ = _offset_pings(offset_en=(-1.8, -42.0), Layback=29.0)
+        ds = self._ds(tmp_path, pk)
+        assert ds.attrs["position_source"] == "ship"
+        assert ds.attrs["tow_point_aft_m"] == pytest.approx(13.0, abs=0.01)
+        np.testing.assert_allclose(ds["layback_m"].values, 29.0)
+
+    @pytest.mark.parametrize("kw", [
+        {"heading": 60.0},                      # heading recorded: the offset was rotated properly
+        {"course_deg": 5.0},                    # heading 0 is right on a northbound line
+        {"jitter": 1.0},                        # the offset moves: a real towfish position
+        {"length_m": 5.0},                      # too short to tell the course
+    ])
+    def test_towfish_otherwise(self, tmp_path, kw):
+        pk, _, _ = _offset_pings(**kw)
+        ds = self._ds(tmp_path, pk)
+        assert ds.attrs["position_source"] == "towfish"
+        assert "tow_point_aft_m" not in ds.attrs

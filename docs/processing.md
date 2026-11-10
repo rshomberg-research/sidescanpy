@@ -383,5 +383,13 @@ setting changes (`detect_setting_changes`), dropout or garbage runs
 - `along_track_distance_m(ds, fill_nav_stalls=False)`: cumulative
   geodesic distance along the track; `fill_nav_stalls` spreads pings that
   repeat a navigation fix.
+- `smooth_navigation(ds, window_s=5.0)`: replaces each ping's position
+  with a straight-line fit over a time window, for recorders whose
+  positions change at every entry but carry an error between GPS fixes
+  (a sawtooth that interpolating between fixes cannot remove). Records a
+  `smooth_navigation` history entry; apply it before `georef`.
+- `course_over_ground(ds, half_window_s=4.0)`: per-ping course from the
+  positions either side, to use as `heading_deg` when no compass is
+  recorded or trusted.
 - `build_survey_track(surveys, freq_key, scanline_stride=)`: nadir track
   and strided scan-line endpoints as a `SurveyTrack`.

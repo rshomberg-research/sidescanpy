@@ -9,6 +9,9 @@ Navigation-derived ping geometry: along-track distance and nav-stall repair.
 - :func:`course_over_ground` -- per-ping course (degrees true) from the
   positions a few seconds before and after each ping, for use as the
   heading when a towfish compass is unreliable.
+- :func:`smooth_navigation` -- running mean of the per-ping positions
+  over a time window, for recorders whose positions carry a periodic
+  error between fixes.
 
 Pure array/dataset functions; no plotting.
 
@@ -20,6 +23,10 @@ import logging
 import numpy as np
 import xarray as xr
 from pyproj import Geod
+
+from sidescanpy._version import __version__
+from sidescanpy.core.history import STEP_GEOREF, append_history, has_step
+from sidescanpy.processing._per_frequency import per_frequency
 
 logger = logging.getLogger(__name__)
 
@@ -155,4 +162,116 @@ def course_over_ground(ds: xr.Dataset, *, half_window_s: float = 4.0) -> np.ndar
     out = np.interp(t, tt[moving], unwrapped) % 360.0
     if (~moving).any() or (~ok).any():
         logger.debug(f"course_over_ground: {int((~moving).sum() + (~ok).sum())} ping(s) interpolated")
+    return out
+
+
+STEP_SMOOTH_NAVIGATION = "smooth_navigation"
+"""History step name written by :func:`smooth_navigation`."""
+
+
+@per_frequency
+def smooth_navigation(ds: xr.Dataset, *, window_s: float = 5.0) -> xr.Dataset:
+    """Replace per-ping positions with their running mean over ``window_s``.
+
+    Each ping's ``latitude`` and ``longitude`` come from a straight-line
+    fit (least squares, against time) to the finite positions within
+    ``window_s / 2`` of its time; with evenly spaced pings that is their
+    mean. The fit rather than the mean keeps pings next to missing
+    positions unbiased. Near the ends of the dataset the window shrinks
+    symmetrically, so the first and last pings keep their positions. A
+    straight track at constant speed is unchanged (no lag).
+
+    For positions that change at every entry but carry an error between
+    GPS fixes, which interpolating between fixes cannot remove. Some
+    recorders run the position ahead of each fix and jump back when the
+    next one arrives: a sawtooth along track with the fix period. A window
+    spanning a whole number of fix periods removes it (and leaves a
+    constant along-track offset of about half its amplitude). Check the
+    track first (:func:`~sidescanpy.processing.aux_update_events`, and the
+    residual from a straight line); on sample-and-hold navigation,
+    interpolate between fixes instead
+    (:func:`~sidescanpy.processing.interpolate_aux_onto_pings`).
+
+    The mean is taken in degrees, which is accurate for windows of
+    seconds to minutes; turns tighter than the distance covered in
+    ``window_s`` are cut short. Heading is not changed: derive it from the
+    smoothed track with :func:`course_over_ground` if the compass is not
+    used.
+
+    Parameters
+    ----------
+    ds : xr.Dataset or SideScanSurvey
+        Frequency channel dataset with per-ping ``time``, ``latitude`` and
+        ``longitude``, pings in time order. A
+        :class:`~sidescanpy.core.survey.SideScanSurvey` is smoothed
+        frequency by frequency; a new survey is returned.
+    window_s : float, default 5.0
+        Width of the time window (s), centred on each ping.
+
+    Returns
+    -------
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: a new dataset with float64 ``latitude`` and
+        ``longitude`` and a ``smooth_navigation`` history record. Pings
+        without a finite position keep NaN.
+
+    Raises
+    ------
+    ValueError
+        If ``window_s`` is not positive, or ``georef`` was already applied
+        (its per-sample positions would go stale; invert it first).
+    """
+    if not window_s > 0:
+        raise ValueError(f"window_s must be positive, got {window_s}")
+    if has_step(ds, STEP_GEOREF):
+        raise ValueError("georef was applied before smooth_navigation; invert georef first")
+    t = ds["time"].values.astype("datetime64[ns]").astype(np.int64) / 1e9
+    out_pos = {}
+    ok = np.isfinite(ds["latitude"].values) & np.isfinite(ds["longitude"].values)
+    tt = t[ok]
+    half = np.minimum(window_s / 2.0, np.minimum(tt - tt[0], tt[-1] - tt)) if tt.size else tt
+    tol = 1e-6  # s: ping times a window apart must fall in on both sides alike
+    i0 = np.searchsorted(tt, tt - half - tol, side="left")
+    i1 = np.searchsorted(tt, tt + half + tol, side="right")
+    def window_sum(x):
+        c = np.concatenate([[0.0], np.cumsum(x)])
+        return c[i1] - c[i0]
+
+    if tt.size:
+        tc = tt - tt[0]
+        count = i1 - i0
+        t_mean = window_sum(tc) / count
+        t_var = window_sum(tc**2) / count - t_mean**2
+        t_var = np.where(t_var > 1e-12, t_var, np.inf)  # one ping in the window: no slope
+    for name in ("latitude", "longitude"):
+        values = np.asarray(ds[name].values, dtype=np.float64)
+        smoothed = np.full(values.shape, np.nan)
+        if tt.size:
+            v = values[ok] - values[ok][0]
+            v_mean = window_sum(v) / count
+            slope = (window_sum(tc * v) / count - t_mean * v_mean) / t_var
+            smoothed[ok] = values[ok][0] + v_mean + slope * (tc - t_mean)
+        out_pos[name] = (("ping",), smoothed, ds[name].attrs)
+    shift = np.hypot(
+        (out_pos["latitude"][1] - ds["latitude"].values) * 111_320.0,
+        (out_pos["longitude"][1] - ds["longitude"].values) * 111_320.0 * np.cos(np.radians(ds["latitude"].values)),
+    )
+    shift = shift[np.isfinite(shift)]
+    out = ds.assign(**out_pos)
+    out = append_history(
+        out,
+        STEP_SMOOTH_NAVIGATION,
+        {
+            "window_s": float(window_s),
+            "n_pings_smoothed": int(ok.sum()),
+            "shift_m_median": float(np.median(shift)) if shift.size else None,
+            "shift_m_max": float(shift.max()) if shift.size else None,
+        },
+        function="sidescanpy.processing.navigation.smooth_navigation",
+        version=__version__,
+    )
+    logger.debug(
+        "smooth_navigation: %d pings over %.1f s windows, median shift %s m",
+        int(ok.sum()), window_s, f"{np.median(shift):.2f}" if shift.size else "n/a",
+    )
     return out
