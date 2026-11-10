@@ -59,6 +59,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   each rung, filled by `build_survey_track`.
 - `datasets`: `jncc_mid_irish_sea_MIS15_2.xtf` (bedforms) and
   `usgs_grand_bay_150602133300.xtf` (a sharp seabed edge).
+- Docs: gallery examples for investigating a survey (what's in a file,
+  navigation, the analysis walkthrough), clean thumbnails in teaching
+  order, and "Three formats, one model" renamed to "Comparing results
+  across sonars and file formats".
 
 ### Changed
 
