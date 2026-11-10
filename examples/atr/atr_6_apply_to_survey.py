@@ -1,22 +1,12 @@
 """
-6. Run the models on a survey and score in metres
-=================================================
+Step 6: run both stages on sidescanpy swath tiles and score in meters.
 
-The trained stages applied to sidescanpy output: swath tiles cut from a
-corrected line, detections turned into targets with positions
-(:func:`~sidescanpy.export.ml.boxes_to_targets`), classified, and scored
-against a catalog in metres (:func:`~sidescanpy.targets.match_targets`).
+Tiles a corrected public Klein line, turns detections into targets with positions
+(boxes_to_targets) and scores them against a catalog (match_targets).
 
-The line is the public USGS Grand Bay Klein line and the catalog the
-five illustrative picks of :ref:`sphx_glr_examples_plot_target_chips.py`.
-The models were trained on a different sonar (Marine Sonic, 900 kHz)
-looking for mine-like objects, so their calls here mean little: this
-page shows how the pieces connect, not how well these models transfer.
-Train on tiles from your own sonar for that.
+Usage: python examples/atr/atr_6_apply_to_survey.py ATR_DIR
 
-Not run when the docs are built. Usage::
-
-    python examples/gallery/atr/atr_6_apply_to_survey.py ATR_DIR
+See "Target recognition" in the sidescanpy docs for what each step does and its results.
 """
 
 # 2026 rshomberg@uri.edu
@@ -48,7 +38,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # %%
 # Convert, correct and tile the line (as in
-# :ref:`sphx_glr_examples_plot_swath_tiles.py`, including the merge window
+# examples/gallery/plot_swath_tiles.py, including the merge window
 # for this file's two-entry GPS updates).
 
 survey = read_and_convert([datasets.fetch("usgs_grand_bay_150602205800.xtf")], fmt="xtf")
@@ -109,16 +99,3 @@ catalog = [
 for min_score in (0.05, 0.25, 0.5):
     print(f"min_score {min_score}:", match_targets(candidates, catalog, max_distance_m=3.0,
                                                    min_score=min_score).summary())
-
-# %%
-# Output of a run::
-#
-#     2 candidate targets on 4 tiles
-#     min_score 0.05: 0 hit(s), 2 false alarm(s), 5 miss(es) within 3 m: precision 0.00, recall 0.00
-#     min_score 0.25: 0 hit(s), 0 false alarm(s), 5 miss(es) within 3 m: precision nan, recall 0.00
-#     min_score 0.5: 0 hit(s), 0 false alarm(s), 5 miss(es) within 3 m: precision nan, recall 0.00
-#
-# As expected for models trained on another sonar, nothing transfers. The
-# candidates are still complete targets (``survey_candidates.json``: file,
-# ping, side, sample, position, score), ready for review and for
-# :func:`~sidescanpy.export.ml.build_target_dataset`.

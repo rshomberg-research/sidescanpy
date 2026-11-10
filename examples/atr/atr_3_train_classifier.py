@@ -1,29 +1,12 @@
 """
-3. Train a classifier on target chips
-=====================================
+Step 3: train the second-stage chip classifier (torchvision ResNet-18).
 
-The second stage looks closely at each detection and decides what it is:
-``MILCO`` (mine-like contact), ``NOMBO`` (non-mine-like bottom object) or
-``clutter`` (not an object; the detector's false alarms). It sees a small
-chip around the object, at a fixed size relative to it, which is where a
-classifier can use detail a detector working on whole images cannot.
+MILCO / NOMBO / clutter, with the detector's own false alarms as clutter (hard
+negatives). Run after step 2. A few minutes on a GPU.
 
-Training chips come from the labelled boxes of the training years. The
-clutter chips are the detector's own false alarms on those years ("hard
-negatives"): what the classifier must reject is what the detector gets
-wrong, not random seabed. A first version used random seabed patches as
-clutter and removed only 3 of 57 false alarms on the test year. With your own survey, :func:`~sidescanpy.export.ml.build_target_dataset`
-renders such chips (and background images) straight from the sonar data
-(:ref:`sphx_glr_examples_plot_training_dataset.py`).
+Usage: python examples/atr/atr_3_train_classifier.py ATR_DIR
 
-The model is a ResNet-18 from `torchvision <https://pytorch.org/vision/>`_,
-pretrained on ImageNet and fine-tuned. Not a sidescanpy dependency
-(``pip install torch torchvision``, or it comes with ``ultralytics``).
-
-Run after :ref:`sphx_glr_examples_atr_atr_2_train_detector.py`. Not run
-when the docs are built (a few minutes on a GPU). Usage::
-
-    python examples/gallery/atr/atr_3_train_classifier.py ATR_DIR
+See "Target recognition" in the sidescanpy docs for what each step does and its results.
 """
 
 # 2026 rshomberg@uri.edu
@@ -144,13 +127,3 @@ for _ in range(30):  # epochs
         best_acc = acc
         torch.save(model.state_dict(), root / "classifier.pt")
 print(f"best validation accuracy {best_acc:.2f}")
-
-# %%
-# Output of a run::
-#
-#     train {'MILCO': 360, 'NOMBO': 229, 'clutter': 1288}
-#     val {'MILCO': 49, 'NOMBO': 0, 'clutter': 55}
-#     best validation accuracy 0.55
-#
-# The validation year has no ``NOMBO``; the test year in
-# :ref:`sphx_glr_examples_atr_atr_4_evaluate.py` is the better measure.
