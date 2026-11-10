@@ -52,6 +52,8 @@ GALLERY_ORDER = [
     "plot_swath_tiles",
     "plot_target_chips",
     "plot_training_dataset",
+    "plot_vendor_chain",
+    "plot_four_published_chains",
     # Theory, in reading order
     "plot_how_sidescan_sees",
     "plot_amplitude_and_db",
