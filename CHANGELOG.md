@@ -69,6 +69,13 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `datasets`: `bgs_london_gateway_dynamo_88.xtf`, a sixth Dynamo pass.
 - Docs: gallery examples for eight wrecks at one scale, four passes over
   one wreck (native and north-up), and a wreck's height from its shadow.
+- Docs: the `.ss.h5` data format has its own section (the one format
+  every reader converts into, a draft open for comment), separate from
+  the source formats. JSF and its navigation-sources page are one page,
+  every source page describes its channels and data streams, and a new
+  page covers adding a source format. Old page URLs redirect.
+- Docs: Development is now Contributing and Project status is now
+  Stability, both written for readers.
 - Docs: Guide and Examples split cleanly. Examples holds every worked
   walkthrough (the executed gallery, target recognition step by step, and
   the example data list); the Guide explains each part of the library.
