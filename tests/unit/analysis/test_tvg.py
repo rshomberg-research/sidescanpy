@@ -22,6 +22,10 @@ from sidescanpy.core.units import linear_to_db as _linear_to_db
 from sidescanpy.processing import correct
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
+# The range-decay classifier and its plots are deprecated (removal in 0.12);
+# these tests keep covering them until then.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 # ============================================================
 # HELPERS
 # ============================================================

@@ -1,6 +1,15 @@
 """
 TVG analysis: backscatter-vs-range profiles and hardware-TVG detection.
 
+The TVG fit is :func:`sidescanpy.analysis.fit_tvg_models` (in
+:mod:`sidescanpy.analysis.tvg_fit`). The candidate classifier below,
+:func:`fit_range_decay` and :func:`fit_tvg_curve` with
+:class:`TVGCandidateFit` and :class:`TVGCandidateFitResult`, is
+deprecated since 0.10 and will be removed in 0.12: it anchored every
+model at one reference bin, compared one spreading coefficient at a time
+and took its window from the nadir and usable-range analyses, which
+often left it fitting the wrong stretch of range.
+
 Profiles and comparisons:
 
 - :func:`backscatter_vs_range`, :func:`backscatter_vs_sample` — binned
@@ -20,6 +29,7 @@ Detecting what TVG the data already carries:
 """
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -43,6 +53,12 @@ from sidescanpy.processing.radiometric import (
 )
 
 logger = logging.getLogger(__name__)
+
+_REMOVAL = "and will be removed in sidescanpy 0.12"
+
+
+def _deprecated(name: str, use: str) -> None:
+    warnings.warn(f"{name} is deprecated since 0.10 {_REMOVAL}; use {use}.", DeprecationWarning, stacklevel=3)
 
 __all__ = [
     "RangeDecayResult",
@@ -147,6 +163,9 @@ class TVGCandidateFit:
     value, because a free scale on one term can absorb unrelated
     range-dependent effects and win on RMSE alone. For ``flat`` (model
     identically zero) both values are equal.
+
+    .. deprecated:: 0.10
+       Removed in 0.12; see :class:`~sidescanpy.analysis.TVGModelFit`.
     """
 
     name: str  # one of _TVG_CANDIDATE_NAMES
@@ -161,15 +180,25 @@ class TVGCandidateFit:
     # (a one-sided window).
     r_fit_min_m: float | None = None
 
+    def __post_init__(self):
+        _deprecated("TVGCandidateFit", "sidescanpy.analysis.fit_tvg_models (TVGModelFit)")
+
 
 @dataclass(frozen=True)
 class TVGCandidateFitResult:
-    """All four candidate fits for one curve, plus the best by fixed-scale RMSE."""
+    """All four candidate fits for one curve, plus the best by fixed-scale RMSE.
+
+    .. deprecated:: 0.10
+       Removed in 0.12; see :class:`~sidescanpy.analysis.TVGFitResult`.
+    """
 
     candidates: list[TVGCandidateFit]  # fixed order: _TVG_CANDIDATE_NAMES
     best: TVGCandidateFit
     observed_range_m: np.ndarray  # bin centers (for plotting)
     observed_loss_db: np.ndarray  # observed loss at those centers (for plotting)
+
+    def __post_init__(self):
+        _deprecated("TVGCandidateFitResult", "sidescanpy.analysis.fit_tvg_models (TVGFitResult)")
 
 
 def fit_tvg_curve(
@@ -186,6 +215,11 @@ def fit_tvg_curve(
     value_col: str = "mean",
 ) -> TVGCandidateFitResult:
     """Fit four candidate hardware-TVG models to a binned raw dB-vs-range curve.
+
+    .. deprecated:: 0.10
+       Removed in 0.12. Use :func:`~sidescanpy.analysis.fit_tvg_models`,
+       which fits a free constant, compares 20/30/40 log R with and
+       without absorption, and ends its window at the noise knee.
 
     Each candidate is a term (or both) of
     :func:`~sidescanpy.processing.radiometric.tvg_gain_db` still present
@@ -240,6 +274,32 @@ def fit_tvg_curve(
     ValueError
         If ``binned`` is empty, or no bin has ``count >= min_count_for_r_ref``.
     """
+    _deprecated("fit_tvg_curve", "sidescanpy.analysis.fit_tvg_models")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return _fit_tvg_curve(
+            binned, spreading_loss_db=spreading_loss_db, absorption_db_per_m=absorption_db_per_m,
+            r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m, r_fit_max_m=r_fit_max_m,
+            min_count_for_r_ref=min_count_for_r_ref, fit_fraction=fit_fraction,
+            r_ref_search_fraction=r_ref_search_fraction, value_col=value_col,
+        )
+
+
+def _fit_tvg_curve(
+    binned: pd.DataFrame,
+    *,
+    spreading_loss_db: float,
+    absorption_db_per_m: float,
+    r_ref_m: float | None,
+    r_fit_min_m: float | None,
+    r_fit_max_m: float | None,
+    min_count_for_r_ref: int,
+    fit_fraction: float,
+    r_ref_search_fraction: float,
+    value_col: str,
+) -> TVGCandidateFitResult:
+    """:func:`fit_tvg_curve` without the deprecation warning (callers suppress
+    the warnings of the result classes)."""
     if binned.empty:
         raise ValueError("fit_tvg_curve: `binned` has no rows")
 
@@ -376,6 +436,10 @@ def _auto_near_edge_m(
 class RangeDecayResult(ResultMixin):
     """TVG-status classification from a range-decay fit.
 
+    .. deprecated:: 0.10
+       Removed in 0.12, with :func:`fit_range_decay`; see
+       :class:`~sidescanpy.analysis.TVGFitResult`.
+
     ``tvg_status`` names what hardware has already removed: ``"none"``,
     ``"spreading_only"``, ``"absorption_only"``, ``"full"``, or
     ``"ambiguous"`` (winner not clearly ahead, or too little data).
@@ -458,6 +522,14 @@ def fit_range_decay(
     spreading_loss_db: float = DEFAULT_SPREADING_LOSS_DB,
 ) -> RangeDecayResult:
     """Classify which TVG terms ``value_var`` already carries.
+
+    .. deprecated:: 0.10
+       Removed in 0.12. Use :func:`~sidescanpy.analysis.fit_tvg_models`
+       (and :func:`~sidescanpy.analysis.check_tvg`); its best model is the
+       TVG to apply and its ``tvg_status`` replaces this one. This
+       function anchors every model at one reference bin, compares one
+       spreading coefficient at a time and needs its window from the
+       caller, so its answers differ.
 
     Converts to dB, bins by ``range_var``, fits the four
     :func:`fit_tvg_curve` candidates and maps the winner (lowest
@@ -542,6 +614,30 @@ def fit_range_decay(
         Spreading coefficient of the ``spreading_only`` and ``full_physics``
         candidates; pass the value the survey's correction uses.
     """
+    _deprecated("fit_range_decay", "sidescanpy.analysis.fit_tvg_models")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return _fit_range_decay(
+            ds, value_var, range_var, already_db=already_db, db_reference_percentile=db_reference_percentile,
+            db_reference_value=db_reference_value, freq_hz=freq_hz, bin_width_m=bin_width_m,
+            usable_range_m=usable_range_m, min_bins=min_bins, ambiguous_rel_tol=ambiguous_rel_tol,
+            min_total_count=min_total_count, exclude_before_sample=exclude_before_sample,
+            exclude_first_n_bins=exclude_first_n_bins, reject_outliers=reject_outliers,
+            outlier_mad_k=outlier_mad_k, outlier_min_bin_count=outlier_min_bin_count,
+            fit_value_col=fit_value_col, r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m,
+            r_fit_min_auto_margin_m=r_fit_min_auto_margin_m, r_ref_search_fraction=r_ref_search_fraction,
+            r_ref_window_fraction=r_ref_window_fraction, channel=channel, spreading_loss_db=spreading_loss_db,
+        )
+
+
+def _fit_range_decay(
+    ds, value_var, range_var, *, already_db, db_reference_percentile, db_reference_value, freq_hz,
+    bin_width_m, usable_range_m, min_bins, ambiguous_rel_tol, min_total_count, exclude_before_sample,
+    exclude_first_n_bins, reject_outliers, outlier_mad_k, outlier_min_bin_count, fit_value_col, r_ref_m,
+    r_fit_min_m, r_fit_min_auto_margin_m, r_ref_search_fraction, r_ref_window_fraction, channel,
+    spreading_loss_db,
+) -> RangeDecayResult:
+    """:func:`fit_range_decay` without the deprecation warning."""
     if range_var not in ds:
         raise ValueError(f"fit_range_decay: {range_var!r} not found — compute geometric ranges first")
 
@@ -729,8 +825,8 @@ def fit_range_decay(
         r_fit_min_m = r_ref_m
 
     absorption_db_per_m = absorption_for_frequency(freq_hz)
-    fit_result = fit_tvg_curve(
-        binned, spreading_loss_db=spreading_loss_db, absorption_db_per_m=absorption_db_per_m,
+    fit_result = _fit_tvg_curve(
+        binned, min_count_for_r_ref=30, fit_fraction=0.6, spreading_loss_db=spreading_loss_db, absorption_db_per_m=absorption_db_per_m,
         r_ref_m=r_ref_m, r_fit_min_m=r_fit_min_m, r_fit_max_m=usable_range_m, r_ref_search_fraction=r_ref_search_fraction, value_col=fit_value_col,
     )
 
