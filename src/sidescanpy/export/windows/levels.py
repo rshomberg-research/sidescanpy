@@ -58,11 +58,12 @@ def mask_nadir_gap_with_uncorrected(ds: xr.Dataset) -> xr.Dataset:
 def mask_dropouts(ds: xr.Dataset) -> xr.Dataset:
     """Set dropout samples (recorded amplitude exactly zero) to NaN.
 
-    A sample recorded as zero carries no measurement. After TVG it is no
-    longer at the dB floor (the gain for its range is added), so it is found
-    on ``uncorrected`` (every radiometric step undone; at or below
-    :data:`~sidescanpy.core.units.MIN_LINEAR`) and masked in
-    ``backscatter_intensity`` and ``uncorrected``. Resampling then
+    A sample recorded as zero carries no measurement. It is found on
+    ``uncorrected`` (every radiometric step undone; at or below
+    :data:`~sidescanpy.core.units.MIN_LINEAR`), which works whatever the
+    correction state, including files corrected before TVG kept such
+    samples at the dB floor, and masked in ``backscatter_intensity`` and
+    ``uncorrected``. Resampling then
     interpolates over it instead of spreading it into a dark spot.
 
     Parameters

@@ -60,8 +60,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - Dropout samples (recorded amplitude exactly zero) are masked before
   geometric and georeferenced resampling
   (`export.windows.mask_dropouts`), so they no longer spread into dark
-  spots. They are found on the uncorrected values, because TVG moves them
-  off the dB floor.
+  spots. They are found on the uncorrected values, so files corrected
+  before TVG kept them at the dB floor are handled too.
 - `mask_nadir_gap` (and so every geometric or georeferenced chip and swath
   window) no longer blanks most of a side on pings where a bright
   far-range return set the first-return threshold: such boundaries are
