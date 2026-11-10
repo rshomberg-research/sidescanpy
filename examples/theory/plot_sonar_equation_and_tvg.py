@@ -78,11 +78,11 @@ from sidescanpy.processing import (
     compute_geometric_ranges,
     slice_by_range,
 )
-from sidescanpy.processing.bottom import uniform_exclusion_boundary
 from sidescanpy.processing.radiometric import (
     center_frequency_hz,
     francois_garrison_absorption_db_per_m,
 )
+from sidescanpy.viz.tvg import plot_tvg_fit
 
 # sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_sonar_equation_and_tvg.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -148,50 +148,39 @@ for label, (name, kwargs, key) in RECORDINGS.items():
 # %%
 # The median level against range
 # -------------------------------
-# For each line: all samples beyond the altitude (past the water
-# column), both sides, binned by slant range in 1 m bins; the median of
-# each bin in dB re 1 recorded unit. The two Klein files store whole
-# numbers, so each sample is first spread evenly over its unit interval
-# (a fixed random offset between -0.5 and 0.5); without it the medians
-# stick to whole numbers and the profile has steps.
+# This page fits with the library:
+# :func:`~sidescanpy.analysis.fit_tvg_models` measures the profile, picks
+# the window and fits the models, and
+# :func:`~sidescanpy.analysis.check_tvg` applies the result.
+#
+# The profile: for each line, all samples beyond the altitude (past the
+# water column), both sides, binned by slant range in 1 m bins; the
+# median of each bin in dB re 1 recorded unit
+# (:func:`~sidescanpy.processing.median_level_profile`). The two Klein
+# files store whole numbers, so each sample is first spread evenly over
+# its unit interval (a fixed random offset between -0.5 and 0.5);
+# without it the medians stick to whole numbers and the profile has
+# steps.
 #
 # The fit window starts 5 m past the profile's peak (inside the peak the
-# beam pattern dominates) and ends at the noise knee, taken as the first
-# range past the peak where the level comes within 3 dB of its lowest
-# value. Beyond the knee the level is noise, which no spreading law
-# describes.
+# beam pattern dominates) and ends at the noise knee, the first range
+# past the peak where the level comes within 3 dB of its lowest value
+# (:func:`~sidescanpy.analysis.find_noise_knee`). Beyond the knee the
+# level is noise, which no spreading law describes.
+#
+# The models: ``L(R) = L0 - n log10 R - k 2 alpha R`` with ``n`` = 20, 30
+# or 40 and absorption off (``k = 0``) or on (``k = 1``). Each has only
+# ``L0`` free, the unknown constant of the sonar equation. A seventh lets
+# ``n`` float too, with absorption on. The RMS residual over the fit
+# window ranks them.
 
-rng = np.random.default_rng(0)
-EDGES = np.arange(0.0, 201.0, 1.0)
-CENTRES = 0.5 * (EDGES[1:] + EDGES[:-1])
-
-
-def median_profile(amp, slant, altitude):
-    """Median level (dB re 1) per 1 m slant-range bin, samples past ``altitude`` only."""
-    keep = np.isfinite(amp) & (slant > altitude)
-    idx = np.digitize(slant[keep], EDGES) - 1
-    vals = amp[keep]
-    order = np.argsort(idx, kind="stable")
-    idx, vals = idx[order], vals[order]
-    bounds = np.searchsorted(idx, np.arange(len(CENTRES) + 1))
-    med = np.array([np.median(vals[a:b]) if b - a > 50 else np.nan for a, b in zip(bounds[:-1], bounds[1:])])
-    return 20 * np.log10(med)
-
-
+SPREADING = (20.0, 30.0, 40.0)
 for label, line in lines.items():
-    ds = line["ds"]
-    amp = ds["backscatter_intensity"].values.astype(np.float64)
-    if np.all(amp == np.round(amp)):
-        amp = amp + rng.uniform(-0.5, 0.5, amp.shape)
-    slant = np.broadcast_to(ds["slant_range_m"].values, amp.shape)
-    line["level"] = level = median_profile(amp, slant, line["altitude"])
-    line["sides"] = [median_profile(amp[:, s], slant[:, s], line["altitude"]) for s in (0, 1)]
-    peak = int(np.nanargmax(level))
-    lowest = peak + int(np.nanargmin(level[peak:]))
-    knee = CENTRES[peak + int(np.argmax(level[peak:] <= level[lowest] + 3.0))]
-    line["window"] = (CENTRES[peak] + 5.0, float(knee))
-    print(f"{label}: peak {level[peak]:.1f} dB at {CENTRES[peak]:.1f} m; lowest {level[lowest]:.1f} dB at "
-          f"{CENTRES[lowest]:.1f} m; knee {knee:.1f} m; fit window {line['window'][0]:.1f} to {knee:.1f} m")
+    line["fit"] = fit = analysis.fit_tvg_models(line["ds"], spreading=SPREADING)
+    line["window"] = fit.window_m
+    peak_db = float(np.interp(fit.peak_m, fit.range_m, fit.level_db))
+    print(f"{label}: peak {peak_db:.1f} dB at {fit.peak_m:.1f} m; lowest {peak_db - fit.contrast_db:.1f} dB; "
+          f"knee {fit.knee_m:.1f} m; fit window {fit.window_m[0]:.1f} to {fit.window_m[1]:.1f} m")
 
 # %%
 # The figure shows each line's starboard side as recorded, with the
@@ -236,68 +225,42 @@ fig.savefig(out / "sonar_equation_and_tvg_windows.png", dpi=150)
 # %%
 # Fitting the spreading law
 # -------------------------
-# Six fixed models, ``L(R) = L0 - n log10 R - k 2 alpha R`` with
-# ``n`` = 20, 30 or 40 and absorption off (``k = 0``) or on (``k = 1``).
-# Each has only ``L0`` free, the unknown constant of the sonar equation.
-# A seventh lets ``n`` float too, with absorption on. The RMS residual
-# over the fit window ranks them.
+# The fit results, line by line: the RMS residual of each model, the
+# best and the runner-up, the free ``n``, and each side fitted alone on
+# the same window.
 
-MODELS = [(n, k) for n in (20, 30, 40) for k in (0, 1)]
-
-
-def model_name(n, k):
-    return f"{n} log R" + (" + abs" if k else "")
-
-
-def fit_models(level, alpha, window):
-    sel = (CENTRES >= window[0]) & (CENTRES <= window[1]) & np.isfinite(level)
-    r, y = CENTRES[sel], level[sel]
-    fits = {}
-    for n, k in MODELS:
-        shape = -n * np.log10(r) - k * 2 * alpha * r
-        l0 = float(np.mean(y - shape))
-        fits[(n, k)] = (l0, float(np.sqrt(np.mean((y - shape - l0) ** 2))))
-    design = np.c_[np.ones_like(r), -np.log10(r)]
-    coef = np.linalg.lstsq(design, y + 2 * alpha * r, rcond=None)[0]
-    free_rms = float(np.sqrt(np.mean((design @ coef - (y + 2 * alpha * r)) ** 2)))
-    return fits, (float(coef[1]), float(coef[0]), free_rms), int(sel.sum())
-
-
+MODELS = [analysis.tvg_model_name(n, k) for n in SPREADING for k in (False, True)]
 for label, line in lines.items():
-    fits, free, nbins = fit_models(line["level"], line["alpha"], line["window"])
-    best = min(fits, key=lambda m: fits[m][1])
-    line.update(fits=fits, free=free, best=best)
-    table = ", ".join(f"{model_name(*m)} {fits[m][1]:.2f}" for m in MODELS)
-    print(f"{label} ({nbins} bins): RMS residual (dB): {table}")
-    ranked = sorted(fits, key=lambda m: fits[m][1])
-    print(f"   best {model_name(*best)} ({fits[best][1]:.2f} dB), next {model_name(*ranked[1])} "
-          f"({fits[ranked[1]][1]:.2f} dB); free fit with absorption: n = {free[0]:.1f}, RMS {free[2]:.2f} dB")
-    per_side = []
-    for side, name in ((0, "port"), (1, "starboard")):
-        sf, _, _ = fit_models(line["sides"][side], line["alpha"], line["window"])
-        sb = min(sf, key=lambda m: sf[m][1])
-        per_side.append(f"{name} {model_name(*sb)} ({sf[sb][1]:.2f} dB)")
-    print(f"   each side alone, same window: {'; '.join(per_side)}")
-    w0, w1 = line["window"]
-    fall = np.interp(w0, CENTRES, line["level"]) - np.interp(w1, CENTRES, line["level"])
+    fit = line["fit"]
+    table = ", ".join(f"{name} {fit.models[name].rms_db:.2f}" for name in MODELS)
+    print(f"{label} ({fit.n_bins} bins): RMS residual (dB): {table}")
+    print(f"   best {fit.best} ({fit.best_model.rms_db:.2f} dB), next {fit.runner_up} "
+          f"({fit.runner_up_model.rms_db:.2f} dB); free fit with absorption: n = {fit.free_n:.1f}, "
+          f"RMS {fit.free_n_rms_db:.2f} dB")
+    per_side = "; ".join(f"{sf.side} {sf.best} ({sf.rms_db:.2f} dB)" for sf in fit.side_best)
+    print(f"   each side alone, same window: {per_side}")
+    w0, w1 = fit.window_m
+    fall = np.interp(w0, fit.range_m, fit.level_db) - np.interp(w1, fit.range_m, fit.level_db)
+    alpha = fit.absorption_db_per_m
     print(f"   the level falls {fall:.1f} dB from {w0:.1f} to {w1:.1f} m; 30 log R + abs predicts "
-          f"30 log10({w1 / w0:.2f}) + 2 x {line['alpha']:.4f} x {w1 - w0:.0f} = "
-          f"{30 * np.log10(w1 / w0) + 2 * line['alpha'] * (w1 - w0):.1f} dB")
+          f"30 log10({w1 / w0:.2f}) + 2 x {alpha:.4f} x {w1 - w0:.0f} = "
+          f"{30 * np.log10(w1 / w0) + 2 * alpha * (w1 - w0):.1f} dB")
 
 # %%
 # The figure is the table above as bars: the RMS residual of each fixed
 # model on each line, best model outlined. Lower is better.
 
+COLOURS = {20.0: "C2", 30.0: "C0", 40.0: "C3"}
 fig, ax = plt.subplots(figsize=(11, 3.8), constrained_layout=True)
 width = 0.13
-for j, (n, k) in enumerate(MODELS):
-    colour = {20: "C2", 30: "C0", 40: "C3"}[n]
+for j, name in enumerate(MODELS):
     for i, line in enumerate(lines.values()):
-        rms = line["fits"][(n, k)][1]
-        best = (n, k) == line["best"]
-        ax.bar(i + (j - 2.5) * width, rms, width * 0.9, color=colour, alpha=1 if k else 0.45,
-               ec="k" if best else "none", lw=2 if best else 0,
-               label=model_name(n, k) if i == 0 else None)
+        model = line["fit"].models[name]
+        best = name == line["fit"].best
+        ax.bar(i + (j - 2.5) * width, model.rms_db, width * 0.9, color=COLOURS[model.spreading_loss_db],
+               alpha=1 if model.absorption_db_per_m > 0 else 0.45, ec="k" if best else "none", lw=2 if best else 0,
+               label=name if i == 0 else None)
+        rms = model.rms_db
         if best:
             ax.text(i + (j - 2.5) * width, rms + 0.12, "best", ha="center", fontsize=8.5)
 ax.set_xticks(range(len(lines)), labels=list(lines))
@@ -309,78 +272,41 @@ ax.set_ylim(0, 8)
 fig.savefig(out / "sonar_equation_and_tvg_rms.png", dpi=150)
 
 # %%
-# What :func:`~sidescanpy.analysis.fit_range_decay` says
-# ------------------------------------------------------
-# The library's classifier, first called as a survey investigation
-# calls it: the usable range from
-# :func:`~sidescanpy.analysis.estimate_usable_range` as the far edge, one
-# boundary past the first seabed echo for all pings, 5 m bins. Then again
-# on the window used above (``r_fit_min_m`` and ``usable_range_m`` set to
-# it, 2 m bins, bin medians). It differs from the fit above in two ways:
-# it anchors every model at one reference bin instead of fitting ``L0``
-# (its "fixed-scale" RMSE), and it compares one spreading coefficient
-# ``n`` at a time, with and without absorption, plus absorption alone and
-# no loss. From the best candidate it names the TVG the recorder has
-# already applied (``tvg_status``: ``none`` means the full model is
-# still in the data). Run with ``n`` = 20, 30 and 40 in turn.
-
-STATUS = "{0.tvg_status}, best {0.best_candidate} ({0.best_rmse_db:.2f} dB)"
-for label, line in lines.items():
-    ds = line["ds"]
-    first = analysis.analyze_nadir(ds).first_bottom_return_sample
-    usable = analysis.estimate_usable_range(ds, bin_width_m=2.0, exclude_before_sample=first)
-    boundary = uniform_exclusion_boundary(first)
-    spacing = float(np.nanmedian(np.diff(ds["slant_range_m"].values[0, 0])))
-    usable_text = f"{usable.usable_range_m:.0f} m" if usable.usable_range_m else "none found"
-    print(f"{label}: usable range {usable_text}; first seabed echo: median sample "
-          f"{np.nanmedian(first):.0f} ({np.nanmedian(first) * spacing:.1f} m), boundary for all pings (90th "
-          f"percentile) sample {int(np.nanmax(boundary))} ({np.nanmax(boundary) * spacing:.1f} m)")
-    for n in (20, 30, 40):
-        default = analysis.fit_range_decay(ds, bin_width_m=5.0, usable_range_m=usable.usable_range_m,
-                                           exclude_before_sample=boundary, spreading_loss_db=n)
-        same = analysis.fit_range_decay(ds, bin_width_m=2.0, usable_range_m=line["window"][1],
-                                        r_fit_min_m=line["window"][0], r_ref_m="auto", fit_value_col="median",
-                                        spreading_loss_db=n)
-        print(f"   n = {n}: default window {default.r_fit_min_m:.1f}-{default.r_fit_max_m:.1f} m: "
-              f"{STATUS.format(default)}; window above, reference {same.r_ref_m:.1f} m: {STATUS.format(same)}")
+# The earlier fit
+# ---------------
+# :func:`~sidescanpy.analysis.fit_range_decay`, the library's earlier
+# TVG classifier, is deprecated since 0.10 and this page no longer runs
+# it. :func:`~sidescanpy.analysis.fit_tvg_models` replaced it for four
+# reasons. Its window ends at the noise knee, so noise past the knee
+# does not bend the fit. Its constant ``L0`` is fitted, where the old
+# fit pinned every model to one reference bin, so one noisy bin moved
+# every residual. It compares 20, 30 and 40 log R side by side, with and
+# without absorption, where the old fit took one spreading coefficient
+# per call. And :func:`~sidescanpy.analysis.check_tvg` tests the result
+# by applying it, as the next section does.
 
 # %%
 # Applying the TVG
 # ----------------
-# A good fit is a hypothesis. To test it, each line is cropped at its
-# noise knee with :func:`~sidescanpy.processing.slice_by_range` (beyond
-# it TVG would only amplify noise) and corrected with
-# :func:`~sidescanpy.processing.apply_tvg` using its own best model. If
-# the model is right the corrected median level is flat across the fit
-# window.
-
-
-def corrected_profile(line, n, k):
-    ds = slice_by_range(line["ds"], max_m=line["window"][1])
-    tvg = apply_tvg(ds, spreading_loss_db=float(n), absorption_db_per_m=k * line["alpha"])
-    db = tvg["backscatter_intensity"].values.astype(np.float64)
-    slant = np.broadcast_to(ds["slant_range_m"].values, db.shape)
-    return median_profile(10 ** (db / 20), slant, line["altitude"]), tvg
-
-
-def flatness(profile, window):
-    sel = (CENTRES >= window[0]) & (CENTRES <= window[1]) & np.isfinite(profile)
-    slope = np.polyfit(CENTRES[sel], profile[sel], 1)[0]
-    return float(np.std(profile[sel])), float(10 * slope)
-
+# A good fit is a hypothesis. To test it,
+# :func:`~sidescanpy.analysis.check_tvg` crops each line at its noise
+# knee with :func:`~sidescanpy.processing.slice_by_range` (beyond it TVG
+# would only amplify noise), corrects it with
+# :func:`~sidescanpy.processing.apply_tvg` using its own best model, and
+# bins the result as the fit did. If the model is right the corrected
+# median level is flat across the fit window.
 
 for label, line in lines.items():
-    line["after"], line["tvg"] = corrected_profile(line, *line["best"])
-    spread, slope = flatness(line["after"], line["window"])
-    print(f"{label}: after TVG with {model_name(*line['best'])}: spread {spread:.2f} dB, "
-          f"trend {slope:+.2f} dB per 10 m across the window")
-for label, other in (("Wight-Barfleur, 548 kHz", (20, 1)), ("Grand Bay, 100 kHz", (30, 1))):
-    line = lines[label]
-    wrong, _ = corrected_profile(line, *other)
-    spread, slope = flatness(wrong, line["window"])
-    sel = (CENTRES >= line["window"][0]) & (CENTRES <= line["window"][1]) & np.isfinite(wrong)
-    print(f"{label} with {model_name(*other)} instead: trend {slope:+.2f} dB per 10 m, "
-          f"{wrong[sel][-1] - wrong[sel][0]:+.1f} dB from one end of the window to the other")
+    fit = line["fit"]
+    line["check"] = check = analysis.check_tvg(line["ds"], fit.tvg_params, fit.window_m)
+    print(f"{label}: after TVG with {check.model_name}: spread {check.spread_db:.2f} dB, "
+          f"trend {check.trend_db_per_10m:+.2f} dB per 10 m across the window")
+for label, (n, with_abs) in (("Wight-Barfleur, 548 kHz", (20.0, True)), ("Grand Bay, 100 kHz", (30.0, True))):
+    fit = lines[label]["fit"]
+    params = {"spreading_loss_db": n, "absorption_db_per_m": fit.absorption_db_per_m if with_abs else 0.0}
+    wrong = analysis.check_tvg(lines[label]["ds"], params, fit.window_m)
+    print(f"{label} with {wrong.model_name} instead: trend {wrong.trend_db_per_10m:+.2f} dB per 10 m, "
+          f"{wrong.end_to_end_db:+.1f} dB from one end of the window to the other")
 
 # %%
 # The Wight-Barfleur swath before and after
@@ -393,8 +319,9 @@ for label, other in (("Wight-Barfleur, 548 kHz", (20, 1)), ("Grand Bay, 100 kHz"
 # range, dark before TVG and as bright as the near range after it.
 
 wb = lines["Wight-Barfleur, 548 kHz"]
-raw = slice_by_range(wb["ds"], max_m=wb["window"][1])["backscatter_intensity"].values
-after = wb["tvg"]["backscatter_intensity"].values
+cropped = slice_by_range(wb["ds"], max_m=wb["window"][1])
+raw = cropped["backscatter_intensity"].values
+after = apply_tvg(cropped, wb["fit"].tvg_params)["backscatter_intensity"].values
 knee = wb["window"][1]
 fig, axes = plt.subplots(1, 2, figsize=(13, 4.6), constrained_layout=True)
 for ax, data, title in ((axes[0], 20 * np.log10(np.maximum(raw, 1e-6)), "Raw level (dB re 1)"),
@@ -418,55 +345,29 @@ fig.savefig(out / "sonar_equation_and_tvg_swath.png", dpi=150)
 # %%
 # Fit, apply, check
 # -----------------
-# Top: the median level against slant range (black) for each line, with
-# the 20, 30 and 40 log R models with absorption anchored to it, the best
-# model (thick), and the fit window (shaded). Bottom: the median level
-# after :func:`~sidescanpy.processing.apply_tvg` with that best model,
-# relative to its mean in the window. Flat means the model holds.
+# Each column is the library's own figure,
+# :func:`~sidescanpy.viz.tvg.plot_tvg_fit`, drawn from the
+# :func:`~sidescanpy.analysis.fit_tvg_models` and
+# :func:`~sidescanpy.analysis.check_tvg` results above. Top: the median
+# level against slant range (black) for each line, with the 20, 30 and
+# 40 log R models with absorption anchored to it, the best model (thick),
+# and the fit window (shaded). Bottom: the median level after
+# :func:`~sidescanpy.processing.apply_tvg` with that best model, relative
+# to its mean in the window. Flat means the model holds.
 
 fig, axes = plt.subplots(2, 3, figsize=(14, 7.6), height_ratios=[1.5, 1], sharex="col", constrained_layout=True)
 for col, (label, line) in enumerate(lines.items()):
-    ax, ax_b = axes[0, col], axes[1, col]
-    lo_w, hi_w = line["window"]
-    sel = (CENTRES >= lo_w) & (CENTRES <= hi_w)
-    x_max = min(CENTRES[np.isfinite(line["level"])].max(), 2.2 * hi_w)
-    for a in (ax, ax_b):
-        a.axvspan(lo_w, hi_w, color="0.92", zorder=0)
-        a.grid(alpha=0.3)
-    ax.plot(CENTRES, line["level"], color="k", lw=1.5, label="measured median")
-    r = CENTRES[(CENTRES >= 0.5 * lo_w) & (CENTRES <= x_max)]
-    for (n, k), colour in (((20, 1), "C2"), ((30, 1), "C0"), ((40, 1), "C3"), ((20, 0), "C2"), ((30, 0), "C0"),
-                           ((40, 0), "C3")):
-        l0 = line["fits"][(n, k)][0]
-        is_best = (n, k) == line["best"]
-        if k == 1 or is_best:
-            ax.plot(r, l0 - n * np.log10(r) - k * 2 * line["alpha"] * r, color=colour, ls="-" if k else "--",
-                    lw=3 if is_best else 1, alpha=1 if is_best else 0.8,
-                    label=f"{model_name(n, k)}: {line['fits'][(n, k)][1]:.2f} dB" + (" (best)" if is_best else ""))
-    ax.set_xlim(0, x_max)
-    finite = line["level"][CENTRES <= x_max]
-    ax.set_ylim(np.nanmin(finite) - 3, np.nanmax(finite) + 4)
-    ax.set_title(label, loc="left")
-    ax.legend(loc="upper right", fontsize=8.5, framealpha=0.95, title="RMS in window", title_fontsize=8.5)
-    rel = line["after"] - np.nanmean(line["after"][sel])
-    spread, slope = flatness(line["after"], line["window"])
-    shown = CENTRES >= lo_w - 3.0
-    ax_b.plot(CENTRES[shown], rel[shown], color="k", lw=1.8)
-    ax_b.axhline(0, color="0.4", lw=0.8)
-    ax_b.set_ylim(-5, 5)
-    ax_b.set_xlabel("slant range (m)")
-    ax_b.text(0.02, 0.88, f"TVG {model_name(*line['best'])}: spread {spread:.2f} dB,\n"
-              f"trend {slope:+.2f} dB per 10 m", transform=ax_b.transAxes, fontsize=8.5, va="top")
-axes[0, 0].set_ylabel("median level (dB re 1 recorded unit)")
-axes[1, 0].set_ylabel("after TVG, relative (dB)")
+    plot_tvg_fit(line["fit"], line["check"], ax=axes[0, col], ax_check=axes[1, col], title=label)
+    if col:
+        axes[0, col].set_ylabel("")
+        axes[1, col].set_ylabel("")
 fig.savefig(out / "sonar_equation_and_tvg.png", dpi=150)
 # sphinx_gallery_start_ignore
 # A clean thumbnail for the examples page (hidden on this page).
 thumb, tax = plt.subplots(figsize=(4, 2.8))
-tax.plot(CENTRES, wb["level"], color="k", lw=2)
-best_l0 = wb["fits"][wb["best"]][0]
-r = CENTRES[(CENTRES > 15) & (CENTRES < 110)]
-tax.plot(r, best_l0 - wb["best"][0] * np.log10(r) - 2 * wb["alpha"] * r, color="C0", lw=2.5)
+tax.plot(wb["fit"].range_m, wb["fit"].level_db, color="k", lw=2)
+r = wb["fit"].range_m[(wb["fit"].range_m > 15) & (wb["fit"].range_m < 110)]
+tax.plot(r, wb["fit"].best_model.level_db(r), color="C0", lw=2.5)
 tax.set_xlim(10, 130)
 tax.set_axis_off()
 thumb.subplots_adjust(0, 0, 1, 1)
@@ -497,35 +398,17 @@ plt.close(thumb)
 # levels still fall about as fast as an uncorrected seabed echo.
 #
 # **Applying the fitted TVG confirms it.** After
-# :func:`~sidescanpy.processing.apply_tvg` with each line's best model,
-# the median level across the window varies by 0.80, 1.01 and 0.42 dB
+# :func:`~sidescanpy.analysis.check_tvg` applies each line's best model,
+# the median level across the window varies by 0.80, 1.02 and 0.42 dB
 # (standard deviation) with trends of -0.32, +0.31 and -0.28 dB per
 # 10 m: flat to within a fraction of a decibel. The wrong model shows at
 # once: 20 log R with absorption on the Wight-Barfleur line leaves
 # -5.5 dB from one end of the window to the other, and 30 log R with
-# absorption on the Grand Bay line +12.8 dB. Pooling both sides can hide
+# absorption on the Grand Bay line +12.7 dB. Pooling both sides can hide
 # differences too: on their own, the Wight-Barfleur port side prefers
 # 40 log R with absorption and the Grand Bay starboard side 20 log R
 # with absorption, while the Grand Bay port side, which holds bright
 # patches of seabed, fits no model well (4.00 dB).
-#
-# **The library classifier agrees once the window matches.**
-# :func:`~sidescanpy.analysis.fit_range_decay` with its default window
-# (from the first seabed echo to the usable range) starts at the beam's
-# peak and, at Wight-Barfleur, stops at 66 m; at Grand Bay
-# :func:`~sidescanpy.analysis.estimate_usable_range` found no usable
-# range and the first-echo boundary landed at 37.4 m, although the
-# median first echo is at 2.7 m (a tenth of the pings have a first echo
-# detected far out), so the default fit looks only at 37.5 to 73.5 m.
-# On those windows it ranks the models differently. Given the window
-# used above, it names the same models: ``full_physics`` (``tvg_status``
-# ``none``) at ``n = 30`` for Wight-Barfleur and London Gateway, and
-# 20 log R without absorption (``spreading_only``, status
-# ``absorption_only``) for Grand Bay. Its RMS values are higher (1.13
-# against 0.80 dB at Wight-Barfleur) because it pins each model to one
-# reference bin instead of fitting ``L0``, and at Wight-Barfleur it
-# prefers ``n = 40`` (0.92 dB) to ``n = 30`` by that measure. The free
-# fit's 34.0 explains the tie: the data sit between the two.
 #
 # **What TVG leaves.** Near the start of each window the corrected level
 # still bends (lower panels, and the rise just outside the water column
@@ -534,8 +417,9 @@ plt.close(thumb)
 # :func:`~sidescanpy.processing.range_correction.fit_range_correction`
 # measures that leftover curve on TVG-corrected data and
 # :func:`~sidescanpy.processing.range_correction.apply_empirical_range_correction`
-# removes it. The workflow is the same each time: fit the decay within
-# the usable range, apply the TVG, and check that the result is flat
-# before trusting it. :doc:`plot_range_limits` shows where the usable
+# removes it. The workflow is the same each time: fit the decay up to
+# the noise knee (:func:`~sidescanpy.analysis.fit_tvg_models`), apply
+# the TVG, and check that the result is flat
+# (:func:`~sidescanpy.analysis.check_tvg`) before trusting it. :doc:`plot_range_limits` shows where the usable
 # range ends and :doc:`/examples/plot_correct_a_line` the whole
 # correction chain.
