@@ -14,6 +14,10 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.radiometric import TVGParams, absorption_for_frequency, tvg_gain_db
 from tests.unit.synthetic import make_raw_dataset as _make_raw_dataset
 
+# The range-decay classifier and its plots are deprecated (removal in 0.12);
+# these tests keep covering them until then.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 
 def _assert_close_nested(a, b, path="result"):
     """Equal structure and non-float values; floats within 1e-9 relative (NaN == NaN).
@@ -170,7 +174,7 @@ class TestFitRangeDecay:
             observed_range_m=np.array([5.0, 40.0]),
             observed_loss_db=np.array([0.0, 10.0]),
         )
-        monkeypatch.setattr(tvg_mod, "fit_tvg_curve", lambda *a, **kw: fake_result)
+        monkeypatch.setattr(tvg_mod, "_fit_tvg_curve", lambda *a, **kw: fake_result)
 
         result = tvg_mod.fit_range_decay(ds, bin_width_m=2.0)
 

@@ -86,28 +86,31 @@ waterfall like this one.
 Time-varying gain (TVG) adds back the spreading and absorption losses
 that make far range darker than near range. Some recorders apply part or
 all of it before writing the file, and correcting again washes out the
-far range. `analysis.fit_range_decay` measures what the data still
-carries:
+far range. `analysis.fit_tvg_models` fits the TVG the data still needs
+(no TVG, absorption only, or 20, 30 or 40 log R with or without
+absorption) to the median level against range:
 
 ```python
-from sidescanpy.analysis import fit_range_decay
+from sidescanpy.analysis import fit_tvg_models
 
 for key in sorted(survey.frequencies):
     ds = compute_geometric_ranges(survey.get_frequency(key).dataset)
-    print(key, fit_range_decay(ds).tvg_status)
+    fit = fit_tvg_models(ds)
+    print(key, fit.best, fit.tvg_status)
 ```
 
 ```
-hz_100000 spreading_only
-hz_400000 full
+hz_100000 flat full
+hz_400000 20 log R absorption_only
 ```
 
-The status names what the data has already had removed: `none` (raw
-losses, apply full TVG), `spreading_only`, `absorption_only`, `full`
-(apply none), or `ambiguous`. Here the fit suggests the recorder already
-compensated spreading at 100 kHz and both terms at 400 kHz. Treat it as a
-hypothesis: apply the recipe it suggests and check that the corrected
-data is flat with range before you trust it. [Processing](processing.md#tvg)
+The best model is the TVG to apply (`fit.tvg_params`), and the status
+names what the recorder has already removed: `none` (raw losses, apply
+full TVG), `spreading_only`, `absorption_only`, or `full` (apply none).
+Here the 100 kHz level hardly falls with range (the recorder levelled
+it, so apply no TVG) and the 400 kHz level falls like 20 log R. Treat it
+as a hypothesis: `analysis.check_tvg` applies the model and measures how
+flat the corrected data is. [Processing](processing.md#tvg)
 explains the TVG terms and [Limitations](limitations.md) what is not
 settled about recorder gain.
 

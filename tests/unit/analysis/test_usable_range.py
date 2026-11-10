@@ -8,9 +8,10 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from sidescanpy.analysis.usable_range import estimate_usable_range
+from sidescanpy.analysis.usable_range import estimate_usable_range, find_noise_knee
 from sidescanpy.processing.bottom import uniform_exclusion_boundary
 from sidescanpy.processing.geometric import compute_geometric_ranges
+from tests.unit.synthetic import make_range_decay_dataset
 from tests.unit.synthetic import make_raw_dataset as _make_raw_dataset
 
 
@@ -26,7 +27,7 @@ class TestEstimateUsableRange:
         ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
         ds = compute_geometric_ranges(ds)
 
-        result = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0)
+        result = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0)
 
         assert result.usable_range_m is not None
         # Signal decays to near-nothing well before the far range edge.
@@ -55,15 +56,15 @@ class TestEstimateUsableRange:
     def test_channel_none_pools_both_channels(self):
         ds = self._make_two_channel_range_ds()
 
-        pooled = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0)
+        pooled = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0)
 
         assert pooled.channel is None
 
     def test_channel_restricts_usable_range_to_one_side(self):
         ds = self._make_two_channel_range_ds()
 
-        ch0 = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel=0)
-        ch1 = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel=1)
+        ch0 = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0, channel=0)
+        ch1 = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0, channel=1)
 
         assert ch0.channel == 0
         assert ch1.channel == 1
@@ -74,8 +75,8 @@ class TestEstimateUsableRange:
     def test_channel_string_matches_int_position(self):
         ds = self._make_two_channel_range_ds()
 
-        by_string = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel="port")
-        by_int = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, channel=0)
+        by_string = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0, channel="port")
+        by_int = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0, channel=0)
 
         assert by_string.usable_range_m == pytest.approx(by_int.usable_range_m)
         assert by_string.channel == 0
@@ -133,8 +134,8 @@ class TestEstimateUsableRange:
         ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=bs)
         ds = compute_geometric_ranges(ds)
 
-        with_spikes = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0)
-        cleaned = estimate_usable_range(ds, bin_width_m=1.0, snr_threshold=3.0, reject_outliers=True)
+        with_spikes = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0)
+        cleaned = estimate_usable_range(ds, method="snr", bin_width_m=1.0, snr_threshold=3.0, reject_outliers=True)
 
         assert cleaned.outlier_n_rejected > 0
         assert cleaned.noise_std < with_spikes.noise_std
@@ -198,3 +199,93 @@ class TestEstimateUsableRange:
         # near-zero contaminated bin the per-ping boundary doesn't have.
         contaminated = uniform_binned[(uniform_binned["range_min_m"] < 8.0) & (uniform_binned["median"] < 1.0)]
         assert not contaminated.empty
+
+
+class TestFindNoiseKnee:
+    @staticmethod
+    def _profile(end=60.0, floor=0.0, n=30.0):
+        r = np.arange(0.5, 100.0, 1.0)
+        level = np.where(r <= end, 60.0 - n * np.log10(np.clip(r, 1, None) / 10.0), floor)
+        level[r < 10.0] = np.nan  # water column
+        return r, level
+
+    def test_knee_at_fall_to_floor(self):
+        r, level = self._profile(end=60.0)
+        knee = find_noise_knee(r, level)
+        assert knee.peak_m == pytest.approx(10.5)
+        assert knee.knee_found
+        assert knee.knee_m == pytest.approx(60.5)
+        assert knee.window_m == (pytest.approx(15.5), pytest.approx(60.5))
+        assert knee.contrast_db == pytest.approx(level[10])
+        assert not knee.low_contrast
+
+    def test_knee_db_moves_knee_earlier(self):
+        r = np.arange(0.5, 100.0, 1.0)
+        level = 60.0 - 0.5 * r  # falls 0.5 dB per m to the end
+        assert find_noise_knee(r, level, knee_db=10.0).knee_m < find_noise_knee(r, level, knee_db=3.0).knee_m
+
+    def test_no_knee_on_flat_profile_falls_back_to_end(self):
+        r = np.arange(0.5, 100.0, 1.0)
+        level = np.full(r.shape, 40.0) + np.random.default_rng(0).normal(0, 0.3, r.shape)
+        knee = find_noise_knee(r, level)
+        assert not knee.knee_found
+        assert knee.knee_m == pytest.approx(r[-3])  # last two bins dropped
+        assert knee.low_contrast
+        assert knee.notes
+
+    def test_peak_searched_in_near_half_only(self):
+        r = np.arange(0.5, 100.0, 1.0)
+        level = np.where(r < 50, 50.0 - 0.4 * r, 30.0 + 0.5 * (r - 50))  # falls, then rises past the old peak
+        knee = find_noise_knee(r, level)
+        assert knee.peak_m < 50.0
+        assert knee.rises_at_far_range
+
+    def test_empty_profile(self):
+        knee = find_noise_knee(np.arange(5.0), np.full(5, np.nan))
+        assert knee.knee_m is None and not knee.knee_found
+
+
+class TestUsableRangeMethods:
+    def test_knee_is_default_method(self):
+        ds = compute_geometric_ranges(make_range_decay_dataset(signal_end_m=60.0, n_pings=50))
+        result = estimate_usable_range(ds)
+        assert result.method == "knee"
+        assert result.usable_range_m == pytest.approx(61.0, abs=2.0)
+        assert result.knee.knee_found
+        assert result.snr_threshold is None
+
+    def test_snr_method_kept(self):
+        ds = compute_geometric_ranges(make_range_decay_dataset(signal_end_m=60.0, n_pings=50))
+        result = estimate_usable_range(ds, method="snr")
+        assert result.method == "snr"
+        assert result.knee is None
+        assert result.usable_range_m == pytest.approx(60.0, abs=2.0)
+
+    def test_knee_answers_where_snr_finds_none(self):
+        """A levelled record (no fall to a floor): SNR gives None, the knee
+        method gives the end of the record with a note."""
+        ds = compute_geometric_ranges(make_range_decay_dataset(spreading_loss_db=0.0, n_pings=50))
+        snr = estimate_usable_range(ds, method="snr")
+        knee = estimate_usable_range(ds)
+        assert snr.usable_range_m is None
+        assert knee.usable_range_m is not None and knee.usable_range_m > 90.0
+        assert not knee.knee.knee_found
+        assert knee.notes
+
+    def test_knee_already_db(self):
+        ds = compute_geometric_ranges(make_range_decay_dataset(signal_end_m=60.0, n_pings=50))
+        db = 20 * np.log10(np.clip(ds["backscatter_intensity"], 1e-6, None))
+        ds = ds.assign(_db=db)
+        result = estimate_usable_range(ds, "_db", already_db=True)
+        assert result.usable_range_m == pytest.approx(61.0, abs=2.0)
+
+    def test_unknown_method_raises(self):
+        ds = compute_geometric_ranges(make_range_decay_dataset(n_pings=5))
+        with pytest.raises(ValueError, match="method"):
+            estimate_usable_range(ds, method="magic")
+
+    def test_knee_result_serializes(self):
+        import json
+
+        ds = compute_geometric_ranges(make_range_decay_dataset(signal_end_m=60.0, n_pings=20))
+        json.dumps(estimate_usable_range(ds).to_dict())

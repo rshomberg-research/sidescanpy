@@ -143,7 +143,7 @@ anomalies.
   ([Navigation](../examples/plot_navigation.rst)).
 - **Recorder gain.** Gain codes are read but not interpreted, and nothing
   in the file says whether the recorder applied TVG. Measure it with
-  `analysis.fit_range_decay` before correcting
+  `analysis.fit_tvg_models` before correcting
   ([Limitations](../limitations.md#radiometric-correction)).
 
 ## Reference

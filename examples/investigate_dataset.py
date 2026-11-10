@@ -1,6 +1,6 @@
 """
 Characterize an unfamiliar sidescan dataset: units, nadir, beam geometry,
-usable range and TVG status.
+usable range and the TVG it needs.
 
 A linear walkthrough of the sidescanpy analysis API. Each step calls one
 library function, keeps its result, and saves the matching plot. The
@@ -30,10 +30,9 @@ from sidescanpy.processing import (
     blank_nadir_noise,
     compute_geometric_ranges,
     invert,
-    uniform_exclusion_boundary,
 )
 from sidescanpy.viz import analysis as plots
-from sidescanpy.viz.tvg import plot_range_decay_fit, plot_range_decay_residuals
+from sidescanpy.viz.tvg import plot_tvg_fit
 
 logger = logging.getLogger("investigate_dataset")
 
@@ -82,8 +81,9 @@ def main() -> None:
     save(plots.plot_nadir_zoom(ds, var, nadir=nadir), out / "nadir_zoom.png")
     save(plots.plot_nadir_waterfall(ds, var, nadir=nadir), out / "nadir_waterfall.png")
 
-    # 5. Usable range: where the signal sinks into the noise floor. The
-    #    nadir gap is masked per ping first.
+    # 5. Usable range: where the signal sinks into the noise floor (the
+    #    noise knee of the median level). The nadir gap is masked per ping
+    #    first.
     usable = analysis.estimate_usable_range(
         ds, value_var=var, bin_width_m=2.0, exclude_before_sample=nadir.first_bottom_return_sample,
     )
@@ -93,29 +93,27 @@ def main() -> None:
     beam = analysis.estimate_beam_geometry(ds, nadir.first_bottom_return_sample, usable.usable_range_m)
     save(plots.plot_beam_geometry(ds, beam, var), out / "beam_geometry.png")
 
-    # 7. TVG status: which spreading/absorption terms are still in the data.
-    #    One survey-wide nadir boundary here (see uniform_exclusion_boundary).
-    boundary = nadir.first_bottom_return_sample
-    decay = analysis.fit_range_decay(
-        ds, value_var=var, bin_width_m=5.0, usable_range_m=usable.usable_range_m,
-        exclude_before_sample=uniform_exclusion_boundary(boundary) if boundary is not None else None,
-    )
-    save(plot_range_decay_fit(decay), out / "range_decay_fit.png")
-    save(plot_range_decay_residuals(decay), out / "range_decay_residuals.png")
+    # 7. The TVG it needs: flat, absorption only and 20/30/40 log R with and
+    #    without absorption, fitted to the median level from past its peak to
+    #    the noise knee; then the best model applied and the result checked.
+    fit = analysis.fit_tvg_models(ds, value_var=var)
+    check = analysis.check_tvg(ds, fit.tvg_params, fit.window_m, value_var=var) if fit.best else None
+    save(plot_tvg_fit(fit, check), out / "tvg_fit.png")
 
-    # 8. Units, from the value range cross-checked against the decay fit.
-    units = analysis.infer_units(values, decay)
+    # 8. Units, from the value range cross-checked against the TVG fit.
+    units = analysis.infer_units(values, fit)
     save(plots.plot_units_distribution(ds, var), out / "units_distribution.png")
 
     results = {
         "values": values, "outlier_comparison": outliers, "nadir": nadir, "usable_range": usable,
-        "beam_geometry": beam, "range_decay": decay, "units": units,
+        "beam_geometry": beam, "tvg_fit": fit, "tvg_check": check, "units": units,
     }
-    metrics = {"source": str(args.input), "freq_key": freq_key, **{k: r.to_dict() for k, r in results.items()}}
+    metrics = {"source": str(args.input), "freq_key": freq_key,
+               **{k: r.to_dict() if r is not None else None for k, r in results.items()}}
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
     logger.info(
-        "units=%s nadir=%s usable_range_m=%s tvg_status=%s -> %s",
-        units.units, nadir.nadir_type, usable.usable_range_m, decay.tvg_status, out,
+        "units=%s nadir=%s usable_range_m=%s tvg=%s (status %s) -> %s",
+        units.units, nadir.nadir_type, usable.usable_range_m, fit.best, fit.tvg_status, out,
     )
 
 

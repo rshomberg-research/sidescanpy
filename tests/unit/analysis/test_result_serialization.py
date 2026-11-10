@@ -18,6 +18,10 @@ from sidescanpy.analysis.usable_range import estimate_usable_range
 from sidescanpy.processing.geometric import compute_geometric_ranges
 from tests.unit.synthetic import make_raw_dataset
 
+# The range-decay classifier and its plots are deprecated (removal in 0.12);
+# these tests keep covering them until then.
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 
 @pytest.fixture(scope="module")
 def results():

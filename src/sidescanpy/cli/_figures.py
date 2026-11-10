@@ -28,7 +28,7 @@ from sidescanpy.processing.track import SurveyTrack
 from sidescanpy.viz.gridded import plot_gridded_raster
 from sidescanpy.viz.targets import plot_target_position_scatter, plot_track_with_targets
 from sidescanpy.viz.track import plot_track_and_scanlines
-from sidescanpy.viz.tvg import plot_candidate_fit, plot_range_decay_residuals, set_fit_window_limits
+from sidescanpy.viz.tvg import plot_tvg_fit
 from sidescanpy.viz.waterfall import plot_survey_overview, plot_waterfall
 
 logger = logging.getLogger(__name__)
@@ -187,23 +187,9 @@ def save_survey_overview_png(ds, output_path: Path, *, dpi: int, **overview_kwar
 # sidescan-analyze tvg-fit
 # ============================================================
 
-def save_tvg_fit_png(decay, output_path: Path, *, suptitle: str, residual_xlabel: str, dpi: int = 140) -> None:
-    """Two-panel decay-fit figure: every candidate curve over the observed
-    loss (top) and the best fit's residuals (bottom)."""
-    fit_result = decay.fit
-    fig, (ax_fit, ax_res) = plt.subplots(2, 1, figsize=(9, 10), sharex=True, gridspec_kw={"height_ratios": [1.3, 1]})
-    for i, c in enumerate(fit_result.candidates):
-        plot_candidate_fit(c, fit_result.observed_range_m, fit_result.observed_loss_db, ax=ax_fit, show_observed=(i == 0))
-    ax_fit.set_title(f"Decay fit — best: {decay.best_candidate}, RMSE={decay.best_rmse_db:.2f}dB")
-    ax_fit.set_xlabel("")
-
-    plot_range_decay_residuals(decay, ax=ax_res, relative_x=False)
-    ax_res.set_title("Residuals")
-    ax_res.set_xlabel(residual_xlabel)
-
-    set_fit_window_limits(ax_fit, decay)
-
-    fig.suptitle(suptitle)
-    fig.tight_layout()
+def save_tvg_fit_png(fit, check, output_path: Path, *, suptitle: str, dpi: int = 140) -> None:
+    """One-column TVG figure: the model fit (top) and the median level after
+    the best model's TVG (bottom), from :func:`~sidescanpy.viz.tvg.plot_tvg_fit`."""
+    fig, _axes = plot_tvg_fit(fit, check)
+    fig.suptitle(suptitle, fontsize=9)
     save_figure(fig, output_path, dpi=dpi)
-

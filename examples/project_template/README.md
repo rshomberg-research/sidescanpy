@@ -9,7 +9,7 @@ of the library.
 config.yaml        one survey's settings (copy per survey)
 steplib.py         config loading, paths, logging, step reports
 01_convert.py      raw .jsf/.sdf -> .ss.h5; target catalog -> targets.json
-02_analyze.py      usable range + TVG decay fit on the uncorrected data
+02_analyze.py      TVG model fit + after-TVG check on the uncorrected data
 03_correct.py      TVG, geometric, georef (+ any configured steps), in place
 04_export.py       track, waterfalls with targets boxed, grids + GeoTIFF
 05_dataset.py      COCO/YOLO training dataset

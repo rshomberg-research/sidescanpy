@@ -45,7 +45,9 @@ One per analysis result: `plot_value_histograms`, `plot_units_distribution`,
 `plot_usable_range`, `plot_segments_overview`, `plot_navigation_summary`,
 `plot_mean_vs_range`, `plot_tvg_gain_curve`, `plot_per_ping_profiles`,
 `plot_multi_frequency_comparison`, `plot_altitude_bin_comparison`,
-`plot_candidate_fit`, `plot_range_decay_fit`, `plot_range_decay_residuals`,
+`plot_tvg_fit` (a `fit_tvg_models` result and, below it, a `check_tvg`
+result). Deprecated, removed in 0.12: `plot_candidate_fit`,
+`plot_range_decay_fit`, `plot_range_decay_residuals`,
 `set_fit_window_limits`.
 
 Multi-panel figure layouts are in `examples/figures/`.

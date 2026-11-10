@@ -1,13 +1,21 @@
 """
-Plots for TVG and range-decay analysis (:mod:`sidescanpy.analysis.tvg`).
+Plots for TVG and range-decay analysis (:mod:`sidescanpy.analysis.tvg`,
+:mod:`sidescanpy.analysis.tvg_fit`).
 
 Each function draws into an optional ``ax``, returns ``(fig, ax)`` and
-never saves a file.
+never saves a file. :func:`plot_tvg_fit` draws a
+:func:`~sidescanpy.analysis.fit_tvg_models` result and, below it, a
+:func:`~sidescanpy.analysis.check_tvg` result. The range-decay plots
+(:func:`plot_candidate_fit`, :func:`plot_range_decay_fit`,
+:func:`plot_range_decay_residuals`, :func:`set_fit_window_limits`) are
+deprecated with :func:`~sidescanpy.analysis.fit_range_decay` and will be
+removed in 0.12.
 
 2026 rshomberg@uri.edu
 """
 
 import logging
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,12 +25,21 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from sidescanpy.analysis.tvg import RangeDecayResult, TVGCandidateFit
+from sidescanpy.analysis.tvg_fit import TVGCheckResult, TVGFitResult, tvg_model_name
 from sidescanpy.processing.radiometric import TVGParams, tvg_gain_db
 
 logger = logging.getLogger(__name__)
 
 
 _CANDIDATE_COLORS = {"flat": "C0", "spreading_only": "C1", "absorption_only": "C2", "full_physics": "C3"}
+
+
+def _deprecated(name: str) -> None:
+    warnings.warn(
+        f"{name} is deprecated since 0.10 and will be removed in sidescanpy 0.12; use "
+        "sidescanpy.viz.tvg.plot_tvg_fit with sidescanpy.analysis.fit_tvg_models.",
+        DeprecationWarning, stacklevel=3,
+    )
 
 
 def _new_fig_ax(ax: Axes | None, **subplots_kwargs) -> tuple[Figure, Axes]:
@@ -302,7 +319,12 @@ def plot_candidate_fit(
         the excluded nadir gap). Purely a display domain; the fit
         itself was never evaluated there and this draws no new
         conclusion about that span.
+
+    .. deprecated:: 0.10
+       Removed in 0.12. Use :func:`plot_tvg_fit` with
+       :func:`~sidescanpy.analysis.fit_tvg_models`.
     """
+    _deprecated("plot_candidate_fit")
     fig, ax = _new_fig_ax(ax)
 
     # x-axis is absolute range -- the y-axis (loss relative to r_ref)
@@ -354,13 +376,26 @@ def plot_candidate_fit(
 
 def plot_range_decay_fit(result: RangeDecayResult, ax: Axes | None = None) -> tuple[Figure, Axes]:
     """Observed loss-vs-range curve with every candidate model overlaid
-    (one :func:`plot_candidate_fit` call per candidate on a shared axis)."""
+    (one :func:`plot_candidate_fit` call per candidate on a shared axis).
+
+    .. deprecated:: 0.10
+       Removed in 0.12. Use :func:`plot_tvg_fit` with
+       :func:`~sidescanpy.analysis.fit_tvg_models`.
+    """
+    _deprecated("plot_range_decay_fit")
     fit_result = result.fit
     fig, ax = _new_fig_ax(ax, figsize=(9, 6))
     if fit_result is None:
         ax.set_title("No fit available")
         return fig, ax
 
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        _plot_candidates(fit_result, ax, result.best_candidate)
+    return fig, ax
+
+
+def _plot_candidates(fit_result, ax: Axes, best_name: str | None) -> None:
     for i, candidate in enumerate(fit_result.candidates):
         plot_candidate_fit(
             candidate,
@@ -369,9 +404,8 @@ def plot_range_decay_fit(result: RangeDecayResult, ax: Axes | None = None) -> tu
             ax=ax,
             color=_CANDIDATE_COLORS.get(candidate.name),
             show_observed=(i == 0),
-            title=f"Decay model fit (best: {result.best_candidate})",
+            title=f"Decay model fit (best: {best_name})",
         )
-    return fig, ax
 
 
 def set_fit_window_limits(
@@ -386,7 +420,12 @@ def set_fit_window_limits(
     span 0 to the far edge (padded), not the fit window, so a misplaced
     reference or window stays visible. With a shared x-axis, call this on
     one panel only. No-op if there is no fit or no recorded window.
+
+    .. deprecated:: 0.10
+       Removed in 0.12. Use :func:`plot_tvg_fit` with
+       :func:`~sidescanpy.analysis.fit_tvg_models`.
     """
+    _deprecated("set_fit_window_limits")
     fit_result = result.fit
     if fit_result is None:
         return
@@ -425,7 +464,12 @@ def plot_range_decay_residuals(
     ``relative_x=True`` plots distance from each candidate's ``r_ref_m``;
     pass ``False`` for absolute range (to stack under
     :func:`plot_candidate_fit` on a shared x-axis).
+
+    .. deprecated:: 0.10
+       Removed in 0.12. Use :func:`plot_tvg_fit` with
+       :func:`~sidescanpy.analysis.fit_tvg_models`.
     """
+    _deprecated("plot_range_decay_residuals")
     fit_result = result.fit
     fig, ax = _new_fig_ax(ax, figsize=(9, 5))
     if fit_result is None:
@@ -458,3 +502,138 @@ def plot_range_decay_residuals(
     ax.set_title("Fit residuals")
     ax.legend(fontsize=8)
     return fig, ax
+
+
+# ============================================================
+# TVG model fit (fit_tvg_models / check_tvg)
+# ============================================================
+
+_MODEL_COLORS = {20.0: "C2", 30.0: "C0", 40.0: "C3", 0.0: "C1"}
+
+
+def plot_tvg_fit(
+    fit: TVGFitResult,
+    check: TVGCheckResult | None = None,
+    ax: Axes | None = None,
+    ax_check: Axes | None = None,
+    *,
+    title: str | None = None,
+) -> tuple[Figure, tuple[Axes, Axes | None]]:
+    """One column: the TVG model fit and, below it, the check after TVG.
+
+    Fit panel: the median level against range (black), the fit window
+    (shaded), the 20, 30 and 40 log R models with absorption (thin), the
+    best model (thick; dashed when it has no absorption), each labelled
+    with its RMS in the window. Check panel (when ``check`` is given):
+    the median level after the TVG, relative to its mean in the window,
+    with a zero line, limits of ±5 dB, and the spread and trend written
+    in the corner. Flat means the model holds.
+
+    Parameters
+    ----------
+    fit : TVGFitResult
+        From :func:`~sidescanpy.analysis.fit_tvg_models`.
+    check : TVGCheckResult, optional
+        From :func:`~sidescanpy.analysis.check_tvg`, normally on
+        ``fit.tvg_params`` and ``fit.window_m``.
+    ax, ax_check : Axes, optional
+        Where to draw. Without ``ax`` a new figure is made, with a second
+        row for the check when ``check`` is given. With ``ax`` and a
+        ``check``, pass ``ax_check`` too.
+    title : str, optional
+        Title of the fit panel.
+
+    Returns
+    -------
+    (Figure, (Axes, Axes or None))
+        The figure, the fit axes and the check axes (``None`` without a
+        check).
+    """
+    if ax is None:
+        if check is not None:
+            fig, (ax, ax_check) = plt.subplots(
+                2, 1, figsize=(5.5, 7.6), height_ratios=[1.5, 1], sharex=True, constrained_layout=True,
+            )
+        else:
+            fig, ax = plt.subplots(figsize=(5.5, 4.6), constrained_layout=True)
+    else:
+        fig = ax.figure
+        if check is not None and ax_check is None:
+            raise ValueError("plot_tvg_fit: pass ax_check with ax when check is given")
+
+    range_m = np.asarray(fit.range_m if fit.range_m is not None else [], dtype=np.float64)
+    level = np.asarray(fit.level_db if fit.level_db is not None else [], dtype=np.float64)
+    finite = np.isfinite(level)
+    ax.set_title(title or _default_title(fit), loc="left")
+    ax.set_ylabel("median level (dB re 1 recorded unit)")
+    ax.grid(alpha=0.3)
+    if not finite.any():
+        ax.text(0.5, 0.5, "no level to fit", transform=ax.transAxes, ha="center")
+        return fig, (ax, ax_check)
+
+    lo_w, hi_w = fit.window_m if fit.window_m is not None else (np.nan, np.nan)
+    x_max = float(range_m[finite].max())
+    if np.isfinite(hi_w):
+        x_max = min(x_max, 2.2 * hi_w)
+    for a in (ax, ax_check):
+        if a is not None and np.isfinite(lo_w):
+            a.axvspan(lo_w, hi_w, color="0.92", zorder=0)
+    ax.plot(range_m, level, color="k", lw=1.5, label="measured median")
+
+    r = range_m[(range_m >= 0.5 * lo_w) & (range_m <= x_max)] if np.isfinite(lo_w) else range_m
+    for name, model in fit.models.items():
+        is_best = name == fit.best
+        with_abs = model.absorption_db_per_m > 0
+        if not (is_best or (with_abs and model.spreading_loss_db in (20.0, 30.0, 40.0))):
+            continue
+        ax.plot(
+            r, model.level_db(r), color=_MODEL_COLORS.get(model.spreading_loss_db, "0.4"),
+            ls="-" if with_abs else "--", lw=3 if is_best else 1, alpha=1 if is_best else 0.8,
+            label=f"{name}: {model.rms_db:.2f} dB" + (" (best)" if is_best else ""), zorder=3 if is_best else 2,
+        )
+    shown = level[(range_m <= x_max) & finite]
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(np.nanmin(shown) - 3, np.nanmax(shown) + 4)
+    if fit.models:
+        ax.legend(loc="upper right", fontsize=8.5, framealpha=0.95, title="RMS in window", title_fontsize=8.5)
+    flags = []
+    if fit.window_source == "end_of_record":
+        flags.append("no noise knee: fit to end of record")
+    if fit.low_contrast:
+        flags.append(f"low contrast ({fit.contrast_db:.1f} dB)")
+    if fit.sides_disagree:
+        flags.append("sides disagree")
+    if flags:
+        ax.text(0.02, 0.03, "\n".join(flags), transform=ax.transAxes, fontsize=8.5, va="bottom", color="C3")
+    if ax_check is None:
+        ax.set_xlabel("slant range (m)")
+    if check is not None:
+        _plot_tvg_check(check, ax_check, lo_w)
+    return fig, (ax, ax_check)
+
+
+def _default_title(fit: TVGFitResult) -> str:
+    freq = f"{fit.freq_hz / 1000:.0f} kHz" if fit.freq_hz else ""
+    best = f"best {fit.best}" if fit.best else "no fit"
+    return ", ".join(part for part in (freq, best) if part)
+
+
+def _plot_tvg_check(check: TVGCheckResult, ax: Axes, lo_w: float) -> None:
+    """The after-TVG panel of :func:`plot_tvg_fit`."""
+    ax.grid(alpha=0.3)
+    ax.axhline(0, color="0.4", lw=0.8)
+    ax.set_ylim(-5, 5)
+    ax.set_xlabel("slant range (m)")
+    ax.set_ylabel("after TVG, relative (dB)")
+    rel = check.relative_db
+    name = tvg_model_name(check.params.get("spreading_loss_db", 0.0), check.params.get("absorption_db_per_m", 0.0) > 0)
+    if rel is None or check.spread_db is None:
+        ax.text(0.02, 0.88, f"TVG {name}: no check", transform=ax.transAxes, fontsize=8.5, va="top")
+        return
+    range_m = np.asarray(check.range_m, dtype=np.float64)
+    shown = range_m >= (lo_w - 3.0 if np.isfinite(lo_w) else -np.inf)
+    ax.plot(range_m[shown], rel[shown], color="k", lw=1.8)
+    ax.text(
+        0.02, 0.88, f"TVG {name}: spread {check.spread_db:.2f} dB,\ntrend {check.trend_db_per_10m:+.2f} dB per 10 m",
+        transform=ax.transAxes, fontsize=8.5, va="top",
+    )

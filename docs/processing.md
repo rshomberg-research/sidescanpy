@@ -121,7 +121,10 @@ These apply to step lists (`correct`, `correct_survey`, `correct_file`).
   spherical spreading (40) less 10 log R (e.g.
   [J. Mar. Sci. Eng. 2017, 5(4), 54](https://www.mdpi.com/2077-1312/5/4/54)).
   Which fits real data varies; measure it per survey with
-  `analysis.fit_range_decay` (pass the same `spreading_loss_db`) and set the
+  `analysis.fit_tvg_models`, which fits no TVG, absorption only and
+  20/30/40 log R with and without absorption to the raw median level and
+  returns the best as `fit.tvg_params`, and confirm it with
+  `analysis.check_tvg` ([Analysis](analysis.md#fitting-the-tvg)). Set the
   coefficient in the config. 40 was the default in 0.7.0-0.7.5 and 20
   (one-way spreading) before 0.7.0; files corrected with either record the
   value in their history, so `invert()` still undoes them exactly.

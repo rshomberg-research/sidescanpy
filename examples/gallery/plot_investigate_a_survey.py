@@ -34,10 +34,9 @@ from sidescanpy.processing import (
     altitude_from_bottom_track,
     blank_nadir_noise,
     compute_geometric_ranges,
-    uniform_exclusion_boundary,
 )
 from sidescanpy.viz import analysis as plots
-from sidescanpy.viz.tvg import plot_range_decay_fit
+from sidescanpy.viz.tvg import plot_tvg_fit
 
 # sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_investigate_a_survey.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -86,9 +85,11 @@ fig, _ = plots.plot_nadir_waterfall(ds, var, nadir=nadirs["hz_218740"])
 # ---------------------------
 # The level falls with range until it reaches the noise floor; beyond
 # that the image holds no seabed.
-# :func:`~sidescanpy.analysis.estimate_usable_range` finds where. Higher
-# frequencies are absorbed faster, so the 521 kHz channel sees about half
-# as far as the 219 kHz one.
+# :func:`~sidescanpy.analysis.estimate_usable_range` finds where: the
+# noise knee, the first range past the near-range peak where the median
+# level comes within 3 dB of its lowest value. Higher frequencies are
+# absorbed faster, so the 521 kHz channel sees about half as far as the
+# 219 kHz one.
 
 usable = {
     fk: analysis.estimate_usable_range(c, value_var=var, bin_width_m=2.0,
@@ -100,32 +101,36 @@ for fk, u in usable.items():
 fig, _ = plots.plot_usable_range(usable["hz_218740"])
 
 # %%
-# Did the recorder already apply a gain?
-# --------------------------------------
+# Which gain does it need?
+# ------------------------
 # Raw sidescan levels fall with range by spreading and absorption, unless
-# the recorder compensated them. :func:`~sidescanpy.analysis.fit_range_decay`
-# fits the level against range, within the usable range, with each
-# combination of terms, and reports a TVG status: ``none`` (no gain
-# applied: correct both terms), ``spreading_only`` or ``full`` (part or
-# all of it already applied: turn those terms off), or ``ambiguous``.
+# the recorder compensated them.
+# :func:`~sidescanpy.analysis.fit_tvg_models` fits the median level from
+# 5 m past its peak to the noise knee with each TVG model: none (flat),
+# absorption only, and 20, 30 or 40 log R with and without absorption,
+# each with a free constant. The best model is the TVG to apply, and its
+# ``tvg_status`` names what the recorder already removed (``none``: no
+# gain applied). A good fit is a hypothesis, so
+# :func:`~sidescanpy.analysis.check_tvg` applies it and measures how flat
+# the corrected level is over the same window.
 
-decays = {}
+fits, checks = {}, {}
 for fk, c in channels.items():
-    boundary = nadirs[fk].first_bottom_return_sample
-    decays[fk] = analysis.fit_range_decay(
-        c, value_var=var, bin_width_m=5.0, usable_range_m=usable[fk].usable_range_m,
-        exclude_before_sample=uniform_exclusion_boundary(boundary) if boundary is not None else None,
-    )
-    d = decays[fk].to_dict()
-    rmse = ", ".join(f"{name} {c['rmse_db']:.1f} dB" for name, c in d["candidates"].items())
-    print(f"{fk}: TVG status {decays[fk].tvg_status} (fit RMS error: {rmse})")
-units = analysis.infer_units(values, decays["hz_218740"])
+    fits[fk] = fit = analysis.fit_tvg_models(c, value_var=var)
+    checks[fk] = check = analysis.check_tvg(c, fit.tvg_params, fit.window_m, value_var=var)
+    rms = ", ".join(f"{name} {m.rms_db:.2f}" for name, m in fit.models.items())
+    print(f"{fk}: window {fit.window_m[0]:.1f}-{fit.window_m[1]:.1f} m, best {fit.best} "
+          f"(TVG status {fit.tvg_status}), free n {fit.free_n:.1f}; RMS in dB: {rms}")
+    print(f"   after TVG: spread {check.spread_db:.2f} dB, trend {check.trend_db_per_10m:+.2f} dB per 10 m")
+units = analysis.infer_units(values, fits["hz_218740"])
 print(f"units: {units.units}")
-fig, _ = plot_range_decay_fit(decays["hz_218740"])
+fig, axes = plt.subplots(2, 2, figsize=(11, 7.6), height_ratios=[1.5, 1], sharex="col", constrained_layout=True)
+for col, fk in enumerate(channels):
+    plot_tvg_fit(fits[fk], checks[fk], ax=axes[0, col], ax_check=axes[1, col])
 # sphinx_gallery_start_ignore
 # A clean thumbnail for the examples page (hidden on this page).
 thumb, tax = plt.subplots(figsize=(4, 2.8))
-plot_range_decay_fit(decays["hz_218740"], ax=tax)
+plot_tvg_fit(fits["hz_218740"], ax=tax)
 if tax.get_legend() is not None:
     tax.get_legend().remove()
 tax.set_title("")
@@ -139,12 +144,13 @@ plt.close(thumb)
 # %%
 # The answer
 # ----------
-# Raw counts, a clean nadir gap, a usable range of about 116 m at 219 kHz
-# and 66 m at 521 kHz, and no gain applied by the recorder at either
-# frequency: the level falls with range, and at 219 kHz the model with
-# both spreading and absorption fits to within about 1 dB (at 521 kHz,
-# with its shorter usable range, absorption alone fits slightly better). So this survey needs the full TVG
-# (:func:`~sidescanpy.processing.apply_tvg` with its defaults), and
-# anything past the usable range is noise to crop or mask, not seabed.
-# Confirm on the corrected data that the level is flat with range: a good
-# fit is a hypothesis, not a result.
+# Raw counts, a clean nadir gap, a usable range of about 160 m at 219 kHz
+# and 90 m at 521 kHz, and no gain applied by the recorder at either
+# frequency: 30 log R with absorption fits best at both (1.23 and 0.79 dB
+# RMS; a free spreading coefficient gives 27 and 34), and applying it
+# leaves the level flat to about 1 dB across the window. So this survey
+# needs :func:`~sidescanpy.processing.apply_tvg` with
+# ``spreading_loss_db=30`` (the default) and Francois-Garrison absorption
+# (``fits[fk].tvg_params``), and anything past the noise knee is noise to
+# crop or mask, not seabed. What TVG leaves near the start of the window
+# is the beam pattern, for the empirical range correction.

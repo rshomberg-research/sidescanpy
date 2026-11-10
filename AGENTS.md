@@ -180,11 +180,12 @@ set `SIDESCANPY_PUBLIC_DATA` to their directory to run
   `_gain_factor` that tracks the signal like an AGC; whether "raw" samples
   are already gain-compensated is unresolved. Some recordings behave as if
   spreading or both TVG terms were applied in hardware. Measure per survey
-  with `analysis.fit_range_decay` and turn TVG terms off accordingly; do
-  not assume.
+  with `analysis.fit_tvg_models` (and `check_tvg`) and apply the model it
+  finds; do not assume.
 - **TVG spreading coefficient is unsettled.** The default is 30 log R
   (insonified area grows with range); 40 log R (two-way spherical) is the
-  physics alternative. `spreading_loss_db` sets it; compare per survey.
+  physics alternative; 20 log R fits some sonars. `spreading_loss_db`
+  sets it; `fit_tvg_models` compares 20/30/40 per survey.
 - **Klein SDF depth is NaN.** Depth is a sensor voltage; the calibration
   lives in companion INI files that are not parsed.
 - **Sound velocity.** Zero or missing values fall back to 1500 m/s
@@ -212,8 +213,9 @@ set `SIDESCANPY_PUBLIC_DATA` to their directory to run
   `bbox_from_channel_dataset` pads by a fixed amount in degrees.
 - **Analysis assumptions:** `analyze_nadir` detects on values as given
   (not inverted); `estimate_beam_geometry` assumes two channels;
-  `fit_range_decay` picks one named candidate and does not fit absorption
-  freely.
+  `fit_tvg_models` fits `n` freely but not absorption (Francois-Garrison
+  at default water) and trusts the recorded altitude. `fit_range_decay`
+  and its plots are deprecated (removal in 0.12).
 - **`fathometer_reading_m`** is not attitude-corrected.
 - **Missing altitude.** Some recordings have none (some EdgeTech Discover
   files write 0 in JSF and nothing in XTF). The opt-in `bottom_track` step

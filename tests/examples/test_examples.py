@@ -84,11 +84,11 @@ def test_investigate_dataset_writes_metrics_and_plots(tmp_path):
 
     metrics = json.loads((out / "metrics.json").read_text())
     assert metrics["freq_key"] == "hz_200000"
-    for key in ("values", "outlier_comparison", "nadir", "usable_range", "beam_geometry", "range_decay", "units"):
+    for key in ("values", "outlier_comparison", "nadir", "usable_range", "beam_geometry", "tvg_fit", "units"):
         assert isinstance(metrics[key], dict), key
     pngs = {p.name for p in out.glob("*.png")}
-    assert {"value_histograms.png", "nadir_zoom.png", "usable_range.png", "range_decay_fit.png"} <= pngs
-    assert len(pngs) == 11
+    assert {"value_histograms.png", "nadir_zoom.png", "usable_range.png", "tvg_fit.png"} <= pngs
+    assert len(pngs) == 10
 
 
 def test_quickstart_writes_waterfall_and_grid(tmp_path):
@@ -102,11 +102,12 @@ def test_quickstart_writes_waterfall_and_grid(tmp_path):
 def test_tvg_calibration_fits_and_applies(tmp_path):
     source = _moving_survey(tmp_path / "moving.ss.h5")
     out = tmp_path / "out"
-    _run_example("tvg_calibration.py", source, "--output-dir", out, "--bin-width-m", "5", "--usable-range-m", "200")
+    _run_example("tvg_calibration.py", source, "--output-dir", out, "--bin-width-m", "5")
     params = json.loads((out / "tvg_params.json").read_text())
     assert params["freq_key"] == "hz_200000"
     assert set(params["tvg"]) == {"spreading_loss_db", "absorption_db_per_m"}
-    assert params["fit"]["best_candidate"] is not None
+    assert params["fit"]["best"] is not None
+    assert params["check"]["spread_db"] is not None
     assert (out / "tvg_calibration.png").stat().st_size > 0
 
 

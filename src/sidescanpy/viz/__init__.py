@@ -31,8 +31,10 @@ Public functions
 - :mod:`sidescanpy.viz.analysis` — one plot per analysis result
   (value histograms, outlier comparison, nadir zoom/waterfall, beam
   geometry, usable range, segments overview, navigation summary).
-- :mod:`sidescanpy.viz.tvg` — TVG / range-decay plots (mean vs. range,
-  candidate fits, decay fit and residuals, fit-window limits).
+- :mod:`sidescanpy.viz.tvg` — TVG plots: :func:`plot_tvg_fit` (model fit
+  and after-TVG check), mean vs. range, gain curve; the deprecated
+  range-decay plots (candidate fits, decay fit and residuals, fit-window
+  limits).
 - :func:`resolve_cmap` — a colormap that renders NaN black, the
   convention every sidescanpy plot follows.
 - :mod:`sidescanpy.viz.scalebar`, :mod:`sidescanpy.viz.basemap` (``maps``
@@ -68,6 +70,7 @@ from sidescanpy.viz.tvg import (
     plot_per_ping_profiles,
     plot_range_decay_fit,
     plot_range_decay_residuals,
+    plot_tvg_fit,
     plot_tvg_gain_curve,
     set_fit_window_limits,
 )
@@ -102,6 +105,7 @@ __all__ = [
     "plot_navigation_summary",
     "plot_shadow_proposals",
     # TVG / range decay
+    "plot_tvg_fit",
     "plot_mean_vs_range",
     "plot_tvg_gain_curve",
     "plot_per_ping_profiles",

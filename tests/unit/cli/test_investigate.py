@@ -23,9 +23,11 @@ _FREQ_HZ = 200_000  # low enough that full-physics loss stays above the dB floor
 _EXPECTED_PNGS = {
     "value_histograms.png", "sample_ping.png", "outlier_comparison.png", "cross_track_profile.png",
     "nadir_zoom.png", "nadir_waterfall.png", "beam_geometry.png", "usable_range.png",
-    "range_decay_fit.png", "range_decay_residuals.png", "units_distribution.png",
+    "tvg_fit.png", "units_distribution.png",
 }
-_EXPECTED_RESULTS = {"values", "outlier_comparison", "nadir", "beam_geometry", "usable_range", "range_decay", "units"}
+_EXPECTED_RESULTS = {
+    "values", "outlier_comparison", "nadir", "beam_geometry", "usable_range", "tvg_fit", "range_decay", "units",
+}
 
 
 def _two_channel_dataset(n_pings=40, n_samples=300):
@@ -70,6 +72,12 @@ def _decay(path, **kwargs):
     return params, results["range_decay"]
 
 
+def _tvg_fit(path, **kwargs):
+    raw, _ = _investigate.load_frequency(path)
+    _, _, _, results = _investigate.investigate(raw, **kwargs)
+    return results["tvg_fit"]
+
+
 class TestInvestigateCommand:
     def test_writes_plots_metrics_and_summary(self, two_channel_path, tmp_path, monkeypatch):
         out = tmp_path / "out"
@@ -91,7 +99,10 @@ class TestInvestigateCommand:
         summary = json.loads((out / "summary.json").read_text())
         assert len(summary) == 1
         assert summary[0]["freq_key"] == "hz_200000"
-        assert summary[0]["tvg_status"] == metrics["results"]["range_decay"]["tvg_status"]
+        assert summary[0]["tvg_status"] == metrics["results"]["tvg_fit"]["fit"]["tvg_status"]
+        assert summary[0]["tvg_model"] == metrics["results"]["tvg_fit"]["fit"]["best"]
+        assert metrics["results"]["tvg_fit"]["check"]["spread_db"] is not None
+        assert metrics["params"]["knee_db"] == 3.0
 
     def test_all_frequencies_writes_one_directory_each(self, tmp_path, monkeypatch):
         ds = make_raw_dataset(n_pings=10, n_samples=100)
@@ -117,6 +128,7 @@ class TestInvestigateCommand:
         metrics = json.loads((out / "hz_200000" / "metrics.json").read_text())
         assert metrics["params"]["channel"] == 1
         assert metrics["results"]["range_decay"]["tvg_status"] == "full"
+        assert metrics["results"]["tvg_fit"]["fit"]["tvg_status"] == "full"
 
 
 class TestInvestigateChannel:
@@ -148,6 +160,17 @@ class TestInvestigateChannel:
         _, starboard = _decay(two_channel_path, channel=1)
         assert pooled.best_rmse_db != pytest.approx(port.best_rmse_db)
         assert pooled.best_rmse_db != pytest.approx(starboard.best_rmse_db)
+
+    def test_tvg_fit_each_side_independently(self, two_channel_path):
+        port = _tvg_fit(two_channel_path, channel=0)
+        starboard = _tvg_fit(two_channel_path, channel=1)
+        assert port["fit"].tvg_status == "none"
+        assert starboard["fit"].best == "flat"
+        assert starboard["check"].spread_db < 0.2
+
+    def test_range_decay_kept_without_deprecation_warning(self, two_channel_path, recwarn):
+        _decay(two_channel_path)
+        assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
 
     def test_unknown_channel_name_raises(self, two_channel_path):
         with pytest.raises(ValueError, match="not found in channel_id"):

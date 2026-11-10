@@ -323,3 +323,56 @@ def make_split_update_scenario(
         "inner": (t > 1.0) & (t < duration_s - 1.0),
         "m_per_deg_lon": m_per_deg_lon,
     }
+
+
+# ============================================================
+# RANGE DECAY (TVG model fit)
+# ============================================================
+
+_RAYLEIGH_MEDIAN_ONE = 1.0 / np.sqrt(2.0 * np.log(2.0))
+
+
+def make_range_decay_dataset(
+    *,
+    spreading_loss_db: float = 30.0,
+    absorption_db_per_m: float = 0.0,
+    n_pings: int = 200,
+    n_samples: int = 2000,
+    sample_rate_hz: float = 15_000.0,
+    freq_hz: float = 200_000,
+    altitude_m: float = 10.0,
+    level_at_10m_db: float = 60.0,
+    signal_end_m: float | None = None,
+    noise_db: float = -40.0,
+    side_gain_db: tuple[float, float] = (0.0, 0.0),
+    side_spreading_db: tuple[float, float] | None = None,
+    integer: bool = False,
+    seed: int = 0,
+) -> xr.Dataset:
+    """Raw two-channel data whose median level falls as a known TVG model.
+
+    Linear amplitude ``10**(L(R)/20)`` with ``L(R) = level_at_10m_db -
+    n log10(R/10) - 2 alpha (R - 10)`` from the altitude out to
+    ``signal_end_m`` (default: the end of the record), times Rayleigh
+    speckle of median 1, plus a Rayleigh noise floor at ``noise_db``. Samples are 0.05 m apart (at the default
+    sample rate), so 2000 samples reach 100 m. ``side_gain_db`` adds a
+    constant per side, ``side_spreading_db`` gives each side its own
+    ``n``, and ``integer`` rounds the amplitudes to whole numbers as many
+    recorders store them. No geometric ranges are added.
+    """
+    rng = np.random.default_rng(seed)
+    r = np.arange(n_samples) * 1500.0 / (2.0 * sample_rate_hz)
+    r_safe = np.clip(r, 0.5, None)
+    bs = np.empty((n_pings, 2, n_samples))
+    for side in (0, 1):
+        n = side_spreading_db[side] if side_spreading_db is not None else spreading_loss_db
+        level = level_at_10m_db + side_gain_db[side] - n * np.log10(r_safe / 10.0) - 2.0 * absorption_db_per_m * (r_safe - 10.0)
+        end = np.inf if signal_end_m is None else signal_end_m
+        signal = np.where((r > altitude_m) & (r <= end), 10.0 ** (level / 20.0), 0.0)
+        speckle = rng.rayleigh(_RAYLEIGH_MEDIAN_ONE, (n_pings, n_samples))
+        noise = 10.0 ** (noise_db / 20.0) * rng.rayleigh(_RAYLEIGH_MEDIAN_ONE, (n_pings, n_samples))
+        bs[:, side] = signal * speckle + noise
+    if integer:
+        bs = np.round(bs)
+    ds = make_raw_dataset(backscatter=bs.astype(np.float32), sample_rate_hz=sample_rate_hz, freq_hz=freq_hz)
+    return ds.assign(altitude_m=("ping", np.full(n_pings, altitude_m, dtype=np.float32)))

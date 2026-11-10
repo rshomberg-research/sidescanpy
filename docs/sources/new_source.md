@@ -108,7 +108,7 @@ On real files:
   XTF), convert both and compare: the samples should be identical
   ([Comparing results across sonars and file formats](../examples/plot_compare_sonars_and_formats.rst)).
 - Measure whether the recorder applied a gain with
-  `analysis.fit_range_decay` before choosing corrections
+  `analysis.fit_tvg_models` before choosing corrections
   ([Investigating an unknown survey](../examples/plot_investigate_a_survey.rst)).
 
 ## 6. Document it

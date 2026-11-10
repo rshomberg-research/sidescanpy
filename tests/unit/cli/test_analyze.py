@@ -44,7 +44,8 @@ class TestRunInvestigate:
             plots=True,
             input=input_path, frequency=None, all_frequencies=False,
             value_var="uncorrected", pings="0:100", channel=None, nadir_n_samples=10,
-            usable_range_bin_width_m=2.0, decay_bin_width_m=5.0,
+            usable_range_bin_width_m=2.0, usable_range_method="knee", decay_bin_width_m=5.0,
+            tvg_bin_width_m=0.02, start_margin_m=0.1, knee_db=3.0, window_m=None,
             decay_db_reference_percentile=99.0, snr_threshold=3.0,
             reject_outliers=False, outlier_mad_k=3.5, decay_fit_value_col="mean",
             output_dir=tmp_path / "out",
@@ -179,8 +180,8 @@ class TestRunTvgFit:
         defaults = dict(
             plots=True,
             ss_h5=ss_h5_path, frequency=1495000, pings=(0, None),
-            reconstruct_raw=False, bin_width_m=1.0, r_ref_m="auto",
-            r_fit_min_m="auto", range_var="slant_range_m",
+            reconstruct_raw=False, bin_width_m=0.02, start_margin_m=0.1, knee_db=3.0,
+            window_m=None, r_ref_m=None, r_fit_min_m=None, range_var="slant_range_m",
             usable_range_m=None, output_dir=tmp_path / "out",
         )
         defaults.update(overrides)
@@ -194,6 +195,10 @@ class TestRunTvgFit:
         assert analyze.run_tvg_fit(args) == 0
         pngs = list((tmp_path / "out").glob("*.png"))
         assert len(pngs) == 1
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["fit"]["best"] is not None
+        assert metrics["fit"]["tvg_params"]["spreading_loss_db"] in (0.0, 20.0, 30.0, 40.0)
+        assert metrics["check"]["spread_db"] is not None
 
     def test_not_raw_without_reconstruct_flag_returns_1(self, tmp_path):
         from sidescanpy.processing import correct_survey
@@ -215,11 +220,10 @@ class TestRunTvgFit:
         args = self._args(tmp_path, path, reconstruct_raw=True)
         assert analyze.run_tvg_fit(args) == 0
 
-    def test_flat_data_without_usable_range_override_returns_1(self, tmp_path):
-        """A flat (no real range-dependent decay) backscatter array is
-        the real Klein SDF failure mode this survives -- the usable-range SNR
-        threshold never trips against the noise floor, so it can't
-        auto-determine usable_range_m."""
+    def test_flat_data_fits_flat_model(self, tmp_path):
+        """A flat (no range-dependent decay) backscatter array, as on data
+        the recorder has levelled: no noise knee, the fit runs to the end of
+        the record and the flat model (no TVG) wins."""
         flat = _decay_survey()
         ds = flat.get_frequency("hz_1495000").dataset
         ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0  # constant, no decay
@@ -230,9 +234,13 @@ class TestRunTvgFit:
         write_survey(flat, path)
 
         args = self._args(tmp_path, path)
-        assert analyze.run_tvg_fit(args) == 1
+        assert analyze.run_tvg_fit(args) == 0
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["fit"]["best"] == "flat"
+        assert metrics["fit"]["window_source"] == "end_of_record"
+        assert metrics["fit"]["tvg_status"] == "full"
 
-    def test_usable_range_m_override_bypasses_auto_detection(self, tmp_path):
+    def test_window_m_sets_fit_window(self, tmp_path):
         flat = _decay_survey()
         ds = flat.get_frequency("hz_1495000").dataset
         ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
@@ -242,17 +250,21 @@ class TestRunTvgFit:
         path = tmp_path / "a.ss.h5"
         write_survey(flat, path)
 
-        args = self._args(tmp_path, path, usable_range_m=10.0)
+        args = self._args(tmp_path, path, window_m=[0.6, 1.2])
         assert analyze.run_tvg_fit(args) == 0
-        pngs = list((tmp_path / "out").glob("*.png"))
-        assert len(pngs) == 1
+        metrics = json.loads((tmp_path / "out" / "metrics.json").read_text())
+        assert metrics["fit"]["window_m"] == [0.6, 1.2]
+        assert metrics["fit"]["window_source"] == "given"
 
-    def test_numeric_r_ref_m_override(self, tmp_path):
+    def test_deprecated_window_flags_warn_and_are_ignored(self, tmp_path, caplog):
         path = tmp_path / "a.ss.h5"
         write_survey(_decay_survey(), path)
 
-        args = self._args(tmp_path, path, r_ref_m=6.0, r_fit_min_m=1.0)
-        assert analyze.run_tvg_fit(args) == 0
+        args = self._args(tmp_path, path, r_ref_m="6.0", r_fit_min_m="1.0", usable_range_m=10.0)
+        with caplog.at_level("WARNING", logger="sidescanpy.cli.analyze"):
+            assert analyze.run_tvg_fit(args) == 0
+        assert "--r-ref-m is deprecated" in caplog.text
+        assert "--usable-range-m is deprecated" in caplog.text
 
     def test_literal_freq_key_fallback_for_non_hz_naming(self, tmp_path):
         """Not every consumer uses JSF/SDF's "hz_<freq>" freq_key
@@ -272,17 +284,12 @@ class TestRunTvgFit:
         assert len(pngs) == 1
 
 
-    def test_unfittable_decay_returns_1_instead_of_crashing(self, tmp_path, monkeypatch):
-        """fit_range_decay returns early (no fit, r_ref_m=None) when there are
-        too few binned samples; tvg-fit used to crash formatting r_ref_m."""
-        from sidescanpy.analysis.tvg import RangeDecayResult
-
+    def test_unfittable_data_returns_1_instead_of_crashing(self, tmp_path):
+        """A window with too few bins gives no model: exit 1, no figure."""
         path = tmp_path / "a.ss.h5"
         write_survey(_decay_survey(), path)
-        early = RangeDecayResult(tvg_status="ambiguous", notes=["Not enough binned samples to fit a decay model."])
-        monkeypatch.setattr(analyze, "fit_range_decay", lambda *a, **k: early)
 
-        args = self._args(tmp_path, path, usable_range_m=10.0)
+        args = self._args(tmp_path, path, window_m=[0.5, 0.51])
         assert analyze.run_tvg_fit(args) == 1
         assert not list((tmp_path / "out").glob("*.png"))
 
@@ -358,7 +365,7 @@ class TestRunUsableRange:
         defaults = dict(
             plots=True,
             input=ss_h5_path, frequency=1495000, pings=(0, None), value_var="uncorrected",
-            range_var="slant_range_m", bin_width_m=1.0, snr_threshold=3.0,
+            range_var="slant_range_m", method="knee", bin_width_m=1.0, knee_db=3.0, snr_threshold=3.0,
             reject_outliers=False, outlier_mad_k=3.5,
             output_dir=tmp_path / "out",
         )
@@ -439,11 +446,10 @@ class TestRunRecommendConfig:
         parsed = yaml.safe_load((tmp_path / "out" / "recommended_config.yaml").read_text())
         assert isinstance(parsed, dict)
 
-    def test_flat_data_omits_tvg_recommendation_gracefully(self, tmp_path):
-        """Same known Klein SDF failure mode TestRunTvgFit covers below --
-        usable_range_m can't be determined on flat data, so the decay fit
-        never runs. recommend-config must still write a file (with the
-        other sections' evidence), not crash."""
+    def test_unfittable_data_omits_tvg_recommendation_gracefully(self, tmp_path):
+        """Bins wider than the recorded range leave no TVG fit;
+        recommend-config must still write a file (with the other sections'
+        evidence), not crash."""
         flat = _decay_survey()
         ds = flat.get_frequency("hz_1495000").dataset
         ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
@@ -454,7 +460,24 @@ class TestRunRecommendConfig:
         args = self._args(tmp_path, path)
         assert analyze.run_recommend_config(args) == 0
         text = (tmp_path / "out" / "recommended_config.yaml").read_text()
-        assert "could not be determined" in text
+        assert "no model could be fitted" in text
+        assert "spreading_loss_db:" not in text
+
+    def test_flat_data_recommends_no_tvg_terms(self, tmp_path):
+        import yaml
+
+        flat = _decay_survey()
+        ds = flat.get_frequency("hz_1495000").dataset
+        ds["backscatter_raw"] = ds["backscatter_raw"] * 0 + 1.0
+        ds["backscatter_intensity"] = ds["backscatter_raw"].copy()
+        path = tmp_path / "a.ss.h5"
+        write_survey(flat, path)
+
+        args = self._args(tmp_path, path, bin_width_m=0.02)
+        assert analyze.run_recommend_config(args) == 0
+        parsed = yaml.safe_load((tmp_path / "out" / "recommended_config.yaml").read_text())
+        assert parsed["spreading_loss_db"] == 0
+        assert parsed["absorption_db_per_m"] == 0
 
 
 def _write_survey_in_parts(survey: SideScanSurvey, out_dir, n_parts: int) -> list:
@@ -628,11 +651,6 @@ class TestParseHelpers:
     def test_parse_ping_range_requires_colon(self):
         with pytest.raises(argparse.ArgumentTypeError):
             analyze._parse_ping_range("100")
-
-    def test_parse_numeric_or_literal(self):
-        assert analyze._parse_numeric_or_literal(None) is None
-        assert analyze._parse_numeric_or_literal("auto") == "auto"
-        assert analyze._parse_numeric_or_literal("6.0") == 6.0
 
 
 class TestOptionSpellings:

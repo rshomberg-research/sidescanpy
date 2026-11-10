@@ -34,6 +34,7 @@ Usage: ``python examples/gallery/plot_four_published_chains.py [output_dir]``
 import itertools
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -203,7 +204,9 @@ def grid_window(ds, to_map, bounds):
     n = db.shape[2] // k
 
     def block_mean(a):
-        return np.nanmean(a[:, :, : n * k].reshape(*a.shape[:2], n, k), axis=3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN blocks (water column) stay NaN
+            return np.nanmean(a[:, :, : n * k].reshape(*a.shape[:2], n, k), axis=3)
 
     ok = np.isfinite(x) & np.isfinite(y)
     bx, by, bd = (block_mean(np.where(ok, a, np.nan)) for a in (np.asarray(x), np.asarray(y), db))
