@@ -10,7 +10,8 @@ page looks at two public lines where that goes wrong in different ways,
 and shows how to see it and fix it:
 
 - a Klein line whose recorder logs every GPS update over two entries;
-- a Klein line from an older survey that records no heading at all.
+- a Klein line from an older survey that records no heading at all, and
+  whose positions jump back at every GPS fix.
 
 Data: USGS Grand Bay (U.S. public domain) and BGS London Gateway (Open
 Government Licence; contains data supplied by UKRI); see
@@ -30,7 +31,12 @@ import numpy as np
 from sidescanpy import datasets
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
-from sidescanpy.processing import aux_update_events, build_survey_track, interpolate_aux_onto_pings
+from sidescanpy.processing import (
+    aux_update_events,
+    build_survey_track,
+    interpolate_aux_onto_pings,
+    smooth_navigation,
+)
 from sidescanpy.processing.navigation import course_over_ground
 from sidescanpy.viz import plot_track_and_scanlines
 
@@ -76,7 +82,9 @@ for var, stats in aux_update_events(survey.navigation).items():
 # 65 ms after the real ones, so the track stalls for one ping in seven.
 # ``merge_window_s`` joins changes less than that far apart into one
 # update. Choose it longer than the follow-up delay and shorter than the
-# real update interval; ``aux_update_events`` shows both.
+# real update interval; ``aux_update_events`` shows both. On a line whose
+# navigation changes at every entry there is nothing to merge: a merge
+# window there joins real fixes and collapses the track.
 
 raw = survey.get_frequency("hz_100000").dataset
 default = interpolate_aux_onto_pings(survey).get_frequency("hz_100000").dataset
@@ -134,6 +142,46 @@ plot_track_and_scanlines(track.track_lat, track.track_lon, track.scan_port_lat, 
                          scan_nadir_lon=track.scan_nadir_lon, fig=fig, ax=ax_t,
                          title="Track and swath (scan lines every 60 pings, placed by course)")
 fig.savefig(out / "navigation_course.png", dpi=150)
+
+# %%
+# Positions that jump back at every fix
+# -------------------------------------
+# Another line from the same survey changes position at every entry, so
+# there are no held fixes to interpolate between, yet once a second the
+# track jumps back by about 2.5 m: the recorder runs the position ahead of
+# each GPS fix and corrects it when the next one arrives. Seen against a
+# straight line, the along-track error is a square wave with a 1 s
+# period. :func:`~sidescanpy.processing.smooth_navigation` replaces each
+# position with a straight-line fit over a time window; 5 s spans whole
+# periods, so the error averages out (and so do the occasional single
+# stale positions some lines have, like the line above).
+
+line80 = interpolate_aux_onto_pings(
+    read_and_convert([datasets.fetch("bgs_london_gateway_dynamo_80.xtf")], fmt="xtf", nav_crs="EPSG:32631"))
+raw80 = line80.get_frequency("hz_400000").dataset
+smoothed = smooth_navigation(line80, window_s=5.0).get_frequency("hz_400000").dataset
+t80 = (raw80["time"].values - raw80["time"].values[0]).astype("timedelta64[ns]").astype(np.int64) / 1e9
+
+
+def along_residual(ds, sel):
+    e, n = east_north(ds)
+    e, n = e[sel], n[sel]
+    u = np.array([e[-1] - e[0], n[-1] - n[0]]) / np.hypot(e[-1] - e[0], n[-1] - n[0])
+    along = e * u[0] + n * u[1]
+    ts = t80[sel]
+    return ts, along - np.polyval(np.polyfit(ts, along, 1), ts)
+
+
+sel = slice(300, 420)
+fig, ax = plt.subplots(figsize=(10, 3.5), constrained_layout=True)
+for label, ds in (("interpolated", raw80), ("smooth_navigation, 5 s", smoothed)):
+    ts, resid = along_residual(ds, sel)
+    ax.plot(ts, resid, ".-", ms=3, lw=0.8, label=label)
+    print(f"{label:24s} along-track error: {np.std(resid):.2f} m (standard deviation)")
+ax.set_xlabel("time (s)")
+ax.set_ylabel("along-track offset from\na straight line (m)")
+ax.legend()
+fig.savefig(out / "navigation_sawtooth.png", dpi=150)
 # sphinx_gallery_start_ignore
 # A clean thumbnail for the examples page (hidden on this page).
 thumb, tax = plt.subplots(figsize=(4, 2.8))
