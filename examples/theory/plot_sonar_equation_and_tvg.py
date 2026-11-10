@@ -272,20 +272,6 @@ ax.set_ylim(0, 8)
 fig.savefig(out / "sonar_equation_and_tvg_rms.png", dpi=150)
 
 # %%
-# The earlier fit
-# ---------------
-# :func:`~sidescanpy.analysis.fit_range_decay`, the library's earlier
-# TVG classifier, is deprecated since 0.10 and this page no longer runs
-# it. :func:`~sidescanpy.analysis.fit_tvg_models` replaced it for four
-# reasons. Its window ends at the noise knee, so noise past the knee
-# does not bend the fit. Its constant ``L0`` is fitted, where the old
-# fit pinned every model to one reference bin, so one noisy bin moved
-# every residual. It compares 20, 30 and 40 log R side by side, with and
-# without absorption, where the old fit took one spreading coefficient
-# per call. And :func:`~sidescanpy.analysis.check_tvg` tests the result
-# by applying it, as the next section does.
-
-# %%
 # Applying the TVG
 # ----------------
 # A good fit is a hypothesis. To test it,
