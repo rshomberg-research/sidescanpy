@@ -1,16 +1,17 @@
-# HDF5 (.ss.h5)
+# The .ss.h5 file
 
-sidescanpy stores a whole survey (every frequency and every aux record)
-in one HDF5 file with the extension `.ss.h5`. Each group is a NetCDF-4
-group written with h5netcdf, so any HDF5 or NetCDF tool can read it, and
-xarray can open each group without sidescanpy.
+The [data format](index.md) on disk: a whole survey (every frequency
+and every aux record) in one HDF5 file with the extension `.ss.h5`.
+Each group is a NetCDF-4 group written with h5netcdf, so any HDF5 or
+NetCDF tool can read it, and xarray can open each group without
+sidescanpy.
 
-:::{admonition} The format is not frozen
+:::{admonition} Format version 0.1, a draft
 :class: warning
-The layout below may change in any 0.x release before 1.0, and a
-file written by one 0.x version may not read in a later one. Keep the
-raw source files and re-convert after an upgrade. The root attribute
-`sidescanpy_version` records which version wrote a file.
+The layout below may change in any release before 1.0, and a file
+written by one version may not read in a later one. Keep the raw source
+files and re-convert after an upgrade. Comments on the layout are
+welcome; see [Data format](index.md).
 :::
 
 ```python
@@ -99,7 +100,7 @@ Group attributes:
 | `freq_hz_start`, `freq_hz_end` | transmit frequency band, Hz |
 | `sample_rate_hz` | sample rate, Hz |
 | `pulse_length_us` | pulse length, µs (0 when the format does not record it) |
-| `processing_history` | JSON list of applied correction steps ([Processing](processing.md#rules)) |
+| `processing_history` | JSON list of applied correction steps ([Processing](../processing.md#rules)) |
 | `xtf_*`, ... | reader provenance: recording program, sonar name, channel numbers, counts of skipped or repaired packets |
 
 Per-ping variables carry their units in the name suffix (`_deg`, `_m`,
@@ -145,4 +146,4 @@ From the shell, `h5ls -r line_001.ss.h5` lists every group and variable
 and `h5dump -A line_001.ss.h5` prints the attributes.
 
 For one frequency on its own, as a plain NetCDF file, see
-[NetCDF](io_netcdf.md).
+[NetCDF, one frequency](netcdf.md).

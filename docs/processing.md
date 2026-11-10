@@ -255,7 +255,7 @@ per-ping latitude, longitude, heading, roll, pitch and heave with values
 interpolated from the survey's navigation and attitude records
 (`DEFAULT_FIELD_SOURCES`). Altitude, depth and sound velocity are live
 sensor readings and are not interpolated by default; see
-[JSF aux source selection](jsf_aux_source_selection.md).
+[JSF: which source each per-ping value uses](sources/jsf.md#which-source-each-per-ping-value-uses).
 `interpolate_onto_channel` takes any external `xr.Dataset` with a `time`
 coordinate, such as a separate GPS log.
 

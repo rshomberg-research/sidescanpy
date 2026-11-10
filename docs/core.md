@@ -2,8 +2,9 @@
 
 Every reader produces the same structure, and every correction, grid
 and export function works on it. This page describes that structure and
-its conventions. [HDF5](io_hdf5.md) lists the variables as they are
-stored in a file.
+its conventions. It is the in-memory side of the
+[data format](format/index.md); [The .ss.h5 file](format/ss_h5.md)
+lists the variables as they are stored on disk.
 
 ## Survey and frequency channels
 

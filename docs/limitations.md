@@ -2,7 +2,7 @@
 
 What sidescanpy does not do yet, and what is not settled. Each item says
 what to do in the meantime. Format-specific quirks are on the
-[JSF](io_jsf.md), [SDF](io_sdf.md) and [XTF](io_xtf.md) pages.
+[JSF](sources/jsf.md), [SDF](sources/sdf.md) and [XTF](sources/xtf.md) pages.
 
 ## Radiometric correction
 
@@ -73,7 +73,7 @@ what to do in the meantime. Format-specific quirks are on the
   per few thousand pings, against seconds for every step in one pass on
   a freshly converted file. Run all the steps you need in one pass from a
   fresh conversion.
-- **Formats not read.** See [Formats](formats.md#not-supported).
+- **Formats not read.** See [Source formats](sources/index.md#not-read-yet).
 
 ## Reporting a problem
 

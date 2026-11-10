@@ -16,6 +16,7 @@
   strict.
 """
 
+import os
 from pathlib import Path
 
 from sphinx.addnodes import pending_xref
@@ -113,7 +114,38 @@ def _quiet_thumbnails_when_not_executed(app, config):
         config.suppress_warnings = [*config.suppress_warnings, "sphinx_gallery.thumbnail"]
 
 
+#: Pages that moved: old path (no suffix) -> new path. The old URL keeps
+#: working as a small page that redirects to the new one.
+MOVED_PAGES = {
+    "formats": "sources/index",
+    "io_jsf": "sources/jsf",
+    "jsf_aux_source_selection": "sources/jsf",
+    "io_sdf": "sources/sdf",
+    "io_xtf": "sources/xtf",
+    "io_hdf5": "format/ss_h5",
+    "io_netcdf": "format/netcdf",
+}
+
+_REDIRECT = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Moved</title>
+<link rel="canonical" href="{target}">
+<meta http-equiv="refresh" content="0; url={target}">
+</head><body><p>This page moved to <a href="{target}">{target}</a>.</p></body></html>
+"""
+
+
+def _write_redirects(app, exception):
+    """Write a redirect page at each old URL in :data:`MOVED_PAGES` (HTML builds only)."""
+    if exception is not None or app.builder.format != "html":
+        return
+    out = Path(app.outdir)
+    for old, new in MOVED_PAGES.items():
+        target = os.path.relpath(new, Path(old).parent) + ".html"
+        (out / f"{old}.html").write_text(_REDIRECT.format(target=target.replace(os.sep, "/")))
+
+
 def setup(app):
+    app.connect("build-finished", _write_redirects)
     app.add_config_value("sidescanpy_noindex", False, "html")
     app.connect("html-page-context", _add_noindex)
     app.connect("missing-reference", _resolve_by_name)

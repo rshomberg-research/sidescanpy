@@ -1,8 +1,9 @@
 # XTF
 
 `.xtf` (eXtended Triton Format) is the most common vendor-neutral
-sidescan format: Klein, EdgeTech and others can record or export it. The
-reader follows the specification's revision 42 (Exail) and has been
+sidescan format: Klein, EdgeTech and others can record or export it.
+sidescanpy converts its sonar packets into the
+[data format](../format/index.md). The reader follows the specification's revision 42 (Exail) and has been
 checked against EdgeTech 4200 files recorded by Isis, and against public
 files written by EdgeTech Discover 7.22, Isis 7.0.41 (Benthos SIS-1624)
 and KleinXlt 4.0 (small cuts of them are the fixtures in
@@ -38,7 +39,30 @@ which the reader uses to step from packet to packet. A sonar packet is a
 256-byte ping header followed, per channel, by a 64-byte channel header
 and that channel's samples.
 
-## Mapping to the standard model
+## Channels and data streams
+
+The file header declares the channels (`ChanInfo`: type, frequency,
+name). Every stream the reader converts comes from the sonar packets;
+navigation and attitude are taken from each ping header, not from the
+separate navigation or attitude packets some writers add.
+
+| Stream | XTF source | In the data format | Rate |
+|---|---|---|---|
+| Sonar, port and starboard, per frequency | channels with `TypeOfChannel` 1 (port) and 2 (starboard), paired by `ChanInfo.Frequency` | one `frequencies/hz_<Hz>` per pair, each with its own ping axis | every ping |
+| Position | ping header `SensorX/Ycoordinate` (`ShipX/Ycoordinate` in one case, see the table below) | per-ping `latitude`, `longitude`; `navigation` record | every ping (held between fixes) |
+| Heading, pitch, roll, heave | ping header | per-ping values; `attitude` record | every ping |
+| Depth, altitude | ping header `SensorDepth`, `SensorPrimaryAltitude` | `depth_m`, `altitude_m`, `fathometer_reading_m` | every ping |
+| Sound velocity | ping header `SoundVelocity` | `sound_vel_ms` | every ping |
+| Layback, cable out | ping header `Layback`, `CableOut` | `layback_m`, `cable_out_m`, `position_source` | every ping |
+| Subbottom, bathymetry, other channels and packets | their own packets | skipped, counted in the reader's summary | |
+| DVL, separate sensors | none | empty `dvl` record, no sensor records | |
+
+Because every value is copied into each ping, it arrives at the ping
+rate but changes only when its sensor updates; count the real changes
+with `processing.aux_update_events` before trusting a track
+([Navigation](../examples/plot_navigation.rst)).
+
+## Mapping to the data format
 
 | Survey | XTF source |
 |---|---|
@@ -99,19 +123,28 @@ anomalies.
   `sidescan-convert survey --nav-crs EPSG:32619`; positions are converted
   to WGS84 longitude/latitude, (0, 0) becomes NaN, and the CRS is recorded
   in `xtf_nav_crs`. Without it such a file raises `ValueError`; the zone
-  is never guessed. `ShipXcoordinate` / `ShipYcoordinate` are not used.
+  is never guessed.
 - **Sample scaling.** Samples are scaled by `2**-Weight` from the channel
   header. Some older files carry meaningless `Weight` values (for example
   -8408, in some KleinXlt and GeoDAS files); blocks with `|Weight|` above
   30 are left unscaled, with a warning, and counted in the
   `xtf_weight_ignored` attribute (`xtf_weight_min` and `xtf_weight_max`
   give the range seen).
-- **Older KleinXlt files.** Some KleinXlt 3.0 files leave the channel
-  `SampleFormat` at 255, which the reader rejects with `ValueError`.
+- **Older KleinXlt files.** Some KleinXlt files leave the channel
+  `SampleFormat` at 255, which is not an XTF sample format. The reader
+  treats it as unset, reads samples by `BytesPerSample`, and logs a
+  warning.
+- **No heading, and an offset that ignores the course.** Some GeoDAS
+  files record `SensorHeading` 0 but offset Sensor from Ship by the tow
+  point rotated by that heading, so the offset points south whatever the
+  course. The reader detects this and uses the Ship positions (see the
+  `position_source` row above). Their positions also jump back once a
+  second at each GPS fix; `processing.smooth_navigation` removes that
+  ([Navigation](../examples/plot_navigation.rst)).
 - **Recorder gain.** Gain codes are read but not interpreted, and nothing
   in the file says whether the recorder applied TVG. Measure it with
   `analysis.fit_range_decay` before correcting
-  ([Limitations](limitations.md#radiometric-correction)).
+  ([Limitations](../limitations.md#radiometric-correction)).
 
 ## Reference
 
