@@ -49,7 +49,8 @@ Public entry points
 - Segments (:mod:`~sidescanpy.processing.segments`): :func:`find_segments`,
   :func:`split_by_segments`, :class:`Segment` and the individual detectors.
 - :func:`backscatter_vs_range` / :func:`backscatter_vs_sample` — binned
-  backscatter profiles.
+  backscatter profiles; :func:`median_level_profile` — median level per
+  range bin in dB, for the TVG model fit.
 - :func:`build_survey_track` / :class:`SurveyTrack` — nadir track plus
   strided swath-edge positions across a multi-file survey.
 
@@ -135,7 +136,11 @@ from sidescanpy.processing.navigation import (
     smooth_navigation,
 )
 from sidescanpy.processing.outliers import mask_bright_ping_rows, reject_range_outliers
-from sidescanpy.processing.profiles import backscatter_vs_range, backscatter_vs_sample
+from sidescanpy.processing.profiles import (
+    backscatter_vs_range,
+    backscatter_vs_sample,
+    median_level_profile,
+)
 from sidescanpy.processing.radiometric import (
     TVGParams,
     absorption_for_frequency,
@@ -254,4 +259,5 @@ __all__ = [
     # profiles
     "backscatter_vs_range",
     "backscatter_vs_sample",
+    "median_level_profile",
 ]
