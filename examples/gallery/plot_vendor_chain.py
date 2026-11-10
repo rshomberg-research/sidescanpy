@@ -27,6 +27,7 @@ Usage: ``python examples/gallery/plot_vendor_chain.py [output_dir]``
 
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -107,7 +108,10 @@ def grid_on_mosaic(ds, block=1):
                                                     ds["latitude_per_sample"].values))
     if block > 1:
         n = db.shape[2] // block
-        x, y, db = (np.nanmean(a[:, :, : n * block].reshape(*a.shape[:2], n, block), axis=3) for a in (x, y, db))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN blocks (water column) stay NaN
+            x, y, db = (np.nanmean(a[:, :, : n * block].reshape(*a.shape[:2], n, block), axis=3)
+                        for a in (x, y, db))
     ok = np.isfinite(x) & np.isfinite(db) & (x > bounds[0] - 5) & (x < bounds[2] + 5) \
         & (y > bounds[1] - 5) & (y < bounds[3] + 5)
     px, py, pv = x[ok] - x0, y1 - y[ok], db[ok]
