@@ -275,7 +275,31 @@ REGISTRY: dict[str, RemoteFile] = {
         member="140325/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/61208_LG_2008_SSS_Aisha_WK_5057_400_05_095_113434_oic.xtf",
         size=27749808,
         sha256="cb8bf7a31833b6b5e00e92528fe4cae11fdb27071f1d4a6676cdd915c6e25073",
-        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2008, line over the Aisha (WK 5057) wreck; "
+        description="XTF (Klein 3000, KleinXlt 3.0 / SonarPro 9.6), 400 kHz, 2008, line over the Aisha "
+                    "(WK 5057) wreck; latitude/longitude navigation, recorder TVG applied",
+    ),
+    "bgs_london_gateway_aisha_15.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2008,
+        member="140325/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/61208_LG_2008_SSS_Aisha_WK_5057_400_15_095_121618_oic.xtf",
+        size=12367728,
+        sha256="432b12f0d8fe9ddf5fd6d31fd706120eb87a465a00595cf3a6b795897a0feb98",
+        description="XTF (Klein 3000, KleinXlt 3.0 / SonarPro 9.6), 400 kHz, 2008, near the Aisha wreck; "
+                    "towfish motion stripes; recorder TVG applied",
+    ),
+    "bgs_london_gateway_aisha_16.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2008,
+        member="140325/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/61208_LG_2008_SSS_Aisha_WK_5057_400_16_095_121500_oic.xtf",
+        size=8241424,
+        sha256="b2dabf1483565fe3849a4a47aec6ae8d81559a841e0b15c08f4468d3e4e19b7c",
+        description="XTF (Klein 3000, KleinXlt 3.0 / SonarPro 9.6), 400 kHz, 2008, near the Aisha wreck; "
+                    "a 105 degree turn; recorder TVG applied",
+    ),
+    "bgs_london_gateway_ash_34.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Ash_5013/61207_LG_2007_SSS_Ash_WK_5013_34_2007_220_114824_oic.xtf",
+        size=16122976,
+        sha256="661d86cd117f4f2075bb466d0d2e0545cf64eb36533b67cee59148c7e841cf52",
+        description="XTF (Klein, GeoDAS), 400 kHz, 2007, near the Ash (WK 5013) wreck; data dropouts on port; "
                     "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
     ),
 }
