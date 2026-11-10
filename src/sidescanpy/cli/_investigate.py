@@ -13,6 +13,7 @@ needs matplotlib.
 
 import json
 import logging
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,12 @@ import xarray as xr
 from sidescanpy.analysis import (
     analyze_nadir,
     characterize_values,
+    check_tvg,
     compare_outlier_rejection,
     estimate_beam_geometry,
     estimate_usable_range,
     fit_range_decay,
+    fit_tvg_models,
     infer_units,
 )
 from sidescanpy.io import load_survey
@@ -65,7 +68,12 @@ def investigate(
     channel: int | str | None = None,
     nadir_n_samples: int = 50,
     usable_range_bin_width_m: float = 2.0,
+    usable_range_method: str = "knee",
     snr_threshold: float = 3.0,
+    tvg_bin_width_m: float = 1.0,
+    start_margin_m: float = 5.0,
+    knee_db: float = 3.0,
+    window_m: tuple[float, float] | None = None,
     decay_bin_width_m: float = 5.0,
     decay_db_reference_percentile: float = 99.0,
     decay_fit_value_col: str = "mean",
@@ -78,7 +86,10 @@ def investigate(
     Returns ``(ds, value_var, params, results)``: the prepared dataset
     (ping-sliced, inverted, nadir noise blanked, geometric ranges added),
     the variable analyzed, the parameters used, and the result objects
-    keyed by name. ``channel`` restricts only the usable-range and
+    keyed by name. ``tvg_fit`` is ``{"fit": TVGFitResult, "check":
+    TVGCheckResult or None}`` (the TVG to apply, and the data after it);
+    ``range_decay`` is the deprecated classifier, kept in the output for
+    one release. ``channel`` restricts the usable-range, TVG-fit and
     range-decay binning to one side (port/starboard); ``None`` pools both.
     """
     if value_var in (UNCORRECTED_VAR, LEGACY_RAW_VAR) and value_var not in ds:
@@ -100,7 +111,12 @@ def investigate(
         "channel": channel,
         "nadir_n_samples": nadir_n_samples,
         "usable_range_bin_width_m": usable_range_bin_width_m,
+        "usable_range_method": usable_range_method,
         "snr_threshold": snr_threshold,
+        "tvg_bin_width_m": tvg_bin_width_m,
+        "start_margin_m": start_margin_m,
+        "knee_db": knee_db,
+        "window_m": list(window_m) if window_m is not None else None,
         "decay_bin_width_m": decay_bin_width_m,
         "decay_db_reference_percentile": decay_db_reference_percentile,
         "decay_fit_value_col": decay_fit_value_col,
@@ -123,16 +139,27 @@ def investigate(
     uniform = uniform_exclusion_boundary(per_ping) if per_ping is not None else None
 
     usable_range = estimate_usable_range(
-        ds, value_var=value_var, bin_width_m=usable_range_bin_width_m, snr_threshold=snr_threshold,
-        exclude_before_sample=per_ping, channel=channel, **outliers,
+        ds, value_var=value_var, method=usable_range_method, bin_width_m=usable_range_bin_width_m,
+        snr_threshold=snr_threshold, knee_db=knee_db, exclude_before_sample=per_ping, channel=channel, **outliers,
     )
     beam_geometry = estimate_beam_geometry(ds, nadir.first_bottom_return_sample, usable_range.usable_range_m)
-    range_decay = fit_range_decay(
-        ds, value_var=value_var, bin_width_m=decay_bin_width_m,
-        db_reference_percentile=decay_db_reference_percentile, usable_range_m=usable_range.usable_range_m,
-        exclude_before_sample=uniform, fit_value_col=decay_fit_value_col, channel=channel, **outliers,
+    tvg_fit = fit_tvg_models(
+        ds, value_var=value_var, bin_width_m=tvg_bin_width_m, start_margin_m=start_margin_m, knee_db=knee_db,
+        window_m=window_m, channel=channel,
     )
-    units = infer_units(values, range_decay)
+    tvg_check = None
+    if tvg_fit.best is not None:
+        tvg_check = check_tvg(ds, tvg_fit.tvg_params, tvg_fit.window_m, value_var=value_var,
+                              bin_width_m=tvg_bin_width_m, channel=channel)
+    # Deprecated classifier, kept in metrics.json for one release.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        range_decay = fit_range_decay(
+            ds, value_var=value_var, bin_width_m=decay_bin_width_m,
+            db_reference_percentile=decay_db_reference_percentile, usable_range_m=usable_range.usable_range_m,
+            exclude_before_sample=uniform, fit_value_col=decay_fit_value_col, channel=channel, **outliers,
+        )
+    units = infer_units(values, tvg_fit)
 
     results = {
         "values": values,
@@ -140,6 +167,7 @@ def investigate(
         "nadir": nadir,
         "beam_geometry": beam_geometry,
         "usable_range": usable_range,
+        "tvg_fit": {"fit": tvg_fit, "check": tvg_check},
         "range_decay": range_decay,
         "units": units,
     }
@@ -161,7 +189,7 @@ def save_figures(ds: xr.Dataset, value_var: str, results: dict[str, Any], output
         plot_usable_range,
         plot_value_histograms,
     )
-    from sidescanpy.viz.tvg import plot_range_decay_fit, plot_range_decay_residuals
+    from sidescanpy.viz.tvg import plot_tvg_fit
 
     output_dir.mkdir(parents=True, exist_ok=True)
     nadir = results["nadir"]
@@ -174,8 +202,7 @@ def save_figures(ds: xr.Dataset, value_var: str, results: dict[str, Any], output
         "nadir_waterfall": plot_nadir_waterfall(ds, value_var, nadir=nadir),
         "beam_geometry": plot_beam_geometry(ds, results["beam_geometry"], value_var),
         "usable_range": plot_usable_range(results["usable_range"]),
-        "range_decay_fit": plot_range_decay_fit(results["range_decay"]),
-        "range_decay_residuals": plot_range_decay_residuals(results["range_decay"]),
+        "tvg_fit": plot_tvg_fit(results["tvg_fit"]["fit"], results["tvg_fit"]["check"]),
         "units_distribution": plot_units_distribution(ds, value_var),
     }
     paths = []
@@ -199,13 +226,22 @@ def metrics_dict(
         "n_pings": int(ds.sizes["ping"]),
         "value_var": value_var,
         "params": params,
-        "results": {name: result.to_dict() for name, result in results.items()},
+        "results": {name: _to_dict(result) for name, result in results.items()},
     }
+
+
+def _to_dict(result: Any) -> Any:
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        return {key: _to_dict(value) for key, value in result.items()}
+    return result.to_dict()
 
 
 def summary_row(source_path: Path, freq_key: str, results: dict[str, Any]) -> dict[str, Any]:
     """One flat comparison-table row per source and frequency."""
-    beam, decay = results["beam_geometry"], results["range_decay"]
+    beam = results["beam_geometry"]
+    fit, check = results["tvg_fit"]["fit"], results["tvg_fit"]["check"]
     return {
         "source": str(source_path),
         "freq_key": freq_key,
@@ -215,8 +251,10 @@ def summary_row(source_path: Path, freq_key: str, results: dict[str, Any]) -> di
         "near_angle_deg": beam.near_angle_deg_median,
         "beam_width_deg": beam.beam_width_deg,
         "usable_range_m": results["usable_range"].usable_range_m,
-        "best_fit_model": decay.best_candidate,
-        "tvg_status": decay.tvg_status,
+        "tvg_model": fit.best,
+        "tvg_rms_db": fit.best_model.rms_db if fit.best_model else None,
+        "tvg_spread_after_db": check.spread_db if check is not None else None,
+        "tvg_status": fit.tvg_status,
         "units": results["units"].units,
     }
 

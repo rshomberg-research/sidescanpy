@@ -27,20 +27,11 @@ from sidescanpy.analysis.characterize import (
 )
 from sidescanpy.analysis.geometry import PingGeometry, measure_ping_geometry
 from sidescanpy.analysis.nadir import NadirResult, analyze_nadir
-from sidescanpy.analysis.tvg import RangeDecayResult, fit_range_decay
+from sidescanpy.analysis.tvg_fit import TVGCheckResult, TVGFitResult, check_tvg, fit_tvg_models
 from sidescanpy.analysis.usable_range import UsableRangeResult, estimate_usable_range
 from sidescanpy.grids import recommend_resolution
 
 logger = logging.getLogger(__name__)
-
-
-_TVG_STATUS_NOTE = {
-    "full": "Hardware already compensates both spreading and absorption.",
-    "absorption_only": "Hardware already compensates spreading; absorption term still needed.",
-    "spreading_only": "Hardware already compensates absorption; spreading term still needed.",
-    "none": "Neither term appears compensated by hardware -- full physics needed "
-            "(no override -- sidescan-correct's own defaults already apply full physics).",
-}
 
 
 def run_analyses(
@@ -49,9 +40,10 @@ def run_analyses(
     """Every result :func:`render_recommended_config` takes, keyed by its
     argument name, from one channel with geometric ranges.
 
-    The range-decay fit uses the adopted recipe (slant range,
-    ``r_ref_m="auto"``, ``r_fit_min_m="auto"``) and is ``None`` without a
-    usable range; ``beam`` is ``None`` when it cannot be computed.
+    The TVG fit is :func:`~sidescanpy.analysis.fit_tvg_models` on slant
+    range (``bin_width_m``), with :func:`~sidescanpy.analysis.check_tvg`
+    of its best model (``tvg_check``, ``None`` without a fit); ``beam`` is
+    ``None`` when it cannot be computed.
     """
     values = characterize_values(ds, value_var=value_var)
     nadir = analyze_nadir(ds, value_var=value_var, nadir_n_samples=nadir_n_samples)
@@ -63,15 +55,13 @@ def run_analyses(
     except (ValueError, KeyError) as exc:
         logger.warning(f"beam-geometry could not be computed ({exc}) -- omitting from the recommendation")
         beam = None
-    decay = None
-    if usable_range.usable_range_m is not None:
-        decay = fit_range_decay(
-            ds, range_var="slant_range_m", bin_width_m=bin_width_m,
-            usable_range_m=usable_range.usable_range_m, r_ref_m="auto", r_fit_min_m="auto",
-        )
+    tvg_fit = fit_tvg_models(ds, value_var=value_var, range_var="slant_range_m", bin_width_m=bin_width_m)
+    tvg_check = None
+    if tvg_fit.best is not None:
+        tvg_check = check_tvg(ds, tvg_fit.tvg_params, tvg_fit.window_m, value_var=value_var, bin_width_m=bin_width_m)
     return dict(
-        values=values, units=infer_units(values), nadir=nadir, beam=beam, usable_range=usable_range,
-        decay=decay, geometry=measure_ping_geometry(ds),
+        values=values, units=infer_units(values, tvg_fit), nadir=nadir, beam=beam, usable_range=usable_range,
+        tvg_fit=tvg_fit, tvg_check=tvg_check, geometry=measure_ping_geometry(ds),
     )
 
 
@@ -81,11 +71,49 @@ def _fmt(value, spec: str = ".2f") -> str:
     return str(value)
 
 
+def _tvg_lines(fit: TVGFitResult | None, check: TVGCheckResult | None) -> list[str]:
+    """The TVG block: the best model's terms as keys, the evidence as comments."""
+    if fit is None or fit.best_model is None:
+        notes = "; ".join(fit.notes) if fit is not None else "no fit run"
+        return [
+            "# TVG: no model could be fitted to this section -- set spreading_loss_db /",
+            "#   absorption_db_per_m by hand, or rerun `sidescan-analyze tvg-fit --window-m MIN MAX`.",
+            f"#   ({notes})",
+        ]
+    best = fit.best_model
+    window = f"{fit.window_m[0]:.1f}-{fit.window_m[1]:.1f} m"
+    lines = [
+        f"# TVG: best model {best.name}, {best.rms_db:.2f} dB RMS over {window} "
+        f"(median level, {fit.bin_width_m:g} m bins).",
+    ]
+    if fit.runner_up_model is not None:
+        lines.append(f"#   Runner-up {fit.runner_up} ({fit.runner_up_model.rms_db:.2f} dB); free n "
+                     f"{_fmt(fit.free_n, '.1f')} with absorption, {_fmt(fit.free_n_no_absorption, '.1f')} without.")
+    if check is not None and check.spread_db is not None:
+        lines.append(f"#   Applied, it leaves {check.spread_db:.2f} dB spread and {check.trend_db_per_10m:+.2f} dB "
+                     "per 10 m across the window.")
+    lines.append(f"#   The recorder appears to have removed: {fit.tvg_status} "
+                 "(none / spreading_only / absorption_only / full).")
+    if fit.window_source == "end_of_record":
+        lines.append("#   No noise knee: the level does not fall to a floor, so the fit runs to the end")
+        lines.append("#   of the record. Typical of data the recorder has already levelled.")
+    if fit.low_contrast:
+        lines.append(f"#   Low contrast ({fit.contrast_db:.1f} dB from peak to floor): little range")
+        lines.append("#   dependence left, or little seabed signal.")
+    if fit.sides_disagree:
+        lines.append("#   Port and starboard disagree (see metrics); the pooled fit may suit neither side.")
+    lines.append("#   Over short windows 20 log R + abs, 30 log R and 40 log R differ by tenths of a dB;")
+    lines.append("#   for a survey, compare several lines before fixing one model.")
+    lines.append(f"spreading_loss_db: {best.spreading_loss_db:g}")
+    lines.append(f"absorption_db_per_m: {best.absorption_db_per_m:.4f}")
+    return lines
+
+
 def render_recommended_config(
     *, source_name: str, freq_key: str, ping_range: tuple, value_var: str,
     values: ValueSummary, nadir: NadirResult, beam: BeamGeometryResult | None,
-    usable_range: UsableRangeResult, decay: RangeDecayResult | None, units: UnitsResult,
-    geometry: PingGeometry,
+    usable_range: UsableRangeResult, tvg_fit: TVGFitResult | None, units: UnitsResult,
+    geometry: PingGeometry, tvg_check: TVGCheckResult | None = None,
 ) -> str:
     """YAML text recommending ``sidescan-correct`` / ``sidescan-export chip``
     settings for one section, with the evidence for each as comments."""
@@ -100,29 +128,7 @@ def render_recommended_config(
         "# ---- sidescan-correct ----",
     ]
 
-    if decay is None:
-        lines.append("# TVG status: could not be determined -- no usable_range_m for")
-        lines.append("#   this section (see usable_range_m note below). Pass --usable-range-m to")
-        lines.append("#   `sidescan-analyze tvg-fit` manually, or investigate the far-range noise")
-        lines.append("#   floor, before setting spreading/absorption overrides.")
-    else:
-        best = decay.best_candidate
-        rmse = decay.best_rmse_db
-        lines.append(f"# TVG status: {decay.tvg_status} (best_candidate={best}, RMSE={_fmt(rmse)} dB)")
-        note = _TVG_STATUS_NOTE.get(decay.tvg_status)
-        if note is not None:
-            lines.append(f"#   {note}")
-            if decay.tvg_status == "full":
-                lines.append("no_spreading: true")
-                lines.append("no_absorption: true")
-            elif decay.tvg_status == "absorption_only":
-                lines.append("no_spreading: true")
-            elif decay.tvg_status == "spreading_only":
-                lines.append("no_absorption: true")
-        else:
-            lines.append(f"#   {decay.tvg_status!r} -- not confident enough for an automatic")
-            lines.append("#   recommendation (see metrics.json). Investigate manually (re-run tvg-fit")
-            lines.append("#   with a different window) before setting spreading/absorption overrides.")
+    lines.extend(_tvg_lines(tvg_fit, tvg_check))
     lines.append("")
 
     lines.append(f"# nadir: {nadir.nadir_type} (altitude_sample_median="
@@ -141,8 +147,8 @@ def render_recommended_config(
         lines.append("")
 
     usable_range_m = usable_range.usable_range_m
-    lines.append(f"# usable_range_m: {_fmt(usable_range_m)} "
-                 f"(SNR against the far-range noise floor)")
+    how = "noise knee of the median level" if usable_range.method == "knee" else "SNR against the far-range noise floor"
+    lines.append(f"# usable_range_m: {_fmt(usable_range_m)} ({how})")
     lines.append("")
 
     lines.append(f"# units: {units.units} (dtype={values.dtype})")

@@ -144,20 +144,15 @@ class TestSaveWaterfallPng:
 
 class TestSaveTvgFitPng:
     def test_writes_two_panel_figure(self, tmp_path):
-        from sidescanpy.analysis.tvg import fit_range_decay
+        from sidescanpy.analysis import check_tvg, fit_tvg_models
         from sidescanpy.processing import compute_geometric_ranges
-        from tests.unit.synthetic import make_raw_dataset
+        from tests.unit.synthetic import make_range_decay_dataset
 
-        n_samples = 400
-        decay = 100.0 * np.exp(-np.arange(n_samples) / 120.0) + 1.0
-        rng = np.random.default_rng(0)
-        data = decay[None, None, :] * (1.0 + 0.02 * rng.standard_normal((30, 2, n_samples)))
-        ds = compute_geometric_ranges(make_raw_dataset(backscatter=data.astype(np.float32)))
-        result = fit_range_decay(ds, bin_width_m=5.0, usable_range_m=250.0)
-        if result.fit is None:
-            pytest.skip("synthetic decay did not produce a fit")
+        ds = compute_geometric_ranges(make_range_decay_dataset(n_pings=50))
+        fit = fit_tvg_models(ds)
+        check = check_tvg(ds, fit.tvg_params, fit.window_m)
         out = tmp_path / "tvg_fit.png"
-        _figures.save_tvg_fit_png(result, out, suptitle="synthetic", residual_xlabel="Slant range (m)")
+        _figures.save_tvg_fit_png(fit, check, out, suptitle="synthetic")
         assert out.stat().st_size > 0
 
 

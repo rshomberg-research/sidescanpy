@@ -26,8 +26,8 @@
   the same targeted-ping-range workflow as ``nadir``/``beam-geometry``/
   etc. above, not the full investigation pass.
 
-- ``recommend-config`` — runs the range-decay fit (TVG term selection)
-  and a ping-geometry measurement (``resolution_m``) against a clean
+- ``recommend-config`` — runs the TVG model fit (``spreading_loss_db``,
+  ``absorption_db_per_m``) and a ping-geometry measurement (``resolution_m``) against a clean
   section, plus ``nadir``/``beam-geometry``/``usable-range``/``units``
   for evidence, and writes one heavily-commented recommended config YAML
   (``sidescanpy.cli._recommend``) -- only the two analyses with a real
@@ -42,16 +42,13 @@
   full-report use case; not the day-to-day way to iterate on one value
   (see the four subcommands above). ``examples/investigate_dataset.py``
   is the same flow as a readable script.
-- ``tvg-fit`` — the TVG decay-curve fit recipe: bin raw
-  backscatter by slant range (matching what ``apply_tvg()`` itself
-  actually uses internally, not ``ground_range_m``), auto-place the fit
-  window past the near-field peak and the reference range inside it
-  (``fit_range_decay(..., r_ref_m="auto", r_fit_min_m="auto")``), and
-  render the decay-fit + residuals figure with
-  ``set_fit_window_limits`` (robust y-limits from the fit
-  window's own values; the full observed x-range always shown, so a
-  misconfigured reference/window is visible rather than silently
-  cropped out of frame).
+- ``tvg-fit`` — the TVG model fit (``fit_tvg_models``): the median
+  level of raw backscatter in slant-range bins (the axis ``apply_tvg()``
+  uses), fitted from ``--start-margin-m`` past the profile peak to the
+  noise knee (``--knee-db``) or over ``--window-m``, by flat, absorption
+  only and 20/30/40 log R with and without absorption; then the best
+  model applied and checked (``check_tvg``). Writes ``metrics.json``
+  (``fit`` and ``check``) and the ``plot_tvg_fit`` figure.
 
 Every subcommand writes its result as JSON (``metrics.json`` from the
 result's ``to_dict()``; ``segment`` writes ``segments.json``,
@@ -83,7 +80,7 @@ from sidescanpy.analysis.beam import estimate_beam_geometry
 from sidescanpy.analysis.characterize import characterize_values, infer_units
 from sidescanpy.analysis.nadir import analyze_nadir
 from sidescanpy.analysis.navigation import summarize_navigation
-from sidescanpy.analysis.tvg import fit_range_decay
+from sidescanpy.analysis.tvg_fit import check_tvg, fit_tvg_models
 from sidescanpy.analysis.usable_range import estimate_usable_range
 from sidescanpy.cli._common import (
     add_common_args,
@@ -121,16 +118,6 @@ def _parse_ping_range(spec: str) -> tuple[int, int | None]:
         raise argparse.ArgumentTypeError(f"must be 'start:stop', got {spec!r}")
     start_s, stop_s = spec.split(":", 1)
     return (int(start_s) if start_s else 0), (int(stop_s) if stop_s else None)
-
-
-def _parse_numeric_or_literal(value: str | None) -> float | str | None:
-    """A number, or a literal ('auto'/'mid_swath') for fit_range_decay to resolve."""
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return value
 
 
 def _load(args: argparse.Namespace, *, path: Path | None = None, geometry_var: str | None = None) -> tuple[str, xr.Dataset]:
@@ -190,14 +177,16 @@ def run_investigate(args: argparse.Namespace) -> int:
             args.input, freq_key, args.output_dir / freq_key, plots=getattr(args, "plots", True),
             value_var=args.value_var, ping_range=_parse_ping_range(args.pings), channel=channel,
             nadir_n_samples=args.nadir_n_samples, usable_range_bin_width_m=args.usable_range_bin_width_m,
-            snr_threshold=args.snr_threshold, decay_bin_width_m=args.decay_bin_width_m,
+            usable_range_method=args.usable_range_method, snr_threshold=args.snr_threshold,
+            tvg_bin_width_m=args.tvg_bin_width_m, start_margin_m=args.start_margin_m, knee_db=args.knee_db,
+            window_m=tuple(args.window_m) if args.window_m else None, decay_bin_width_m=args.decay_bin_width_m,
             decay_db_reference_percentile=args.decay_db_reference_percentile,
             decay_fit_value_col=args.decay_fit_value_col,
             reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
         )
         logger.info(
             f"{args.input.name} / {freq_key}: units={row['units']} nadir={row['nadir']} "
-            f"usable_range_m={row['usable_range_m']} tvg_status={row['tvg_status']}"
+            f"usable_range_m={row['usable_range_m']} tvg_model={row['tvg_model']} tvg_status={row['tvg_status']}"
         )
         rows.append(row)
     write_json(rows, args.output_dir / "summary.json")
@@ -209,8 +198,8 @@ def run_investigate(args: argparse.Namespace) -> int:
 # ============================================================
 
 def run_tvg_fit(args: argparse.Namespace) -> int:
-    """Range-decay fit (``fit_range_decay``, auto window + reference) on the
-    uncorrected signal; writes ``metrics.json`` and the fit + residuals PNG."""
+    """TVG model fit (``fit_tvg_models``) and after-TVG check (``check_tvg``)
+    on the uncorrected signal; writes ``metrics.json`` and the fit PNG."""
     args.output_dir.mkdir(parents=True, exist_ok=True)
     freq_key, ds = _load(args, path=args.ss_h5)
     if args.reconstruct_raw:
@@ -219,39 +208,39 @@ def run_tvg_fit(args: argparse.Namespace) -> int:
         logger.error(f"{args.ss_h5} is already TVG-corrected -- pass --reconstruct-raw to invert the recorded corrections first.")
         return 1
     ds = ds if "ground_range_m" in ds else compute_geometric_ranges(ds)
+    for flag in ("r_ref_m", "r_fit_min_m", "usable_range_m"):
+        if getattr(args, flag, None) is not None:
+            logger.warning(f"--{flag.replace('_', '-')} is deprecated and ignored (the fit window runs from "
+                           "--start-margin-m past the peak to the noise knee; set it with --window-m MIN MAX).")
 
-    usable_range_m = args.usable_range_m
-    if usable_range_m is None:
-        usable_range_m = estimate_usable_range(ds, range_var=args.range_var, bin_width_m=args.bin_width_m).usable_range_m
-        if usable_range_m is None:
-            logger.error(
-                "Could not determine usable_range_m for this survey/ping range -- a known failure mode "
-                "on AGC-flattened data, not necessarily bad data. Pass --usable-range-m explicitly."
-            )
-            return 1
-    decay = fit_range_decay(
-        ds, range_var=args.range_var, bin_width_m=args.bin_width_m,
-        usable_range_m=usable_range_m, r_ref_m=args.r_ref_m, r_fit_min_m=args.r_fit_min_m,
+    window_m = tuple(args.window_m) if args.window_m else None
+    fit = fit_tvg_models(
+        ds, range_var=args.range_var, bin_width_m=args.bin_width_m, start_margin_m=args.start_margin_m,
+        knee_db=args.knee_db, window_m=window_m,
     )
-    if decay.fit is None:
-        logger.error(f"{args.ss_h5.name} {freq_key}: no decay model could be fit "
-                     f"(classification={decay.tvg_status}): {'; '.join(decay.notes) or 'no detail'}")
+    if fit.best is None:
+        logger.error(f"{args.ss_h5.name} {freq_key}: no TVG model could be fit: {'; '.join(fit.notes) or 'no detail'}")
         return 1
+    check = check_tvg(ds, fit.tvg_params, fit.window_m, range_var=args.range_var, bin_width_m=args.bin_width_m)
 
     start, stop = args.pings
-    logger.info(f"{args.ss_h5.name} {freq_key}: tvg-fit classification={decay.tvg_status} "
-                f"best_candidate={decay.best_candidate} rmse={decay.best_rmse_db:.2f}dB")
-    logger.debug(f"  usable_range_m={usable_range_m:.2f} r_ref_m={decay.r_ref_m:.2f} fit window="
-                 f"[{decay.r_fit_min_m:.2f}, {decay.r_fit_max_m:.2f}] n_bins_used={decay.n_bins_used}")
-    write_json(decay, args.output_dir / "metrics.json")
+    best = fit.best_model
+    logger.info(
+        f"{args.ss_h5.name} {freq_key}: tvg-fit best={best.name} rms={best.rms_db:.2f}dB "
+        f"window=[{fit.window_m[0]:.1f}, {fit.window_m[1]:.1f}]m ({fit.window_source}) free_n={fit.free_n:.1f} "
+        f"after-TVG spread={check.spread_db:.2f}dB trend={check.trend_db_per_10m:+.2f}dB/10m "
+        f"-> spreading_loss_db={best.spreading_loss_db:g} absorption_db_per_m={best.absorption_db_per_m:.4f}"
+    )
+    for note in fit.notes:
+        logger.debug(f"  note: {note}")
+    write_json({"fit": fit.to_dict(), "check": check.to_dict()}, args.output_dir / "metrics.json")
     if args.plots:
         from sidescanpy.cli import _figures
 
         out_path = args.output_dir / f"{args.ss_h5.stem}_{freq_key}_tvg_fit.png"
         _figures.save_tvg_fit_png(
-            decay, out_path,
+            fit, check, out_path,
             suptitle=f"{args.ss_h5.name}  {freq_key}  pings {start}:{stop if stop is not None else ''}",
-            residual_xlabel="Slant range (m)" if args.range_var == "slant_range_m" else f"{args.range_var} (m)",
             dpi=140,
         )
         logger.debug(f"wrote {out_path}")
@@ -345,8 +334,9 @@ def run_usable_range(args: argparse.Namespace) -> int:
     """Usable-range boundary from binned backscatter vs. range."""
     freq_key, ds = _load(args, geometry_var=args.range_var)
     usable_range = estimate_usable_range(
-        ds, value_var=args.value_var, range_var=args.range_var, bin_width_m=args.bin_width_m,
-        snr_threshold=args.snr_threshold, reject_outliers=args.reject_outliers, outlier_mad_k=args.outlier_mad_k,
+        ds, value_var=args.value_var, range_var=args.range_var, method=args.method, bin_width_m=args.bin_width_m,
+        knee_db=args.knee_db, snr_threshold=args.snr_threshold, reject_outliers=args.reject_outliers,
+        outlier_mad_k=args.outlier_mad_k,
     )
     _finish(args, freq_key, usable_range, f"usable_range_m = {usable_range.usable_range_m}")
     if args.plots:
@@ -395,9 +385,9 @@ def run_recommend_config(args: argparse.Namespace) -> int:
     args.output.write_text(render_recommended_config(
         source_name=args.input.name, freq_key=freq_key, ping_range=args.pings, value_var=args.value_var, **results,
     ))
-    decay = results["decay"]
+    fit = results["tvg_fit"]
     logger.info(
-        f"{args.input.name} / {freq_key}: tvg_status={decay.tvg_status if decay else None}  "
+        f"{args.input.name} / {freq_key}: tvg_model={fit.best if fit else None}  "
         f"nadir={results['nadir'].nadir_type}  usable_range_m={results['usable_range'].usable_range_m}  "
         f"ping_spacing_m={results['geometry'].ping_spacing_m_median} -> {args.output}"
     )
@@ -423,6 +413,11 @@ def build_parser() -> tuple[CLIParser, Any]:
     )
     p_inv.add_argument("--nadir-n-samples", type=int, default=50)
     p_inv.add_argument("--usable-range-bin-width-m", type=float, default=2.0)
+    p_inv.add_argument("--usable-range-method", choices=["knee", "snr"], default="knee")
+    p_inv.add_argument("--tvg-bin-width-m", type=float, default=1.0, help="Bin width of the TVG model fit")
+    p_inv.add_argument("--start-margin-m", type=float, default=5.0, help="TVG fit window starts this far past the profile peak")
+    p_inv.add_argument("--knee-db", type=float, default=3.0, help="Noise knee: first range within this many dB of the lowest level")
+    p_inv.add_argument("--window-m", type=float, nargs=2, metavar=("MIN", "MAX"), default=None, help="TVG fit window instead of peak-to-knee")
     p_inv.add_argument("--decay-bin-width-m", type=float, default=5.0)
     p_inv.add_argument("--decay-db-reference-percentile", type=float, default=99.0)
     p_inv.add_argument("--snr-threshold", type=float, default=3.0)
@@ -432,7 +427,7 @@ def build_parser() -> tuple[CLIParser, Any]:
     p_inv.add_argument("--output-dir", required=True, type=Path)
     p_inv.set_defaults(func=run_investigate)
 
-    p_tvg = subparsers.add_parser("tvg-fit", help="TVG decay-curve fit + residuals, using the adopted auto-window recipe")
+    p_tvg = subparsers.add_parser("tvg-fit", help="Fit TVG models (flat, absorption, 20/30/40 log R) and check the best one")
     p_tvg.add_argument(
         "--ss-h5", required=True, type=Path,
         help="Path to a .ss.h5 file, or a directory of them (lazily concatenated, same convention as "
@@ -446,15 +441,13 @@ def build_parser() -> tuple[CLIParser, Any]:
     p_tvg.add_argument("--pings", type=_parse_ping_range, default=(0, 5000))
     p_tvg.add_argument("--reconstruct-raw", action="store_true", help="Invert the recorded corrections first (needed for an already-corrected .ss.h5)")
     p_tvg.add_argument("--bin-width-m", type=float, default=1.0)
-    p_tvg.add_argument("--r-ref-m", type=_parse_numeric_or_literal, default="auto", help="Number, 'auto' (default), or 'mid_swath'")
-    p_tvg.add_argument("--r-fit-min-m", type=_parse_numeric_or_literal, default="auto", help="Number or 'auto' (default)")
+    p_tvg.add_argument("--start-margin-m", type=float, default=5.0, help="Fit window starts this far past the profile peak")
+    p_tvg.add_argument("--knee-db", type=float, default=3.0, help="Noise knee: first range within this many dB of the lowest level")
+    p_tvg.add_argument("--window-m", type=float, nargs=2, metavar=("MIN", "MAX"), default=None, help="Fit window instead of peak-to-knee")
     p_tvg.add_argument("--range-var", default="slant_range_m", choices=("slant_range_m", "ground_range_m"))
-    p_tvg.add_argument(
-        "--usable-range-m", type=float, default=None,
-        help="Bypass usable_range_m auto-detection and use this value instead -- needed on some "
-             "Klein SDF data where AGC flattens backscatter enough that the SNR threshold never "
-             "trips; not normally needed for JSF.",
-    )
+    p_tvg.add_argument("--r-ref-m", default=None, help="Deprecated, ignored (the fit has no reference range)")
+    p_tvg.add_argument("--r-fit-min-m", default=None, help="Deprecated, ignored (use --window-m)")
+    p_tvg.add_argument("--usable-range-m", type=float, default=None, help="Deprecated, ignored (use --window-m)")
     p_tvg.add_argument("--output-dir", required=True, type=Path)
     p_tvg.set_defaults(func=run_tvg_fit)
 
@@ -530,7 +523,9 @@ def build_parser() -> tuple[CLIParser, Any]:
     p_ur = subparsers.add_parser("usable-range", help="Find the usable-range boundary")
     _common_single_channel_args(p_ur)
     p_ur.add_argument("--range-var", default="slant_range_m", choices=("slant_range_m", "ground_range_m"))
+    p_ur.add_argument("--method", choices=["knee", "snr"], default="knee", help="Noise knee (default) or the SNR rule")
     p_ur.add_argument("--bin-width-m", type=float, default=2.0)
+    p_ur.add_argument("--knee-db", type=float, default=3.0, help="--method knee: within this many dB of the lowest level")
     p_ur.add_argument("--snr-threshold", type=float, default=3.0)
     p_ur.add_argument("--reject-outliers", action="store_true")
     p_ur.add_argument("--outlier-mad-k", type=float, default=3.5)
