@@ -43,7 +43,8 @@ to 3 m at every GPS fix (`processing.smooth_navigation` removes that).
 On the GeoDAS lines with no heading the recorder's tow-point offset
 points south whatever the course; the reader detects it, uses the ship
 positions and records the tow point (12.5 m aft) for the layback step.
-The cable layback is not recorded: about 20 m aligns the Dynamo passes.
+The cable layback is not recorded: about 15 m brings opposite-direction
+Dynamo passes together.
 `datasets.BGS_LONDON_GATEWAY_WRECKS` holds the catalogued centre of each
 wreck from the BGS record (UTM 31N meters); a line can show its wreck
 tens of meters from that centre along track.
