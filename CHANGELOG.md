@@ -21,6 +21,32 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   training dataset with backgrounds; and a target-recognition section
   (detector, classifier, review, evaluation) trained on a public
   labelled image set.
+- `"layback"` correction step (`processing.apply_layback`, `sidescan-correct
+  --layback`, not in `DEFAULT_STEPS`): moves ship positions astern along the
+  heading by the recorded layback plus the antenna-to-tow-point offset, with
+  a Pythagorean cable-out estimate where no layback is recorded. It only
+  moves positions whose new `position_source` attribute is `ship`, so a
+  layback the acquisition software already applied is never applied again.
+  Keeps the recorded positions in `latitude_before_layback` /
+  `longitude_before_layback`; `invert(ds, ["layback"])` restores them.
+- Readers carry per-ping `layback_m` (JSF, XTF) and `cable_out_m` (JSF,
+  XTF, SDF), and set the `position_source` / `position_source_reason`
+  attributes: JSF from validity bit 13, XTF from Sensor vs Ship
+  coordinates (`towfish` or `unknown`, never `ship`; Isis files with no
+  Ship coordinates and a recorded layback are noted in
+  `position_source_reason` as probably the ship), SDF from which position the reader used. JSF also records
+  `tow_point_aft_m` / `tow_point_starboard_m` when set, SDF
+  `sdf_layback_method`.
+- XTF files with projected navigation (`NavUnits` 0, easting/northing in
+  metres) convert when the caller names the projection: `nav_crs` on
+  `io.xtf.convert`, `io.read_and_convert` and `io.read_and_convert_segments`
+  (an EPSG code, a CRS string or a `pyproj.CRS`), and
+  `sidescan-convert survey --nav-crs`. Sensor positions are converted to
+  WGS84 longitude/latitude with pyproj, an easting/northing of exactly
+  (0, 0) becomes NaN, and the CRS is recorded in the `xtf_nav_crs`
+  attribute. Without `nav_crs` such a file raises `ValueError` (it raised
+  `NotImplementedError`); the zone is not guessed. `nav_crs` is ignored
+  for files in degrees (`NavUnits` 3).
 
 ### Fixed
 
@@ -43,142 +69,6 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   (`max_boundary_factor`, new `processing.reject_late_boundaries`). On one
   public Klein line this blanked the near port swath on 86 of 297 pings,
   which showed as black bands in dual-swath chips.
-
-## [0.9.0] — 2026-11-09
-
-### Added
-
-- The correction functions `crop_far_range`, `altitude_from_bottom_track`,
-  `apply_tvg`, `compute_geometric_ranges`,
-  `range_correction.apply_empirical_range_correction` and
-  `compute_georeferencing` also take a `SideScanSurvey`: every frequency
-  is corrected and a new survey is returned. With
-  `interpolate_aux_onto_pings`, a survey can be corrected one explicit call
-  at a time, the style the docs and examples now use.
-- `apply_tvg` takes the `TVGParams` fields as keyword arguments
-  (`apply_tvg(ds, spreading_loss_db=40)`).
-- `.ss.h5` files record `format_name`, `format_version` (`0.1`, separate
-  from the package version until the layout is frozen as 1.0) and
-  `date_created`. Reading a file with a newer format version logs a
-  warning.
-
-### Changed
-
-- The repository is public. Installs from GitHub no longer need repository
-  access, and the docs drop the pre-release access and sharing notes: the
-  "Pre-release status" page is now "Project status" (`status.md`), and
-  the site is no longer marked `noindex`.
-
-### Fixed
-
-- `datasets.fetch` retries a failed download twice (5 s and 20 s apart)
-  before raising, so a briefly misbehaving archive server no longer
-  fails an example or a docs build.
-
-## [0.8.0] — 2026-10-29
-
-### Removed
-
-- The 0.6.0 deprecation shims (breaking):
-  - `sidescanpy.viz.along_track_distance_m` and
-    `sidescanpy.viz.waterfall.along_track_distance_m`; import it from
-    `sidescanpy.processing.navigation`.
-  - `sidescan-analyze` flags `--stage3-bin-width-m`,
-    `--stage4-bin-width-m`, `--stage4-db-reference-percentile` and
-    `--stage4-fit-value-col`, and the matching `--config` keys; use
-    `--usable-range-bin-width-m`, `--decay-bin-width-m`,
-    `--decay-db-reference-percentile` and `--decay-fit-value-col`.
-  - The `raw` and `backscatter_raw` spellings of `uncorrected` for
-    `--value-var`, `--garbage-value-var` and `--render-level`.
-  - The internal deprecated-alias and renamed-config-key helpers in
-    `sidescanpy.cli`.
-- `.vscode/settings.json` and the `.gitmessage` commit template from the
-  repository.
-
-### Added
-
-- `"layback"` correction step (`processing.apply_layback`, `sidescan-correct
-  --layback`, not in `DEFAULT_STEPS`): moves ship positions astern along the
-  heading by the recorded layback plus the antenna-to-tow-point offset, with
-  a Pythagorean cable-out estimate where no layback is recorded. It only
-  moves positions whose new `position_source` attribute is `ship`, so a
-  layback the acquisition software already applied is never applied again.
-  Keeps the recorded positions in `latitude_before_layback` /
-  `longitude_before_layback`; `invert(ds, ["layback"])` restores them.
-- Readers carry per-ping `layback_m` (JSF, XTF) and `cable_out_m` (JSF,
-  XTF, SDF), and set the `position_source` / `position_source_reason`
-  attributes: JSF from validity bit 13, XTF from Sensor vs Ship
-  coordinates (`towfish` or `unknown`, never `ship`; Isis files with no
-  Ship coordinates and a recorded layback are noted in
-  `position_source_reason` as probably the ship), SDF from which position the reader used. JSF also records
-  `tow_point_aft_m` / `tow_point_starboard_m` when set, SDF
-  `sdf_layback_method`.
-- `io.jsf.write_subset` and `io.xtf.write_subset`: copy a run of pings
-  (with the XTF file header) to a new file, byte for byte.
-- Tests on five small cuts of openly licensed recordings (UK JNCC under the
-  Open Government Licence v3, USGS public domain) covering EdgeTech
-  Discover JSF and XTF, Isis (Benthos SIS-1624) XTF and KleinXlt XTF,
-  including a check that the JSF and XTF readers agree on pings Discover
-  wrote in both formats. The files are not in the repository; they are
-  listed with sources and checksums in `tests/data/public/SOURCES.md`, and
-  the tests run when `SIDESCANPY_PUBLIC_DATA` points at them.
-
-- `"bottom_track"` correction step (`processing.altitude_from_bottom_track`,
-  `sidescan-correct --bottom-track`): sets `altitude_m` from the first
-  bottom return where it is NaN or <= 0 (optionally also where the recorded
-  value disagrees by more than `max_diff_m`, or everywhere). Without it, a
-  survey with no recorded altitude gets NaN ground range and no georeferenced
-  positions. Opt-in; not in `DEFAULT_STEPS`. The return must persist for
-  `min_return_m` (default 5 m) of slant range, 70 % of it above threshold,
-  so a transmit burst is not taken for the seabed. Not a processing level.
-- `detect_first_bottom_return` takes `min_run_fraction` (default 1.0, no
-  change): a run tolerates gaps when below 1.
-- `.ss.h5` files record the version that wrote them in the root attribute
-  `sidescanpy_version`.
-- Pre-release documentation: a "Pre-release status" page (what may change
-  before 1.0, installing from the private repository, the docs download,
-  the test data bundle), warnings in the README, the docs home page and
-  the HDF5 page that the `.ss.h5` format is not frozen, and a maintainer
-  section on sharing before release in the development guide.
-- `sidescanpy.datasets`: `fetch(name)` returns a local copy of an openly
-  licensed public recording (UK JNCC under the Open Government Licence,
-  USGS public domain), reading just that file out of the agency's
-  multi-gigabyte zip archive with HTTP range requests, checking its
-  SHA-256 and caching it in `SIDESCANPY_DATA_DIR` or
-  `~/.cache/sidescanpy`. Also `list_datasets()`, `citation(name)` and
-  `data_dir()`. Standard library only.
-- Worked examples on public data (`examples/gallery/`, `make gallery`):
-  reading a file, correcting a line, gridding to a map and GeoTIFF, and
-  the same code on EdgeTech JSF, Benthos XTF and Klein XTF. Each has a
-  docs page with its code and figure; the README shows two of the
-  figures.
-- The documentation site is public at
-  <https://rshomberg-research.github.io/sidescanpy/> (published from
-  `main` into the organization's public site repository; the code stays
-  private), with an Examples section, a quickstart on public data, search,
-  and light and dark themes. Until the release its pages ask search engines
-  not to index them. The `docs` workflow also keeps every build of
-  `main` and `v*` tags as a `sidescanpy-docs` artifact.
-- XTF files with projected navigation (`NavUnits` 0, easting/northing in
-  metres) convert when the caller names the projection: `nav_crs` on
-  `io.xtf.convert`, `io.read_and_convert` and `io.read_and_convert_segments`
-  (an EPSG code, a CRS string or a `pyproj.CRS`), and
-  `sidescan-convert survey --nav-crs`. Sensor positions are converted to
-  WGS84 longitude/latitude with pyproj, an easting/northing of exactly
-  (0, 0) becomes NaN, and the CRS is recorded in the `xtf_nav_crs`
-  attribute. Without `nav_crs` such a file raises `ValueError` (it raised
-  `NotImplementedError`); the zone is not guessed. `nav_crs` is ignored
-  for files in degrees (`NavUnits` 3).
-
-### Changed
-
-- README install instructions install from the repository (sidescanpy is
-  not on PyPI yet).
-- The geometric step logs a WARNING when pings have NaN altitude (NaN ground
-  range) or altitude <= 0 (ground range equals slant range).
-
-### Fixed
-
 - `io.jsf`: `SonarDataMessage.cable_out_m` was the raw field / 1000; the
   field is in decimetres, so it is now / 10 (130 m, not 1.3 m, on a public
   Discover file with a 125.9 m layback).
@@ -198,17 +88,6 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   earlier versions of pings with non-zero pitch are wrong and should be
   regenerated**; swath-frame products use only `across_track_m` and change
   by a fraction of a percent.
-- `io.xtf`: samples are now multiplied by `2**-Weight` from each channel
-  header. EdgeTech Discover writes raw block-floating-point samples with
-  the JSF weighting factor in `Weight`, which can change from ping to ping,
-  so amplitudes from such files were 2^Weight too large and jumped by
-  factors of two between pings. They now equal the JSF samples for the same
-  ping. Files with `Weight` 0 (Isis- and Klein-written files seen so far)
-  are unchanged. New attributes `xtf_weight_min` / `xtf_weight_max`.
-- `io.jsf`: messages of types the reader does not parse (for example
-  type 2000 in some EdgeTech Discover files) are skipped with one WARNING
-  per file giving the count per type, instead of one WARNING per message
-  (hundreds per file). Each skipped record is logged at DEBUG.
 - `grids.resample_channel_to_grid` accepts `method` as a string
   (`"mean"`, …) as well as a `ResamplingMethod`, like `grid_channel`; a
   string raised `AttributeError`. An unknown name raises `ValueError`.
@@ -265,6 +144,127 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `io.read_and_convert` and `io.detect_format` accept paths as `str` as
   well as `Path` (a list of str raised `AttributeError` on `.stem`), and a
   single path as well as a list.
+
+## [0.9.0] — 2026-11-09
+
+### Added
+
+- The correction functions `crop_far_range`, `altitude_from_bottom_track`,
+  `apply_tvg`, `compute_geometric_ranges`,
+  `range_correction.apply_empirical_range_correction` and
+  `compute_georeferencing` also take a `SideScanSurvey`: every frequency
+  is corrected and a new survey is returned. With
+  `interpolate_aux_onto_pings`, a survey can be corrected one explicit call
+  at a time, the style the docs and examples now use.
+- `apply_tvg` takes the `TVGParams` fields as keyword arguments
+  (`apply_tvg(ds, spreading_loss_db=40)`).
+- `.ss.h5` files record `format_name`, `format_version` (`0.1`, separate
+  from the package version until the layout is frozen as 1.0) and
+  `date_created`. Reading a file with a newer format version logs a
+  warning.
+
+### Changed
+
+- The repository is public. Installs from GitHub no longer need repository
+  access, and the docs drop the pre-release access and sharing notes: the
+  "Pre-release status" page is now "Project status" (`status.md`), and
+  the site is no longer marked `noindex`.
+
+### Fixed
+
+- `datasets.fetch` retries a failed download twice (5 s and 20 s apart)
+  before raising, so a briefly misbehaving archive server no longer
+  fails an example or a docs build.
+
+## [0.8.0] — 2026-10-29
+
+### Removed
+
+- The 0.6.0 deprecation shims (breaking):
+  - `sidescanpy.viz.along_track_distance_m` and
+    `sidescanpy.viz.waterfall.along_track_distance_m`; import it from
+    `sidescanpy.processing.navigation`.
+  - `sidescan-analyze` flags `--stage3-bin-width-m`,
+    `--stage4-bin-width-m`, `--stage4-db-reference-percentile` and
+    `--stage4-fit-value-col`, and the matching `--config` keys; use
+    `--usable-range-bin-width-m`, `--decay-bin-width-m`,
+    `--decay-db-reference-percentile` and `--decay-fit-value-col`.
+  - The `raw` and `backscatter_raw` spellings of `uncorrected` for
+    `--value-var`, `--garbage-value-var` and `--render-level`.
+  - The internal deprecated-alias and renamed-config-key helpers in
+    `sidescanpy.cli`.
+- `.vscode/settings.json` and the `.gitmessage` commit template from the
+  repository.
+
+### Added
+
+- `io.jsf.write_subset` and `io.xtf.write_subset`: copy a run of pings
+  (with the XTF file header) to a new file, byte for byte.
+- Tests on five small cuts of openly licensed recordings (UK JNCC under the
+  Open Government Licence v3, USGS public domain) covering EdgeTech
+  Discover JSF and XTF, Isis (Benthos SIS-1624) XTF and KleinXlt XTF,
+  including a check that the JSF and XTF readers agree on pings Discover
+  wrote in both formats. The files are not in the repository; they are
+  listed with sources and checksums in `tests/data/public/SOURCES.md`, and
+  the tests run when `SIDESCANPY_PUBLIC_DATA` points at them.
+
+- `"bottom_track"` correction step (`processing.altitude_from_bottom_track`,
+  `sidescan-correct --bottom-track`): sets `altitude_m` from the first
+  bottom return where it is NaN or <= 0 (optionally also where the recorded
+  value disagrees by more than `max_diff_m`, or everywhere). Without it, a
+  survey with no recorded altitude gets NaN ground range and no georeferenced
+  positions. Opt-in; not in `DEFAULT_STEPS`. The return must persist for
+  `min_return_m` (default 5 m) of slant range, 70 % of it above threshold,
+  so a transmit burst is not taken for the seabed. Not a processing level.
+- `detect_first_bottom_return` takes `min_run_fraction` (default 1.0, no
+  change): a run tolerates gaps when below 1.
+- `.ss.h5` files record the version that wrote them in the root attribute
+  `sidescanpy_version`.
+- Pre-release documentation: a "Pre-release status" page (what may change
+  before 1.0, installing from the private repository, the docs download,
+  the test data bundle), warnings in the README, the docs home page and
+  the HDF5 page that the `.ss.h5` format is not frozen, and a maintainer
+  section on sharing before release in the development guide.
+- `sidescanpy.datasets`: `fetch(name)` returns a local copy of an openly
+  licensed public recording (UK JNCC under the Open Government Licence,
+  USGS public domain), reading just that file out of the agency's
+  multi-gigabyte zip archive with HTTP range requests, checking its
+  SHA-256 and caching it in `SIDESCANPY_DATA_DIR` or
+  `~/.cache/sidescanpy`. Also `list_datasets()`, `citation(name)` and
+  `data_dir()`. Standard library only.
+- Worked examples on public data (`examples/gallery/`, `make gallery`):
+  reading a file, correcting a line, gridding to a map and GeoTIFF, and
+  the same code on EdgeTech JSF, Benthos XTF and Klein XTF. Each has a
+  docs page with its code and figure; the README shows two of the
+  figures.
+- The documentation site is public at
+  <https://rshomberg-research.github.io/sidescanpy/> (published from
+  `main` into the organization's public site repository; the code stays
+  private), with an Examples section, a quickstart on public data, search,
+  and light and dark themes. Until the release its pages ask search engines
+  not to index them. The `docs` workflow also keeps every build of
+  `main` and `v*` tags as a `sidescanpy-docs` artifact.
+
+### Changed
+
+- README install instructions install from the repository (sidescanpy is
+  not on PyPI yet).
+- The geometric step logs a WARNING when pings have NaN altitude (NaN ground
+  range) or altitude <= 0 (ground range equals slant range).
+
+### Fixed
+
+- `io.xtf`: samples are now multiplied by `2**-Weight` from each channel
+  header. EdgeTech Discover writes raw block-floating-point samples with
+  the JSF weighting factor in `Weight`, which can change from ping to ping,
+  so amplitudes from such files were 2^Weight too large and jumped by
+  factors of two between pings. They now equal the JSF samples for the same
+  ping. Files with `Weight` 0 (Isis- and Klein-written files seen so far)
+  are unchanged. New attributes `xtf_weight_min` / `xtf_weight_max`.
+- `io.jsf`: messages of types the reader does not parse (for example
+  type 2000 in some EdgeTech Discover files) are skipped with one WARNING
+  per file giving the count per type, instead of one WARNING per message
+  (hundreds per file). Each skipped record is logged at DEBUG.
 
 ## [0.7.6] — 2026-10-12
 
