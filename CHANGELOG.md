@@ -66,7 +66,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `processing.smooth_navigation`: per-ping positions replaced by a
   straight-line fit over a time window (default 5 s), for positions that
   jump back at every GPS fix; recorded in `processing_history`.
-- `datasets`: `bgs_london_gateway_dynamo_88.xtf`, a sixth Dynamo pass.
+- `datasets`: `bgs_london_gateway_dynamo_88.xtf`, a sixth Dynamo pass, and
+  `bgs_london_gateway_aisha_15.xtf`, `aisha_16` and `ash_34` (artifacts).
+- Docs: a gallery example of common sidescan artifacts and their causes.
 - Docs: gallery examples for eight wrecks at one scale, four passes over
   one wreck (native and north-up), and a wreck's height from its shadow.
 - Docs: Guide and Examples split cleanly. Examples holds every worked

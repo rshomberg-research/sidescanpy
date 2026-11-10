@@ -38,6 +38,7 @@ GALLERY_ORDER = [
     "plot_whats_in_a_file",
     "plot_navigation",
     "plot_investigate_a_survey",
+    "plot_common_artifacts",
     "plot_correct_a_line",
     "plot_compare_sonars_and_formats",
     "plot_grid_to_a_map",
