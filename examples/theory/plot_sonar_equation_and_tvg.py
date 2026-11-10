@@ -67,6 +67,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
 
 from sidescanpy import analysis, datasets
 from sidescanpy.io import read_and_convert
@@ -122,8 +123,9 @@ fig.savefig(out / "sonar_equation_and_tvg_laws.png", dpi=150)
 # Three recordings
 # ----------------
 # The high frequency of the Wight-Barfleur line (a chirp from 521 to
-# 574 kHz, center 548 kHz; the JSF records no altitude, so it comes from
-# the first seabed echo), a Klein line from the shallow Grand Bay
+# 574 kHz, center 548 kHz, sidescanpy key ``hz_521000``, named by the
+# start of the sweep; labels use the center. The JSF records no
+# altitude, so it comes from the first seabed echo), a Klein line from the shallow Grand Bay
 # estuary (100 kHz) and a London Gateway line (Klein 3000, 400 kHz) whose
 # recorder applied its own TVG. Incomplete pings are dropped.
 
@@ -192,6 +194,46 @@ for label, line in lines.items():
           f"{CENTRES[lowest]:.1f} m; knee {knee:.1f} m; fit window {line['window'][0]:.1f} to {knee:.1f} m")
 
 # %%
+# The figure shows each line's starboard side as recorded, with the
+# parts of the image this section uses boxed: the water column (left
+# out), the fit window, and the range past the noise knee, where the
+# level no longer falls.
+
+
+def label_box(ax, x0, x1, y0, y1, text, colour="cyan", where="above", fontsize=9):
+    """Outline a feature with a rectangle and name it."""
+    ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.6))
+    y = y1 if where == "above" else y0
+    ax.text(x0, y, text, color=colour, fontsize=fontsize, fontweight="bold",
+            va="bottom" if where == "above" else "top", ha="left",
+            bbox=dict(boxstyle="square,pad=0.15", fc="black", ec="none", alpha=0.7))
+
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 4.8), constrained_layout=True)
+for ax, (label, line) in zip(axes, lines.items()):
+    ds = line["ds"]
+    slant_row = ds["slant_range_m"].values[0, 1]
+    n = max(1, int(round(0.1 / float(slant_row[1] - slant_row[0]))))
+    amp = ds["backscatter_intensity"].values[:, 1].astype(np.float64)
+    keep = (amp.shape[1] // n) * n
+    img = 20 * np.log10(amp[:, :keep].reshape(amp.shape[0], -1, n).mean(axis=2) + 1e-3)
+    r_end = float(slant_row[keep - 1])
+    n_p = img.shape[0]
+    lo, hi = np.percentile(img[:, img.shape[1] // 10:], [2, 99.5])
+    ax.imshow(img, cmap="gray", vmin=lo, vmax=hi, origin="lower", aspect="auto", extent=[0, r_end, 0, n_p])
+    w0, w1 = line["window"]
+    label_box(ax, 0.2, line["altitude"], 0.03 * n_p, 0.75 * n_p, "water\ncolumn", colour="cyan")
+    label_box(ax, w0, w1, 0.03 * n_p, 0.88 * n_p, f"fit window {w0:.1f}-{w1:.1f} m", colour="yellow")
+    if w1 < 0.97 * r_end:
+        label_box(ax, w1 + 0.01 * r_end, 0.99 * r_end, 0.03 * n_p, 0.6 * n_p, "past the\nknee", colour="magenta")
+    if label.startswith("London Gateway"):
+        label_box(ax, 10, 62, 590, 730, "wreck and its shadow", colour="orange", where="below")
+    ax.set_xlabel("starboard slant range (m)")
+    ax.set_title(label, loc="left")
+axes[0].set_ylabel("ping")
+fig.savefig(out / "sonar_equation_and_tvg_windows.png", dpi=150)
+
+# %%
 # Fitting the spreading law
 # -------------------------
 # Six fixed models, ``L(R) = L0 - n log10 R - k 2 alpha R`` with
@@ -241,6 +283,30 @@ for label, line in lines.items():
     print(f"   the level falls {fall:.1f} dB from {w0:.1f} to {w1:.1f} m; 30 log R + abs predicts "
           f"30 log10({w1 / w0:.2f}) + 2 x {line['alpha']:.4f} x {w1 - w0:.0f} = "
           f"{30 * np.log10(w1 / w0) + 2 * line['alpha'] * (w1 - w0):.1f} dB")
+
+# %%
+# The figure is the table above as bars: the RMS residual of each fixed
+# model on each line, best model outlined. Lower is better.
+
+fig, ax = plt.subplots(figsize=(11, 3.8), constrained_layout=True)
+width = 0.13
+for j, (n, k) in enumerate(MODELS):
+    colour = {20: "C2", 30: "C0", 40: "C3"}[n]
+    for i, line in enumerate(lines.values()):
+        rms = line["fits"][(n, k)][1]
+        best = (n, k) == line["best"]
+        ax.bar(i + (j - 2.5) * width, rms, width * 0.9, color=colour, alpha=1 if k else 0.45,
+               ec="k" if best else "none", lw=2 if best else 0,
+               label=model_name(n, k) if i == 0 else None)
+        if best:
+            ax.text(i + (j - 2.5) * width, rms + 0.12, "best", ha="center", fontsize=8.5)
+ax.set_xticks(range(len(lines)), labels=list(lines))
+ax.set_ylabel("RMS residual in the fit window (dB)")
+ax.set_title("Which spreading law fits: pale bars without absorption, solid with", loc="left")
+ax.grid(alpha=0.3, axis="y")
+ax.legend(ncol=3, fontsize=9, loc="upper right")
+ax.set_ylim(0, 8)
+fig.savefig(out / "sonar_equation_and_tvg_rms.png", dpi=150)
 
 # %%
 # What :func:`~sidescanpy.analysis.fit_range_decay` says
@@ -321,7 +387,10 @@ for label, other in (("Wight-Barfleur, 548 kHz", (20, 1)), ("Grand Bay, 100 kHz"
 # -----------------------------------------
 # The raw level in dB and the same pings after
 # :func:`~sidescanpy.processing.apply_tvg` with 30 log R and absorption,
-# both sides, cropped at the noise knee.
+# both sides, cropped at the noise knee. Boxed on starboard: the water
+# column, the stretch between the water column and the start of the fit
+# window where the beam pattern still shapes the level, and the far
+# range, dark before TVG and as bright as the near range after it.
 
 wb = lines["Wight-Barfleur, 548 kHz"]
 raw = slice_by_range(wb["ds"], max_m=wb["window"][1])["backscatter_intensity"].values
@@ -337,6 +406,12 @@ for ax, data, title in ((axes[0], 20 * np.log10(np.maximum(raw, 1e-6)), "Raw lev
     ax.set_title(title, loc="left")
     ax.set_xlabel("slant range, port (-) and starboard (+) (m)")
     fig.colorbar(im, ax=ax, label="dB", shrink=0.85)
+    n_p = swath.shape[0]
+    label_box(ax, -wb["altitude"], wb["altitude"], 0.03 * n_p, 0.8 * n_p, "water column", colour="cyan")
+for ax in axes:
+    label_box(ax, wb["altitude"] + 0.5, wb["window"][0], 0.03 * n_p, 0.55 * n_p, "beam\npattern",
+              colour="yellow")
+    label_box(ax, 60, knee - 0.5, 0.03 * n_p, 0.3 * n_p, "far range", colour="magenta")
 axes[0].set_ylabel("ping")
 fig.savefig(out / "sonar_equation_and_tvg_swath.png", dpi=150)
 

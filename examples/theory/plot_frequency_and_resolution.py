@@ -59,6 +59,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
 from scipy.ndimage import uniform_filter1d
 
 from sidescanpy import datasets
@@ -114,10 +115,14 @@ print(f"crossover for B = 53 kHz and theta = 0.3 deg: {100 * dr_hf:.2f} cm / {th
 # -----------------------
 # The towfish recorded a low and a high frequency on every ping, each a
 # chirp. The JSF file stores the start and end of each sweep and its
-# length; their difference is the bandwidth. The sidescanpy frequency key
-# names the start of the sweep (``hz_521000``) and
+# length; their difference is the bandwidth. The low frequency sweeps
+# 218.74 to 241.74 kHz, center 230 kHz; the high one 521 to 574 kHz,
+# center 548 kHz. The sidescanpy frequency keys name the start of each
+# sweep (``hz_218740`` and ``hz_521000``), and
 # :func:`~sidescanpy.processing.radiometric.center_frequency_hz` gives
-# the center. The first ping is incomplete and is dropped.
+# the center, which titles and labels below use. The first ping is
+# incomplete and is dropped. The figure draws the two sweeps as the file
+# records them: frequency against time within the pulse.
 
 survey = read_and_convert([datasets.fetch("jncc_wight_barfleur_20130321174522.jsf")], fmt="jsf")
 lines = {}
@@ -136,6 +141,27 @@ for key, name in zip(survey.frequencies, ("low", "high")):
           f"sample spacing c / (2 fs) = {C:.0f} / (2 x {a['sample_rate_hz']:.0f}) = "
           f"{100 * C / (2 * a['sample_rate_hz']):.2f} cm; the same pulse uncompressed: c tau / 2 = "
           f"{C * tau / 2:.2f} m")
+
+fig, chirp_axes = plt.subplots(2, 1, figsize=(10, 5.2), sharex=True, constrained_layout=True)
+for ax, name, colour in zip(chirp_axes, ("high", "low"), ("C3", "C0")):
+    a = lines[name]["ds"].attrs
+    f0, f1, tau_ms = a["freq_hz_start"] / 1e3, a["freq_hz_end"] / 1e3, a["pulse_length_us"] / 1e3
+    fc = (f0 + f1) / 2
+    ax.plot([0, tau_ms], [f0, f1], color=colour, lw=3)
+    ax.plot(tau_ms / 2, fc, "o", color=colour, ms=8)
+    ax.text(tau_ms / 2 - 0.2, fc + 3, f"center {fc:.0f} kHz", color=colour, fontsize=9, ha="right")
+    ax.annotate("", (tau_ms + 0.3, f1), (tau_ms + 0.3, f0), arrowprops=dict(arrowstyle="<->", color=colour))
+    ax.text(tau_ms + 0.45, fc, f"B = {f1:.2f} - {f0:.2f}\n   = {f1 - f0:.0f} kHz", color=colour, fontsize=9,
+            va="center")
+    ax.annotate("", (tau_ms, f0 - 6), (0, f0 - 6), arrowprops=dict(arrowstyle="<->", color=colour))
+    ax.text(tau_ms / 2, f0 - 8, f"tau = {tau_ms:.0f} ms", color=colour, fontsize=9, ha="center", va="top")
+    ax.set_ylim(f0 - 22, f1 + 8)
+    ax.set_ylabel("frequency (kHz)")
+    ax.set_title(f"{name}: chirp {f0:.2f} to {f1:.2f} kHz in {tau_ms:.0f} ms", loc="left")
+    ax.grid(alpha=0.3)
+chirp_axes[1].set_xlim(-0.3, 10.5)
+chirp_axes[1].set_xlabel("time within the pulse (ms)")
+fig.savefig(out / "frequency_and_resolution_chirps.png", dpi=150)
 
 # %%
 # The JSF file records no beam width. The XTF copies of the same pings,
@@ -224,6 +250,10 @@ for name, colour in (("low", "C0"), ("high", "C3")):
     if name == "high":
         ax.plot(lag_cm, p["corr_125"], "o--", color=colour, mfc="none",
                 label="high, 125-135 m (beyond the noise knee)")
+    g40 = grain_length(p["corr_40"], p["spacing"])
+    ax.plot(100 * g40, 0.5, "X", color=colour, ms=10, mec="k", zorder=5)
+    ax.annotate(f"grain length {100 * g40:.2f} cm", (100 * g40, 0.5), (100 * g40 + 0.4, 0.58 if name == "low" else 0.36),
+                color=colour, fontsize=9, arrowprops=dict(arrowstyle="->", color=colour))
     ax.axvline(100 * p["resolution"], color=colour, lw=1, ls=":")
     ax.text(100 * p["resolution"] + 0.1, 0.9, f"c / 2B = {100 * p['resolution']:.1f} cm", color=colour, fontsize=9)
 ax.axhline(0.5, color="0.5", lw=0.8)
@@ -248,6 +278,21 @@ for name in ("low", "high"):
     print(f"{name}: neighboring-ping correlation "
           + ", ".join(f"{r0 + 5:.0f} m {c:.3f}" for r0, c in zip(starts[::3], p["adjacent"][::3])))
 
+fig, ax = plt.subplots(figsize=(9, 3.6), constrained_layout=True)
+for name, colour in (("low", "C0"), ("high", "C3")):
+    p = lines[name]
+    ax.plot(starts + 5, p["adjacent"], "o-", color=colour, label=f"{name} ({p['center'] / 1e3:.0f} kHz)")
+    ax.plot(starts + 5, p["corr_40"][1] * np.ones_like(starts, dtype=float), ls=":", color=colour, lw=1)
+ax.text(30, lines["low"]["corr_40"][1] + 0.03, "for scale: neighboring samples along range, 45-55 m", fontsize=9)
+ax.axhline(0, color="0.4", lw=0.8)
+ax.set_ylim(-0.1, 1)
+ax.set_xlabel("slant range (m)")
+ax.set_ylabel("speckle correlation, ping i and i + 1")
+ax.set_title("Neighboring pings: almost no shared speckle", loc="left")
+ax.grid(alpha=0.3)
+ax.legend(loc="center right", fontsize=9)
+fig.savefig(out / "frequency_and_resolution_along_track.png", dpi=150)
+
 # %%
 # The same patch at both frequencies
 # ----------------------------------
@@ -261,7 +306,7 @@ for name in ("low", "high"):
 # wavelength.
 
 STARBOARD, R0, R1, CELL = 1, 60.0, 95.0, 0.25
-patches, spectra = {}, {}
+patches, spectra, spectra_peak = {}, {}, {}
 for name in ("low", "high"):
     p = lines[name]
     n = int(round(CELL / p["spacing"]))
@@ -277,19 +322,41 @@ for name in ("low", "high"):
     keep = k > 1 / 30
     spectra[name] = (k[keep], power[keep] / power[keep].max())
     peak = k[keep][np.argmax(power[keep])]
+    spectra_peak[name] = peak
     print(f"{name}: along-track spectrum peaks at {peak:.4f} cycles/m, a wavelength of {1 / peak:.2f} m "
           f"({1 / peak / DX:.1f} pings); spread of the 0.25 m cells {binned.std():.2f} dB, "
           f"{CELL / p['resolution']:.0f} resolution cells of c / 2B per 0.25 m")
 
-fig, axes = plt.subplots(1, 3, figsize=(13, 5), width_ratios=[1, 1, 0.9], constrained_layout=True)
+fig = plt.figure(figsize=(13, 8.6), constrained_layout=True)
+grid = fig.add_gridspec(2, 3, height_ratios=[0.75, 1.25], width_ratios=[1, 1, 0.9])
+ax_ctx = fig.add_subplot(grid[0, :])
+axes = [fig.add_subplot(grid[1, k]) for k in range(3)]
+p = lines["high"]
+n8 = int(round(0.1 / p["spacing"]))
+keep = (p["amp"].shape[-1] // n8) * n8
+ctx = 20 * np.log10(p["amp"][:, STARBOARD, :keep].reshape(p["amp"].shape[0], -1, n8).mean(axis=2) + 1e-3)
+ax_ctx.imshow(ctx, cmap="gray", vmin=np.percentile(ctx, 2), vmax=np.percentile(ctx, 99.5), origin="lower",
+              aspect="auto", extent=[0, keep * p["spacing"], 0, ctx.shape[0]])
+ax_ctx.add_patch(Rectangle((R0, 1), R1 - R0, ctx.shape[0] - 2, fill=False, ec="yellow", lw=2))
+ax_ctx.text(R0 + 0.5, ctx.shape[0] - 4, "bedform patch (60-95 m) used for the spectrum", color="yellow", fontsize=9,
+            fontweight="bold", va="top", bbox=dict(boxstyle="square,pad=0.15", fc="black", ec="none", alpha=0.7))
+ax_ctx.set_xlabel("starboard slant range (m)")
+ax_ctx.set_ylabel("ping")
+ax_ctx.set_title(f"The whole line, starboard, high ({p['center'] / 1e3:.0f} kHz), raw level in dB", loc="left")
 along = np.array([0, DX * (patches["low"].shape[0] - 1)])
 for ax, name in zip(axes[:2], ("low", "high")):
     img = patches[name]
     lo, hi = np.percentile(img, [2, 98])
     ax.imshow(img, cmap="gray", vmin=lo, vmax=hi, origin="lower", aspect="auto", interpolation="nearest",
               extent=[R0, R1, along[0], along[1]])
-    ax.set_title(f"{name}: {lines[name]['center'] / 1e3:.0f} kHz", loc="left")
+    ax.set_title(f"{name}: {lines[name]['center'] / 1e3:.0f} kHz, patch less its range mean", loc="left",
+                 fontsize=10)
     ax.set_xlabel("starboard slant range (m)")
+    wavelength = 1 / spectra_peak[name]
+    ax.annotate("", (R1 - 1.5, 20 + wavelength * 3), (R1 - 1.5, 20), arrowprops=dict(arrowstyle="<->", color="yellow",
+                lw=1.8))
+    ax.text(R1 - 2.2, 20 + wavelength * 1.5, f"3 x {wavelength:.2f} m", color="yellow", fontsize=9, ha="right",
+            va="center", fontweight="bold", bbox=dict(boxstyle="square,pad=0.15", fc="black", ec="none", alpha=0.7))
 axes[0].set_ylabel("distance along track (m)")
 for name, colour in (("low", "C0"), ("high", "C3")):
     k, pw = spectra[name]
@@ -300,7 +367,9 @@ axes[2].set_xlabel("along-track wavelength (m)")
 axes[2].set_ylabel("power, normalized")
 axes[2].set_title("Bedform spectrum, 60-95 m", loc="left")
 axes[2].grid(alpha=0.3, which="both")
-axes[2].legend()
+axes[2].axvline(1 / spectra_peak["high"], color="0.3", lw=1, ls="--")
+axes[2].text(1 / spectra_peak["high"] * 1.05, 0.95, f"peak {1 / spectra_peak['high']:.2f} m", fontsize=9, va="top")
+axes[2].legend(loc="upper left")
 fig.savefig(out / "frequency_and_resolution_patch.png", dpi=150)
 
 # %%
@@ -312,13 +381,27 @@ fig.savefig(out / "frequency_and_resolution_patch.png", dpi=150)
 # correlation shows which one limits.
 
 irish = read_and_convert([datasets.fetch("jncc_mid_irish_sea_MIS15_2.xtf")], fmt="xtf")
-for key in irish.frequencies:
+fig, ax = plt.subplots(figsize=(9, 3.8), constrained_layout=True)
+for key, colour in zip(irish.frequencies, ("C2", "C1")):
     ds = irish.get_frequency(key).dataset.load()
     c = float(np.nanmean(ds["sound_vel_ms"].values))
     spacing = c / (2 * ds.attrs["sample_rate_hz"])
-    corr = range_correlation(speckle(ds["backscatter_intensity"].values.astype(np.float64), spacing, 60, 120), 2)
+    corr = range_correlation(speckle(ds["backscatter_intensity"].values.astype(np.float64), spacing, 60, 120), 4)
     print(f"{key}: sample spacing {c:.0f} / (2 x {ds.attrs['sample_rate_hz']:.0f}) = {100 * spacing:.2f} cm; "
           f"correlation of neighboring samples at 60-120 m: {corr[1]:.2f}")
+    ax.plot(100 * spacing * np.arange(len(corr)), corr, "o-", color=colour,
+            label=f"SIS-1624, {float(ds.attrs['freq_hz_start']) / 1e3:.0f} kHz, 60-120 m")
+p = lines["high"]
+ax.plot(100 * p["spacing"] * np.arange(len(p["corr_40"])), p["corr_40"], "o-", color="C3", ms=4,
+        label=f"Wight-Barfleur high ({p['center'] / 1e3:.0f} kHz), 45-55 m")
+ax.axhline(0.5, color="0.5", lw=0.8)
+ax.set_xlim(0, 20)
+ax.set_xlabel("distance between samples along range (cm)")
+ax.set_ylabel("speckle correlation")
+ax.set_title("A sonar limited by its sampling: neighbors already independent", loc="left")
+ax.grid(alpha=0.3)
+ax.legend(fontsize=9)
+fig.savefig(out / "frequency_and_resolution_second_sonar.png", dpi=150)
 
 # %%
 # Resolution, measured

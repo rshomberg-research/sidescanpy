@@ -52,6 +52,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
 
 from sidescanpy import analysis, datasets
 from sidescanpy.io import read_and_convert
@@ -75,8 +76,12 @@ C = 1500.0
 # --------------------------
 # The sonar recorded a low and a high frequency on every ping. Each is a
 # frequency sweep (chirp); :func:`~sidescanpy.processing.radiometric.center_frequency_hz`
-# gives its center. The first ping is incomplete and is dropped. The
-# altitude comes from the first seabed echo (``bottom_track``).
+# gives its center. The low one sweeps 218.74 to 241.74 kHz, center
+# 230 kHz (sidescanpy key ``hz_218740``, the start of the sweep); the
+# high one 521 to 574 kHz, center 548 kHz (``hz_521000``). Titles and
+# labels below use the center frequencies. The first ping is incomplete
+# and is dropped. The altitude comes from the first seabed echo
+# (``bottom_track``).
 
 survey = read_and_convert([datasets.fetch("jncc_wight_barfleur_20130321174522.jsf")], fmt="jsf")
 lines = {}
@@ -108,6 +113,36 @@ print(f"an echo from 250 m would arrive {2 * 250 / C - T:.3f} s after the next p
       f"{250 - r_max:.1f} m in it")
 
 # %%
+# The figure draws three pings on a time line. Each records for
+# ``2 x 199.9 / c`` seconds and the next goes out ``T`` later. An echo
+# from 250 m (red) leaves with ping 1 and comes back during ping 2's
+# record, where the recorder can only place it at the time since ping 2.
+
+t_rec = 2 * recorded / C
+fig, ax = plt.subplots(figsize=(12, 3.0), constrained_layout=True)
+for k in range(3):
+    ax.add_patch(Rectangle((k * T, 0.2), t_rec, 0.6, color=f"C{k}", alpha=0.18, lw=0))
+    ax.plot([k * T, k * T], [0, 1.1], color=f"C{k}", lw=2)
+    ax.text(k * T + 0.004, 1.13, f"ping {k + 1} sent", color=f"C{k}", fontsize=10)
+    ax.text(k * T + t_rec / 2, 0.5, f"ping {k + 1} record\n{1000 * t_rec:.0f} ms = {recorded:.0f} m",
+            ha="center", va="center", fontsize=9, color=f"C{k}")
+t_echo = 2 * 250 / C
+ax.annotate("", (t_echo, 0.12), (0, 0.12), arrowprops=dict(arrowstyle="->", color="C3", lw=1.8))
+ax.text(t_echo / 2, 0.02, f"echo from 250 m: back after 2 x 250 / c = {t_echo:.3f} s", color="C3", ha="center",
+        va="top", fontsize=9)
+ax.plot(t_echo, 0.12, "o", color="C3", ms=7)
+ax.annotate(f"placed in ping 2 at {t_echo - T:.3f} s = {250 - r_max:.1f} m", (t_echo, 0.12), (t_echo + 0.04, -0.2),
+            color="C3", fontsize=9, arrowprops=dict(arrowstyle="->", color="C3"))
+ax.annotate("", (T, -0.25), (0, -0.25), arrowprops=dict(arrowstyle="<->", color="k"))
+ax.text(T / 2, -0.3, f"T = {T:.3f} s:  c T / 2 = {r_max:.1f} m", ha="center", va="top", fontsize=9)
+ax.set_xlim(-0.01, 3 * T)
+ax.set_ylim(-0.55, 1.3)
+ax.set_yticks([])
+ax.set_xlabel("time since ping 1 (s)")
+ax.set_title("Range ambiguity: an echo from beyond c T / 2 lands in the next ping", loc="left")
+fig.savefig(out / "range_limits_timing.png", dpi=150)
+
+# %%
 # The near end: the first samples
 # -------------------------------
 # What each ping holds before the water column: count the samples that
@@ -131,11 +166,16 @@ for name, colour in (("low", "C0"), ("high", "C3")):
     print(f"   mean level 10-12 ms after transmit {settled:.2f}; the mean reaches half of that at {half:.1f} ms; "
           f"largest mean in the first 12 ms {mean_start.max():.2f}")
     ax_mean.plot(t_ms, mean_start, color=colour, label=f"{name} ({center_frequency_hz(ds) / 1e3:.0f} kHz)")
+    ax_mean.axvspan(0, 1000 * np.median(lead) / fs, ymin=0, ymax=0.06 if name == "low" else 0.12, color=colour,
+                    alpha=0.5, lw=0)
+    ax_mean.plot(half, settled / 2, "o", color=colour, ms=7, mfc="none", mew=2)
     ax_hist.hist(1000 * lead.ravel() / fs, bins=40, color=colour, alpha=0.6, label=name)
 ax_mean.set_xlabel("time since transmit (ms)")
 ax_mean.set_ylabel("mean amplitude, all pings")
 ax_mean.set_title("Start of each ping: zeros, then a slow rise", loc="left")
-ax_mean.legend()
+ax_mean.plot([], [], "s", color="0.4", alpha=0.5, label="leading zeros (median length)")
+ax_mean.plot([], [], "o", color="0.4", mfc="none", mew=2, label="half of the 10-12 ms level")
+ax_mean.legend(loc="upper left", fontsize=9)
 ax_hist.set_xlabel("length of the leading zeros (ms)")
 ax_hist.set_ylabel("pings and sides")
 ax_hist.set_title("The zero stretch varies from ping to ping", loc="left")
@@ -175,6 +215,68 @@ for name in ("low", "high"):
     knee_text = f"within 1 dB of it from {knee:.0f} m" if knee else "still falling at the end of the record: no knee"
     print(f"   lowest binned level {level[lowest]:.1f} dB at {centre[lowest]:.0f} m; {knee_text}; "
           f"level at the end of the record {level[-1]:.1f} dB")
+
+# %%
+# The figure shows both frequencies on the starboard side, the same
+# pings, with each frequency's usable range (solid line) and noise knee
+# (dashed line, high frequency only) and the farthest tenth of the
+# record that :func:`~sidescanpy.analysis.estimate_usable_range` takes
+# as the noise floor (boxed). The zooms on the right show 80 to 120 m
+# at each frequency, each on its own grey stretch: at the high frequency
+# the ripples end near 90 m and leave even speckle; the low frequency
+# still shows changes of level along range and from ping to ping.
+
+
+def starboard_db(ds, cell_m=0.1):
+    """Starboard level in dB, averaged over ``cell_m`` of range, and the range of each cell."""
+    fs = ds.attrs["sample_rate_hz"]
+    n = max(1, int(round(cell_m / (C / (2 * fs)))))
+    amp = ds["backscatter_intensity"].values[:, 1].astype(np.float64)
+    keep = (amp.shape[1] // n) * n
+    db = 20 * np.log10(amp[:, :keep].reshape(amp.shape[0], -1, n).mean(axis=2) + 1e-3)
+    return db, (np.arange(db.shape[1]) + 0.5) * n * C / (2 * fs)
+
+
+def label_box(ax, x0, x1, y0, y1, text, colour="cyan", where="above", fontsize=9):
+    """Outline a feature with a rectangle and name it."""
+    ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.6))
+    y = y1 if where == "above" else y0
+    ax.text(x0, y, text, color=colour, fontsize=fontsize, fontweight="bold",
+            va="bottom" if where == "above" else "top", ha="left",
+            bbox=dict(boxstyle="square,pad=0.15", fc="black", ec="none", alpha=0.7))
+
+
+ZOOM = (80.0, 120.0, 30, 130)
+fig, axes = plt.subplots(2, 2, figsize=(13, 7), width_ratios=[2.3, 1], constrained_layout=True)
+for row, name in enumerate(("low", "high")):
+    ds, p = lines[name], profiles[name]
+    db, rng_m = starboard_db(ds)
+    lo, hi = np.percentile(db[:, rng_m > 20], [2, 99.5])
+    n_p = db.shape[0]
+    ax, ax_z = axes[row]
+    ax.imshow(db, cmap="gray", vmin=lo, vmax=hi, origin="lower", aspect="auto", extent=[0, rng_m[-1], 0, n_p])
+    ax.axvline(p["usable"], color="yellow", lw=1.5)
+    ax.text(p["usable"] + 1, 5, f"usable range\n{p['usable']:.0f} m", color="yellow", fontsize=9, fontweight="bold")
+    if p["knee"]:
+        ax.axvline(p["knee"], color="cyan", lw=1.5, ls="--")
+        ax.text(p["knee"] + 1, 5, f"noise knee\n{p['knee']:.0f} m", color="cyan", fontsize=9, fontweight="bold")
+        label_box(ax, p["knee"] + 3, 176, n_p - 70, n_p - 24, "noise only", colour="magenta")
+    else:
+        label_box(ax, 140, 176, n_p - 70, n_p - 24, "level still falling", colour="lime")
+    tenth = 0.9 * p["range"][-1]
+    label_box(ax, tenth, rng_m[-1] - 0.5, 4, n_p - 90, "taken as\nnoise floor", colour="orange")
+    label_box(ax, ZOOM[0], ZOOM[1], ZOOM[2], ZOOM[3], "zoom", colour="w")
+    ax.set_xlim(0, rng_m[-1])
+    ax.set_ylabel("ping")
+    ax.set_title(f"{name}, {p['freq'] / 1e3:.0f} kHz, starboard, level in dB", loc="left")
+    in_zoom = (rng_m >= ZOOM[0]) & (rng_m <= ZOOM[1])
+    zoom = db[ZOOM[2]:ZOOM[3], in_zoom]
+    ax_z.imshow(zoom, cmap="gray", vmin=np.percentile(zoom, 1), vmax=np.percentile(zoom, 99.5), origin="lower",
+                aspect="auto", extent=[ZOOM[0], ZOOM[1], ZOOM[2], ZOOM[3]])
+    ax_z.set_title(f"Zoom, {p['freq'] / 1e3:.0f} kHz (own stretch)", loc="left")
+axes[1, 0].set_xlabel("starboard slant range (m)")
+axes[1, 1].set_xlabel("starboard slant range (m)")
+fig.savefig(out / "range_limits_far_end.png", dpi=150)
 
 # %%
 # Absorption against frequency

@@ -58,7 +58,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Polygon, Wedge
+from matplotlib.patches import Polygon, Rectangle, Wedge
+from scipy.ndimage import uniform_filter1d
 
 from sidescanpy import analysis, datasets
 from sidescanpy.core.units import mask_floor_db
@@ -66,6 +67,7 @@ from sidescanpy.export.windows.levels import with_db_var
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
 from sidescanpy.processing import altitude_from_bottom_track, compute_geometric_ranges
+from sidescanpy.processing.radiometric import center_frequency_hz
 
 # sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_how_sidescan_sees.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -78,10 +80,17 @@ configure_logging("ERROR")
 # The line
 # --------
 # One line over Wight-Barfleur Reef in the English Channel, recorded at
-# two frequencies. This page uses the high one. The file records no
-# altitude, so the ``bottom_track`` step measures it from the first
-# seabed echo of every ping. The first ping was cut short in the
-# recording and one side holds no samples, so it is dropped.
+# two frequencies. This page uses the high one, a chirp from 521 to
+# 574 kHz with its center at 548 kHz (sidescanpy names it by the start
+# of the sweep, ``hz_521000``); titles below use the center frequency.
+# The file records no altitude, so the ``bottom_track`` step measures it
+# from the first seabed echo of every ping. The first ping was cut short
+# in the recording and one side holds no samples, so it is dropped.
+#
+# The figure is the whole line as recorded, port flipped to the left,
+# with the features this page explains boxed: the water column, the
+# first seabed echo, a patch of sand ripples (zoomed on the right) and
+# the far range where the echo fades into the noise.
 
 survey = read_and_convert([datasets.fetch("jncc_wight_barfleur_20130321174522.jsf")], fmt="jsf")
 high = survey.frequencies[-1]
@@ -90,8 +99,54 @@ ds = ds.isel(ping=np.isfinite(ds["backscatter_intensity"].values).all(axis=(1, 2
 ds = with_db_var(compute_geometric_ranges(altitude_from_bottom_track(ds)))
 fs = float(ds.attrs["sample_rate_hz"])
 n_pings, n_samples = ds.sizes["ping"], ds.sizes["sample"]
-print(f"{high}: {n_pings} pings, {n_samples} samples per side, sampled at {fs:.0f} Hz "
+f_khz = center_frequency_hz(ds) / 1e3
+altitude = float(np.nanmedian(ds["altitude_m"].values))
+print(f"{high}: chirp {ds.attrs['freq_hz_start'] / 1e3:.0f} to {ds.attrs['freq_hz_end'] / 1e3:.0f} kHz, "
+      f"center {f_khz:.1f} kHz; {n_pings} pings, {n_samples} samples per side, sampled at {fs:.0f} Hz "
       f"({1e6 / fs:.1f} microseconds per sample)")
+
+FACTOR = 8   # average 8 samples (7 cm) for display
+n_keep = (n_samples // FACTOR) * FACTOR
+coarse = 20 * np.log10(np.abs(ds["backscatter_intensity"].values[:, :, :n_keep])
+                       .reshape(n_pings, 2, -1, FACTOR).mean(axis=-1) + 1e-3)
+image = np.concatenate([coarse[:, 0, ::-1], coarse[:, 1]], axis=1)
+r_max = n_keep * 1500.0 / (2 * fs)   # c = 1500 m/s, see below
+lo, hi = np.nanpercentile(image[np.isfinite(image) & (image > 0)], [2, 99.5])
+
+
+def label_box(ax, x0, x1, y0, y1, text, colour="cyan", where="above", fontsize=9):
+    """Outline a feature with a rectangle and name it."""
+    ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.6))
+    y = y1 if where == "above" else y0
+    ax.text(x0, y, text, color=colour, fontsize=fontsize, fontweight="bold",
+            va="bottom" if where == "above" else "top", ha="left",
+            bbox=dict(boxstyle="square,pad=0.15", fc="black", ec="none", alpha=0.6))
+
+
+RIPPLES = (60.0, 80.0, 30, 90)   # starboard slant range (m) and pings of the zoom
+fig, (ax_all, ax_zoom) = plt.subplots(1, 2, figsize=(13, 5.6), width_ratios=[2.2, 1], constrained_layout=True)
+ax_all.imshow(image, cmap="copper", vmin=lo, vmax=hi, origin="lower", aspect="auto",
+              extent=[-r_max, r_max, 0, n_pings], interpolation="antialiased")
+r_axis = np.linspace(-r_max, r_max, image.shape[1], endpoint=False) + r_max / image.shape[1]
+in_zoom = (r_axis >= RIPPLES[0]) & (r_axis <= RIPPLES[1])
+zoom = uniform_filter1d(image[RIPPLES[2]:RIPPLES[3], in_zoom], 5, axis=1)   # 35 cm along range
+ax_zoom.imshow(zoom, cmap="copper", vmin=np.percentile(zoom, 1), vmax=np.percentile(zoom, 99.5), origin="lower",
+               aspect="auto", extent=[RIPPLES[0], RIPPLES[1], RIPPLES[2], RIPPLES[3]], interpolation="nearest")
+label_box(ax_all, -altitude, altitude, 4, n_pings - 22, "water column", where="above")
+label_box(ax_all, altitude - 1.5, altitude + 6, 40, 230, "first seabed\necho", colour="yellow")
+label_box(ax_all, RIPPLES[0], RIPPLES[1], RIPPLES[2], RIPPLES[3], "sand ripples", colour="w")
+label_box(ax_all, 105, 148, 150, n_pings - 4, "fading into\nthe noise", colour="magenta", where="below")
+ax_all.set_xlim(-150, 150)
+ax_all.set_xlabel("slant range (m), port left, starboard right")
+ax_all.set_ylabel("ping")
+ax_all.set_title(f"The line as recorded, {f_khz:.0f} kHz, raw level in dB", loc="left")
+for spine in ax_zoom.spines.values():
+    spine.set_edgecolor("w")
+    spine.set_linewidth(2)
+ax_zoom.set_xlabel("starboard slant range (m)")
+ax_zoom.set_ylabel("ping")
+ax_zoom.set_title("Zoom: sand ripples (own stretch,\naveraged over 35 cm of range)", loc="left")
+fig.savefig(out / "how_sidescan_sees_line.png", dpi=150)
 
 # %%
 # The speed of sound
@@ -131,19 +186,44 @@ for r in (20.0, 50.0, 100.0):
           f"{r:.0f} x {np.radians(BEAM_WIDTH_DEG):.5f} = {r * np.radians(BEAM_WIDTH_DEG):.2f} m")
 
 # %%
+# The figure shows the seabed from above: seven pings, each lighting a
+# strip that widens with range (along track stretched, so the strips
+# can be seen). Close to the towfish the strip is really about as wide
+# as the array itself (the near field), which this sketch leaves out.
+
+fig, ax_top = plt.subplots(figsize=(11, 3.6), constrained_layout=True)
+across = np.linspace(0, 100, 50)
+for k in range(-3, 4):
+    half = across * np.radians(BEAM_WIDTH_DEG) / 2
+    for sign in (-1, 1):
+        ax_top.fill_between(sign * across, k * ping_spacing - half, k * ping_spacing + half,
+                            color="C1" if k == 0 else "0.6", alpha=0.8 if k == 0 else 0.35, lw=0)
+ax_top.plot(0, 0, marker=">", color="k", ms=12)
+ax_top.annotate("", (0, 4 * ping_spacing), (0, 3.2 * ping_spacing), arrowprops=dict(arrowstyle="->", color="k"))
+ax_top.text(1.5, 3.4 * ping_spacing, "towfish heading", fontsize=9, va="center")
+for r in (50.0, 100.0):
+    w = r * np.radians(BEAM_WIDTH_DEG)
+    ax_top.annotate("", (r, -w / 2), (r, w / 2), arrowprops=dict(arrowstyle="<->", color="C3", lw=1.2))
+    ax_top.text(r + 1.5, -0.25, f"{w:.2f} m\nat {r:.0f} m", color="C3", fontsize=9, va="top")
+ax_top.annotate("", (-60, 0), (-60, ping_spacing), arrowprops=dict(arrowstyle="<->", color="k", lw=1.2))
+ax_top.text(-61.5, ping_spacing / 2, f"next ping\n{ping_spacing:.2f} m on", fontsize=9, ha="right", va="center")
+ax_top.set_xlabel("across track (m), port left")
+ax_top.set_ylabel("along track (m)")
+ax_top.set_title(f"From above: pings {ping_spacing:.2f} m apart, {BEAM_WIDTH_DEG} deg beams (one ping in orange)",
+                 loc="left")
+ax_top.set_xlim(-112, 118)
+ax_top.set_ylim(-3, 3.6)
+fig.savefig(out / "how_sidescan_sees_strips.png", dpi=150)
+
+# %%
 # The geometry
 # ------------
-# Left: a cross-section across the track, drawn to scale at this line's
+# A cross-section across the track, drawn to scale at this line's
 # altitude. The two fans start some angle off vertical, so the seabed
 # straight below is never lit. The dashed circle is every point at one
 # slant range: a rock top on that circle echoes at the same time as the
-# flat seabed where the circle meets it. Right: the seabed from above.
-# Each ping lights a thin strip that widens with range; the next pings
-# light the strips beside it (along track stretched, so the strips can
-# be seen). Close to the towfish the strip is really about as wide as
-# the array itself (the near field), which this sketch leaves out.
+# flat seabed where the circle meets it.
 
-altitude = float(np.nanmedian(ds["altitude_m"].values))
 INNER_DEG, OUTER_DEG = 15.0, 84.0   # illustrative fan edges, measured from vertical
 
 
@@ -192,19 +272,9 @@ def draw_cross_section(ax, altitude, inner_deg=INNER_DEG, slant_example=40.0, ha
     ax.set_ylabel("height above seabed (m)")
 
 
-fig, (ax_side, ax_top) = plt.subplots(1, 2, figsize=(13, 4.2), width_ratios=[1.6, 1], constrained_layout=True)
+fig, ax_side = plt.subplots(figsize=(11, 3.3), constrained_layout=True)
 draw_cross_section(ax_side, altitude, half_width=60.0)
-ax_side.set_title("Across the track: two fans, the nadir gap, one slant range")
-across = np.linspace(0, 100, 50)
-for k in range(-3, 4):
-    half = across * np.radians(BEAM_WIDTH_DEG) / 2
-    for sign in (-1, 1):
-        ax_top.fill_between(sign * across, k * ping_spacing - half, k * ping_spacing + half,
-                            color="C1" if k == 0 else "0.6", alpha=0.8 if k == 0 else 0.35, lw=0)
-ax_top.set_xlabel("across track (m), port left")
-ax_top.set_ylabel("along track (m)")
-ax_top.set_title(f"From above: pings {ping_spacing:.2f} m apart, {BEAM_WIDTH_DEG} deg beams")
-ax_top.set_ylim(-3, 3)
+ax_side.set_title("Across the track: two fans, the nadir gap, one slant range", loc="left")
 fig.savefig(out / "how_sidescan_sees_geometry.png", dpi=150)
 
 # %%
@@ -244,19 +314,31 @@ def running_mean(values, n):
 
 one_m = int(round(1.0 / (c / (2 * fs))))
 smooth = running_mean(level, one_m)
-fig, ax = plt.subplots(figsize=(11, 4.2), constrained_layout=True)
-ax.plot(time_ms, level, lw=0.3, color="0.6", label="samples")
-ax.plot(time_ms, smooth, lw=1.5, color="C3", label="1 m running mean (dB)")
-ax.axvspan(0, 1000 * fb / fs, color="C0", alpha=0.12, label="water column")
-ax.axvline(1000 * fb / fs, color="C0", lw=1.5, label="first seabed echo")
+fig, (ax, ax_z) = plt.subplots(1, 2, figsize=(13, 4.4), width_ratios=[2.4, 1], constrained_layout=True)
+for a in (ax, ax_z):
+    a.plot(time_ms, level, lw=0.3, color="0.6", label="samples")
+    a.plot(time_ms, smooth, lw=1.5, color="C3", label="1 m running mean (dB)")
+    a.axvspan(0, 1000 * fb / fs, color="C0", alpha=0.12, label="water column")
+    a.axvline(1000 * fb / fs, color="C0", lw=1.5, label="first seabed echo")
+    a.set_xlabel("time since transmit (ms)")
 ax.axvspan(2000 * usable.usable_range_m / c, time_ms[-1], color="0.5", alpha=0.15, label="fading into noise")
-ax.set_xlabel("time since transmit (ms)")
 ax.set_ylabel("recorded level (dB re 1 count)")
 ax.set_xlim(0, time_ms[-1])
 ax.legend(loc="upper right", fontsize=9)
 top = ax.secondary_xaxis("top", functions=(lambda t: c * t / 2000, lambda r: 2000 * r / c))
 top.set_xlabel(f"slant range R = c t / 2 (m), c = {c:.0f} m/s")
-ax.set_title(f"Ping {PING}, starboard, {high}", loc="left")
+ax.set_title(f"Ping {PING}, starboard, {f_khz:.0f} kHz", loc="left")
+# Zoom on the first seabed echo, outlined in the full view.
+z0, z1 = 1000 * fb / fs - 4.0, 1000 * fb / fs + 4.0
+ax.add_patch(Rectangle((z0, -25), z1 - z0, 80, fill=False, ec="k", lw=1.2))
+ax.set_ylim(-35, 62)
+ax.text(z0, 56, "zoom", fontsize=9)
+ax_z.set_xlim(z0, z1)
+ax_z.set_ylim(-25, 55)
+ax_z.text(1000 * fb / fs + 0.2, -20, f"{1000 * fb / fs:.2f} ms\n= {c * fb / fs / 2:.2f} m", color="C0", fontsize=9)
+top_z = ax_z.secondary_xaxis("top", functions=(lambda t: c * t / 2000, lambda r: 2000 * r / c))
+top_z.set_xlabel("slant range (m)")
+ax_z.set_title("Zoom: the first seabed echo", loc="left")
 fig.savefig(out / "how_sidescan_sees_ping.png", dpi=150)
 
 # %%
@@ -276,6 +358,37 @@ print(f"at that angle the first echo is H / cos(theta) = {altitude:.2f} / {np.co
       f"farther than H ({(altitude / np.cos(np.radians(theta)) - altitude) / (c / (2 * fs)):.0f} samples)")
 
 # %%
+# The figure follows every ping. Left: the altitude from the bottom
+# track and the slant range of the first echo on each side, nearly on
+# top of each other. Right: the angle ``arccos(H / R)`` that the two
+# give, the quantity whose median and spread are printed above.
+
+alt_ping = ds["altitude_m"].values
+first_range = np.full(first_return.shape, np.nan)
+ok = np.isfinite(first_return)
+pp, cc = np.nonzero(ok)
+first_range[ok] = ds["slant_range_m"].values[pp, cc, first_return[ok].astype(int)]
+angle = np.degrees(np.arccos(np.clip(alt_ping[:, None] / first_range, -1, 1)))
+angle[~(first_range >= alt_ping[:, None])] = np.nan
+fig, (ax_r, ax_t) = plt.subplots(1, 2, figsize=(13, 3.8), constrained_layout=True)
+ax_r.plot(alt_ping, color="k", lw=2, label="altitude H (bottom track)")
+for side, (name, colour) in enumerate((("port", "C0"), ("starboard", "C3"))):
+    ax_r.plot(first_range[:, side], color=colour, lw=0.9, label=f"first echo R, {name} (analyze_nadir)")
+    ax_t.plot(angle[:, side], ".", color=colour, ms=4, label=name)
+ax_r.set_xlabel("ping")
+ax_r.set_ylabel("range (m)")
+ax_r.set_title("Two picks of the same echo", loc="left")
+ax_r.legend(fontsize=9)
+ax_t.axhline(theta, color="k", lw=1.2, ls="--", label=f"median {theta:.1f} deg")
+ax_t.set_xlabel("ping")
+ax_t.set_ylabel("arccos(H / R) (deg from vertical)")
+ax_t.set_title("First-echo angle, ping by ping", loc="left")
+ax_t.legend(fontsize=9)
+for a in (ax_r, ax_t):
+    a.grid(alpha=0.3)
+fig.savefig(out / "how_sidescan_sees_angle.png", dpi=150)
+
+# %%
 # Geometry, one ping and the waterfall together
 # ---------------------------------------------
 # Top: the cross-section at this line's altitude, with the inner fan
@@ -285,13 +398,6 @@ print(f"at that angle the first echo is H / cos(theta) = {altitude:.2f} / {np.co
 # column, as wide on each side as the altitude; the image fades at long
 # range.
 
-FACTOR = 8   # average 8 samples (7 cm) for display
-n_keep = (n_samples // FACTOR) * FACTOR
-coarse = 20 * np.log10(np.abs(ds["backscatter_intensity"].values[:, :, :n_keep])
-                       .reshape(n_pings, 2, -1, FACTOR).mean(axis=-1) + 1e-3)
-image = np.concatenate([coarse[:, 0, ::-1], coarse[:, 1]], axis=1)
-r_max = n_keep * c / (2 * fs)
-lo, hi = np.nanpercentile(image[np.isfinite(image) & (image > 0)], [2, 99.5])
 signed_slant = np.concatenate([-slant[::-1], slant])
 ping_levels = mask_floor_db(ds["backscatter_db"].values[PING])
 ping_smooth = np.concatenate([running_mean(ping_levels[0], one_m)[::-1], running_mean(ping_levels[1], one_m)])
@@ -312,7 +418,7 @@ ax_wf.imshow(image, cmap="copper", vmin=lo, vmax=hi, origin="lower", aspect="aut
 ax_wf.axhline(PING, color="w", lw=0.8, ls=":")
 ax_wf.text(-145, PING + 3, f"ping {PING}", color="w", fontsize=9)
 ax_wf.set_ylabel("ping")
-ax_wf.set_title(f"Waterfall: {n_pings} pings stacked, raw level in dB ({high})", loc="left")
+ax_wf.set_title(f"Waterfall: {n_pings} pings stacked, raw level in dB ({f_khz:.0f} kHz)", loc="left")
 for ax in (ax_ping, ax_wf):
     ax.set_xlim(-150, 150)
     ax.set_xlabel("slant range (m), port left, starboard right")

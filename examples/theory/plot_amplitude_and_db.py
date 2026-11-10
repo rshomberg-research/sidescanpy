@@ -53,6 +53,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Rectangle
 
 from sidescanpy import analysis, datasets
 from sidescanpy.core.units import FLOOR_DB, MIN_LINEAR, linear_to_db
@@ -61,6 +62,7 @@ from sidescanpy.export.windows.levels import with_db_var
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
 from sidescanpy.processing import altitude_from_bottom_track, compute_geometric_ranges
+from sidescanpy.processing.radiometric import center_frequency_hz
 
 # sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_amplitude_and_db.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -71,8 +73,10 @@ configure_logging("ERROR")
 # %%
 # The line
 # --------
-# The high frequency of a line over Wight-Barfleur Reef, as recorded.
-# The first ping is incomplete and is dropped. The JSF format stores
+# The high frequency of a line over Wight-Barfleur Reef, as recorded:
+# a chirp from 521 to 574 kHz with its center at 548 kHz (sidescanpy
+# names it by the start of the sweep, ``hz_521000``); titles below use
+# the center frequency. The first ping is incomplete and is dropped. The JSF format stores
 # each ping as 16-bit integers with one scale factor ``2^-N`` per ping
 # and side (block floating point); the reader applies the scale, so the
 # values below are in the recorder's units, not counts of one fixed size.
@@ -84,15 +88,30 @@ ds = ds.isel(ping=np.isfinite(ds["backscatter_intensity"].values).all(axis=(1, 2
 ds = with_db_var(compute_geometric_ranges(altitude_from_bottom_track(ds)))
 amp = ds["backscatter_intensity"].values          # (ping, side, sample), as recorded
 first_return = analysis.analyze_nadir(ds).first_bottom_return_sample
-print(f"{high}: {ds.sizes['ping']} pings, {ds.sizes['sample']} samples per side")
+f_khz = center_frequency_hz(ds) / 1e3
+print(f"{high}: chirp {ds.attrs['freq_hz_start'] / 1e3:.0f} to {ds.attrs['freq_hz_end'] / 1e3:.0f} kHz, center "
+      f"{f_khz:.1f} kHz; {ds.sizes['ping']} pings, {ds.sizes['sample']} samples per side")
+
+
+NEAR_COLOUR, FAR_COLOUR = "#ff6f61", "#4fc3f7"   # bright enough to read on a grey image
+
+
+def label_box(ax, x0, x1, y0, y1, text, colour="cyan", where="above", fontsize=9, bg="black"):
+    """Outline a feature with a rectangle and name it."""
+    ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.6))
+    y = y1 if where == "above" else y0
+    ax.text(x0, y, text, color=colour, fontsize=fontsize, fontweight="bold",
+            va="bottom" if where == "above" else "top", ha="left",
+            bbox=dict(boxstyle="square,pad=0.15", fc=bg, ec="none", alpha=0.7))
 
 # %%
 # Near seabed and far range in one ping
 # -------------------------------------
 # Ping 150, starboard. The median sample between 20 and 30 m of slant
 # range (just past the first seabed echo) against the median between
-# 150 and 160 m (far range, close to the noise). The last figure on
-# this page shows the ping and the two windows.
+# 150 and 160 m (far range, close to the noise). The figure shows the
+# two windows on the starboard waterfall (boxed around ping 150); the
+# last figure on this page shows the ping itself.
 
 PING, SIDE = 150, 1
 slant = ds["slant_range_m"].values[PING, SIDE]
@@ -114,6 +133,23 @@ print(f"ratio {near:.2f} / {far:.3f} = {ratio:.1f} in amplitude = 20 log10({rati
 print(f"for comparison, power (amplitude squared) ratio {ratio ** 2:.0f} = 10 log10({ratio ** 2:.0f}) = "
       f"{10 * np.log10(ratio ** 2):.1f} dB")
 
+starboard_db = ds["backscatter_db"].values[:, SIDE]
+fig, ax = plt.subplots(figsize=(12, 4.6), constrained_layout=True)
+ax.imshow(starboard_db, cmap="gray", vmin=-5, vmax=50, origin="lower", aspect="auto",
+          extent=[slant[0], slant[-1], 0, ds.sizes["ping"]])
+fb_m = slant[int(np.nanmedian(first_return[:, SIDE]))]
+label_box(ax, 0.5, fb_m - 0.5, 5, ds.sizes["ping"] - 30, "water column", colour="cyan")
+label_box(ax, NEAR[0], NEAR[1], PING - 4, PING + 4, f"near window\n{NEAR[0]:.0f}-{NEAR[1]:.0f} m, ping {PING}",
+          colour=NEAR_COLOUR, where="below")
+label_box(ax, FAR[0], FAR[1], PING - 4, PING + 4, f"far window\n{FAR[0]:.0f}-{FAR[1]:.0f} m, ping {PING}",
+          colour=FAR_COLOUR, where="below")
+label_box(ax, 110, 198, 200, ds.sizes["ping"] - 6, "far range: echo close to the noise", colour="magenta",
+          where="below")
+ax.set_xlabel("starboard slant range (m)")
+ax.set_ylabel("ping")
+ax.set_title(f"Starboard, {f_khz:.0f} kHz, level in dB re 1 (grey from -5 to 50 dB)", loc="left")
+fig.savefig(out / "amplitude_and_db_windows.png", dpi=150)
+
 # %%
 # The whole line: linear and dB histograms
 # ----------------------------------------
@@ -133,11 +169,17 @@ print(f"in dB, 99.8 % of the non-zero seabed samples lie between {lo_db:.1f} and
 
 fig, (ax_lin, ax_db) = plt.subplots(1, 2, figsize=(12, 3.8), constrained_layout=True)
 ax_lin.hist(values, bins=100, color="0.4")
+ax_lin.axvline(0.05 * values.max(), color="C3", lw=1.2)
+ax_lin.text(0.05 * values.max() * 1.15, 0.9, f"5 % of the largest:\n{np.mean(values < 0.05 * values.max()):.1%} "
+            "of samples below", color="C3", fontsize=9, va="top", transform=ax_lin.get_xaxis_transform())
 ax_lin.set_xlabel("recorded amplitude")
 ax_lin.set_ylabel("samples")
 ax_lin.set_yscale("log")
 ax_lin.set_title("Linear amplitude", loc="left")
 ax_db.hist(levels[levels > FLOOR_DB], bins=100, color="0.4")
+ax_db.axvspan(lo_db, hi_db, color="C0", alpha=0.12)
+ax_db.text(0.02, 0.97, f"shaded: 99.8 % of samples,\n{lo_db:.1f} to {hi_db:.1f} dB", color="C0", fontsize=9,
+           va="top", transform=ax_db.transAxes, bbox=dict(fc="white", ec="none", alpha=0.85))
 ax_db.set_xlabel("level (dB re 1 recorded unit)")
 ax_db.set_yscale("log")
 ax_db.set_title("dB (zeros left out)", loc="left")
@@ -171,6 +213,32 @@ print(f"the ping maximum occurs once in {np.mean(repeats == 1):.0%} of pings and
       f"at most {repeats.max()} times")
 
 # %%
+# Left: the stored integers around the brightest sample of the line. A
+# saturated echo would run flat along the 16-bit limit; this one peaks
+# once and falls away. Right: the largest stored integer of every ping
+# and side, all below the limit.
+
+bp, bs, bi = where
+bv = amp[bp, bs]
+b_step = np.min(np.diff(np.unique(bv)))
+around = slice(bi - 120, bi + 121)
+fig, (ax_pk, ax_top) = plt.subplots(1, 2, figsize=(12, 3.8), width_ratios=[1.4, 1], constrained_layout=True)
+ax_pk.plot(ds["slant_range_m"].values[bp, bs, around], bv[around] / b_step, ".-", color="0.3", ms=3, lw=0.7)
+ax_pk.axhline(32767, color="C3", lw=1.2, ls="--")
+ax_pk.text(ds["slant_range_m"].values[bp, bs, bi - 118], 32767 * 0.97, "16-bit limit, 32767", color="C3",
+           fontsize=9, va="top")
+ax_pk.set_ylim(0, 36000)
+ax_pk.set_xlabel(f"slant range (m), ping {bp}, {['port', 'starboard'][bs]}")
+ax_pk.set_ylabel("stored integer")
+ax_pk.set_title("The brightest echo: one peak, no flat top", loc="left")
+ax_top.hist(top_counts, bins=40, color="0.4")
+ax_top.axvline(32767, color="C3", lw=1.2, ls="--")
+ax_top.set_xlabel("largest stored integer in a ping and side")
+ax_top.set_ylabel("pings and sides")
+ax_top.set_title("Every ping stays under the limit", loc="left")
+fig.savefig(out / "amplitude_and_db_clipping.png", dpi=150)
+
+# %%
 # Zeros and the dB floor
 # ----------------------
 # Some samples are exactly zero: the first samples of every ping, while
@@ -192,6 +260,30 @@ print(f"{zeros} zero samples ({zeros / amp.size:.2%} of the line); smallest non-
       f"= {20 * np.log10(smallest):.1f} dB re 1")
 
 # %%
+# The figure shows the first 400 samples of ping 150, starboard, after
+# :func:`~sidescanpy.core.units.linear_to_db`: the leading zeros sit on
+# the -120 dB floor, far below the smallest real sample of the line.
+
+head = linear_to_db(row[:400])
+n_lead = int(np.argmax(row > 0))
+fig, ax = plt.subplots(figsize=(11, 3.6), constrained_layout=True)
+ax.plot(np.arange(400), head, ".", color="0.3", ms=3)
+ax.axhline(20 * np.log10(smallest), color="C0", lw=1, ls="--")
+ax.text(398, 20 * np.log10(smallest) - 3, f"smallest non-zero sample of the line, {20 * np.log10(smallest):.1f} dB",
+        color="C0", fontsize=9, ha="right", va="top")
+label_box(ax, -3, n_lead - 0.5, FLOOR_DB - 5, FLOOR_DB + 5, f"{n_lead} zeros, clipped to {FLOOR_DB:.0f} dB",
+          colour="C3", bg="white")
+ax.annotate("", (n_lead + 25, FLOOR_DB), (n_lead + 25, 20 * np.log10(smallest)),
+            arrowprops=dict(arrowstyle="<->", color="k"))
+ax.text(n_lead + 30, (FLOOR_DB + 20 * np.log10(smallest)) / 2,
+        f"{20 * np.log10(smallest) - FLOOR_DB:.0f} dB", fontsize=9, va="center")
+ax.set_ylim(FLOOR_DB - 10, 30)
+ax.set_xlabel("sample number")
+ax.set_ylabel("linear_to_db (dB re 1)")
+ax.set_title(f"Start of ping {PING}, starboard: zeros on the floor", loc="left")
+fig.savefig(out / "amplitude_and_db_zeros.png", dpi=150)
+
+# %%
 # Where 0 dB sits
 # ---------------
 # The same two medians against three references: one recorded unit,
@@ -200,9 +292,22 @@ print(f"{zeros} zero samples ({zeros / amp.size:.2%} of the line); smallest non-
 
 references = {"1 recorded unit": 1.0, "brightest sample": brightest,
               "99th percentile": float(np.percentile(values, 99))}
-for name, a0 in references.items():
+fig, ax = plt.subplots(figsize=(9, 4), constrained_layout=True)
+for i, (name, a0) in enumerate(references.items()):
     n_db, f_db = 20 * np.log10(near / a0), 20 * np.log10(far / a0)
     print(f"  re {name:16s} ({a0:7.1f}): near {n_db:6.1f} dB, far {f_db:6.1f} dB, difference {n_db - f_db:.1f} dB")
+    ax.plot(i, n_db, "o", color="C3", ms=9, label="near seabed median" if i == 0 else None)
+    ax.plot(i, f_db, "o", color="C0", ms=9, label="far range median" if i == 0 else None)
+    ax.annotate("", (i, n_db), (i, f_db), arrowprops=dict(arrowstyle="<->", color="k"))
+    ax.text(i + 0.06, (n_db + f_db) / 2, f"{n_db - f_db:.1f} dB", fontsize=10, va="center")
+ax.axhline(0, color="0.5", lw=0.8)
+ax.set_xticks(range(len(references)), labels=[f"re {name}" for name in references])
+ax.set_xlim(-0.5, len(references) - 0.3)
+ax.set_ylabel("level (dB)")
+ax.set_title("Three 0 dB references: the levels move, the difference does not", loc="left")
+ax.grid(alpha=0.3, axis="y")
+ax.legend(loc="lower left", fontsize=9)
+fig.savefig(out / "amplitude_and_db_reference.png", dpi=150)
 
 # %%
 # What an 8-bit stretch keeps
@@ -245,6 +350,9 @@ for ax, (name, img) in zip(axes, (("A: one stretch for the swath", img_a), ("B: 
     ax.imshow(img, cmap="gray", vmin=0, vmax=255, origin="lower", aspect="auto",
               extent=[slant[0], slant[-1], block.start, block.stop])
     ax.axhline(PING, color="C1", lw=0.6, ls=":")
+    key = name[0]
+    for (r0, r1), g, colour in ((NEAR, grey[key][0], NEAR_COLOUR), (FAR, grey[key][1], FAR_COLOUR)):
+        label_box(ax, r0, r1, PING - 5, PING + 5, f"grey {g:.0f}", colour=colour)
     ax.set_title(name, loc="left")
     ax.set_ylabel("ping")
 axes[1].axvline(100, color="C1", lw=1)
