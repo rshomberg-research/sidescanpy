@@ -13,7 +13,7 @@ functions measure a dataset's units, nadir, usable range and TVG state.
 Until 1.0, any 0.x release may change the `.ss.h5` file format, the
 API and the CLI. Keep your raw sonar files, pin the version you use,
 and expect to re-convert `.ss.h5` files after an upgrade. See
-[Project status](status.md).
+[Stability](status.md).
 :::
 
 [![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/plot_correct_a_line.rst)
@@ -82,6 +82,6 @@ Guide <guide>
 Data format <format/index>
 Source formats <sources/index>
 API reference <reference/index>
-Development <development>
-Project status <status>
+Stability <status>
+Contributing <development>
 ```

@@ -1,4 +1,11 @@
-# Development
+# Contributing
+
+How to set up sidescanpy for development, run its checks, and where things
+go. Bug reports and proposals are welcome as
+[GitHub issues](https://github.com/rshomberg-research/sidescanpy/issues);
+for a reader problem see [Reporting a problem](limitations.md#reporting-a-problem).
+To add a reader for a new sonar format, see
+[Adding a source format](sources/new_source.md).
 
 ## Setup
 
@@ -66,70 +73,19 @@ Imports go one way, `core ← io ← processing ← analysis ← grids ← targe
 - **Versions** follow SemVer. Until 1.0, a minor release may break the
   API or the `.ss.h5` format; `CHANGELOG.md` lists every break.
 
-## Publishing
+## Test data
 
-**Docs.** The site is at
-<https://rshomberg-research.github.io/sidescanpy/>. The `docs` workflow
-pushes each build of `main` into the `sidescanpy/` folder of the
-repository `rshomberg-research/rshomberg-research.github.io`, which
-GitHub Pages serves. (This setup dates from when the code repository
-was private; Pages on this repository at the same URL would replace it.)
-The workflow also keeps every build of `main` and of `v*` tags as the
-`sidescanpy-docs` artifact (90 days).
+The repository holds code only, no survey data.
 
-One-time setup, as an organization owner:
-
-```bash
-# 1. The public site repository: a redirect to the docs, served by Pages.
-gh repo create rshomberg-research/rshomberg-research.github.io --public \
-   --description "Public site of rshomberg-research (sidescanpy docs)"
-#    push an index.html that redirects to sidescanpy/ and an empty .nojekyll,
-#    then: Settings -> Pages -> Deploy from a branch -> main, / (root)
-
-# 2. A deploy key the docs workflow pushes with.
-ssh-keygen -t ed25519 -N "" -C "sidescanpy docs deploy" -f docs_deploy_key
-gh repo deploy-key add docs_deploy_key.pub --allow-write \
-   -R rshomberg-research/rshomberg-research.github.io --title "sidescanpy docs"
-gh secret set DOCS_DEPLOY_KEY -R rshomberg-research/sidescanpy < docs_deploy_key
-rm docs_deploy_key docs_deploy_key.pub
-
-# 3. Turn publishing on; the next push to main publishes.
-gh variable set PUBLISH_DOCS --body true -R rshomberg-research/sidescanpy
-```
-
-**Gallery.** The example pages are built by
-[sphinx-gallery](https://sphinx-gallery.github.io/), which runs every
-`examples/gallery/plot_*.py` script during the docs build, locally and
-in CI, and shows its code, printed output and figures. The scripts
-download real data; CI caches it between runs. The README shows two of
-the figures from `docs/assets/gallery/`; `make readme-images` refreshes
-them from the last `make docs`. The unit suite checks offline that every
-dataset name a script fetches is registered.
-
-**Test data.** The public fixtures are kept outside the repository and
-handed out as one zip. Rebuild it whenever a fixture or `SOURCES.md`
-changes:
-
-```bash
-cd /path/to/fixtures/..       # the directory holding the fixtures folder
-mkdir sidescanpy-public-fixtures
-cp fixtures/*.jsf fixtures/*.xtf /path/to/sidescanpy/tests/data/public/SOURCES.md \
-   sidescanpy-public-fixtures/
-zip -qrX sidescanpy-public-fixtures-$(date +%F).zip sidescanpy-public-fixtures
-rm -r sidescanpy-public-fixtures
-```
-
-Then run `test_public_fixtures.py` against the unzipped copy before
-sharing it. Only openly licensed data goes in the zip (see
-`SOURCES.md`). A published Zenodo record can't be withdrawn, so check
-the zip before archiving it there.
-
-## Releasing
-
-1. Update `CHANGELOG.md` with a dated section and the version in
-   `pyproject.toml`.
-2. Run `make test`, `make lint`, `make docs` and the integration tests
-   on real data; all pass.
-3. Build and check the wheel: `uv build`, then install it in a fresh
-   environment and run [Getting started](getting_started.md).
-4. Merge to `main`, tag `vX.Y.Z` and push the tag.
+- **Examples.** The [worked examples](examples/index.rst) download public
+  recordings with `sidescanpy.datasets.fetch()`; see
+  [Example data](example_data.md). The other scripts in `examples/` run
+  on synthetic data. The gallery scripts run during `make docs` (locally
+  and in CI), and the unit suite checks offline that every dataset name
+  a script fetches is registered.
+- **Public fixtures.** `tests/unit/io/test_public_fixtures.py` runs on
+  small cuts of openly licensed recordings (EdgeTech JSF, and XTF from
+  three writers), listed with source, licence and checksum in
+  [`tests/data/public/SOURCES.md`](https://github.com/rshomberg-research/sidescanpy/blob/main/tests/data/public/SOURCES.md).
+  They are kept outside the repository; point `SIDESCANPY_PUBLIC_DATA`
+  at their folder to run those tests, which skip without it.

@@ -67,7 +67,7 @@ what to do in the meantime. Format-specific quirks are on the
 ## Files and performance
 
 - **The `.ss.h5` format is not frozen.** See
-  [Project status](status.md). Keep the raw files.
+  [Stability](status.md). Keep the raw files.
 - **Re-correcting a georeferenced file is slow.** Adding a step to a
   file that already has per-sample latitude and longitude takes minutes
   per few thousand pings, against seconds for every step in one pass on
