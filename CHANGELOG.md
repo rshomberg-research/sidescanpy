@@ -22,6 +22,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   (detector, classifier, review, evaluation) trained on a public
   labelled image set.
 
+### Fixed
+
+- `mask_nadir_gap` (and so every geometric or georeferenced chip and swath
+  window) no longer blanks most of a side on pings where a bright
+  far-range return set the first-return threshold: such boundaries are
+  rejected against the channel's usual boundary before smoothing
+  (`max_boundary_factor`, new `processing.reject_late_boundaries`). On one
+  public Klein line this blanked the near port swath on 86 of 297 pings,
+  which showed as black bands in dual-swath chips.
+
 ## [0.9.0] — 2026-11-09
 
 ### Added

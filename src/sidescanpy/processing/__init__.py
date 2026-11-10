@@ -88,6 +88,7 @@ from sidescanpy.processing.bottom import (
     detect_nadir_noise_extent,
     mask_before_sample,
     mask_nadir_gap,
+    reject_late_boundaries,
     smooth_boundary_across_pings,
     uniform_exclusion_boundary,
 )
@@ -226,6 +227,7 @@ __all__ = [
     "altitude_sample_index",
     "uniform_exclusion_boundary",
     "mask_nadir_gap",
+    "reject_late_boundaries",
     # outliers
     "reject_range_outliers",
     "mask_bright_ping_rows",
