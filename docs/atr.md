@@ -17,14 +17,15 @@ detection and decides what it is, or rejects it.
 |---|---|---|
 | 1. Convert and correct | raw JSF, SDF or XTF to the data model, then TVG, ground range and positions, one call per correction | [Getting started](getting_started.md), [Correct a line](examples/plot_correct_a_line.rst) |
 | 2. Cut images to annotate | dual-swath tiles with square pixels in metres, plus an index of where each tile sits in the data | [Swath tiles for annotation](examples/plot_swath_tiles.rst) |
-| 3. Annotate | draw boxes in FiftyOne, CVAT or Label Studio and export COCO; read the boxes back as targets with ping, side and position | [Swath tiles for annotation](examples/plot_swath_tiles.rst), [Review and correct labels](examples/atr/atr_5_review_fiftyone.rst) |
-| 4. Train a detector | one class, "object", on whole images | [Labelled images](examples/atr/atr_1_prepare.rst), [Train a detector](examples/atr/atr_2_train_detector.rst) |
-| 5. Train a classifier | chips around each labelled object, plus clutter and background images | [Train a classifier](examples/atr/atr_3_train_classifier.rst), [Training dataset with backgrounds](examples/plot_training_dataset.rst) |
-| 6. Find candidates | run both stages on new tiles and turn the detections into targets with positions | [Run the models on a survey](examples/atr/atr_6_apply_to_survey.rst) |
-| 7. Review | confirm, reject and correct the candidates; the corrections are the next round's training data | [Review and correct labels](examples/atr/atr_5_review_fiftyone.rst) |
-| 8. Test on more data | score on lines or surveys that were never used for training, in image space or in metres | [Test both stages](examples/atr/atr_4_evaluate.rst), [Run the models on a survey](examples/atr/atr_6_apply_to_survey.rst) |
+| 3. Annotate | draw boxes in FiftyOne, CVAT or Label Studio and export COCO; read the boxes back as targets with ping, side and position | [Swath tiles for annotation](examples/plot_swath_tiles.rst), [Review and correct labels](atr/review.md) |
+| 4. Train a detector | one class, "object", on whole images | [Labelled images](atr/prepare.md), [Train a detector](atr/detector.md) |
+| 5. Train a classifier | chips around each labelled object, plus clutter and background images | [Train a classifier](atr/classifier.md), [Training dataset with backgrounds](examples/plot_training_dataset.rst) |
+| 6. Find candidates | run both stages on new tiles and turn the detections into targets with positions | [Run the models on a survey](atr/survey.md) |
+| 7. Review | confirm, reject and correct the candidates; the corrections are the next round's training data | [Review and correct labels](atr/review.md) |
+| 8. Test on more data | score on lines or surveys that were never used for training, in image space or in metres | [Test both stages](atr/evaluate.md), [Run the models on a survey](atr/survey.md) |
 
-The detector and classifier examples train on a public labelled image
+The [step-by-step pages](atr/index.md) walk through steps 4 to 8 in
+turn. The detector and classifier examples train on a public labelled image
 set (Santos et al. 2024, mine-like objects seen by a Marine Sonic sonar),
 because no openly licensed raw sidescan recording with labelled targets
 was available. With your own data, steps 2 and 3 produce the same kind of
@@ -67,3 +68,9 @@ analyst, the chips come straight from the catalog.
   setting rarely transfers to another without new labels. Correcting the
   data first (TVG, ground range, the same pixel size) narrows the gap but
   does not close it.
+
+```{toctree}
+:hidden:
+
+Step by step <atr/index>
+```

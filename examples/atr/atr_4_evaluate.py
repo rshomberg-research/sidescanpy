@@ -1,26 +1,12 @@
 """
-4. Test both stages on more data
-================================
+Step 4: test both stages on the held-out year.
 
-The year 2017 was kept out of training and validation. Here both stages
-run on it as they would on a new survey: the detector with a low
-confidence threshold (miss little), then the classifier on a chip around
-each detection, dropping those it calls ``clutter``.
+Compares the detector alone with detector plus classifier on 2017, matching boxes by
+overlap (IoU >= 0.1), and draws a figure of test images.
 
-A detection is a hit when it overlaps a labelled object by at least 10 %
-(intersection over union; the objects are a few pixels across, so a
-stricter overlap punishes small offsets more than real mistakes).
-The detector alone, at its usual threshold and at the low one, is
-shown for comparison: the classifier's job is to remove the false alarms
-the low threshold lets in while keeping the hits.
+Usage: python examples/atr/atr_4_evaluate.py ATR_DIR
 
-On sonar data with positions the same comparison is made in metres with
-:func:`~sidescanpy.targets.match_targets`
-(:ref:`sphx_glr_examples_atr_atr_6_apply_to_survey.py`).
-
-Not run when the docs are built. Usage::
-
-    python examples/gallery/atr/atr_4_evaluate.py ATR_DIR
+See "Target recognition" in the sidescanpy docs for what each step does and its results.
 """
 
 # 2026 rshomberg@uri.edu
@@ -140,19 +126,3 @@ for ax, path in zip(axes.ravel(), shown):
     ax.set_axis_off()
 (root / "figures").mkdir(exist_ok=True)
 fig.savefig(root / "figures" / "atr_test.png", dpi=150)
-
-# %%
-# Output of a run (30 labelled objects in the test year)::
-#
-#     detector alone, conf 0.25            4 hits,   5 false alarms,  26 misses: precision 0.44, recall 0.13
-#     detector alone, conf 0.05           20 hits,  57 false alarms,  10 misses: precision 0.26, recall 0.67
-#     detector (conf 0.05) + classifier   15 hits,  26 false alarms,  15 misses: precision 0.37, recall 0.50
-#     two-stage, MILCO only               15 hits,  13 false alarms,  13 misses
-#
-# .. image:: /assets/atr/two_stage_test.jpg
-#    :alt: Six test images with labelled objects in green and two-stage detections in red and cyan
-#
-# The low threshold finds two thirds of the objects but raises 57 false
-# alarms; the classifier removes more than half of them and loses five
-# hits. With 30 test objects these numbers move a lot from run to run;
-# the comparison between rows is the point, not the values.

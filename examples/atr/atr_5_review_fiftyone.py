@@ -1,22 +1,11 @@
 """
-5. Review detections and correct the labels
-===========================================
+Step 5: review the detections in FiftyOne and correct the labels in CVAT.
 
-A person checks what the two stages found before it counts: confirms
-objects, rejects false alarms, fixes classes and adds what was missed.
-The corrected labels become training data for the next round, which is
-how a small labelled set grows.
+Needs fiftyone, a CVAT account and a person; exports the corrected labels as COCO.
 
-`FiftyOne <https://docs.voxel51.com/>`_ shows images with their labels
-and predictions, filters them (e.g. low-confidence calls, or every
-``NOMBO``), and hands images to an annotation tool such as CVAT for
-corrections. COCO is the exchange format both ways, which sidescanpy
-reads with :func:`~sidescanpy.export.ml.read_coco_boxes`.
+Usage: python examples/atr/atr_5_review_fiftyone.py ATR_DIR
 
-Not run when the docs are built: it opens an app, needs a CVAT account
-and a person. ``pip install fiftyone``. Usage::
-
-    python examples/gallery/atr/atr_5_review_fiftyone.py ATR_DIR
+See "Target recognition" in the sidescanpy docs for what each step does and its results.
 """
 
 # 2026 rshomberg@uri.edu

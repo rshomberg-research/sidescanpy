@@ -1,33 +1,14 @@
 """
-1. Labelled sonar images for a detector
-=======================================
+Step 1: download the labelled sonar images and split them by year.
 
-The detector and classifier in these examples are trained on a public,
-labelled sidescan image set: Santos et al. (2024), *Side-scan sonar
-imaging for mine detection*, 1170 images from a Marine Sonic sonar on a
-Gavia AUV, with YOLO boxes for mine-like contacts (``MILCO``, 437) and
-non-mine-like bottom objects (``NOMBO``, 231). CC BY 4.0,
-doi:`10.6084/m9.figshare.24574879 <https://doi.org/10.6084/m9.figshare.24574879>`_;
-article doi:`10.1016/j.dib.2024.110132 <https://doi.org/10.1016/j.dib.2024.110132>`_.
+Downloads Santos et al. (2024), 'Side-scan sonar imaging for mine detection' (CC BY 4.0,
+doi:10.6084/m9.figshare.24574879), checks each yearly archive, and writes a one-class
+detection dataset in the Ultralytics layout: train 2010/2015/2018, validation 2021,
+test 2017.
 
-The images are already waterfalls; there is no raw sonar file behind
-them. With your own data, the same images and labels come from
-:ref:`sphx_glr_examples_plot_swath_tiles.py` and an annotation tool.
+Usage: python examples/atr/atr_1_prepare.py ATR_DIR
 
-This script downloads the five yearly archives (218 MB), checks them and
-splits by year, because neighbouring images overlap and a random split
-would put near-copies in both sets:
-
-- train: 2010, 2015, 2018
-- validation: 2021
-- test ("more data" the models never saw): 2017
-
-It writes a one-class detection dataset (every object is ``object``; the
-classifier decides what it is) in the folder layout Ultralytics reads.
-
-Not run when the docs are built. Usage::
-
-    python examples/gallery/atr/atr_1_prepare.py ATR_DIR
+See "Target recognition" in the sidescanpy docs for what each step does and its results.
 """
 
 # 2026 rshomberg@uri.edu
@@ -104,10 +85,3 @@ for split, years in SPLITS.items():
 )
 for split, (n_img, n_box) in counts.items():
     print(f"{split:5s} {n_img:4d} images, {n_box:4d} boxes")
-
-# %%
-# Output of a run::
-#
-#     train 1029 images,  589 boxes
-#     val     48 images,   49 boxes
-#     test    93 images,   30 boxes
