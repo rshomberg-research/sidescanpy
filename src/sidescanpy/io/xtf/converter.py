@@ -103,6 +103,20 @@ pings: Triton Isis records the layback without applying it) say so in
 ``position_source_reason`` but stay ``unknown``. The ``layback``
 correction step moves only ``ship`` positions.
 
+One exception is detected and corrected. Some writers (seen in GeoDAS
+files) offset Sensor from Ship by their tow-point offset and layback
+rotated by the recorded heading. With no heading recorded
+(``SensorHeading`` 0 throughout) that offset points the same way, south
+at heading 0, on every line whatever the course, so Sensor is not the
+towfish. When ``SensorHeading`` is 0 on every ping, Sensor sits a fixed
+east/north offset from Ship, and the line runs well away from north, the
+Ship positions become ``latitude`` / ``longitude`` with
+``position_source`` ``ship``, and the offset rotated back by heading 0
+(less any recorded ``Layback``) is recorded as ``tow_point_aft_m`` /
+``tow_point_starboard_m`` for the ``layback`` step. That step rotates by
+``heading_deg``, so set a heading first (the course over ground,
+:func:`~sidescanpy.processing.navigation.course_over_ground`).
+
 Not converted: ``pulse_length_us`` is not in the XTF ping or channel
 headers and is 0.0 (as for SDF); gain codes are not interpreted.
 
@@ -137,6 +151,7 @@ from pyproj import CRS, Transformer
 
 from sidescanpy.core.schema import (
     OPTIONAL_PER_PING_VARS,
+    POSITION_SHIP,
     POSITION_SOURCE_ATTR,
     POSITION_SOURCE_REASON_ATTR,
     POSITION_TOWFISH,
@@ -169,6 +184,12 @@ SHIP_SENSOR_FRACTION = 0.95
 #: with no Ship coordinates and a recorded layback, look like the ship's
 #: position. Reported in position_source_reason only, never assumed.
 SHIP_POSITION_PROGRAMS = ("isis",)
+#: Largest standard deviation (m) of a Sensor - Ship offset taken as fixed.
+ZERO_HEADING_OFFSET_SD_M = 0.1
+#: Shortest Ship track (m) over which a fixed offset is judged.
+ZERO_HEADING_MIN_TRACK_M = 20.0
+#: A fixed offset is only suspect on courses further than this from north.
+ZERO_HEADING_MIN_COURSE_DEG = 20.0
 _METRES_PER_DEGREE = 111_320.0
 
 
@@ -236,9 +257,11 @@ def convert(
         len(files), sum(f.n_pings for f in files), survey_name,
     )
 
-    position_attrs = _position_source_attrs(files, projected)
+    offsets = [_zero_heading_offset(f, proj) for f, proj in zip(files, projected)]
+    position_attrs = _position_source_attrs(files, projected, offsets)
     headers = np.concatenate([
-        _geographic_headers(f, crs) if proj else f.ping_headers for f, proj in zip(files, projected)
+        _geographic_headers(_position_headers(f, off), f.path, crs) if proj else _position_headers(f, off)
+        for f, proj, off in zip(files, projected, offsets)
     ])
     times = ping_times(headers)
     order = _time_order(times)
@@ -310,9 +333,19 @@ def _check_nav_units(data: XtfPingData, crs: CRS | None) -> bool:
     )
 
 
-def _geographic_headers(data: XtfPingData, crs: CRS) -> np.ndarray:
-    """Copy of the ping headers with sensor easting/northing replaced by WGS84 lon/lat."""
+def _position_headers(data: XtfPingData, offset: tuple[float, float, float] | None) -> np.ndarray:
+    """The ping headers; with ``offset`` (see :func:`_zero_heading_offset`) a copy with Ship as Sensor."""
+    if offset is None:
+        return data.ping_headers
     h = data.ping_headers.copy()
+    h["SensorXcoordinate"] = h["ShipXcoordinate"]
+    h["SensorYcoordinate"] = h["ShipYcoordinate"]
+    return h
+
+
+def _geographic_headers(headers: np.ndarray, path, crs: CRS) -> np.ndarray:
+    """Copy of the ping headers with sensor easting/northing replaced by WGS84 lon/lat."""
+    h = headers.copy()
     east = h["SensorXcoordinate"].astype(np.float64)
     north = h["SensorYcoordinate"].astype(np.float64)
     no_fix = (east == 0) & (north == 0)
@@ -321,10 +354,10 @@ def _geographic_headers(data: XtfPingData, crs: CRS) -> np.ndarray:
     lon[no_fix] = np.nan
     lat[no_fix] = np.nan
     if no_fix.any():
-        logger.debug("%s: %d ping(s) at easting/northing (0, 0) set to NaN", data.path, int(no_fix.sum()))
+        logger.debug("%s: %d ping(s) at easting/northing (0, 0) set to NaN", path, int(no_fix.sum()))
     h["SensorXcoordinate"] = lon
     h["SensorYcoordinate"] = lat
-    logger.debug("%s: NavUnits 0 positions converted from %s to WGS84", data.path, crs.to_string())
+    logger.debug("%s: NavUnits 0 positions converted from %s to WGS84", path, crs.to_string())
     return h
 
 
@@ -341,7 +374,67 @@ def _ship_sensor_offset_m(data: XtfPingData, projected: bool) -> np.ndarray:
     return dist
 
 
-def _position_source_attrs(files: list[XtfPingData], projected: list[bool]) -> dict[str, str]:
+def _ship_sensor_offset_en(data: XtfPingData, projected: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-ping Sensor minus Ship (east m, north m) and Ship-has-a-position mask."""
+    h = data.ping_headers
+    sx, sy = h["SensorXcoordinate"].astype(np.float64), h["SensorYcoordinate"].astype(np.float64)
+    shx, shy = h["ShipXcoordinate"].astype(np.float64), h["ShipYcoordinate"].astype(np.float64)
+    if projected:
+        east, north = sx - shx, sy - shy
+    else:
+        east = _METRES_PER_DEGREE * (sx - shx) * np.cos(np.deg2rad(sy))
+        north = _METRES_PER_DEGREE * (sy - shy)
+    has_ship = ~((shx == 0) & (shy == 0)) & np.isfinite(shx) & np.isfinite(shy)
+    return east, north, has_ship
+
+
+def _ship_track(data: XtfPingData, projected: bool, has_ship: np.ndarray) -> tuple[float, float]:
+    """Course (degrees true) and length (m) from the first to the last Ship position."""
+    h = data.ping_headers
+    x, y = h["ShipXcoordinate"][has_ship].astype(np.float64), h["ShipYcoordinate"][has_ship].astype(np.float64)
+    de, dn = x[-1] - x[0], y[-1] - y[0]
+    if not projected:
+        de, dn = _METRES_PER_DEGREE * de * np.cos(np.deg2rad(y[0])), _METRES_PER_DEGREE * dn
+    return float(np.degrees(np.arctan2(de, dn)) % 360.0), float(np.hypot(de, dn))
+
+
+def _zero_heading_offset(data: XtfPingData, projected: bool) -> tuple[float, float, float] | None:
+    """``(east_m, north_m, layback_m)`` when Sensor is Ship shifted by an offset rotated by heading 0.
+
+    Some writers (seen in GeoDAS files) apply their tow-point offset and
+    layback rotated by the recorded heading; when no heading is recorded
+    (``SensorHeading`` 0 on every ping) the shift points the same way on
+    every line, so Sensor is not the towfish. Detected when, on at least
+    ``SHIP_SENSOR_FRACTION`` of the pings with a Ship position, Sensor is
+    more than ``SHIP_SENSOR_TOL_M`` from it, the east/north offset varies
+    by less than ``ZERO_HEADING_OFFSET_SD_M``, and the Ship track runs at
+    least ``ZERO_HEADING_MIN_TRACK_M`` on a course more than
+    ``ZERO_HEADING_MIN_COURSE_DEG`` from north. ``layback_m`` is the
+    median recorded ``Layback`` (0 when not recorded).
+    """
+    heading = data.ping_headers["SensorHeading"].astype(np.float64)
+    if heading.size == 0 or np.any(heading != 0):
+        return None
+    east, north, has_ship = _ship_sensor_offset_en(data, projected)
+    if has_ship.sum() < 2:
+        return None
+    east, north = east[has_ship], north[has_ship]
+    if (np.hypot(east, north) > SHIP_SENSOR_TOL_M).sum() < SHIP_SENSOR_FRACTION * east.size:
+        return None
+    if max(float(np.std(east)), float(np.std(north))) > ZERO_HEADING_OFFSET_SD_M:
+        return None
+    course, length = _ship_track(data, projected, has_ship)
+    if length < ZERO_HEADING_MIN_TRACK_M or min(course, 360.0 - course) <= ZERO_HEADING_MIN_COURSE_DEG:
+        return None
+    with np.errstate(invalid="ignore"):
+        layback = data.ping_headers["Layback"].astype(np.float64)
+        layback = layback[np.isfinite(layback) & (layback > 0)]
+    return float(np.median(east)), float(np.median(north)), float(np.median(layback)) if layback.size else 0.0
+
+
+def _position_source_attrs(
+    files: list[XtfPingData], projected: list[bool], offsets: list[tuple[float, float, float] | None]
+) -> dict[str, str | float]:
     """What ``SensorX/Ycoordinate`` are the position of, from Ship vs Sensor.
 
     Per file: Sensor away from Ship (more than ``SHIP_SENSOR_TOL_M``) on at
@@ -351,10 +444,29 @@ def _position_source_attrs(files: list[XtfPingData], projected: list[bool]) -> d
     Discover) put the laid-back towfish position in both fields. No Ship
     position, a ``SHIP_POSITION_PROGRAMS`` writer and ``Layback`` > 0 on
     at least ``SHIP_SENSOR_FRACTION`` of the pings is noted in the reason
-    as probably the ship, but stays unknown.
+    as probably the ship, but stays unknown. Files with an ``offset`` from
+    :func:`_zero_heading_offset` are converted with their Ship positions
+    (ship), and when every file has the same offset it is recorded as
+    ``tow_point_aft_m`` / ``tow_point_starboard_m`` (the offset rotated
+    back by heading 0, less the recorded layback) for the ``layback`` step.
     """
     sources, notes = [], []
-    for data, proj in zip(files, projected):
+    for data, proj, offset in zip(files, projected, offsets):
+        if offset is not None:
+            east, north, layback = offset
+            sources.append(POSITION_SHIP)
+            notes.append(
+                f"{Path(data.path).name}: Sensor is Ship shifted {east:.2f} m east, {north:.2f} m north on "
+                f"every ping, whatever the course: an offset rotated by heading 0 (no heading recorded), "
+                f"so Ship positions are used; tow point {-north - layback:.2f} m aft, {east:.2f} m starboard"
+                + (f" after the recorded layback {layback:.2f} m" if layback else "")
+            )
+            logger.warning(
+                "%s: SensorX/Y is ShipX/Y shifted by a fixed %.1f m east, %.1f m north (an offset rotated by "
+                "heading 0); using the Ship positions. Set heading_deg (e.g. course over ground) before the "
+                "layback step", Path(data.path).name, east, north,
+            )
+            continue
         dist = _ship_sensor_offset_m(data, proj)
         with_ship = np.isfinite(dist)
         n_ship = int(with_ship.sum())
@@ -393,7 +505,13 @@ def _position_source_attrs(files: list[XtfPingData], projected: list[bool]) -> d
         "XTF Sensor vs Ship coordinates (apart: Sensor is the towfish; otherwise unknown). "
         + "; ".join(notes)
     )
-    return {POSITION_SOURCE_ATTR: source, POSITION_SOURCE_REASON_ATTR: reason}
+    attrs: dict[str, str | float] = {POSITION_SOURCE_ATTR: source, POSITION_SOURCE_REASON_ATTR: reason}
+    found = {(round(o[0], 2), round(o[1], 2), round(o[2], 2)) for o in offsets if o is not None}
+    if len(found) == 1 and all(o is not None for o in offsets):
+        east, north, layback = offsets[0]
+        attrs["tow_point_aft_m"] = -north - layback
+        attrs["tow_point_starboard_m"] = east
+    return attrs
 
 
 def _rate_rtol(files: list[XtfPingData]) -> float:

@@ -53,7 +53,7 @@ and that channel's samples.
 | `sample_rate_hz` | `NumSamples / TimeDuration` |
 | `time` | `Year` … `Second` + `HSeconds` (10 ms resolution) |
 | `layback_m`, `cable_out_m` | `Layback`, `CableOut` + `CableOutHundredths` / 100 |
-| `position_source` attribute | `towfish` when `SensorX/Y` sit away from `ShipX/Y`; else `unknown`, never `ship` (Isis files with no `ShipX/Y` and a recorded `Layback` are noted in `position_source_reason` as probably the ship) (see processing → Layback) |
+| `position_source` attribute | `towfish` when `SensorX/Y` sit away from `ShipX/Y`; else `unknown` (Isis files with no `ShipX/Y` and a recorded `Layback` are noted in `position_source_reason` as probably the ship). `ship` only when `SensorHeading` is 0 throughout and `SensorX/Y` sit a fixed east/north offset from `ShipX/Y` on a line away from north: the writer rotated its tow-point offset by heading 0, so the reader uses `ShipX/Y` and records `tow_point_aft_m` / `tow_point_starboard_m` (see processing → Layback) |
 | navigation / attitude records | every ping header (`source = extracted_from_xtf_ping_headers`) |
 
 `pulse_length_us` is not in the XTF headers and is 0.0. Gain codes are
