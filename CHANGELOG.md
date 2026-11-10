@@ -9,6 +9,33 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- `analysis.fit_tvg_models`: the TVG a raw recording still needs. It
+  fits the median level of linear amplitude (1 m slant-range bins past
+  the altitude, both sides pooled, in dB, dithered for integer samples)
+  from 5 m past the profile peak to the noise knee, with no TVG,
+  absorption only and 20/30/40 log R each with and without
+  Francois-Garrison absorption, every model with a least-squares
+  constant, plus a free `n` with and without absorption. Returns
+  `TVGFitResult`: window, peak, knee, contrast and fallback flags, every
+  model's RMS, best and runner-up, per-side fits with a disagreement
+  flag, `tvg_params` (ready for `apply_tvg` or the `tvg` step) and
+  `tvg_status` derived from the best model. Where no knee is found (the
+  level does not fall to a floor) it fits to the end of the record and
+  says so; it warns when the profile peak lies far past the altitude.
+- `analysis.check_tvg`: apply a TVG recipe on data cropped at the window
+  end and report the spread, trend and end-to-end change of the
+  corrected median level (`TVGCheckResult`).
+- `analysis.find_noise_knee` (`NoiseKnee`): peak, floor and noise knee of
+  a level-vs-range profile.
+- `processing.median_level_profile`: median level per range bin in dB,
+  with dither for integer samples.
+- `viz.plot_tvg_fit`: one column with the fit (median, window, 20/30/40
+  log R with absorption, best model, legend "RMS in window") and the
+  level after TVG (relative, ±5 dB, spread and trend).
+- `sidescan-analyze tvg-fit --start-margin-m --knee-db --window-m MIN MAX`;
+  `investigate --tvg-bin-width-m --start-margin-m --knee-db --window-m
+  --usable-range-method`; `usable-range --method --knee-db`.
+
 - `export.ml.write_swath_tiles`, `read_tile_index`, `read_coco_boxes` and
   `boxes_to_targets`: swath tiles for annotation or detection, and boxes
   drawn on them (COCO from FiftyOne, CVAT, Label Studio, or detector
@@ -84,6 +111,38 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Changed
 
+- TVG numbers change. `fit_tvg_models` replaces the range-decay
+  classifier everywhere (investigate, recommend-config, tvg-fit, the
+  examples): it fits a free constant instead of anchoring each model at
+  one reference bin, ends its window at the noise knee instead of at a
+  separately estimated usable range, and compares 20, 30 and 40 log R
+  instead of one spreading coefficient, so the reported model, RMS and
+  `tvg_status` differ from 0.9 (no `ambiguous` status any more).
+- `analysis.estimate_usable_range` defaults to `method="knee"` (the noise
+  knee of the binned median level in dB; the end of the record when the
+  level never falls to a floor). The previous SNR rule is
+  `method="snr"`; it found no usable range on data the recorder had
+  levelled.
+- `sidescan-analyze investigate` adds `tvg_fit` (fit and check) to
+  `metrics.json`, reports `tvg_model`, `tvg_rms_db`, `tvg_spread_after_db`
+  and the derived `tvg_status` in `summary.json`, and draws `tvg_fit.png`
+  in place of `range_decay_fit.png` and `range_decay_residuals.png`;
+  `range_decay` stays in `metrics.json` for one release.
+- `sidescan-analyze tvg-fit` writes `{"fit", "check"}` to `metrics.json`
+  and the `plot_tvg_fit` figure; levelled data fit `flat` instead of
+  failing for want of a usable range.
+- `sidescan-analyze recommend-config` writes the best model's
+  `spreading_loss_db` and `absorption_db_per_m` instead of
+  `no_spreading` / `no_absorption` from a status.
+- `infer_units` accepts a `TVGFitResult`.
+- `processing.uniform_exclusion_boundary` logs a WARNING when its value is
+  more than `warn_factor` (3) times the median boundary.
+- `examples/project_template`: `02_analyze.py` fits with `fit_tvg_models`,
+  checks the best model and the config's recipe with `check_tvg`, flags a
+  recipe more than 0.5 dB less flat, and draws `plot_tvg_fit`; the
+  template config's `spreading_loss_db` is 30 (was 20) and its `analyze:`
+  block takes `start_margin_m`, `knee_db` and `window_m` instead of
+  `usable_range_m` and `r_fit_min_m`.
 - `io.xtf`: when `SensorHeading` is 0 on every ping and `SensorX/Y` sit a
   fixed east/north offset from `ShipX/Y` on a line well away from north,
   the writer rotated its tow-point offset by heading 0, so Sensor is not
@@ -98,6 +157,19 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   green by default (`port_color`, `starboard_color`). The legend has
   one entry per side, and the axes hold two scan-line collections
   instead of one.
+
+### Deprecated
+
+Removal planned in 0.12.
+
+- `analysis.fit_range_decay`, `analysis.fit_tvg_curve`,
+  `TVGCandidateFit`, `TVGCandidateFitResult`: use `fit_tvg_models` and
+  `check_tvg`. `fit_range_decay` behaves as before and warns.
+- `viz.plot_candidate_fit`, `plot_range_decay_fit`,
+  `plot_range_decay_residuals`, `set_fit_window_limits`: use
+  `plot_tvg_fit`.
+- `sidescan-analyze tvg-fit --r-ref-m`, `--r-fit-min-m`,
+  `--usable-range-m`: ignored with a warning; use `--window-m`.
 
 ### Fixed
 

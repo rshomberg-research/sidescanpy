@@ -13,7 +13,7 @@ after each step.
 
 ```
 01_convert.py   raw .jsf/.sdf/.xtf -> .ss.h5, target catalog -> targets.json
-02_analyze.py   measure the uncorrected data (usable range, TVG decay)
+02_analyze.py   measure the uncorrected data (TVG model fit and check)
 03_correct.py   apply the corrections chosen from step 2
 04_export.py    waterfalls, track, grids, GeoTIFF
 05_dataset.py   COCO/YOLO training dataset
@@ -67,7 +67,7 @@ correcting.
 | Step | Library calls |
 |---|---|
 | convert | `io.read_and_convert`, `processing.crop_far_range_noise`, `io.hdf5.write_survey`, `io.read_target_catalog`, `targets.correlate` (Klein positions by time) |
-| analyze | `analysis.estimate_usable_range`, `analysis.fit_range_decay`, `processing.invert` (to analyze already-corrected files) |
+| analyze | `analysis.fit_tvg_models`, `analysis.check_tvg`, `analysis.estimate_usable_range`, `processing.invert` (to analyze already-corrected files) |
 | correct | `processing.correction_steps`, `processing.correct_file(..., frequency_params=, chunk_pings=)` |
 | export | `io.hdf5.concat_survey_frequency`, `processing.ping_windows`, `targets.correlate.correlate_catalog`, `targets.waterfall.waterfall_boxes`, `grids.grid_channel`, `grids.to_geotiff`, `viz.*` |
 | dataset | `export.ml.DatasetSpec`, `export.ml.build_target_dataset` |

@@ -30,7 +30,7 @@ that model it provides:
   and build COCO/YOLO training sets of fixed-size chips or full swaths, in
   native pixels or real-world meters.
 - **Analysis:** small functions that measure a dataset (nadir and first
-  bottom return, usable range, TVG decay fit, units, beam geometry,
+  bottom return, usable range, TVG model fit, units, beam geometry,
   navigation segments) and return dataclasses.
 - **CLI:** `sidescan-convert`, `sidescan-correct`, `sidescan-export`,
   `sidescan-analyze` for quick runs over the same API.

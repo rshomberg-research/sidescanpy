@@ -12,8 +12,8 @@ what to do in the meantime. Format-specific quirks are on the
   gain control; XTF gain codes are read but not interpreted. Some
   recordings behave as if spreading, or both spreading and absorption,
   were already compensated. Measure each survey with
-  `analysis.fit_range_decay` and turn off the TVG terms it says are
-  already applied ([Getting started](getting_started.md#check-the-gain-before-correcting)
+  `analysis.fit_tvg_models` and apply the model it finds (`flat` means
+  apply none) ([Getting started](getting_started.md#check-the-gain-before-correcting)
   shows how). Do not assume a sonar model behaves the same on every
   survey.
 - **The spreading coefficient is a choice.** The default TVG uses
@@ -21,12 +21,14 @@ what to do in the meantime. Format-specific quirks are on the
   growth of the insonified seabed patch with range. Which fits real data
   varies by sonar and seabed. Set `spreading_loss_db` per survey after a
   fit; the value used is recorded in each file's history.
-- **The decay fit picks a named candidate.** `fit_range_decay` compares
-  four fixed loss models and does not fit absorption freely. Its fit
-  window can run past the point where the signal reaches the noise
-  floor, and the two frequencies of one line can get different answers.
-  Check that the corrected data is flat with range before trusting the
-  verdict.
+- **The TVG fit compares fixed models.** `fit_tvg_models` compares 0,
+  20, 30 and 40 log R with and without Francois-Garrison absorption at
+  default water conditions; it fits `n` freely but not absorption, so a
+  wrong absorption coefficient shows up as a trend after TVG. Over short
+  windows the models differ by tenths of a dB and the label means little.
+  It trusts the recorded altitude, and a recorder gain that only shows in
+  the shape of the curve is not identified. Check that the corrected
+  data is flat with range (`check_tvg`) before trusting the model.
 - **No angle-dependent correction.** TVG depends on range only. There is
   no beam-pattern or grazing-angle correction, and no mosaic-wide
   normalization between lines.
