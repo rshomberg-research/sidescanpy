@@ -18,6 +18,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   CleanSweep mosaic; JNCC Solan Bank and East Rockall lines with their
   Isis/TritonMap GeoTIFFs; five AWI OFOBS PS124 JSF files with their CARIS
   mosaic (CC BY 4.0). Together about 830 MB; only those two examples use them.
+- Docs: a Theory section (its own gallery, `examples/theory/`): why
+  sidescan looks the way it does, one idea per page, each measured on a
+  public recording. Shadow height and common artifacts move there (old
+  URLs redirect). Every gallery page now opens with its result figure.
 
 - `export.ml.write_swath_tiles`, `read_tile_index`, `read_coco_boxes` and
   `boxes_to_targets`: swath tiles for annotation or detection, and boxes
@@ -110,6 +114,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   instead of one.
 
 ### Fixed
+
+- Docs: the four-passes example used a 15 m cable layback for the Dynamo
+  lines; opposite-direction pairs measure about 27.5 m beyond the 12.5 m
+  tow point, which brings the passes together.
 
 - `viz.plot_waterfall`: the automatic colour range (`vmin_pct` /
   `vmax_pct`) is taken from the samples that are drawn. In ground-range and

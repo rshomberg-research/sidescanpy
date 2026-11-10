@@ -32,7 +32,7 @@ docs-serve: docs
 	uv run --all-extras python -m http.server -d docs/_build/html 8000
 
 docs-clean:
-	rm -rf docs/_build docs/examples docs/reference/generated docs/sg_execution_times.rst
+	rm -rf docs/_build docs/examples docs/theory docs/reference/generated docs/sg_execution_times.rst
 
 # Refresh the two gallery figures the README shows (after `make docs`).
 readme-images:
