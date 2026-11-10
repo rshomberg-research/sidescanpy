@@ -24,7 +24,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from sidescanpy import datasets
-from sidescanpy.core.units import linear_to_db
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
 from sidescanpy.processing import apply_tvg, compute_geometric_ranges
@@ -49,9 +48,10 @@ for ax, (name, fmt, freq_key, label) in zip(axes, lines):
     survey = read_and_convert([datasets.fetch(name)], fmt=fmt)
     survey = apply_tvg(survey)
     ds = compute_geometric_ranges(survey.get_frequency(freq_key).dataset)
-    ds = ds.assign(backscatter_db=linear_to_db(ds["backscatter_intensity"]))
-    plot_waterfall(ds, x_axis="slant_range", value_var="backscatter_db",
-                   vmin_pct=10, vmax_pct=99.5, ax=ax, title=f"{label}, {freq_key}")
+    # apply_tvg returns dB; average samples to about 1000 per side for display.
+    ds = ds.coarsen(sample=max(1, ds.sizes["sample"] // 1000), boundary="trim").mean()
+    plot_waterfall(ds, x_axis="slant_range", vmin_pct=2, vmax_pct=99.5, ax=ax,
+                   title=f"{label}, {freq_key}")
 fig.savefig(out / "three_formats.png", dpi=110)
 
 # %%
