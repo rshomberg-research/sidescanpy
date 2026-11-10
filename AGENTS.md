@@ -123,7 +123,7 @@ forward positive; heading compass bearing clockwise from north.
 uv sync --all-extras          # environment (the dev extra alone skips viz tests)
 make test                     # unit tests; clears PYTHONPATH (see below)
 make lint                     # ruff
-make docs                     # Sphinx -W -n, runs the gallery (~140 MB first time)
+make docs                     # Sphinx -W -n, runs the gallery (~1.3 GB download first time)
 make docs-fast                # same, gallery not executed
 PYTHONPATH="" uv run pytest tests/unit/grids/test_resample.py -v
 PYTHONPATH="" uv run pytest tests/examples -q   # example smoke runs

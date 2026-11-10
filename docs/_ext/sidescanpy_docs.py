@@ -49,6 +49,8 @@ GALLERY_ORDER = [
     "plot_swath_tiles",
     "plot_target_chips",
     "plot_training_dataset",
+    "plot_vendor_chain",
+    "plot_four_published_chains",
 ]
 
 

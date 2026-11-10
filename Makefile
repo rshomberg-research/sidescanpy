@@ -19,7 +19,7 @@ lint:
 # --all-extras: `uv run --extra docs` alone would re-sync the environment
 # without the dev extra, and the gallery needs viz and geo.
 # `make docs` runs the gallery scripts on the public recordings (downloads
-# ~140 MB the first time); `make docs-fast` skips running them.
+# about 1.3 GB the first time, 1.9 GB on disk); `make docs-fast` skips running them.
 SPHINX = uv run --all-extras sphinx-build -W --keep-going -n -b html docs docs/_build/html
 
 docs:

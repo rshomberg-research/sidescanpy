@@ -9,6 +9,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- Docs: two gallery examples on processing as a recorded choice:
+  recreating a vendor mosaic (CleanSweep) from the same pings, and four
+  agencies' published mosaics against one recorded sidescanpy chain.
+- `datasets`: published mosaics as well as raw recordings, and files
+  served on their own URL (`RemoteFile.member=None`, PANGAEA) as well as
+  zip members. New entries: a whole USGS Grand Bay line and the release's
+  CleanSweep mosaic; JNCC Solan Bank and East Rockall lines with their
+  Isis/TritonMap GeoTIFFs; five AWI OFOBS PS124 JSF files with their CARIS
+  mosaic (CC BY 4.0). Together about 830 MB; only those two examples use them.
+
 - `export.ml.write_swath_tiles`, `read_tile_index`, `read_coco_boxes` and
   `boxes_to_targets`: swath tiles for annotation or detection, and boxes
   drawn on them (COCO from FiftyOne, CVAT, Label Studio, or detector

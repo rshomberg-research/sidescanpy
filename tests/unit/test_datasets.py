@@ -10,6 +10,7 @@ HTTP with range support to check the range reader itself.
 import dataclasses
 import hashlib
 import http.server
+import io
 import threading
 import zipfile
 from pathlib import Path
@@ -140,6 +141,42 @@ class TestFetch:
         with pytest.raises(OSError, match="SHA-256"):
             datasets.fetch("test_line.xtf", directory=cache)
         assert list(cache.iterdir()) == []
+
+
+@pytest.mark.unit
+class TestDirectFile:
+    """Archives that serve each file on its own URL (``member=None``)."""
+
+    @pytest.fixture
+    def direct(self, monkeypatch):
+        entry = RemoteFile(
+            source="usgs_grand_bay", archive_url="https://example.invalid/line_001.jsf",
+            member=None, size=len(PAYLOAD),
+            sha256=hashlib.sha256(PAYLOAD).hexdigest(), description="test",
+        )
+        monkeypatch.setitem(datasets.REGISTRY, "test_direct.jsf", entry)
+        calls = []
+
+        def fake_urlopen(req):
+            calls.append(req.full_url)
+            return io.BytesIO(PAYLOAD)
+
+        monkeypatch.setattr(datasets, "_urlopen", fake_urlopen)
+        monkeypatch.setattr(datasets, "_open_remote_zip", lambda url: pytest.fail("not a zip"))
+        return calls
+
+    def test_fetch_downloads_whole_file_when_no_member(self, direct, tmp_path):
+        path = datasets.fetch("test_direct.jsf", directory=tmp_path)
+        assert path.read_bytes() == PAYLOAD
+        assert direct == ["https://example.invalid/line_001.jsf"]
+
+    def test_fetch_checks_checksum_when_no_member(self, direct, monkeypatch, tmp_path):
+        monkeypatch.setattr(datasets, "_RETRY_DELAYS_S", (0.0, 0.0))
+        bad = dataclasses.replace(datasets.REGISTRY["test_direct.jsf"], sha256="0" * 64)
+        monkeypatch.setitem(datasets.REGISTRY, "test_direct.jsf", bad)
+        with pytest.raises(OSError, match="SHA-256"):
+            datasets.fetch("test_direct.jsf", directory=tmp_path)
+        assert list(tmp_path.iterdir()) == []
 
 
 class _RangeHandler(http.server.SimpleHTTPRequestHandler):

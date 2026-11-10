@@ -28,7 +28,7 @@ def _fetched_names(script: Path) -> list[str]:
                 and node.func.attr == "fetch"):
             names += [a.value for a in node.args if isinstance(a, ast.Constant)]
         if isinstance(node, ast.Constant) and isinstance(node.value, str) \
-                and re.fullmatch(r"[a-z_0-9]+\.(jsf|xtf|sdf)", node.value, re.I):
+                and re.fullmatch(r"[a-z_0-9]+\.(jsf|xtf|sdf|tif|tiff)", node.value, re.I):
             names.append(node.value)
     return names
 
