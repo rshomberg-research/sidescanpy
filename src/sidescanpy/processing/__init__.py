@@ -132,6 +132,7 @@ from sidescanpy.processing.navigation import (
     along_track_distance_m,
     course_over_ground,
     fill_nav_stalls,
+    smooth_navigation,
 )
 from sidescanpy.processing.outliers import mask_bright_ping_rows, reject_range_outliers
 from sidescanpy.processing.profiles import backscatter_vs_range, backscatter_vs_sample
@@ -173,6 +174,7 @@ __all__ = [
     "along_track_distance_m",
     "fill_nav_stalls",
     "course_over_ground",
+    "smooth_navigation",
     "interpolate_aux_onto_pings",
     "interpolate_onto_channel",
     "held_value_fixes",
