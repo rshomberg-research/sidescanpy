@@ -36,4 +36,4 @@ docs-clean:
 
 # Refresh the two gallery figures the README shows (after `make docs`).
 readme-images:
-	uv run --all-extras python -c "from PIL import Image; [Image.open(f'docs/examples/images/sphx_glr_plot_{n}_001.png').convert('RGB').quantize(256, dither=Image.Dither.NONE).save(f'docs/assets/gallery/{n}.png', optimize=True) for n in ('correct_a_line', 'three_formats')]"
+	uv run --all-extras python -c "from PIL import Image; [Image.open(f'docs/examples/images/sphx_glr_plot_{n}_001.png').convert('RGB').quantize(256, dither=Image.Dither.NONE).save(f'docs/assets/gallery/{a}.png', optimize=True) for n, a in (('correct_a_line', 'correct_a_line'), ('compare_sonars_and_formats', 'three_formats'))]"

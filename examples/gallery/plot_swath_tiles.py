@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 from PIL import Image
 
 from sidescanpy import datasets
@@ -39,6 +40,7 @@ from sidescanpy.processing import (
     interpolate_aux_onto_pings,
 )
 
+# sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_swath_tiles.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("WARNING")
@@ -133,3 +135,16 @@ for box, t in zip(boxes[record.file_name], targets):
 ax.set_title(f"{record.file_name}: port mirrored on the left, starboard on the right")
 ax.set_xlabel("pixel (0.1 m)")
 fig.savefig(out / "swath_tiles.png", dpi=150)
+# sphinx_gallery_start_ignore
+# A clean thumbnail for the examples page (hidden on this page).
+thumb, tax = plt.subplots(figsize=(4, 2.8))
+tile = np.asarray(Image.open(tiles_dir / record.file_name))
+tax.imshow(tile[:, 1180:1600], cmap="gray", aspect="auto")
+for box in boxes[record.file_name]:
+    if box.x > 1180:
+        tax.add_patch(plt.Rectangle((box.x - 1180, box.y), box.w, box.h, fill=False, edgecolor="red", lw=2))
+tax.set_axis_off()
+thumb.subplots_adjust(0, 0, 1, 1)
+thumb.savefig(out / "thumb_swath_tiles.png", dpi=100)
+plt.close(thumb)
+# sphinx_gallery_end_ignore

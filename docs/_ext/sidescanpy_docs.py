@@ -8,6 +8,12 @@
   (a re-export) link to the one documented object of that name. Names
   that match several objects stay unlinked.
 - ``gallery_argv``: the sphinx-gallery ``reset_argv`` callable.
+- ``gallery_order``: the gallery's teaching order (``within_subsection_order``).
+- Gallery thumbnails: each example writes a clean thumbnail image into
+  its output folder and names it with ``sphinx_gallery_thumbnail_path``.
+  When the gallery is not executed (``-D plot_gallery=0``) those files
+  don't exist; only that warning is silenced then, so a full build stays
+  strict.
 """
 
 from pathlib import Path
@@ -25,6 +31,29 @@ def gallery_argv(gallery_conf, script_vars):
     out = Path(gallery_conf["src_dir"]) / "_build" / "gallery-output"
     out.mkdir(parents=True, exist_ok=True)
     return [str(out)]
+
+
+GALLERY_ORDER = [
+    "plot_read_a_file",
+    "plot_whats_in_a_file",
+    "plot_navigation",
+    "plot_investigate_a_survey",
+    "plot_correct_a_line",
+    "plot_compare_sonars_and_formats",
+    "plot_grid_to_a_map",
+    "plot_swath_tiles",
+    "plot_target_chips",
+    "plot_training_dataset",
+]
+
+
+def gallery_order(filename):
+    """sphinx-gallery ``within_subsection_order``: examples in teaching order.
+
+    Files not in :data:`GALLERY_ORDER` follow, alphabetically.
+    """
+    stem = Path(filename).stem
+    return (GALLERY_ORDER.index(stem), stem) if stem in GALLERY_ORDER else (len(GALLERY_ORDER), stem)
 
 
 _NOINDEX = '<meta name="robots" content="noindex, nofollow" />\n'
@@ -76,8 +105,14 @@ def _resolve_by_name(app, env, node: pending_xref, contnode):
                                fullname, node, contnode)
 
 
+def _quiet_thumbnails_when_not_executed(app, config):
+    if str(getattr(config, "plot_gallery", "True")).strip().lower() in ("0", "false", "no", "off"):
+        config.suppress_warnings = [*config.suppress_warnings, "sphinx_gallery.thumbnail"]
+
+
 def setup(app):
     app.add_config_value("sidescanpy_noindex", False, "html")
     app.connect("html-page-context", _add_noindex)
     app.connect("missing-reference", _resolve_by_name)
+    app.connect("config-inited", _quiet_thumbnails_when_not_executed)
     return {"parallel_read_safe": True, "parallel_write_safe": True}

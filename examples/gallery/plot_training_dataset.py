@@ -38,6 +38,7 @@ from sidescanpy.processing import (
     interpolate_aux_onto_pings,
 )
 
+# sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_training_dataset.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("WARNING")
@@ -103,6 +104,17 @@ for ax, path in zip(axes.ravel(), targets + backgrounds):
     ax.set_xticks([])
     ax.set_yticks([])
 fig.savefig(out / "training_dataset.png", dpi=150)
+# sphinx_gallery_start_ignore
+# A clean thumbnail for the examples page (hidden on this page).
+thumb, taxes = plt.subplots(2, 3, figsize=(4, 2.8))
+thumb.patch.set_facecolor("black")
+for tax, path in zip(taxes.ravel(), targets[:3] + backgrounds[:3]):
+    tax.imshow(Image.open(path), cmap="gray")
+    tax.set_axis_off()
+thumb.subplots_adjust(0, 0, 1, 1)
+thumb.savefig(out / "thumb_training_dataset.png", dpi=100)
+plt.close(thumb)
+# sphinx_gallery_end_ignore
 
 # %%
 # Look at the backgrounds before training. Here they come from the inner

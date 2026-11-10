@@ -40,6 +40,7 @@ from sidescanpy.processing import (
 )
 from sidescanpy.targets import write_targets_json
 
+# sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_target_chips.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("WARNING")
@@ -120,6 +121,17 @@ for row, target in enumerate(catalog):
         if col == 0:
             ax.set_ylabel(f"{target.target_id} ({target.category})")
 fig.savefig(out / "target_chips_levels.png", dpi=150)
+# sphinx_gallery_start_ignore
+# A clean thumbnail for the examples page (hidden on this page).
+thumb, taxes = plt.subplots(2, 2, figsize=(4, 2.8))
+thumb.patch.set_facecolor("black")
+for tax, level in zip(taxes.ravel(), levels):
+    tax.imshow(Image.open(out / level / "chip" / "target_c2.png"), cmap="gray")
+    tax.set_axis_off()
+thumb.subplots_adjust(0, 0, 1, 1)
+thumb.savefig(out / "thumb_target_chips.png", dpi=100)
+plt.close(thumb)
+# sphinx_gallery_end_ignore
 
 # %%
 # The same targets at three pixel sizes. A list of resolutions builds one

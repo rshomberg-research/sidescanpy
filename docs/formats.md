@@ -24,7 +24,7 @@ for stem, survey in read_and_convert_segments("line_001.xtf"):  # split at range
 "Tested with" means real files from that source have been converted and
 inspected. The public EdgeTech line was written by Discover both as JSF
 and as XTF, and the two readers return identical samples
-([Three formats, one model](examples/plot_three_formats.rst)).
+([Comparing results across sonars and file formats](examples/plot_compare_sonars_and_formats.rst)).
 Other sonars and writers of the same formats often work; if one does
 not, see [Reporting a problem](limitations.md#reporting-a-problem).
 

@@ -37,6 +37,7 @@ from sidescanpy.processing import (
 )
 from sidescanpy.viz import plot_gridded_raster
 
+# sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_grid_to_a_map.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("INFO")
@@ -69,3 +70,17 @@ for ax, freq_key in zip(axes, ["hz_100000", "hz_400000"]):
     plot_gridded_raster(raster, fig=fig, ax=ax, cmap="copper", vmin_pct=2, vmax_pct=98,
                         title=f"{freq_key}, 1 m UTM grid")
 fig.savefig(out / "grid_to_a_map.png", dpi=110)
+# sphinx_gallery_start_ignore
+# A clean thumbnail for the examples page (hidden on this page).
+thumb, tax = plt.subplots(figsize=(4, 2.8))
+plot_gridded_raster(raster, fig=thumb, ax=tax, cmap="copper", vmin_pct=2, vmax_pct=98,
+                    show_colorbar=False, title=None)
+(x0, x1), (y0, y1) = tax.get_xlim(), tax.get_ylim()
+half_h = 0.35 * (x1 - x0)  # a window with the card's 10:7 shape, centred on the line
+tax.set_ylim((y0 + y1) / 2 - half_h, (y0 + y1) / 2 + half_h)
+tax.set_aspect("auto")
+tax.set_axis_off()
+thumb.subplots_adjust(0, 0, 1, 1)
+thumb.savefig(out / "thumb_grid_to_a_map.png", dpi=100)
+plt.close(thumb)
+# sphinx_gallery_end_ignore
