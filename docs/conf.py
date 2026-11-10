@@ -83,6 +83,9 @@ sphinx_gallery_conf = {
     "show_signature": False,
     "matplotlib_animations": False,
     "abort_on_example_error": True,
+    # 2x images for high-resolution screens (the chip and tile figures are
+    # detailed).
+    "image_srcset": ["2x"],
 }
 
 # -- HTML --------------------------------------------------------------------

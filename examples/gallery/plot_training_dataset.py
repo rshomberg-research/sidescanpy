@@ -43,7 +43,7 @@ out.mkdir(parents=True, exist_ok=True)
 configure_logging("WARNING")
 
 survey = read_and_convert([datasets.fetch("usgs_grand_bay_150602205800.xtf")], fmt="xtf")
-survey = interpolate_aux_onto_pings(survey)
+survey = interpolate_aux_onto_pings(survey, merge_window_s=0.3)
 survey = apply_tvg(survey)
 survey = compute_geometric_ranges(survey)
 survey = compute_georeferencing(survey)
@@ -73,8 +73,8 @@ catalog = [
 # only there to show the layout.
 
 spec = DatasetSpec(
-    styles=("chip",), render_level="geometric", size_px=128, resolution_m=0.2,
-    resample_method="kdtree", box_size_m=4.0, categories=["contact", "reef"],
+    styles=("chip",), render_level="geometric", size_px=256, resolution_m=0.1,
+    box_size_m=4.0, categories=["contact", "reef"],
     n_background=8, val_fraction=0.4, split_block_pings=50,
     layout="ultralytics", seed=0,
 )
@@ -102,7 +102,7 @@ for ax, path in zip(axes.ravel(), targets + backgrounds):
     ax.set_title(f"{path.parent.name}: {path.stem}", fontsize=8)
     ax.set_xticks([])
     ax.set_yticks([])
-fig.savefig(out / "training_dataset.png", dpi=100)
+fig.savefig(out / "training_dataset.png", dpi=150)
 
 # %%
 # Look at the backgrounds before training. Here they come from the inner
