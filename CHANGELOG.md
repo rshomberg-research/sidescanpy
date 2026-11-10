@@ -63,8 +63,26 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   navigation, the analysis walkthrough), clean thumbnails in teaching
   order, and "Three formats, one model" renamed to "Comparing results
   across sonars and file formats".
+- `processing.smooth_navigation`: per-ping positions replaced by a
+  straight-line fit over a time window (default 5 s), for positions that
+  jump back at every GPS fix; recorded in `processing_history`.
+- `datasets`: `bgs_london_gateway_dynamo_88.xtf`, a sixth Dynamo pass.
+- Docs: gallery examples for eight wrecks at one scale, four passes over
+  one wreck (native and north-up), and a wreck's height from its shadow.
+- Docs: Guide and Examples split cleanly. Examples holds every worked
+  walkthrough (the executed gallery, target recognition step by step, and
+  the example data list); the Guide explains each part of the library.
 
 ### Changed
+
+- `io.xtf`: when `SensorHeading` is 0 on every ping and `SensorX/Y` sit a
+  fixed east/north offset from `ShipX/Y` on a line well away from north,
+  the writer rotated its tow-point offset by heading 0, so Sensor is not
+  the towfish. The reader now uses `ShipX/Y` with `position_source`
+  `ship`, records the offset as `tow_point_aft_m` /
+  `tow_point_starboard_m` (less any recorded `Layback`) and logs a
+  WARNING. Seen in GeoDAS files; positions of such files move by the
+  offset (12.6 m on the London Gateway lines).
 
 - `plot_track_and_scanlines` and `plot_track_with_targets` draw each
   scan-line rung as two halves split at nadir, port red and starboard
