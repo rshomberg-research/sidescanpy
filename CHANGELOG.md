@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-11-10
+
 ### Added
 
 - `export.ml.write_swath_tiles`, `read_tile_index`, `read_coco_boxes` and
