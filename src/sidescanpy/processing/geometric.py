@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_SOUND_VEL_MS = DEFAULT_SOUND_VEL_MS
 
 #: Recorded in the ``geometric`` history record. Records without this key
-#: (sidescanpy 0.7.6 and earlier) were made by a model that rotated the
+#: (sidescanpy 0.9.0 and earlier) were made by a model that rotated the
 #: ground vector by pitch (along = ground·sin θ), wrong for pitched pings.
 PITCH_MODEL = "fan_beam_flat_bottom"
 

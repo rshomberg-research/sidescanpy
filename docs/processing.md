@@ -167,7 +167,7 @@ References:
   distance from nadir, `sqrt(along² + across²)`, equals `ground_range_m`,
   which does not depend on pitch. NaN pitch is taken as 0 and logged at
   WARNING. Pitch shifts a ping forward or aft by a constant; it does not
-  rotate the swath. Files made by 0.7.6 and earlier used
+  rotate the swath. Files made by 0.9.0 and earlier used
   `along = ground·sin θ` (an offset growing with range, about 8.7 m at
   100 m and 5°); their `geometric` history record lacks `pitch_model`.
   Roll and yaw are not modelled.
