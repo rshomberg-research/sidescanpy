@@ -116,11 +116,11 @@ def detect_first_bottom_return(
         valid_roll = np.where(np.isfinite(min_sample_arr)[..., None], valid_roll, True)
 
     roll_for_peak = np.where(valid_roll, roll, np.nan) if valid_roll is not None else roll
-    if peak_percentile >= 100.0:
-        peak = np.nanmax(roll_for_peak, axis=-1, keepdims=True)
-    else:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN slice -> NaN
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN slice -> NaN
+        if peak_percentile >= 100.0:
+            peak = np.nanmax(roll_for_peak, axis=-1, keepdims=True)
+        else:
             peak = np.nanpercentile(roll_for_peak, peak_percentile, axis=-1, keepdims=True)
     threshold = threshold_fraction * peak
     above = roll >= threshold
@@ -227,7 +227,9 @@ def detect_nadir_noise_extent(
     roll = (csum[..., smooth_window:] - csum[..., :-smooth_window]) / smooth_window
 
     window = max(min(search_window, n_samples) - smooth_window, 1)
-    peak = np.nanmax(roll[..., :window], axis=-1, keepdims=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN slice (padded ping) -> NaN
+        peak = np.nanmax(roll[..., :window], axis=-1, keepdims=True)
     threshold = threshold_fraction * peak
     below = (roll <= threshold).astype(np.int32)
 

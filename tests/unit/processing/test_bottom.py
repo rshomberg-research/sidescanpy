@@ -730,3 +730,19 @@ def test_geometric_warns_on_missing_or_zero_altitude(caplog):
         compute_geometric_ranges(ds)
     msgs = [r.getMessage() for r in caplog.records]
     assert any("1 of 4 pings have NaN altitude_m" in m and "1 have altitude_m <= 0" in m for m in msgs)
+
+
+def test_all_nan_ping_gives_nan_without_warning():
+    """A NaN-padded (incomplete) ping is NaN in both detectors, with no RuntimeWarning."""
+    import warnings
+
+    arr = np.ones((3, 2, 400))
+    arr[:, :, 200:] = 10.0
+    arr[1] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        first = detect_first_bottom_return(arr)
+        extent = detect_nadir_noise_extent(arr)
+    assert np.isnan(first[1]).all()
+    assert np.isnan(extent[1]).all()
+    assert np.isfinite(first[0]).all()
