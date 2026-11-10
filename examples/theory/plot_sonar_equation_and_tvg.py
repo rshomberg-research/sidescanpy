@@ -302,7 +302,8 @@ for label, (n, with_abs) in (("Wight-Barfleur, 548 kHz", (20.0, True)), ("Grand 
 # both sides, cropped at the noise knee. Boxed on starboard: the water
 # column, the stretch between the water column and the start of the fit
 # window where the beam pattern still shapes the level, and the far
-# range, dark before TVG and as bright as the near range after it.
+# range, dark before TVG and as bright as the near range after it. Each
+# panel's gray scale is stretched over its seabed samples only.
 
 wb = lines["Wight-Barfleur, 548 kHz"]
 cropped = slice_by_range(wb["ds"], max_m=wb["window"][1])
@@ -313,7 +314,11 @@ fig, axes = plt.subplots(1, 2, figsize=(13, 4.6), constrained_layout=True)
 for ax, data, title in ((axes[0], 20 * np.log10(np.maximum(raw, 1e-6)), "Raw level (dB re 1)"),
                         (axes[1], after, "After TVG: 30 log R + 2 alpha R")):
     swath = np.concatenate([data[:, 0, ::-1], data[:, 1]], axis=1)
-    lo, hi = np.percentile(swath[swath > -100], [2, 99.5])
+    # Stretch on the seabed only: the dark water column would otherwise
+    # take half the gray scale and wash the seabed out.
+    signed = np.linspace(-knee, knee, swath.shape[1])
+    seabed = swath[:, np.abs(signed) > wb["altitude"] + 1.0]
+    lo, hi = np.percentile(seabed[np.isfinite(seabed) & (seabed > -100)], [1, 99.5])
     im = ax.imshow(swath, cmap="gray", vmin=lo, vmax=hi, aspect="auto", origin="lower",
                    extent=[-knee, knee, 0, swath.shape[0]])
     ax.set_title(title, loc="left")
