@@ -7,6 +7,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-11-10
+
 ### Added
 
 - `analysis.fit_tvg_models`: the TVG a raw recording still needs. It

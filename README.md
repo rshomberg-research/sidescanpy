@@ -47,8 +47,8 @@ Python 3.12 or newer. sidescanpy is not on PyPI yet; install it from
 this repository, pinned to a release tag:
 
 ```bash
-pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
-pip install "sidescanpy[viz,maps,geo] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
+pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
+pip install "sidescanpy[viz,maps,geo] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
 ```
 
 `uv pip install` and `uv add` take the same argument. The second line adds basemaps
