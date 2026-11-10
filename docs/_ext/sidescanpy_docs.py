@@ -8,7 +8,11 @@
   (a re-export) link to the one documented object of that name. Names
   that match several objects stay unlinked.
 - ``gallery_argv``: the sphinx-gallery ``reset_argv`` callable.
-- ``gallery_order``: the gallery's teaching order (``within_subsection_order``).
+- ``gallery_order``: the galleries' teaching order (``within_subsection_order``).
+- Goal image first: on every gallery page (Examples and Theory) the
+  page's result figure is shown under the title, before the text and the
+  code that makes it. By default that is the page's last figure;
+  :data:`GOAL_IMAGE` picks another.
 - Gallery thumbnails: each example writes a clean thumbnail image into
   its output folder and names it with ``sphinx_gallery_thumbnail_path``.
   When the gallery is not executed (``-D plot_gallery=0``) those files
@@ -17,6 +21,7 @@
 """
 
 import os
+import re
 from pathlib import Path
 
 from sphinx.addnodes import pending_xref
@@ -39,17 +44,53 @@ GALLERY_ORDER = [
     "plot_whats_in_a_file",
     "plot_navigation",
     "plot_investigate_a_survey",
-    "plot_common_artifacts",
     "plot_correct_a_line",
     "plot_compare_sonars_and_formats",
     "plot_grid_to_a_map",
     "plot_wreck_gallery",
     "plot_four_passes",
-    "plot_shadow_height",
     "plot_swath_tiles",
     "plot_target_chips",
     "plot_training_dataset",
+    "plot_vendor_chain",
+    "plot_four_published_chains",
+    # Theory, in reading order
+    "plot_how_sidescan_sees",
+    "plot_amplitude_and_db",
+    "plot_range_limits",
+    "plot_frequency_and_resolution",
+    "plot_sonar_equation_and_tvg",
+    "plot_slant_to_ground_range",
+    "plot_slopes_and_layover",
+    "plot_shadow_height",
+    "plot_ping_spacing_and_coverage",
+    "plot_towfish_attitude",
+    "plot_navigation_and_position",
+    "plot_common_artifacts",
 ]
+
+
+#: Gallery pages whose goal image is not their last figure: script stem ->
+#: figure number (1-based, as in ``sphx_glr_<stem>_001.png``).
+GOAL_IMAGE: dict[str, int] = {"plot_common_artifacts": 1}
+
+_GALLERY_DOCS = ("examples/plot_", "theory/plot_")
+_IMAGE_BLOCK = re.compile(r"^\.\. image-sg:: \S+\n(?:[ \t]+\S.*\n)*", re.M)
+_TITLE = re.compile(r"^\.\. _sphx_glr_\S+:\n\s*\n[^\n]+\n=+\n", re.M)
+
+
+def _goal_image_first(app, docname, source):
+    """Show a gallery page's result figure under its title (``source-read``)."""
+    if not docname.startswith(_GALLERY_DOCS):
+        return
+    text = source[0]
+    blocks = _IMAGE_BLOCK.findall(text)
+    title = _TITLE.search(text)
+    if not blocks or title is None:
+        return  # gallery not executed, or not a sphinx-gallery page
+    wanted = GOAL_IMAGE.get(Path(docname).name)
+    block = next((b for b in blocks if wanted and f"_{wanted:03d}.png" in b.split("\n", 1)[0]), blocks[-1])
+    source[0] = text[: title.end()] + "\n" + block + "\n" + text[title.end():]
 
 
 def gallery_order(filename):
@@ -125,6 +166,8 @@ MOVED_PAGES = {
     "io_xtf": "sources/xtf",
     "io_hdf5": "format/ss_h5",
     "io_netcdf": "format/netcdf",
+    "examples/plot_shadow_height": "theory/plot_shadow_height",
+    "examples/plot_common_artifacts": "theory/plot_common_artifacts",
 }
 
 _REDIRECT = """<!DOCTYPE html>
@@ -146,6 +189,7 @@ def _write_redirects(app, exception):
 
 
 def setup(app):
+    app.connect("source-read", _goal_image_first)
     app.connect("build-finished", _write_redirects)
     app.add_config_value("sidescanpy_noindex", False, "html")
     app.connect("html-page-context", _add_noindex)

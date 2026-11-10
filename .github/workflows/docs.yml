@@ -2,7 +2,7 @@
 # Sphinx (-W -n: any warning, such as a malformed docstring or an
 # unresolved cross-reference, fails the build). The build runs the
 # examples/gallery/ scripts through sphinx-gallery; the public recordings
-# they download (~140 MB) are cached between runs. Builds from main and from
+# they download (about 1.3 GB) are cached between runs. Builds from main and from
 # version tags are kept as a downloadable "sidescanpy-docs" artifact
 # (90 days).
 #

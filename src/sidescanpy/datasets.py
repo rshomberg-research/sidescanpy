@@ -1,10 +1,13 @@
 """
 Openly licensed sidescan recordings for examples and tests.
 
-Each registered file is one raw recording inside a public agency archive
-(a multi-gigabyte zip). :func:`fetch` pulls just that member out with HTTP
-range requests, checks its SHA-256 and caches it, so an example needs a
-few tens of megabytes instead of the whole archive.
+Each registered file is one raw recording, or one published product
+made from recordings, in a public agency archive. Most archives are
+multi-gigabyte zips: :func:`fetch` pulls just the one member out with
+HTTP range requests, so an example needs a few tens of megabytes instead
+of the whole archive. A few archives serve each file on its own URL;
+those are downloaded directly. Either way the SHA-256 is checked and the
+file cached.
 
 >>> from sidescanpy import datasets
 >>> path = datasets.fetch("jncc_wight_barfleur_20130321174522.jsf")
@@ -57,11 +60,15 @@ class Source:
 
 @dataclass(frozen=True)
 class RemoteFile:
-    """One recording inside a source archive."""
+    """One file in a source archive.
+
+    ``member`` is the file's path inside the zip at ``archive_url``; when
+    it is ``None``, ``archive_url`` is the file itself.
+    """
 
     source: str
     archive_url: str
-    member: str
+    member: str | None
     size: int
     sha256: str
     description: str
@@ -102,6 +109,92 @@ SOURCES: dict[str, Source] = {
         licence="U.S. public domain",
         attribution="U.S. Geological Survey, originator of the data.",
     ),
+    "usgs_grand_bay_mosaic": Source(
+        title=(
+            "Locker, S.D., Forde, A.S., and Smith, C.G., 2018, Subbottom and "
+            "Sidescan Sonar Data Acquired in 2015 From Grand Bay, Mississippi "
+            "and Alabama: U.S. Geological Survey data release (sidescan "
+            "mosaic, CleanSweep 3.9, 0.30 m)"
+        ),
+        url="https://doi.org/10.5066/P9374DKQ",
+        licence="U.S. public domain",
+        attribution="U.S. Geological Survey, originator of the data.",
+    ),
+    "jncc_solan_bank": Source(
+        title=(
+            "Joint Nature Conservation Committee, Raw sidescan sonar data from "
+            "Solan Bank Area of Search (CEND 11/08, 2008)"
+        ),
+        url="https://www.data.gov.uk/dataset/5773e015-c014-416c-aa43-a0397a8fd9e9",
+        licence="Open Government Licence v3.0",
+        attribution=(
+            "Contains public sector information licensed under the Open "
+            "Government Licence v3.0."
+        ),
+    ),
+    "jncc_solan_bank_mosaics": Source(
+        title=(
+            "Joint Nature Conservation Committee, Processed sidescan mosaics "
+            "from Solan Bank Area of Search (CEND 11/08, 2008)"
+        ),
+        url="https://www.data.gov.uk/dataset/6c1e65a9-d45d-443e-b563-f723ac266ac4",
+        licence="Open Government Licence v3.0",
+        attribution=(
+            "Contains public sector information licensed under the Open "
+            "Government Licence v3.0."
+        ),
+    ),
+    "jncc_east_rockall": Source(
+        title=(
+            "Joint Nature Conservation Committee, Raw side scan data from "
+            "Anton Dohrn and East Rockall Bank (MV Franklin, 2009)"
+        ),
+        url="https://www.data.gov.uk/dataset/09203cee-92dd-486b-8838-a525507765fd",
+        licence="Open Government Licence v3.0",
+        attribution=(
+            "Contains public sector information licensed under the Open "
+            "Government Licence v3.0."
+        ),
+    ),
+    "jncc_east_rockall_mosaics": Source(
+        title=(
+            "Joint Nature Conservation Committee, Processed side scan data "
+            "from Anton Dohrn and East Rockall Bank (MV Franklin, 2009)"
+        ),
+        url="https://www.data.gov.uk/dataset/efc2ea5f-c376-4904-b7fb-34cdde65744e",
+        licence="Open Government Licence v3.0",
+        attribution=(
+            "Contains public sector information licensed under the Open "
+            "Government Licence v3.0."
+        ),
+    ),
+    "awi_ofobs_ps124": Source(
+        title=(
+            "Hehemann, Laura; Purser, Autun; Boehringer, Lilian; Werner, Ellen; "
+            "Wenzhöfer, Frank (2021): Side scan sonar and swath bathymetry "
+            "collected along OFOBS profiles PS124_26-7 during POLARSTERN cruise "
+            "PS124, binned [dataset]. PANGAEA, https://doi.org/10.1594/PANGAEA.939172, "
+            "In: Hehemann, L et al. (2021): Side scan sonar and swath bathymetry "
+            "collected along OFOBS profiles during POLARSTERN cruise PS124 "
+            "[dataset publication series]. PANGAEA, "
+            "https://doi.org/10.1594/PANGAEA.939322"
+        ),
+        url="https://doi.org/10.1594/PANGAEA.939172",
+        licence="Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        attribution="Cite the dataset as given in its title.",
+    ),
+    "awi_ofobs_ps124_maps": Source(
+        title=(
+            "Hehemann, Laura; Boehringer, Lilian; Purser, Autun; Werner, Ellen; "
+            "Wenzhöfer, Frank (2021): Seafloor bathymetric maps derived from side "
+            "scan data collected along OFOBS profiles during POLARSTERN cruise "
+            "PS124 to the southern Weddell Sea [dataset]. PANGAEA, "
+            "https://doi.org/10.1594/PANGAEA.939087"
+        ),
+        url="https://doi.org/10.1594/PANGAEA.939087",
+        licence="Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        attribution="Cite the dataset as given in its title.",
+    ),
     "bgs_london_gateway": Source(
         title=(
             "British Geological Survey, National Geoscience Data Centre, "
@@ -123,6 +216,22 @@ _JNCC_MIS = (
     "JNCC2008_05IrishSolanGeophysSidescanMidIrishRawData.zip"
 )
 _USGS_GB = "https://coastal.er.usgs.gov/data-release/doi-P9374DKQ/data/2015-315-FA_xtf.zip"
+_USGS_GB_MOSAIC = "https://coastal.er.usgs.gov/data-release/doi-P9374DKQ/data/2015-315-FA_SSSMosaic.zip"
+_JNCC_SOLAN = (
+    "http://s3-eu-west-1.amazonaws.com/data.defra.gov.uk/Marine/"
+    "JNCC2008_05IrishSolanGeophysSidescanSolanRawData.zip"
+)
+_JNCC_SOLAN_MOSAICS = (
+    "http://s3-eu-west-1.amazonaws.com/data.defra.gov.uk/Marine/"
+    "JNCC2008_05IrishSolanGeophysSidescanSolanBProcessedImages.zip"
+)
+_JNCC_ROCKALL = (
+    "http://s3-eu-west-1.amazonaws.com/data.defra.gov.uk/Marine/"
+    "JNCC2009_07AntonDohrnEastRockallGeophysSideScanRawData.zip"
+)
+_JNCC_ROCKALL_MOSAICS = "http://data.jncc.gov.uk/data/d4ddd363-97eb-4ef6-9b8b-6f019f434103-ProcessedImages.zip"
+_PANGAEA_PS124 = "https://download.pangaea.de/dataset/939172/files/"
+_PANGAEA_PS124_MAPS = "https://download.pangaea.de/dataset/939087/files/"
 _BGS_LG = "https://webservices.bgs.ac.uk/accessions/download/140325?fileName="
 _BGS_LG_2007 = _BGS_LG + "88635_61207_LG_2007_SSS_Wrecks.zip"
 _BGS_LG_2008 = _BGS_LG + "88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057.zip"
@@ -181,6 +290,87 @@ REGISTRY: dict[str, RemoteFile] = {
         member="15CCT03_SSS_150531200100.xtf", size=11581824,
         sha256="1f18a5906a40bf6ad23a3ab59a7ffcbd3282c4f3d1c892179b85e402c2efec2c",
         description="XTF (SonarPro), Klein; recorded altitude is a lost bottom track",
+    ),
+    "usgs_grand_bay_150602202800.xtf": RemoteFile(
+        source="usgs_grand_bay", archive_url=_USGS_GB,
+        member="15CCT03_SSS_153_150602202800.xtf", size=235858624,
+        sha256="621f02bfc775983d40c873d97e201d713fbd5ba612e77f3654510e6d5219ee34",
+        description="XTF (SonarPro), Klein 100 kHz, a whole line under the release's mosaic; "
+                    "recorded altitude unusable",
+    ),
+    "usgs_grand_bay_mosaic_30cmgray.tif": RemoteFile(
+        source="usgs_grand_bay_mosaic", archive_url=_USGS_GB_MOSAIC,
+        member="30cmgray/30cmgray_LFSS.tif", size=715352534,
+        sha256="62c7a8db2f71e69bee5d071d1aed97e4201dbb14d640f080372aa4d3d0dbfd16",
+        description="GeoTIFF, the release's sidescan mosaic (CleanSweep 3.9), 0.30 m, UTM 16N; "
+                    "8-bit palette, index rises with echo strength (drawn dark), 255 = no data",
+    ),
+    "jncc_solan_bank_SB04_10.xtf": RemoteFile(
+        source="jncc_solan_bank", archive_url=_JNCC_SOLAN,
+        member="SB04_10.XTF", size=78805888,
+        sha256="fcf448a7a29dedee1c3e709b86ec18a065a17423d96abdf34dde3b9c43965dfb",
+        description="XTF (Isis), Benthos SIS-1500, 200 kHz; positions are the ship's, no layback recorded",
+    ),
+    "jncc_solan_bank_SB4_10.tif": RemoteFile(
+        source="jncc_solan_bank_mosaics", archive_url=_JNCC_SOLAN_MOSAICS,
+        member="SB4_10.TIF", size=16414280,
+        sha256="285e41529d31f7a649f3aabd6e2edf2e488e807432fd3458d14af25372a2dec9",
+        description="GeoTIFF (Isis/TritonMap) of line SB04_10, 0.5 m, UTM 30N; 8-bit palette, 0 = no data",
+    ),
+    "jncc_east_rockall_ER_C1_SS_001_6.xtf": RemoteFile(
+        source="jncc_east_rockall", archive_url=_JNCC_ROCKALL,
+        member="RawData/Raw_East_Rockall_C1/6_JNCC_FRANKLIN_2009_ER_C1_SS_001.XTF", size=75873792,
+        sha256="d57ed7aa813d77f830b86cf4a679ab53da67ded915cd167eaa18dd8efab45170",
+        description="XTF (Isis 7.2.69), EdgeTech 4200, 120 + 410 kHz; navigation stored as UTM 29N "
+                    "(nav_crs='EPSG:32629')",
+    ),
+    "jncc_east_rockall_ER_C1_SS_001_6_CMG.tif": RemoteFile(
+        source="jncc_east_rockall_mosaics", archive_url=_JNCC_ROCKALL_MOSAICS,
+        member="Tif_East_Rockall_C1/6_JNCC_FRANKLIN_2009_ER_C1_SS_001_CMG.TIF", size=56538014,
+        sha256="3cc3b5a9bc6db17acc13b9e1a014aa6fae8caa500a34c5d27902d2e99e633e21",
+        description="GeoTIFF (Isis/TritonMap) of the same line, 0.4 m, UTM 28N; 8-bit palette, 0 = no data",
+    ),
+    "awi_ofobs_ps124_20210217004957.jsf": RemoteFile(
+        source="awi_ofobs_ps124", archive_url=_PANGAEA_PS124 + "20210217004957_Binned.jsf",
+        member=None, size=51075935,
+        sha256="d7fe2f041ce05d33273b792349d2a26776c0e56f883982b1331720d4b12fae1c",
+        description="EdgeTech 2205 JSF (Discover Bathymetric, binned), towed OFOBS frame, Weddell Sea, "
+                    "one of five consecutive files on profile PS124_26-7; USBL positions",
+    ),
+    "awi_ofobs_ps124_20210217005306.jsf": RemoteFile(
+        source="awi_ofobs_ps124", archive_url=_PANGAEA_PS124 + "20210217005306_Binned.jsf",
+        member=None, size=51095077,
+        sha256="88b4f7081f93fcd8ff2818f927ed5e0981e61bc21884082ae8c1cb8b2b9715f4",
+        description="EdgeTech 2205 JSF (Discover Bathymetric, binned), towed OFOBS frame, Weddell Sea, "
+                    "one of five consecutive files on profile PS124_26-7; USBL positions",
+    ),
+    "awi_ofobs_ps124_20210217005615.jsf": RemoteFile(
+        source="awi_ofobs_ps124", archive_url=_PANGAEA_PS124 + "20210217005615_Binned.jsf",
+        member=None, size=51058773,
+        sha256="40d893e40c53fa8dcb207ab060e843ade42a05b7d37b259e689f01e48ded5e7b",
+        description="EdgeTech 2205 JSF (Discover Bathymetric, binned), towed OFOBS frame, Weddell Sea, "
+                    "one of five consecutive files on profile PS124_26-7; USBL positions",
+    ),
+    "awi_ofobs_ps124_20210217005924.jsf": RemoteFile(
+        source="awi_ofobs_ps124", archive_url=_PANGAEA_PS124 + "20210217005924_Binned.jsf",
+        member=None, size=51076371,
+        sha256="88538f641d0853226dd31708066b6f115268f399b5118994547ded233def2ee6",
+        description="EdgeTech 2205 JSF (Discover Bathymetric, binned), towed OFOBS frame, Weddell Sea, "
+                    "one of five consecutive files on profile PS124_26-7; USBL positions",
+    ),
+    "awi_ofobs_ps124_20210217010233.jsf": RemoteFile(
+        source="awi_ofobs_ps124", archive_url=_PANGAEA_PS124 + "20210217010233_Binned.jsf",
+        member=None, size=51069870,
+        sha256="dfbe72e2a35b0682f01c8c21556a1314351282f51f59715517c9333c1ce09070",
+        description="EdgeTech 2205 JSF (Discover Bathymetric, binned), towed OFOBS frame, Weddell Sea, "
+                    "one of five consecutive files on profile PS124_26-7; USBL positions",
+    ),
+    "awi_ofobs_ps124_026_07_ssh_10cm_part1.tiff": RemoteFile(
+        source="awi_ofobs_ps124_maps", archive_url=_PANGAEA_PS124_MAPS + "PS124_026_07_SSH_10cm_part1.tiff",
+        member=None, size=25387360,
+        sha256="dafd87b066aabd3ef2c332f7d3ec3de2ab1eea585192733de6d0bc996ada5062",
+        description="GeoTIFF (CARIS HIPS and SIPS), high-frequency sidescan intensity mosaic of profile "
+                    "PS124_26-7, 0.10 m, float32, UPS South (EPSG:32761)",
     ),
     "bgs_london_gateway_dynamo_78.xtf": RemoteFile(
         source="bgs_london_gateway", archive_url=_BGS_LG_2007,
@@ -400,9 +590,14 @@ def _download(name: str, entry: "RemoteFile", path: Path) -> None:
     tmp = path.with_name(path.name + ".part")
     logger.debug("Fetching %s from %s (member %s)", name, entry.archive_url, entry.member)
     try:
-        with _open_remote_zip(entry.archive_url) as zf, zf.open(entry.member) as src, \
-                open(tmp, "wb") as dst:
-            shutil.copyfileobj(src, dst, length=_RANGE_BUFFER)
+        if entry.member is None:
+            req = urllib.request.Request(entry.archive_url, headers={"User-Agent": _USER_AGENT})
+            with _urlopen(req) as src, open(tmp, "wb") as dst:
+                shutil.copyfileobj(src, dst, length=_RANGE_BUFFER)
+        else:
+            with _open_remote_zip(entry.archive_url) as zf, zf.open(entry.member) as src, \
+                    open(tmp, "wb") as dst:
+                shutil.copyfileobj(src, dst, length=_RANGE_BUFFER)
         size = tmp.stat().st_size
         digest = _sha256(tmp)
         if size != entry.size or digest != entry.sha256:
@@ -469,6 +664,11 @@ class _HttpRangeReader(io.RawIOBase):
         buffer[: len(data)] = data
         self.pos += len(data)
         return len(data)
+
+
+def _urlopen(req: urllib.request.Request):
+    """``urlopen`` with the module timeout (a seam for the tests)."""
+    return urllib.request.urlopen(req, timeout=_TIMEOUT_S)
 
 
 def _open_remote_zip(url: str) -> zipfile.ZipFile:

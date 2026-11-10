@@ -21,10 +21,12 @@ has, but only once the navigation is right. Here that takes four steps:
    :func:`~sidescanpy.processing.course_over_ground` gives the direction
    each ping looks across.
 4. **Layback.** The towfish trails the ship by the tow-point offset plus
-   the cable. The cable length was not recorded, so the layback here
-   (15 m) was found from two passes run in opposite directions (lines 78
-   and 85): with no layback they place the wreck 30 m apart along the
-   track, twice the missing layback.
+   the cable. The cable length was not recorded, so the cable layback
+   here (27.5 m, beyond the 12.5 m tow point) was found from two pairs
+   of passes run in opposite directions: with only the tow point applied
+   they place the wreck 53 to 57 m apart along the track, twice the
+   missing layback (:doc:`/theory/plot_navigation_and_position` measures
+   it).
 
 Data: BGS London Gateway, Klein 3000 at 400 kHz, Open Government Licence
 v3.0, contains data supplied by UKRI (see :doc:`/example_data`).
@@ -64,7 +66,7 @@ configure_logging("ERROR")
 
 LINES = ["bgs_london_gateway_dynamo_78.xtf", "bgs_london_gateway_dynamo_86.xtf",
          "bgs_london_gateway_dynamo_88.xtf", "bgs_london_gateway_dynamo_85.xtf"]
-LAYBACK_M = 15.0
+LAYBACK_M = 27.5
 WINDOW_M, CELL_M = 64.0, 0.15
 
 # The catalogued wreck position (UTM zone 31N), moved to the middle of the
@@ -178,7 +180,7 @@ plt.close(thumb)
 # Reading the result
 # ------------------
 # On the map the four passes put the hull in the same place to within
-# 5 to 10 m. What is left has three sources. A tidal current set the
+# a few meters. What is left has three sources. A tidal current set the
 # towfish sideways off the ship's track on the south-east line (the
 # passes made 1.35 m/s over the ground running north-east and 2.65 m/s
 # running south-west, so about 0.65 m/s of current), and a layback only

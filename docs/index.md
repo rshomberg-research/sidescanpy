@@ -59,7 +59,12 @@ walks through this code step by step, with the output of each step.
 - **Start here:** [Install](install.md), [Getting started](getting_started.md).
 - **Examples:** [real data, code and results](examples/index.rst), all on
   openly licensed recordings you can download, plus
-  [target recognition](atr.md) step by step and the [example data](example_data.md).
+  [target recognition](atr.md) step by step.
+- **Theory:** [why sidescan looks the way it does](theory/index.rst): the
+  physics behind each processing step, measured on the same public recordings.
+- **Example data:** [every public recording](example_data.md) the
+  Examples and Theory pages use, with its source, size and licence, and how
+  `sidescanpy.datasets.fetch` downloads it.
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
@@ -78,6 +83,8 @@ walks through this code step by step, with the output of each step.
 Install <install>
 Getting started <getting_started>
 Examples <examples/index>
+Theory <theory/index>
+Example data <example_data>
 Guide <guide>
 Data format <format/index>
 Source formats <sources/index>

@@ -35,6 +35,19 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `sidescan-analyze tvg-fit --start-margin-m --knee-db --window-m MIN MAX`;
   `investigate --tvg-bin-width-m --start-margin-m --knee-db --window-m
   --usable-range-method`; `usable-range --method --knee-db`.
+- Docs: two gallery examples on processing as a recorded choice:
+  recreating a vendor mosaic (CleanSweep) from the same pings, and four
+  agencies' published mosaics against one recorded sidescanpy chain.
+- `datasets`: published mosaics as well as raw recordings, and files
+  served on their own URL (`RemoteFile.member=None`, PANGAEA) as well as
+  zip members. New entries: a whole USGS Grand Bay line and the release's
+  CleanSweep mosaic; JNCC Solan Bank and East Rockall lines with their
+  Isis/TritonMap GeoTIFFs; five AWI OFOBS PS124 JSF files with their CARIS
+  mosaic (CC BY 4.0). Together about 830 MB; only those two examples use them.
+- Docs: a Theory section (its own gallery, `examples/theory/`): why
+  sidescan looks the way it does, one idea per page, each measured on a
+  public recording. Shadow height and common artifacts move there (old
+  URLs redirect). Every gallery page now opens with its result figure.
 
 - `export.ml.write_swath_tiles`, `read_tile_index`, `read_coco_boxes` and
   `boxes_to_targets`: swath tiles for annotation or detection, and boxes
@@ -172,6 +185,10 @@ Removal planned in 0.12.
   `--usable-range-m`: ignored with a warning; use `--window-m`.
 
 ### Fixed
+
+- Docs: the four-passes example used a 15 m cable layback for the Dynamo
+  lines; opposite-direction pairs measure about 27.5 m beyond the 12.5 m
+  tow point, which brings the passes together.
 
 - `viz.plot_waterfall`: the automatic colour range (`vmin_pct` /
   `vmax_pct`) is taken from the samples that are drawn. In ground-range and
