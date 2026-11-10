@@ -300,7 +300,8 @@ fig.savefig(out / "common_artifacts_water_objects.png", dpi=150)
 # takes over.
 #
 # *What to do:* :func:`~sidescanpy.analysis.estimate_usable_range`
-# finds where the level stops falling; crop or mask beyond it
+# finds where the level stops falling (its default, the noise knee);
+# crop or mask beyond it
 # (:func:`~sidescanpy.processing.crop_far_range_noise`).
 
 channel = compute_geometric_ranges(altitude_from_bottom_track(barfleur_h.load()))
@@ -320,7 +321,7 @@ ax_n.set_ylabel("ping")
 ax_l.plot(ranges, np.median(db[:, n_side - 1::-1], axis=0), lw=0.8, label="port")
 ax_l.plot(ranges, np.median(db[:, n_side:], axis=0), lw=0.8, label="starboard")
 ax_l.axvline(u, color="k", ls="--", lw=1)
-ax_l.text(u + 2, ax_l.get_ylim()[1], f"usable range {u:.0f} m", va="top", fontsize=9)
+ax_l.text(u + 2, ax_l.get_ylim()[1], f"usable range {u:.0f} m (noise knee)", va="top", fontsize=9)
 ax_l.set_xlabel("slant range (m)")
 ax_l.set_ylabel("median level over all pings (dB)")
 ax_l.legend()
