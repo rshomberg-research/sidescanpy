@@ -50,6 +50,21 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `datasets`: eleven public BGS London Gateway lines (Klein 400 kHz XTF
   over seven catalogued wrecks, Open Government Licence) and
   `BGS_LONDON_GATEWAY_WRECKS`, the catalogued wreck centres.
+- `processing.course_over_ground`: per-ping course over ground from the
+  positions a few seconds either side, to use as the heading when a
+  towfish compass is not trusted.
+- `build_survey_track(..., heading="course")` places the swath edges
+  with that course instead of the recorded heading.
+- `SurveyTrack.scan_nadir_lat` / `scan_nadir_lon`: nadir position at
+  each rung, filled by `build_survey_track`.
+
+### Changed
+
+- `plot_track_and_scanlines` and `plot_track_with_targets` draw each
+  scan-line rung as two halves split at nadir, port red and starboard
+  green by default (`port_color`, `starboard_color`). The legend has
+  one entry per side, and the axes hold two scan-line collections
+  instead of one.
 
 ### Fixed
 
@@ -151,6 +166,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - `io.read_and_convert` and `io.detect_format` accept paths as `str` as
   well as `Path` (a list of str raised `AttributeError` on `.stem`), and a
   single path as well as a list.
+- JSF conversion no longer fails on a file whose last one or two pings
+  were cut short when recording stopped: those pings are dropped with a
+  warning. Any other change of sample count within a frequency still
+  raises.
 
 ## [0.9.0] — 2026-11-09
 

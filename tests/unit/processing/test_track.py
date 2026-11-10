@@ -27,6 +27,14 @@ class TestBuildSurveyTrack:
         expected_n_rungs = len(np.arange(0, n_pings, 3))
         assert len(result.scan_port_lat) == expected_n_rungs
         assert len(result.scan_stbd_lat) == expected_n_rungs
+        assert len(result.scan_nadir_lat) == expected_n_rungs
+        assert len(result.scan_nadir_lon) == expected_n_rungs
+
+    def test_scan_nadir_is_track_position_at_rung_pings(self, sample_multi_frequency_survey):
+        surveys = {Path("a.ss.h5"): sample_multi_frequency_survey}
+        result = build_survey_track(surveys, "hz_1495000", scanline_stride=3)
+        np.testing.assert_allclose(result.scan_nadir_lat, result.track_lat[::3])
+        np.testing.assert_allclose(result.scan_nadir_lon, result.track_lon[::3])
 
     def test_multi_file_concatenates_in_time_order(self, sample_multi_frequency_survey):
         from sidescanpy.core import SideScanSurvey
@@ -91,3 +99,43 @@ class TestBuildSurveyTrack:
         assert isinstance(result, SurveyTrack)
         assert result.n_pings == len(result.track_lat)
         assert result.n_scanlines == len(result.scan_port_lat) == len(result.scan_stbd_lon)
+
+
+class TestBuildSurveyTrackHeading:
+    """heading="course" places the swath edges square to the GPS track
+    even when the recorded compass heading is wrong."""
+
+    @staticmethod
+    def _survey():
+        from sidescanpy.core import SideScanSurvey
+        from tests.unit.synthetic import make_raw_dataset
+
+        ds = make_raw_dataset(n_pings=60, n_samples=200)
+        ds = ds.assign(latitude=("ping", 41.5 + np.arange(60) * 1e-5),       # northbound
+                       longitude=("ping", np.full(60, -71.4)),
+                       heading_deg=("ping", np.full(60, 45.0, dtype=np.float32)))  # compass is off by 45
+        survey = SideScanSurvey(source_files=["a.jsf"], source_format="JSF", survey_name="a")
+        survey.add_frequency("hz_200000", ds)
+        return {Path("a.ss.h5"): survey}
+
+    @staticmethod
+    def _rung_bearing(track):
+        from pyproj import Geod
+
+        az, _, _ = Geod(ellps="WGS84").inv(track.scan_nadir_lon, track.scan_nadir_lat,
+                                            track.scan_stbd_lon, track.scan_stbd_lat)
+        return np.asarray(az) % 360
+
+    def test_course_puts_starboard_due_east(self):
+        track = build_survey_track(self._survey(), "hz_200000", scanline_stride=10, heading="course")
+        np.testing.assert_allclose(self._rung_bearing(track), 90.0, atol=1.0)
+
+    def test_compass_follows_recorded_heading(self):
+        track = build_survey_track(self._survey(), "hz_200000", scanline_stride=10)
+        np.testing.assert_allclose(self._rung_bearing(track), 135.0, atol=1.0)
+
+    def test_unknown_heading_option_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="heading"):
+            build_survey_track(self._survey(), "hz_200000", scanline_stride=10, heading="gyro")

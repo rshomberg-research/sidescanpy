@@ -18,6 +18,7 @@ import xarray as xr
 
 from sidescanpy.processing.correct import correct
 from sidescanpy.processing.interpolate import interpolate_aux_onto_pings
+from sidescanpy.processing.navigation import course_over_ground
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ class SurveyTrack:
     ``track_*`` arrays have one entry per ping across every file, in time
     order. ``scan_*`` arrays are index-aligned port/starboard swath-edge
     positions at every ``scanline_stride``-th ping of each file.
+    ``scan_nadir_*`` is the nadir position at those same pings, where
+    each rung splits into its port and starboard halves (None when not
+    known).
     """
 
     track_lat: np.ndarray
@@ -37,6 +41,8 @@ class SurveyTrack:
     scan_port_lon: np.ndarray
     scan_stbd_lat: np.ndarray
     scan_stbd_lon: np.ndarray
+    scan_nadir_lat: Optional[np.ndarray] = None
+    scan_nadir_lon: Optional[np.ndarray] = None
 
     @property
     def n_pings(self) -> int:
@@ -52,6 +58,7 @@ def build_survey_track(
     freq_key: str,
     *,
     scanline_stride: int,
+    heading: str = "compass",
 ) -> Optional[SurveyTrack]:
     """Nadir track + strided port/starboard scan-line endpoints for one
     frequency, across every file that has it, in time order.
@@ -84,6 +91,11 @@ def build_survey_track(
         e.g. ``"hz_1495000"``.
     scanline_stride : int
         Draw a scan-line rung every Nth ping.
+    heading : {"compass", "course"}, default "compass"
+        Heading used to place the swath edges: the recorded
+        ``heading_deg``, or the GPS course over ground
+        (``sidescanpy.processing.navigation.course_over_ground``) for a
+        towfish whose compass is not trusted.
 
     Returns
     -------
@@ -91,6 +103,8 @@ def build_survey_track(
         None if no file has ``freq_key``. Track arrays cover every ping;
         scan arrays cover every ``scanline_stride``-th ping.
     """
+    if heading not in ("compass", "course"):
+        raise ValueError(f"heading must be 'compass' or 'course', got {heading!r}")
     entries = [(p, s) for p, s in surveys.items() if freq_key in s.frequencies]
     if not entries:
         return None
@@ -104,6 +118,8 @@ def build_survey_track(
     edge_datasets = []
     for _p, survey in entries:
         ds = survey.get_frequency(freq_key).dataset
+        if heading == "course":
+            ds = ds.assign(heading_deg=("ping", course_over_ground(ds).astype(np.float32)))
         track_lat_parts.append(ds["latitude"].values)
         track_lon_parts.append(ds["longitude"].values)
 
@@ -133,6 +149,8 @@ def build_survey_track(
     edge_concat = xr.concat(edge_datasets, dim="ping")
     lat_edge = edge_concat["latitude_per_sample"].values[:, :, 0]   # (ping, channel)
     lon_edge = edge_concat["longitude_per_sample"].values[:, :, 0]
+    nadir_lat = edge_concat["latitude"].values
+    nadir_lon = edge_concat["longitude"].values
 
     track = SurveyTrack(
         track_lat=track_lat,
@@ -141,6 +159,8 @@ def build_survey_track(
         scan_port_lon=lon_edge[:, 0],
         scan_stbd_lat=lat_edge[:, 1],
         scan_stbd_lon=lon_edge[:, 1],
+        scan_nadir_lat=nadir_lat,
+        scan_nadir_lon=nadir_lon,
     )
     logger.debug(f"{freq_key}: survey track with {track.n_pings} pings, {track.n_scanlines} scan line(s)")
     return track
