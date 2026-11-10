@@ -1,14 +1,18 @@
 """
 Step 2 -- measure the converted (uncorrected) data before correcting it:
-usable range and the TVG range-decay fit, per frequency, on one file.
+the TVG model fit per frequency, on one file, and how flat the data are
+after the best model and after the config's recipe.
 
-Compares the fit with the TVG recipe in the config's `correct:` section and
-flags a disagreement in the report, so the recipe is checked before step 3
-applies it.
+The fit (fit_tvg_models) compares no TVG, absorption only and 20/30/40
+log R with and without absorption over a window from past the profile
+peak to the noise knee; check_tvg applies a recipe and measures the
+corrected level. The report flags a config recipe that leaves the data
+more than 0.5 dB less flat than the best model, so the recipe is checked
+before step 3 applies it.
 
 Writes:
-  <output_root>/analyze/<freq>_tvg_fit.png      fit + residuals
-  <output_root>/analyze/<freq>_metrics.json     fit_range_decay result
+  <output_root>/analyze/<freq>_tvg_fit.png      fit + level after TVG
+  <output_root>/analyze/<freq>_metrics.json     fit and both checks
   <output_root>/reports/02_analyze.{json,md}
 
 Usage:
@@ -22,46 +26,45 @@ import json
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from steplib import logger, save_figure, ss_h5_files, start_step
 
-from sidescanpy.analysis import estimate_usable_range, fit_range_decay
+from sidescanpy.analysis import check_tvg, fit_tvg_models
 from sidescanpy.core.history import has_step
 from sidescanpy.io.hdf5 import load_channel_dataset
 from sidescanpy.processing import compute_geometric_ranges, invert
-from sidescanpy.viz import plot_candidate_fit, plot_range_decay_residuals, set_fit_window_limits
+from sidescanpy.processing.radiometric import DEFAULT_SPREADING_LOSS_DB, TVGParams
+from sidescanpy.viz import plot_tvg_fit
 
-# fit_range_decay's tvg_status names the loss terms already compensated in
-# the data; with none compensated (status "none"), both terms belong in the
-# software TVG -- the "full physics" recipe.
-_RECIPE_FOR_STATUS = {"none": "full physics", "spreading_only": "absorption only",
-                      "absorption_only": "spreading only", "full": "no TVG"}
+# The config's recipe is "less flat" than the best model by more than this.
+_FLATNESS_TOLERANCE_DB = 0.5
 
 
-def configured_recipe(cfg: dict, freq_key: str) -> str:
+def configured_params(cfg: dict, freq_key: str) -> TVGParams:
+    """The TVG the config's correct: section applies to ``freq_key``
+    (absorption None: Francois-Garrison, as apply_tvg does)."""
     correct = cfg.get("correct", {})
     tvg = dict((correct.get("params") or {}).get("tvg") or {})
     tvg.update(((correct.get("frequency_params") or {}).get(freq_key) or {}).get("tvg") or {})
-    spreading = tvg.get("spreading_loss_db", 20.0) != 0
-    absorption = tvg.get("absorption_db_per_m", None) != 0
-    return {(True, True): "full physics", (True, False): "spreading only",
-            (False, True): "absorption only", (False, False): "no TVG"}[(spreading, absorption)]
+    return TVGParams(spreading_loss_db=tvg.get("spreading_loss_db", DEFAULT_SPREADING_LOSS_DB),
+                     absorption_db_per_m=tvg.get("absorption_db_per_m"))
 
 
-def fit_figure(decay, title: str):
-    fit = decay.fit
-    fig, (ax_fit, ax_res) = plt.subplots(2, 1, figsize=(9, 10), sharex=True, gridspec_kw={"height_ratios": [1.3, 1]})
-    for i, c in enumerate(fit.candidates):
-        plot_candidate_fit(c, fit.observed_range_m, fit.observed_loss_db, ax=ax_fit, show_observed=(i == 0))
-    ax_fit.set_title(f"Decay fit -- best: {decay.best_candidate}, RMSE={decay.best_rmse_db:.2f} dB")
-    ax_fit.set_xlabel("")
-    plot_range_decay_residuals(decay, ax=ax_res, relative_x=False)
-    ax_res.set_title("Residuals")
-    ax_res.set_xlabel("Slant range (m)")
-    set_fit_window_limits(ax_fit, decay)
-    fig.suptitle(title)
-    fig.tight_layout()
+def fit_figure(fit, check_best, check_config, title: str):
+    """plot_tvg_fit's column, with the config recipe's level added to the
+    after-TVG panel (orange dashed)."""
+    fig, (ax, ax_check) = plot_tvg_fit(fit, check_best)
+    fig.set_size_inches(6.5, 8.5)
+    if check_config is not None and check_config.relative_db is not None:
+        shown = check_config.range_m >= fit.window_m[0] - 3.0
+        ax_check.plot(check_config.range_m[shown], check_config.relative_db[shown], color="C1", ls="--", lw=1.5,
+                      label=f"config: {check_config.model_name}, spread {check_config.spread_db:.2f} dB")
+        ax_check.legend(loc="lower right", fontsize=8)
+    fig.suptitle(title, fontsize=9)
     return fig
+
+
+def _round(value, digits=2):
+    return None if value is None else round(float(value), digits)
 
 
 def main(argv=None) -> None:
@@ -74,6 +77,7 @@ def main(argv=None) -> None:
     start, stop = opts.get("pings", [0, 5000])
     range_var = opts.get("range_var", "slant_range_m")
     bin_width_m = opts.get("bin_width_m", 1.0)
+    window_m = opts.get("window_m")
     report.results["file"] = path.name
     report.results["pings"] = [start, stop]
     out_dir = paths.step_dir("analyze")
@@ -85,38 +89,53 @@ def main(argv=None) -> None:
             ds = invert(ds)  # analyze the uncorrected signal even on a corrected file
         if "slant_range_m" not in ds:
             ds = compute_geometric_ranges(ds)
-        # analyze.usable_range_m / r_fit_min_m override the automatic choices, for
-        # data (e.g. AGC-flattened) where the detector finds no usable range or the
-        # fit window starts inside the near-field rise. Check the decay figure.
-        usable = opts.get("usable_range_m")
-        if usable is None:
-            usable = estimate_usable_range(ds, range_var=range_var, bin_width_m=bin_width_m).usable_range_m
-        else:
-            report.note(f"{freq_key}: usable range set in the config: {usable} m")
-        if usable is None:
-            report.note(f"{freq_key}: usable range could not be determined; no TVG fit "
-                        "(set analyze.usable_range_m after looking at the data)")
+        # analyze.window_m overrides the automatic window (5 m past the peak to
+        # the noise knee) when the figure shows it on the wrong stretch.
+        if window_m is not None:
+            report.note(f"{freq_key}: fit window set in the config: {window_m} m")
+        fit = fit_tvg_models(
+            ds, range_var=range_var, bin_width_m=bin_width_m, window_m=window_m,
+            start_margin_m=opts.get("start_margin_m", 5.0), knee_db=opts.get("knee_db", 3.0),
+        )
+        if fit.best is None:
+            (out_dir / f"{freq_key}_metrics.json").write_text(json.dumps({"fit": fit.to_dict()}, indent=2, default=str))
+            report.note(f"{freq_key}: no TVG model could be fit: {'; '.join(fit.notes)}")
             continue
-        decay = fit_range_decay(ds, range_var=range_var, bin_width_m=bin_width_m, usable_range_m=usable,
-                                r_ref_m="auto", r_fit_min_m=opts.get("r_fit_min_m", "auto"))
-        (out_dir / f"{freq_key}_metrics.json").write_text(json.dumps(decay.to_dict(), indent=2, default=str))
-        if decay.fit is None:
-            report.note(f"{freq_key}: no decay model could be fit ({decay.tvg_status}): {'; '.join(decay.notes)}")
-            continue
-        suggested = _RECIPE_FOR_STATUS.get(decay.tvg_status, decay.tvg_status)
-        configured = configured_recipe(cfg, freq_key)
+        configured = configured_params(cfg, freq_key)
+        check_best = check_tvg(ds, fit.tvg_params, fit.window_m, range_var=range_var, bin_width_m=bin_width_m)
+        check_config = check_tvg(ds, configured, fit.window_m, range_var=range_var, bin_width_m=bin_width_m)
+        (out_dir / f"{freq_key}_metrics.json").write_text(json.dumps(
+            {"fit": fit.to_dict(), "check_best": check_best.to_dict(), "check_config": check_config.to_dict()},
+            indent=2, default=str,
+        ))
+        best = fit.best_model
         report.results[freq_key] = {
-            "usable_range_m": round(usable, 2), "tvg_status": decay.tvg_status,
-            "best_candidate": decay.best_candidate, "best_rmse_db": round(decay.best_rmse_db, 2),
-            "fit_window_m": [round(decay.r_fit_min_m, 2), round(decay.r_fit_max_m, 2)],
-            "r_ref_m": round(decay.r_ref_m, 2), "suggested_recipe": suggested, "configured_recipe": configured,
+            "best_model": best.name, "best_rms_db": _round(best.rms_db), "runner_up": fit.runner_up,
+            "free_n": _round(fit.free_n, 1), "fit_window_m": [_round(w) for w in fit.window_m],
+            "window_source": fit.window_source, "low_contrast": fit.low_contrast,
+            "tvg_params": {"spreading_loss_db": best.spreading_loss_db,
+                           "absorption_db_per_m": _round(best.absorption_db_per_m, 4)},
+            "tvg_status": fit.tvg_status,
+            "spread_after_best_db": _round(check_best.spread_db),
+            "trend_after_best_db_per_10m": _round(check_best.trend_db_per_10m),
+            "configured": check_config.params, "configured_model": check_config.model_name,
+            "spread_after_config_db": _round(check_config.spread_db),
+            "trend_after_config_db_per_10m": _round(check_config.trend_db_per_10m),
         }
-        logger.info("%s: %s (best %s, RMSE %.2f dB); config uses %s", freq_key, decay.tvg_status,
-                    decay.best_candidate, decay.best_rmse_db, configured)
-        if suggested != configured:
-            report.note(f"{freq_key}: the fit suggests {suggested} but the config applies {configured} -- "
-                        "check the figure and update correct: before step 3")
-        fig = fit_figure(decay, f"{path.name}  {freq_key}  pings {start}:{stop}")
+        logger.info("%s: best %s (%.2f dB RMS, free n %.1f); after TVG %.2f dB; config %s leaves %s dB",
+                    freq_key, best.name, best.rms_db, fit.free_n, check_best.spread_db, check_config.model_name,
+                    _round(check_config.spread_db))
+        for note in fit.notes:
+            if not note.startswith("Best "):
+                report.note(f"{freq_key}: {note}")
+        if (check_config.spread_db is not None and check_best.spread_db is not None
+                and check_config.spread_db - check_best.spread_db > _FLATNESS_TOLERANCE_DB):
+            report.note(
+                f"{freq_key}: the config's TVG ({check_config.model_name}) leaves {check_config.spread_db:.2f} dB "
+                f"against {check_best.spread_db:.2f} dB for {best.name} -- check the figure and update "
+                "correct: before step 3"
+            )
+        fig = fit_figure(fit, check_best, check_config, f"{path.name}  {freq_key}  pings {start}:{stop}")
         report.figure(save_figure(fig, out_dir / f"{freq_key}_tvg_fit.png", dpi=140, tight=False), paths.output_root)
 
     report.write(paths.reports, next_step="03_correct.py")

@@ -34,8 +34,9 @@ analyze:
   pings: [0, 5000]
   bin_width_m: 1.0
   range_var: slant_range_m
-  usable_range_m: null   # null: detect; set it when the detector finds none
-  r_fit_min_m: auto      # or a range (m) past the near-field peak
+  start_margin_m: 5.0    # the TVG fit window starts this far past the profile peak
+  knee_db: 3.0           # ...and ends at the noise knee, within this many dB of the lowest level
+  window_m: null         # or [min, max] (m) to set the fit window by hand
 
 correct:
   # interpolate_aux is added automatically when a step needs navigation.
@@ -44,7 +45,7 @@ correct:
   chunk_pings: 2000      # bound memory; null corrects whole files at once
   params:
     tvg:
-      spreading_loss_db: 20.0       # 0 if the hardware already compensates spreading
+      spreading_loss_db: 30.0       # 02_analyze's best model; 0 if the hardware already compensates spreading
       # absorption_db_per_m: 0.2    # default: Francois-Garrison for each frequency
     # interpolate_aux:
     #   held_values: fixes          # "raw" interpolates repeated (sample-and-hold) aux entries as logged

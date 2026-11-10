@@ -97,5 +97,5 @@ plt.close(thumb)
 # %%
 # The default TVG uses 30 log R spreading and Francois-Garrison
 # absorption. Whether a sonar already applied some gain in hardware
-# varies; :func:`~sidescanpy.analysis.fit_range_decay` measures what a dataset
+# varies; :func:`~sidescanpy.analysis.fit_tvg_models` measures what a dataset
 # still needs (see ``examples/tvg_calibration.py``).
