@@ -24,6 +24,18 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+- Georeferenced chips and windows honour `resample_method="griddata"` (the
+  default): `export.georef_window.extract_georef_window` gains
+  `interp_method` and interpolates with scipy in the map frame instead of
+  averaging within a search radius, which blurred windows finer than the
+  ping spacing. The shared `export.geometric_window.interpolate_scattered`
+  centres coordinates before triangulating; with raw UTM coordinates
+  scipy's triangulation lost precision and drew faceted images.
+- Dropout samples (recorded amplitude exactly zero) are masked before
+  geometric and georeferenced resampling
+  (`export.windows.mask_dropouts`), so they no longer spread into dark
+  spots. They are found on the uncorrected values, because TVG moves them
+  off the dB floor.
 - `mask_nadir_gap` (and so every geometric or georeferenced chip and swath
   window) no longer blanks most of a side on pings where a bright
   far-range return set the first-return threshold: such boundaries are
