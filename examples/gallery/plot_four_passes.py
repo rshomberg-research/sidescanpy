@@ -22,8 +22,9 @@ has, but only once the navigation is right. Here that takes four steps:
    each ping looks across.
 4. **Layback.** The towfish trails the ship by the tow-point offset plus
    the cable. The cable length was not recorded, so the layback here
-   (20 m) was found by aligning these passes: shorter or longer layback
-   pulls the wrecks on opposite courses apart.
+   (15 m) was found from two passes run in opposite directions (lines 78
+   and 85): with no layback they place the wreck 30 m apart along the
+   track, twice the missing layback.
 
 Data: BGS London Gateway, Klein 3000 at 400 kHz, Open Government Licence
 v3.0, contains data supplied by UKRI (see :doc:`/example_data`).
@@ -63,7 +64,7 @@ configure_logging("ERROR")
 
 LINES = ["bgs_london_gateway_dynamo_78.xtf", "bgs_london_gateway_dynamo_86.xtf",
          "bgs_london_gateway_dynamo_88.xtf", "bgs_london_gateway_dynamo_85.xtf"]
-LAYBACK_M = 20.0
+LAYBACK_M = 15.0
 WINDOW_M, CELL_M = 64.0, 0.15
 
 # The catalogued wreck position (UTM zone 31N), moved to the middle of the
@@ -176,8 +177,13 @@ plt.close(thumb)
 # %%
 # Reading the result
 # ------------------
-# On the map the four passes put the hull in the same place to within a
-# few metres; what is left comes from the layback, which is one value for
-# all four lines, and from the course standing in for the heading. The
-# shadows point away from each track, so each pass shows a different side
-# of the wreck: a mosaic of all four would show more of it than any one.
+# On the map the four passes put the hull in the same place to within
+# 5 to 10 m. What is left has three sources. A tidal current set the
+# towfish sideways off the ship's track on the south-east line (the
+# passes made 1.35 m/s over the ground running north-east and 2.65 m/s
+# running south-west, so about 0.65 m/s of current), and a layback only
+# moves a pass along its course. The layback is one value for all four
+# lines, while the real one varies a little from line to line. And the
+# course stands in for the heading. The shadows point away from each
+# track, so each pass shows a different side of the wreck: a mosaic of
+# all four would show more of it than any one.
