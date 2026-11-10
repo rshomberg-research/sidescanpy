@@ -300,7 +300,7 @@ print(f"first seabed echo at sample {fb}: t = {fb} / {fs:.0f} = {1000 * fb / fs:
       f"R = {c:.0f} x {fb / fs:.5f} / 2 = {c * fb / fs / 2:.2f} m")
 for other in (1480.0, 1520.0):
     print(f"  with c = {other:.0f} m/s the same echo would be at {other * fb / fs / 2:.2f} m")
-print(f"usable range, starboard (estimate_usable_range): {usable.usable_range_m:.0f} m")
+print(f"usable range, starboard (estimate_usable_range, noise knee): {usable.usable_range_m:.0f} m")
 
 
 
@@ -321,7 +321,7 @@ for a in (ax, ax_z):
     a.axvspan(0, 1000 * fb / fs, color="C0", alpha=0.12, label="water column")
     a.axvline(1000 * fb / fs, color="C0", lw=1.5, label="first seabed echo")
     a.set_xlabel("time since transmit (ms)")
-ax.axvspan(2000 * usable.usable_range_m / c, time_ms[-1], color="0.5", alpha=0.15, label="fading into noise")
+ax.axvspan(2000 * usable.usable_range_m / c, time_ms[-1], color="0.5", alpha=0.15, label="noise (past the noise knee)")
 ax.set_ylabel("recorded level (dB re 1 count)")
 ax.set_xlim(0, time_ms[-1])
 ax.legend(loc="upper right", fontsize=9)
@@ -468,9 +468,10 @@ plt.close(thumb)
 #
 # **The image fades with range.** The level falls by tens of dB from
 # the first echo outward. :func:`~sidescanpy.analysis.estimate_usable_range`
-# puts the starboard signal into the noise at 68 m, while the mean
-# level keeps falling slowly past that; :doc:`plot_range_limits` looks
-# at why. The ping is also recorded as plain counts, not a calibrated
+# puts the starboard signal into the noise at 91 m: its noise knee, where
+# the median level comes within 3 dB of its lowest value and stops
+# falling. :doc:`plot_range_limits` compares that with a more cautious
+# rule. The ping is also recorded as plain counts, not a calibrated
 # sound level: :doc:`plot_amplitude_and_db` explains what the dB values
 # mean.
 #
