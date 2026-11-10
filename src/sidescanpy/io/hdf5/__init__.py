@@ -51,7 +51,7 @@ Conventions
 - ``chunks=`` applies only to frequency channels. Aux records always
   load eagerly regardless.
 
-See ``docs/io_hdf5.md`` for full reference.
+See ``docs/format/ss_h5.md`` for full reference.
 
 2026 rshomberg@uri.edu
 """

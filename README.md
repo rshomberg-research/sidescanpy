@@ -199,7 +199,7 @@ make docs   # documentation site, runs the gallery (needs every extra: uv sync -
 
 Integration tests under `tests/integration/` need real survey files and
 are skipped without them. The public test fixtures are not in the
-repository either; see [`docs/status.md`](docs/status.md#test-and-example-data). See [`docs/development.md`](docs/development.md)
+repository either; see [`docs/development.md`](docs/development.md#test-data). See [`docs/development.md`](docs/development.md)
 and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License

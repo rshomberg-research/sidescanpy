@@ -19,7 +19,7 @@ Conventions
   converter coerces them to ``np.nan``.
 - All output time coordinates are ``datetime64[ns]``.
 
-See ``docs/io_jsf.md`` for full reference and known issues.
+See ``docs/sources/jsf.md`` for full reference and known issues.
 
 2026 rshomberg@uri.edu
 """

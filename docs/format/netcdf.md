@@ -1,9 +1,10 @@
-# NetCDF
+# NetCDF, one frequency
 
+The same [data format](index.md) for a single frequency.
 `sidescanpy.io.netcdf` writes one frequency channel on its own, as a
 standalone NetCDF-4 file (`.nc`), without the survey wrapper or the aux
 records. Use it to hand one frequency to a tool or a colleague that
-expects a single dataset. For a whole survey, use [`.ss.h5`](io_hdf5.md).
+expects a single dataset. For a whole survey, use [`.ss.h5`](ss_h5.md).
 
 ```python
 from sidescanpy.io.netcdf import read_frequency_channel, write_frequency_channel

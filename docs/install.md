@@ -62,6 +62,6 @@ uv sync --all-extras
 make test
 ```
 
-See [Development](development.md) for the test, lint and docs commands.
+See [Contributing](development.md) for the test, lint and docs commands.
 
 Next: [Getting started](getting_started.md).

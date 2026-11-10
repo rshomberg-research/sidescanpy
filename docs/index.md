@@ -13,7 +13,7 @@ functions measure a dataset's units, nadir, usable range and TVG state.
 Until 1.0, any 0.x release may change the `.ss.h5` file format, the
 API and the CLI. Keep your raw sonar files, pin the version you use,
 and expect to re-convert `.ss.h5` files after an upgrade. See
-[Project status](status.md).
+[Stability](status.md).
 :::
 
 [![A raw and a corrected EdgeTech line](assets/gallery/correct_a_line.png)](examples/plot_correct_a_line.rst)
@@ -64,8 +64,12 @@ walks through this code step by step, with the output of each step.
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
   [Command line](cli.md), [Logging](logging.md), [Limitations](limitations.md).
-- **Formats:** [overview](formats.md), [JSF](io_jsf.md), [SDF](io_sdf.md), [XTF](io_xtf.md), [HDF5](io_hdf5.md),
-  [NetCDF](io_netcdf.md).
+- **Data format:** [the format every reader converts into](format/index.md):
+  [the .ss.h5 file](format/ss_h5.md) and [NetCDF for one frequency](format/netcdf.md).
+  A draft, open for comment.
+- **Source formats:** [overview](sources/index.md), [EdgeTech JSF](sources/jsf.md),
+  [Klein SDF](sources/sdf.md), [XTF](sources/xtf.md), and
+  [adding a source format](sources/new_source.md).
 - **Reference:** [API reference](reference/index.md), one page per module, generated from the docstrings.
 
 ```{toctree}
@@ -75,8 +79,9 @@ Install <install>
 Getting started <getting_started>
 Examples <examples/index>
 Guide <guide>
-Formats <formats>
+Data format <format/index>
+Source formats <sources/index>
 API reference <reference/index>
-Development <development>
-Project status <status>
+Stability <status>
+Contributing <development>
 ```

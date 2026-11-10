@@ -1,10 +1,9 @@
 # Klein SDF
 
-Klein sidescan systems record SDF (`.sdf`): a sequence of pages, each a
-4-byte marker (`0xFFFFFFFF`), a 512-byte header and a body of sonar
-samples. sidescanpy reads the sonar pages of the UUV-3500 layout (page
-versions 3501 and 3502, low and high frequency), as written by the
-Klein 4900, and converts them into one `SideScanSurvey`.
+Klein sidescan systems record SDF (`.sdf`). sidescanpy reads the sonar
+pages of the UUV-3500 layout (page versions 3501 and 3502, low and high
+frequency), as written by the Klein 4900, and converts them into the
+[data format](../format/index.md).
 
 ```python
 from sidescanpy.io import read_and_convert, read_and_convert_segments
@@ -22,6 +21,38 @@ builds the survey from a page list.
 There is no public SDF example yet. If you can share a short SDF file
 under an open licence, please get in touch.
 
+## File structure
+
+A sequence of pages, each a 4-byte marker (`0xFFFFFFFF`), a 512-byte
+header and a body of sonar samples. Each page is one ping at one
+frequency, and its header carries everything recorded with that ping:
+position, attitude, altitude, speed and the auxiliary sensors.
+
+## Channels and data streams
+
+Unlike JSF, SDF has no separate navigation or sensor messages: every
+stream comes from the sonar page headers, one value per page.
+
+| Stream | SDF source | In the data format | Rate |
+|---|---|---|---|
+| Sonar, port and starboard, low frequency | page 3501 body | `frequencies/hz_<Hz>` (from `sonar_freq_khz`) | every low-frequency ping |
+| Sonar, port and starboard, high frequency | page 3502 body | a second `frequencies/hz_<Hz>` | every high-frequency ping |
+| Towfish position | `fish_latitude`, `fish_longitude` (radians) | per-ping `latitude`, `longitude`; `navigation` record | every page (held between fixes) |
+| Ship position | `ship_latitude`, `ship_longitude` | used only when the towfish position is 0 | every page |
+| Heading, pitch, roll | towfish heading, pitch, roll | per-ping values; `attitude` record | every page |
+| Altitude | altimeter reading | `altitude_m`, `fathometer_reading_m` | every page |
+| Depth | a sensor voltage | `depth_m` is NaN (see below) | every page |
+| Auxiliary pitch, roll, depth, altitude sensors | aux header fields | exposed on the page objects, not converted | every page |
+| Cable out | field 50 | `cable_out_m` (no layback distance is recorded) | every page |
+| Sound velocity, heave | not recorded | NaN; range at 1500 m/s | none |
+| DVL, other sensors | none in SDF | empty `dvl` record, no sensor records | none |
+
+Both frequencies keep their own ping axes. `position_source` is
+`towfish` where the page's towfish position is set and used, `ship`
+where the reader fell back to the ship position, and `mixed` if both
+occur; `sdf_layback_method` records the header's layback method (0
+Pythagorean, 1 hull mount).
+
 ## Page versions
 
 | Version | Pages | Read |
@@ -32,7 +63,7 @@ under an open licence, please get in touch.
 | 3000, 3001 | System 3000 | no |
 | others | non-sonar pages | skipped |
 
-## Mapping to the model
+## Mapping to the data format
 
 | Survey | SDF header |
 |---|---|

@@ -47,8 +47,10 @@ frequency, keyed `hz_<frequency>`, plus the navigation, attitude, DVL and
 sensor records the file carried. Backscatter has dimensions
 `(ping, channel, sample)`, with channel 0 port and 1 starboard. Per-ping
 values (position, heading, attitude, altitude, sound velocity) are
-variables along `ping`. [Data model](core.md) describes the structure
-and [HDF5](io_hdf5.md) the `.ss.h5` file.
+variables along `ping`. This is sidescanpy's [data format](format/index.md):
+every reader converts into it and everything else runs on it.
+[Data model](core.md) describes the structure and
+[The .ss.h5 file](format/ss_h5.md) the file.
 
 The `.ss.h5` file is a derived product. Keep the raw XTF: until 1.0 the
 file format may change and you may need to convert again.
@@ -199,7 +201,8 @@ The CLI runs the same library calls on whole folders of files; see
 
 - [Building a workflow](workflow.md): one script per step and one config
   per survey, for real surveys.
-- [Formats](formats.md): what each reader supports.
+- [Data format](format/index.md): the format every reader converts into.
+- [Source formats](sources/index.md): what each reader supports.
 - [API reference](reference/index.md): every function and its parameters.
 
 Data: JNCC mid-Irish Sea, Open Government Licence v3.0 (see

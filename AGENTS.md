@@ -10,7 +10,7 @@ https://github.com/rshomberg-research/sidescanpy (public).
 `main`. Everything in the repository, `docs/` and every docstring is
 public. **Status:** beta. The `.ss.h5` format, API and CLI may change in
 any 0.x release, and the README and docs say so; keep those warnings
-until 1.0. Publishing setup: `docs/development.md` → "Publishing".
+until 1.0. The `docs` workflow publishes the site from `main`.
 
 This file is the working guide for anyone changing the code, by hand or
 with a coding agent. It is not a log: history belongs in commit

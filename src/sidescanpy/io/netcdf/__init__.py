@@ -22,7 +22,7 @@ Conventions
 - Round-trip is bit-exact for variable values, attributes, and
   ``processing_history``.
 
-See ``docs/io_netcdf.md`` for full reference.
+See ``docs/format/netcdf.md`` for full reference.
 
 2026 rshomberg@uri.edu
 """
