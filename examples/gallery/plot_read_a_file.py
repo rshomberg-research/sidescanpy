@@ -30,6 +30,7 @@ from sidescanpy.log import configure_logging
 from sidescanpy.processing import compute_geometric_ranges
 from sidescanpy.viz import plot_waterfall
 
+# sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_read_a_file.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("INFO")
@@ -64,3 +65,12 @@ for ax, freq_key in zip(axes, sorted(survey.frequencies)):
     plot_waterfall(ds, x_axis="slant_range", gamma=0.5, ax=ax,
                    title=f"{freq_key}: raw, slant range")
 fig.savefig(out / "read_a_file.png", dpi=110)
+# sphinx_gallery_start_ignore
+# A clean thumbnail for the examples page (hidden on this page).
+thumb, tax = plt.subplots(figsize=(4, 2.8))
+plot_waterfall(ds, x_axis="slant_range", gamma=0.5, ax=tax, title=None)
+tax.set_axis_off()
+thumb.subplots_adjust(0, 0, 1, 1)
+thumb.savefig(out / "thumb_read_a_file.png", dpi=100)
+plt.close(thumb)
+# sphinx_gallery_end_ignore

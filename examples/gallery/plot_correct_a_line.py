@@ -39,6 +39,7 @@ from sidescanpy.processing import (
 )
 from sidescanpy.viz import plot_waterfall
 
+# sphinx_gallery_thumbnail_path = '_build/gallery-output/thumb_correct_a_line.png'
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
 out.mkdir(parents=True, exist_ok=True)
 configure_logging("INFO")
@@ -80,6 +81,18 @@ plot_waterfall(for_display(raw), x_axis="slant_range", gamma=0.5, ax=ax_raw, tit
 plot_waterfall(for_display(corrected), x_axis="across_track", y_axis="along_track",
                vmin_pct=2, vmax_pct=99.5, ax=ax_cor, title="Bottom track + TVG + ground range (dB)")
 fig.savefig(out / "correct_a_line.png", dpi=110)
+# sphinx_gallery_start_ignore
+# A clean thumbnail for the examples page (hidden on this page).
+thumb, tax = plt.subplots(figsize=(4, 2.8))
+plot_waterfall(for_display(corrected), x_axis="across_track", y_axis="along_track",
+               vmin_pct=2, vmax_pct=99.5, ax=tax, title=None)
+tax.set_facecolor("black")
+tax.set_xticks([])
+tax.set_yticks([])
+thumb.subplots_adjust(0, 0, 1, 1)
+thumb.savefig(out / "thumb_correct_a_line.png", dpi=100)
+plt.close(thumb)
+# sphinx_gallery_end_ignore
 
 # %%
 # The default TVG uses 30 log R spreading and Francois-Garrison

@@ -77,7 +77,7 @@ sphinx_gallery_conf = {
     "filename_pattern": r"/plot_",
     # Each script gets a scratch output directory as its first argument.
     "reset_argv": "sidescanpy_docs.gallery_argv",
-    "within_subsection_order": "FileNameSortKey",
+    "within_subsection_order": "sidescanpy_docs.gallery_order",
     "download_all_examples": False,
     "remove_config_comments": True,
     "show_signature": False,
