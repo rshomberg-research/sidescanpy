@@ -47,9 +47,16 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   attribute. Without `nav_crs` such a file raises `ValueError` (it raised
   `NotImplementedError`); the zone is not guessed. `nav_crs` is ignored
   for files in degrees (`NavUnits` 3).
+- `datasets`: eleven public BGS London Gateway lines (Klein 400 kHz XTF
+  over seven catalogued wrecks, Open Government Licence) and
+  `BGS_LONDON_GATEWAY_WRECKS`, the catalogued wreck centres.
 
 ### Fixed
 
+- `io.xtf`: blocks whose `Weight` lies beyond ±30 (garbage in some older
+  KleinXlt/GeoDAS files, e.g. -8408) are left unscaled with a WARNING and
+  counted in `xtf_weight_ignored`; 2**-Weight used to overflow every
+  sample.
 - Georeferenced chips and windows honour `resample_method="griddata"` (the
   default): `export.georef_window.extract_georef_window` gains
   `interp_method` and interpolates with scipy in the map frame instead of
