@@ -13,13 +13,13 @@ sidescanpy is not on PyPI yet. Until it is, install from the GitHub
 repository, pinned to a release tag:
 
 ```bash
-pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
+pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
 ```
 
 With [uv](https://docs.astral.sh/uv/), in a project:
 
 ```bash
-uv add "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.9.0"
+uv add "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
 ```
 
 `uv add` records the pin in `pyproject.toml` and `uv.lock`. Use `@main`
