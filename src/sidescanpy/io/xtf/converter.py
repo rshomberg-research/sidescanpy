@@ -26,7 +26,10 @@ validated survey shaped like the JSF and SDF ones:
   ping; scaling makes the samples equal to the JSF ones for the same
   ping (checked on a public Discover 7.22 recording with both files).
   Writers that leave ``Weight`` at 0 are unaffected. The range seen is
-  recorded in ``xtf_weight_min`` / ``xtf_weight_max``.
+  recorded in ``xtf_weight_min`` / ``xtf_weight_max``. Some older
+  Klein-written files hold garbage (e.g. -8408); blocks with ``|Weight|``
+  above 30 are left unscaled, with a WARNING, and counted in
+  ``xtf_weight_ignored``.
 - Each frequency has its own ping axis. A ping holding neither channel
   of a frequency (some files' early packets carry only the low-frequency
   pair, see :mod:`sidescanpy.io.xtf.reader`) is left out of that
@@ -146,6 +149,10 @@ from sidescanpy.io.xtf.reader import XtfChannel, XtfPingData, ping_times
 from sidescanpy.io.xtf.structs import HEADER_TYPE_SONAR, NAV_UNITS_LATLON, NAV_UNITS_METERS
 
 logger = logging.getLogger(__name__)
+
+# Largest plausible |Weight| (the 2**-Weight block-floating-point exponent);
+# larger values are treated as unrecorded.
+_MAX_WEIGHT = 30
 
 #: ``SoundVelocity`` values below this (m/s) are taken as halved and doubled.
 HALVED_SOUND_VELOCITY_BELOW_MS = 1000.0
@@ -587,6 +594,7 @@ def _build_frequency_channel(
     pos[keep] = np.arange(n)
     bs = np.full((n, 2, max_n), np.nan, dtype=np.float32)
     weights: list[np.ndarray] = []
+    n_weight_ignored = 0
     for piece in entry.pieces:
         for side, ch in enumerate((piece.port, piece.stbd)):
             if ch is None or ch.samples.shape[1] == 0:
@@ -599,6 +607,13 @@ def _build_frequency_channel(
             # JSF samples are by their weighting factor.
             weight = ch.headers["Weight"][rows].astype(np.int64)
             weights.append(weight)
+            # A weighting exponent beyond +-_MAX_WEIGHT is not a scale but
+            # garbage (some older Klein-written files hold e.g. -8408, which
+            # would overflow every sample): leave those blocks unscaled.
+            implausible = np.abs(weight) > _MAX_WEIGHT
+            if implausible.any():
+                n_weight_ignored += int(implausible.sum())
+                weight = np.where(implausible, 0, weight)
             if np.any(weight != 0):
                 block *= np.exp2(-weight).astype(np.float32)[:, None]
             k = ch.num_samples[rows, None].astype(np.int64)
@@ -611,6 +626,12 @@ def _build_frequency_channel(
             bs[dst, side, :m] = block
 
     weight_all = np.concatenate(weights) if weights else np.zeros(0, dtype=np.int64)
+    if n_weight_ignored:
+        logger.warning(
+            "hz_%d: %d channel block(s) have an implausible Weight (%d to %d, beyond +-%d); "
+            "their samples are left unscaled",
+            freq_hz, n_weight_ignored, weight_all.min(), weight_all.max(), _MAX_WEIGHT,
+        )
     n_weighted = int(np.sum(weight_all != 0))
     if n_weighted:
         logger.debug(
@@ -641,6 +662,7 @@ def _build_frequency_channel(
         "xtf_pings_other_sample_rate": n_other,
         "xtf_weight_min": int(weight_all.min()) if weight_all.size else 0,
         "xtf_weight_max": int(weight_all.max()) if weight_all.size else 0,
+        "xtf_weight_ignored": n_weight_ignored,
     }
     coords = {
         "sample": (["sample"], np.arange(max_n)),
