@@ -186,42 +186,52 @@ fig.savefig(out / "range_limits_first_samples.png", dpi=150)
 # The far end: where the echo meets the noise
 # -------------------------------------------
 # :func:`~sidescanpy.analysis.estimate_usable_range` bins all samples
-# beyond the first seabed echo by slant range (2 m bins, both sides),
-# takes the median of the farthest tenth of the bins as the noise floor
-# and reports the last bin still 3 noise standard deviations above it.
-# The same binned medians, in dB, show the knee directly: the range
-# where the level stops falling, taken here as the first bin within
-# 1 dB of the lowest bin.
+# beyond the first seabed echo by slant range (2 m bins, both sides) and
+# reports where the signal ends in one of two ways.
+#
+# - **Noise knee** (the default, ``method="knee"``): the bin medians in
+#   dB, and the first range past the near-range peak where the level
+#   comes within 3 dB of its lowest value
+#   (:func:`~sidescanpy.analysis.find_noise_knee`). Past it the level
+#   no longer falls: any seabed signal is gone.
+# - **SNR rule** (``method="snr"``, the cautious alternative): the median
+#   of the farthest tenth of the bins is taken as the noise floor, and
+#   the usable range is the last bin still 3 noise standard deviations
+#   above it.
 
 profiles = {}
 for name in ("low", "high"):
     ds = lines[name]
     first = analysis.analyze_nadir(ds).first_bottom_return_sample
-    usable = analysis.estimate_usable_range(ds, exclude_before_sample=first)
-    binned = usable.binned
+    by_knee = analysis.estimate_usable_range(ds, exclude_before_sample=first)
+    by_snr = analysis.estimate_usable_range(ds, exclude_before_sample=first, method="snr")
+    binned = by_snr.binned
     centre = 0.5 * (binned["range_min_m"].values + binned["range_max_m"].values)
     level = 20 * np.log10(binned["median"].values)
-    lowest = int(np.argmin(level))
-    # No knee inside the record if the lowest bin is in the last tenth.
-    knee = float(centre[np.argmax(level <= level[lowest] + 1.0)]) if lowest < 0.9 * len(level) else None
-    profiles[name] = dict(range=centre, level=level, usable=usable.usable_range_m, knee=knee,
-                          noise=20 * np.log10(usable.noise_floor), alpha=francois_garrison_absorption_db_per_m(
-                              center_frequency_hz(ds)), freq=center_frequency_hz(ds))
-    threshold = usable.noise_floor + usable.snr_threshold * usable.noise_std
-    print(f"{name}: usable range (estimate_usable_range) {usable.usable_range_m:.0f} m; noise floor "
-          f"{usable.noise_floor:.2f} ({20 * np.log10(usable.noise_floor):.1f} dB re 1), noise std {usable.noise_std:.2f}; "
-          f"a bin counts as signal above {usable.noise_floor:.2f} + {usable.snr_threshold:.0f} x {usable.noise_std:.2f} = "
-          f"{threshold:.2f} ({20 * np.log10(threshold):.1f} dB re 1)")
-    knee_text = f"within 1 dB of it from {knee:.0f} m" if knee else "still falling at the end of the record: no knee"
-    print(f"   lowest binned level {level[lowest]:.1f} dB at {centre[lowest]:.0f} m; {knee_text}; "
-          f"level at the end of the record {level[-1]:.1f} dB")
+    knee = by_knee.knee
+    # The lowest bin in the last tenth of the record: the level is still
+    # falling where the record ends, so the knee is no noise floor.
+    falling = knee.lowest_m >= 0.9 * centre[-1]
+    profiles[name] = dict(range=centre, level=level, knee=by_knee.usable_range_m, snr=by_snr.usable_range_m,
+                          falling=falling, noise=20 * np.log10(by_snr.noise_floor),
+                          alpha=francois_garrison_absorption_db_per_m(center_frequency_hz(ds)),
+                          freq=center_frequency_hz(ds))
+    print(f"{name}: usable range by the noise knee (default) {by_knee.usable_range_m:.0f} m; lowest binned level "
+          f"{knee.lowest_db:.1f} dB re 1 at {knee.lowest_m:.0f} m, the knee is the first range within "
+          f"{knee.knee_db:.0f} dB of it; level at the end of the record {level[-1]:.1f} dB")
+    if falling:
+        print("   the lowest bin lies in the last tenth of the record: the level is still falling where it ends")
+    threshold = by_snr.noise_floor + by_snr.snr_threshold * by_snr.noise_std
+    print(f"   usable range by the SNR rule {by_snr.usable_range_m:.0f} m; noise floor "
+          f"{by_snr.noise_floor:.2f} ({20 * np.log10(by_snr.noise_floor):.1f} dB re 1), noise std "
+          f"{by_snr.noise_std:.2f}; a bin counts as signal above {by_snr.noise_floor:.2f} + "
+          f"{by_snr.snr_threshold:.0f} x {by_snr.noise_std:.2f} = {threshold:.2f} ({20 * np.log10(threshold):.1f} dB re 1)")
 
 # %%
 # The figure shows both frequencies on the starboard side, the same
-# pings, with each frequency's usable range (solid line) and noise knee
-# (dashed line, high frequency only) and the farthest tenth of the
-# record that :func:`~sidescanpy.analysis.estimate_usable_range` takes
-# as the noise floor (boxed). The zooms on the right show 80 to 120 m
+# pings, with each frequency's usable range by the noise knee (solid
+# line) and by the SNR rule (dashed line), and the farthest tenth of the
+# record that the SNR rule takes as the noise floor (boxed). The zooms on the right show 80 to 120 m
 # at each frequency, each on its own grey stretch: at the high frequency
 # the ripples end near 90 m and leave even speckle; the low frequency
 # still shows changes of level along range and from ping to ping.
@@ -255,16 +265,16 @@ for row, name in enumerate(("low", "high")):
     n_p = db.shape[0]
     ax, ax_z = axes[row]
     ax.imshow(db, cmap="gray", vmin=lo, vmax=hi, origin="lower", aspect="auto", extent=[0, rng_m[-1], 0, n_p])
-    ax.axvline(p["usable"], color="yellow", lw=1.5)
-    ax.text(p["usable"] + 1, 5, f"usable range\n{p['usable']:.0f} m", color="yellow", fontsize=9, fontweight="bold")
-    if p["knee"]:
-        ax.axvline(p["knee"], color="cyan", lw=1.5, ls="--")
-        ax.text(p["knee"] + 1, 5, f"noise knee\n{p['knee']:.0f} m", color="cyan", fontsize=9, fontweight="bold")
-        label_box(ax, p["knee"] + 3, 176, n_p - 70, n_p - 24, "noise only", colour="magenta")
+    ax.axvline(p["knee"], color="yellow", lw=1.5)
+    ax.text(p["knee"] + 1, 5, f"noise knee\n{p['knee']:.0f} m", color="yellow", fontsize=9, fontweight="bold")
+    ax.axvline(p["snr"], color="cyan", lw=1.5, ls="--")
+    ax.text(p["snr"] + 1, 5, f"SNR rule\n{p['snr']:.0f} m", color="cyan", fontsize=9, fontweight="bold")
+    if p["falling"]:
+        label_box(ax, p["knee"] + 2, 178, n_p - 70, n_p - 24, "level still\nfalling", colour="lime")
     else:
-        label_box(ax, 140, 176, n_p - 70, n_p - 24, "level still falling", colour="lime")
+        label_box(ax, p["knee"] + 3, 176, n_p - 70, n_p - 24, "noise only", colour="magenta")
     tenth = 0.9 * p["range"][-1]
-    label_box(ax, tenth, rng_m[-1] - 0.5, 4, n_p - 90, "taken as\nnoise floor", colour="orange")
+    label_box(ax, tenth, rng_m[-1] - 0.5, 4, n_p - 90, "SNR rule:\nnoise floor", colour="orange")
     label_box(ax, ZOOM[0], ZOOM[1], ZOOM[2], ZOOM[3], "zoom", colour="w")
     ax.set_xlim(0, rng_m[-1])
     ax.set_ylabel("ping")
@@ -317,9 +327,9 @@ for name in ("low", "high"):
 # Left: absorption against frequency, with the two frequencies of this
 # line. Right: the binned median level against slant range for both
 # (solid), the spreading-plus-absorption model with the noise floor
-# (dashed), the noise knee (circle), the usable range from
-# :func:`~sidescanpy.analysis.estimate_usable_range` (triangle), and the
-# end of the record and ``c / (2 PRF)`` (grey lines).
+# (dashed), the usable range from
+# :func:`~sidescanpy.analysis.estimate_usable_range` by the noise knee
+# (circle) and by the SNR rule (triangle), and the end of the record and ``c / (2 PRF)`` (grey lines).
 
 freqs = np.logspace(4, 6, 200)
 fig, (ax_a, ax_l) = plt.subplots(1, 2, figsize=(12.5, 5.2), width_ratios=[1, 1.5], constrained_layout=True)
@@ -330,9 +340,8 @@ for name, colour in (("low", "C0"), ("high", "C3")):
               label=f"{p['freq'] / 1e3:.0f} kHz: {1000 * p['alpha']:.0f} dB/km")
     ax_l.plot(p["range"], p["level"], color=colour, lw=2, label=f"{name}, {p['freq'] / 1e3:.0f} kHz, measured")
     ax_l.plot(p["range"], p["model"], "--", color=colour, lw=1.2, label="model: 30 log R + 2 alpha R, plus floor")
-    if p["knee"]:
-        ax_l.plot(p["knee"], np.interp(p["knee"], p["range"], p["level"]), "o", color=colour, ms=9, mfc="none", mew=2)
-    ax_l.plot(p["usable"], np.interp(p["usable"], p["range"], p["level"]), "v", color=colour, ms=9)
+    ax_l.plot(p["knee"], np.interp(p["knee"], p["range"], p["level"]), "o", color=colour, ms=9, mfc="none", mew=2)
+    ax_l.plot(p["snr"], np.interp(p["snr"], p["range"], p["level"]), "v", color=colour, ms=9)
 ax_a.set_xlabel("frequency (kHz)")
 ax_a.set_ylabel("absorption (dB/km, one way)")
 ax_a.set_title("Francois-Garrison absorption", loc="left")
@@ -343,8 +352,8 @@ for x, label in ((recorded, "end of record"), (r_max, "c / (2 PRF)")):
     ax_l.text(x - 1.5, 1.5, label, rotation=90, ha="right", va="bottom", fontsize=9, color="0.3")
 ax_l.set_xlabel("slant range (m)")
 ax_l.set_ylabel("median level (dB re 1 recorded unit)")
-ax_l.plot([], [], "o", color="0.3", ms=8, mfc="none", mew=2, label="noise knee (within 1 dB of the lowest)")
-ax_l.plot([], [], "v", color="0.3", ms=8, label="usable range (estimate_usable_range)")
+ax_l.plot([], [], "o", color="0.3", ms=8, mfc="none", mew=2, label="usable range: noise knee (default)")
+ax_l.plot([], [], "v", color="0.3", ms=8, label="usable range: SNR rule")
 ax_l.set_title("Echo level against range, both frequencies", loc="left")
 ax_l.set_xlim(0, 220)
 ax_l.set_ylim(0, 68)
@@ -376,27 +385,28 @@ plt.close(thumb)
 # is not exactly the default and the recorder may add gain of its own,
 # so this is a check of the shape, not a fit.
 #
-# **The noise knee and the usable range differ.** At the high
-# frequency the median level stops falling at about 99 m (within 1 dB of
-# its lowest, 8.0 dB re 1 at 115 m).
-# :func:`~sidescanpy.analysis.estimate_usable_range` is more cautious
-# and gives 66 m: it takes the farthest tenth of the record as the
-# noise floor (3.81, 11.6 dB re 1) and asks for a median 3 noise standard
-# deviations above it, 10.39 units or 20.3 dB re 1. Noise in sidescan
-# is speckled, its standard deviation (2.19) a large share of its level,
-# so that test asks for about 9 dB of signal over the floor. Beyond
-# 115 m the high-frequency floor rises again, to 12.0 dB at the end of
-# the record; something in the recorder or the water adds level with
-# time, which the file does not explain. Both numbers are useful: 66 m
-# is where the seabed is clearly above the noise, 99 m is where any
-# seabed signal is gone.
+# **Two answers at the high frequency.** The noise knee, the default of
+# :func:`~sidescanpy.analysis.estimate_usable_range`, puts the end of
+# the signal at 89 m: the first range within 3 dB of the lowest median
+# level, 8.0 dB re 1 at 115 m. The SNR rule (``method="snr"``) is more
+# cautious and gives 66 m: it takes the farthest tenth of the record as
+# the noise floor (3.81, 11.6 dB re 1) and asks for a median 3 noise
+# standard deviations above it, 10.39 units or 20.3 dB re 1. Noise in
+# sidescan is speckled, its standard deviation (2.19) a large share of
+# its level, so that test asks for about 9 dB of signal over the floor.
+# Beyond 115 m the high-frequency floor rises again, to 12.0 dB at the
+# end of the record; something in the recorder or the water adds level
+# with time, which the file does not explain. Both numbers are useful:
+# 66 m is where the seabed is clearly above the noise, 89 m is where
+# any seabed signal is gone.
 #
 # **The low frequency runs out of record, not of signal.** Its median is
 # still falling at the end of the record (22.9 dB re 1 at 195 m, the
-# lowest bin), so no knee lies inside it. The usable range of 116 m
-# from :func:`~sidescanpy.analysis.estimate_usable_range` is then too
-# short for a different reason: the "noise floor" it takes from the last
-# tenth of the record (14.50, 23.2 dB re 1) is still partly seabed echo.
+# lowest bin). The noise knee lands at 161 m, but with the lowest level
+# at the end of the record it only marks where the level comes within
+# 3 dB of its last value, not a floor. The SNR rule's 116 m is too short
+# for a different reason: the "noise floor" it takes from the last tenth
+# of the record (14.50, 23.2 dB re 1) is still partly seabed echo.
 #
 # **Timing.** The sonar pinged every 0.281 s (PRF 3.56 Hz), which allows
 # ``c / (2 PRF) = 1500 x 0.281 / 2 = 210.8 m``. The recorder kept
@@ -420,7 +430,8 @@ plt.close(thumb)
 # limit does not cost any seabed.
 #
 # *In sidescanpy:* :func:`~sidescanpy.analysis.estimate_usable_range`
-# measures the usable range;
+# measures the usable range (the noise knee by default, the SNR rule
+# with ``method="snr"``);
 # :func:`~sidescanpy.processing.slice_by_range` cuts the record at it,
 # and :func:`~sidescanpy.processing.apply_tvg` compensates spreading
 # and absorption (with
