@@ -60,6 +60,8 @@ walks through this code step by step, with the output of each step.
 - **Examples:** [real data, code and results](examples/index.rst), all on
   openly licensed recordings you can download, plus
   [target recognition](atr.md) step by step and the [example data](example_data.md).
+- **Theory:** [why sidescan looks the way it does](theory/index.rst): the
+  physics behind each processing step, measured on the same public recordings.
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
@@ -78,6 +80,7 @@ walks through this code step by step, with the output of each step.
 Install <install>
 Getting started <getting_started>
 Examples <examples/index>
+Theory <theory/index>
 Guide <guide>
 Data format <format/index>
 Source formats <sources/index>

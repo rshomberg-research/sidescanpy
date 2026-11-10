@@ -3,8 +3,9 @@
 Guide pages are MyST Markdown in ``docs/``. The API reference is
 generated from the numpydoc docstrings into
 ``docs/reference/generated/`` by ``_ext/api_pages.py``. The
-examples gallery is built by sphinx-gallery from ``examples/gallery/``
-into ``docs/examples/``, running every script on the public recordings
+examples and theory galleries are built by sphinx-gallery from
+``examples/gallery/`` and ``examples/theory/`` into ``docs/examples/`` and
+``docs/theory/``, running every script on the public recordings
 (``plot_gallery=0`` skips running them).
 """
 
@@ -72,8 +73,8 @@ intersphinx_mapping = {
 
 # -- Gallery -----------------------------------------------------------------
 sphinx_gallery_conf = {
-    "examples_dirs": ["../examples/gallery"],
-    "gallery_dirs": ["examples"],
+    "examples_dirs": ["../examples/gallery", "../examples/theory"],
+    "gallery_dirs": ["examples", "theory"],
     "filename_pattern": r"/plot_",
     # Each script gets a scratch output directory as its first argument.
     "reset_argv": "sidescanpy_docs.gallery_argv",

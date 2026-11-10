@@ -20,7 +20,7 @@ many small pieces.
 Data: BGS London Gateway, Klein 3000 at 400 kHz, Open Government Licence
 v3.0, contains data supplied by UKRI (see :doc:`/example_data`).
 
-Usage: ``python examples/gallery/plot_shadow_height.py [output_dir]``
+Usage: ``python examples/theory/plot_shadow_height.py [output_dir]``
 """
 
 # 2026 rshomberg@uri.edu
@@ -138,4 +138,4 @@ plt.close(thumb)
 # the shadow is close to the noise floor, the shadow merges into it and
 # reads too long. A shadow also gives the height of the object's highest
 # point along each ping, not its shape. Compare passes from other
-# directions (:doc:`plot_four_passes`) before trusting one number.
+# directions (:doc:`/examples/plot_four_passes`) before trusting one number.
