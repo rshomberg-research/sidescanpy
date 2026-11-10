@@ -187,3 +187,11 @@ plt.close(thumb)
 # course stands in for the heading. The shadows point away from each
 # track, so each pass shows a different side of the wreck: a mosaic of
 # all four would show more of it than any one.
+#
+# Why the 152° pass looks different
+# ---------------------------------
+# Same wreck, different geometry. The other passes run along the hull;
+# this one crosses it end-on, close under the towfish (about 10 m slant
+# range), where shadows are short and the recorder's gain makes the
+# seabed bright. Its track is on the other side, so the shadows fall the
+# other way.
