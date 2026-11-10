@@ -98,8 +98,8 @@ src/sidescanpy/
 ├── datasets.py  fetch() public example recordings (stdlib only, any layer may use)
 └── log.py       configure_logging, log_timing
 examples/        runnable scripts, smoke-tested in tests/examples;
-                 gallery/ plot_*.py run on fetched public data by sphinx-gallery
-                 during `make docs` (and in CI)
+                 gallery/ (Examples) and theory/ (Theory) plot_*.py run on fetched
+                 public data by sphinx-gallery during `make docs` (and in CI)
 docs/            Sphinx site: MyST guide pages, conf.py, _ext/ (API page
                  generator, cross-reference fallback)
 ```
@@ -123,7 +123,7 @@ forward positive; heading compass bearing clockwise from north.
 uv sync --all-extras          # environment (the dev extra alone skips viz tests)
 make test                     # unit tests; clears PYTHONPATH (see below)
 make lint                     # ruff
-make docs                     # Sphinx -W -n, runs the gallery (~140 MB first time)
+make docs                     # Sphinx -W -n, runs both galleries (~1.3 GB download first time)
 make docs-fast                # same, gallery not executed
 PYTHONPATH="" uv run pytest tests/unit/grids/test_resample.py -v
 PYTHONPATH="" uv run pytest tests/examples -q   # example smoke runs

@@ -2,7 +2,8 @@ Examples
 ========
 
 Worked walkthroughs on real data. The Guide explains how each part of
-sidescanpy works; these pages show it doing a job.
+sidescanpy works; these pages show it doing a job, and :doc:`/theory/index`
+explains why the steps are there.
 
 Each example below runs sidescanpy on a real, openly licensed recording
 that anyone can download, and shows the code, what it prints and the

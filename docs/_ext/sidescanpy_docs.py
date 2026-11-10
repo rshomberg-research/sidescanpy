@@ -8,7 +8,7 @@
   (a re-export) link to the one documented object of that name. Names
   that match several objects stay unlinked.
 - ``gallery_argv``: the sphinx-gallery ``reset_argv`` callable.
-- ``gallery_order``: the gallery's teaching order (``within_subsection_order``).
+- ``gallery_order``: the galleries' teaching order (``within_subsection_order``).
 - Gallery thumbnails: each example writes a clean thumbnail image into
   its output folder and names it with ``sphinx_gallery_thumbnail_path``.
   When the gallery is not executed (``-D plot_gallery=0``) those files
@@ -48,6 +48,9 @@ GALLERY_ORDER = [
     "plot_swath_tiles",
     "plot_target_chips",
     "plot_training_dataset",
+    # Theory
+    "plot_vendor_chain",
+    "plot_four_published_chains",
 ]
 
 
