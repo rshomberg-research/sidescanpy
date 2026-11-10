@@ -98,7 +98,7 @@ html_theme_options = {
     "github_url": "https://github.com/rshomberg-research/sidescanpy",
     "navigation_with_keys": False,
     "show_toc_level": 2,
-    "header_links_before_dropdown": 6,
+    "header_links_before_dropdown": 7,
     "secondary_sidebar_items": ["page-toc"],
 }
 html_sidebars = {"index": [], "install": [], "getting_started": [], "status": []}
