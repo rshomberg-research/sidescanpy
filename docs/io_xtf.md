@@ -102,9 +102,10 @@ anomalies.
   is never guessed. `ShipXcoordinate` / `ShipYcoordinate` are not used.
 - **Sample scaling.** Samples are scaled by `2**-Weight` from the channel
   header. Some older files carry meaningless `Weight` values (for example
-  -8408), which make every sample unusable. If a converted file's samples
-  are all infinite, NaN or zero, check `xtf_weight_min` and
-  `xtf_weight_max` in the dataset attributes.
+  -8408, in some KleinXlt and GeoDAS files); blocks with `|Weight|` above
+  30 are left unscaled, with a warning, and counted in the
+  `xtf_weight_ignored` attribute (`xtf_weight_min` and `xtf_weight_max`
+  give the range seen).
 - **Older KleinXlt files.** Some KleinXlt 3.0 files leave the channel
   `SampleFormat` at 255, which the reader rejects with `ValueError`.
 - **Recorder gain.** Gain codes are read but not interpreted, and nothing

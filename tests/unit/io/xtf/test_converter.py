@@ -202,6 +202,21 @@ class TestAbsentAndPadding:
         assert ds.attrs["xtf_weight_min"] == 0
         assert ds.attrs["xtf_weight_max"] == 6
 
+    def test_implausible_weight_ignored_with_warning(self, tmp_path, caplog):
+        """Some older Klein-written files carry garbage Weight (e.g. -8408);
+        2**-Weight would overflow every sample. Such blocks stay unscaled."""
+        weights = [-8408, 3, -4584, 0]
+        pk = [_ping(i, chan_fields={"Weight": w}) for i, w in enumerate(weights)]
+        with caplog.at_level("WARNING", logger="sidescanpy"):
+            ds = convert(read_xtf(_dual(tmp_path, pk))).get_frequency("hz_100000").dataset
+        bs = ds["backscatter_intensity"].values
+        assert np.isfinite(bs[:, 1]).all()
+        np.testing.assert_array_equal(bs[0, 1], ramp(N_SAMP, np.uint16, 1).astype(np.float32))
+        np.testing.assert_array_equal(bs[1, 1], ramp(N_SAMP, np.uint16, 5).astype(np.float32) * 2.0 ** -3)
+        assert ds.attrs["xtf_weight_ignored"] > 0
+        assert ds.attrs["xtf_weight_min"] == -8408
+        assert any("Weight" in r.getMessage() for r in caplog.records)
+
     def test_zero_weight_leaves_samples_unscaled(self, dual_survey):
         _, survey = dual_survey
         ds = survey.get_frequency("hz_100000").dataset

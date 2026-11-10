@@ -30,6 +30,18 @@ going online.
 | `jncc_mid_irish_sea_MIS13_2.xtf` | 4 MB | The same sonar, a short line |
 | `usgs_grand_bay_150602205800.xtf` | 5 MB | Klein, XTF (KleinXlt 4.0 / SonarPro 12), shallow estuary |
 | `usgs_grand_bay_150531200100.xtf` | 12 MB | Klein, XTF; the recorded altitude is a lost bottom track |
+| `bgs_london_gateway_dynamo_78.xtf`, `_80`, `_85`, `_86`, `_90` | 9 to 27 MB each | Klein 400 kHz, XTF (GeoDAS, 2007): five passes over the Dynamo wreck |
+| `bgs_london_gateway_eastoaze_31.xtf`, `ernaboldt_13`, `storm_04`, `amethyst_25`, `ash_11` | 9 to 26 MB each | the same survey: one line over each of five more wrecks |
+| `bgs_london_gateway_aisha_05.xtf` | 28 MB | Klein 400 kHz, XTF (SonarPro, 2008): the Aisha wreck |
+
+The London Gateway files store navigation as UTM zone 31N easting and
+northing without saying so: convert them with `nav_crs="EPSG:32631"`.
+They record no heading (use the course over ground), their samples
+already carry the recorder's TVG, and their `Weight` fields are garbage,
+which the reader ignores with a warning.
+`datasets.BGS_LONDON_GATEWAY_WRECKS` holds the catalogued centre of each
+wreck from the BGS record (UTM 31N meters); a line can show its wreck
+tens of meters from that centre along track.
 
 ## Sources and licences
 
@@ -44,6 +56,12 @@ going online.
   <https://www.data.gov.uk/dataset/4a67eeb2-3dce-40b6-96ca-66cc25eeeada>.
   Contains public sector information licensed under the Open Government
   Licence v3.0.
+- **London Gateway.** British Geological Survey, National Geoscience
+  Data Centre, *Geophysical Survey WESSEX_London_Gateway: Thames Estuary
+  (2002, 2007, 2008, 2011)*, item 140325,
+  <https://webapps.bgs.ac.uk/services/ngdc/accessions/index.html#item140325>.
+  Acquired by the Port of London Authority and Wessex Archaeology.
+  Contains data supplied by UKRI; Open Government Licence v3.0.
 - **Grand Bay.** Locker, S.D., Forde, A.S., and Smith, C.G., 2018,
   *Subbottom and Sidescan Sonar Data Acquired in 2015 From Grand Bay,
   Mississippi and Alabama*: U.S. Geological Survey data release,

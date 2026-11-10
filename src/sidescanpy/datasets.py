@@ -102,6 +102,16 @@ SOURCES: dict[str, Source] = {
         licence="U.S. public domain",
         attribution="U.S. Geological Survey, originator of the data.",
     ),
+    "bgs_london_gateway": Source(
+        title=(
+            "British Geological Survey, National Geoscience Data Centre, "
+            "Geophysical Survey WESSEX_London_Gateway: Thames Estuary (2002, "
+            "2007, 2008, 2011), item 140325"
+        ),
+        url="https://webapps.bgs.ac.uk/services/ngdc/accessions/index.html#item140325",
+        licence="Open Government Licence v3.0",
+        attribution="Contains data supplied by UKRI.",
+    ),
 }
 
 _JNCC_WB = (
@@ -113,6 +123,9 @@ _JNCC_MIS = (
     "JNCC2008_05IrishSolanGeophysSidescanMidIrishRawData.zip"
 )
 _USGS_GB = "https://coastal.er.usgs.gov/data-release/doi-P9374DKQ/data/2015-315-FA_xtf.zip"
+_BGS_LG = "https://webservices.bgs.ac.uk/accessions/download/140325?fileName="
+_BGS_LG_2007 = _BGS_LG + "88635_61207_LG_2007_SSS_Wrecks.zip"
+_BGS_LG_2008 = _BGS_LG + "88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057.zip"
 
 REGISTRY: dict[str, RemoteFile] = {
     "jncc_wight_barfleur_20130321174522.jsf": RemoteFile(
@@ -157,7 +170,116 @@ REGISTRY: dict[str, RemoteFile] = {
         sha256="1f18a5906a40bf6ad23a3ab59a7ffcbd3282c4f3d1c892179b85e402c2efec2c",
         description="XTF (SonarPro), Klein; recorded altitude is a lost bottom track",
     ),
+    "bgs_london_gateway_dynamo_78.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_78_2007_219_130935_oic.xtf",
+        size=27208272,
+        sha256="00f101a20a4a55456d247836483615cf4fd6779f21aa471de3f6b000c618fa30",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_dynamo_80.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_80_2007_219_130348_oic.xtf",
+        size=11237536,
+        sha256="f976e64504e50160718256b4175cff1ac39aa4ceca0febedb9b70e7d6cd1bb6b",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_dynamo_85.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_85_2007_219_131706_oic.xtf",
+        size=16425408,
+        sha256="5eb1d74d2fb31aed027e01edf3f07be2574bd6b2f0bda0501ab94ae5c8aed56e",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_dynamo_86.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_86_2007_219_132253_oic.xtf",
+        size=26789520,
+        sha256="95066ed3458fabe5bb39fd54b22d47dfcf5ef746cbea845f239891b5cb380b6b",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_dynamo_90.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Dynamo_5100/61207_LG_2007_SSS_Dynamo_WK_5100_90_2007_219_135010_oic.xtf",
+        size=9178672,
+        sha256="1091721a4fb9b29d283fcc8bb0426fcebc6d40ca33ed81e49353577dc46381b2",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Dynamo (WK 5100) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_eastoaze_31.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_EastOaze_5056/61207_LG_2007_SSS_EastOaze_WK_5056_31_2007_219_173707_oic.xtf",
+        size=25928752,
+        sha256="ff60f009b66cb9d5086a47b3510bd085c108bab4e1984cdc43810e3cf0d13c08",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the East Oaze wreck (WK 5056) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_ernaboldt_13.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_ErnaBoldt_5961/61207_LG_2007_SSS_ErnaBoldt_WK_5961_13_2007_219_115801_oic.xtf",
+        size=9504368,
+        sha256="7fa9cedd8f15b006f9cf6802344ce0f22743bdc2c9c63dca2c2cc61682b4c4a4",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Erna Boldt (WK 5961) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_storm_04.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_Storm_5960/61207_LG_2007_SSS_Storm_WK_5960_400_04_2007_219_105516_oic.xtf",
+        size=13470880,
+        sha256="70d69ff4ba3fbe6944ce43a28d76f0441054ae4ba499cf7ead7465566ca10d51",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the SS Storm (WK 5960) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_amethyst_25.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Amethyst_5063/61207_LG_2007_SSS_Amethyst_WK_5063_25_2007_219_164208_oic.xtf",
+        size=11860424,
+        sha256="707e2499e5ffa7fc661ac341d3b87edea69ac14042ff7303ac61f32a932f2000",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Amethyst (WK 5063) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_ash_11.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2007,
+        member="140325/88635_61207_LG_2007_SSS_Wrecks/61207_LG_2007_SSS_Ash_5013/61207_LG_2007_SSS_Ash_WK_5013_11_2007_220_121722_oic.xtf",
+        size=11109584,
+        sha256="738c6f9f9629231ca9367dabb0f8e50dfac683eed909398d1243841b6f893699",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2007, line over the Ash (WK 5013) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
+    "bgs_london_gateway_aisha_05.xtf": RemoteFile(
+        source="bgs_london_gateway", archive_url=_BGS_LG_2008,
+        member="140325/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057/61208_LG_2008_SSS_Aisha_WK_5057_400_05_095_113434_oic.xtf",
+        size=27749808,
+        sha256="cb8bf7a31833b6b5e00e92528fe4cae11fdb27071f1d4a6676cdd915c6e25073",
+        description="XTF (Klein, GeoDAS/SonarPro), 400 kHz, 2008, line over the Aisha (WK 5057) wreck; "
+                    "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
+    ),
 }
+
+BGS_LONDON_GATEWAY_WRECKS: dict[str, tuple[float, float]] = {
+    "Amethyst": (364468.0, 5708659.0),
+    "Ancient": (325490.0, 5708230.0),
+    "Argus": (359499.0, 5706071.0),
+    "Ash": (360905.0, 5706497.0),
+    "Atherton": (359708.0, 5706186.0),
+    "Dynamo": (401449.0, 5743755.0),
+    "East Oaze": (362786.0, 5707385.0),
+    "Erna Boldt": (403551.0, 5746997.0),
+    "Letchworth": (357544.0, 5705592.0),
+    "London": (343115.0, 5707365.0),
+    "Pottery": (346619.0, 5706276.0),
+    "SS Storm": (406001.0, 5747115.0),
+    "Unknown wreck": (375530.0, 5714052.0),
+    "Aisha": (363982.0, 5707656.0),
+}
+"""Catalogued wreck centres of the London Gateway survey, as given in the BGS
+record (UTM zone 31N, WGS84; easting, northing in meters). Centres only: a
+line can show its wreck tens of meters away along track, so treat them as
+approximate positions, not boxes."""
 
 
 def list_datasets() -> list[str]:
