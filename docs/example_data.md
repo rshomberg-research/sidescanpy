@@ -109,14 +109,19 @@ tens of meters from that centre along track.
   <https://www.data.gov.uk/dataset/efc2ea5f-c376-4904-b7fb-34cdde65744e>.
   Contains public sector information licensed under the Open Government
   Licence v3.0.
-- **AWI OFOBS, PS124.** Hehemann, L., Purser, A., Boehringer, L., et al.
+- **AWI OFOBS, PS124.** Hehemann, Laura; Purser, Autun; Boehringer,
+  Lilian; Werner, Ellen; Wenzhöfer, Frank (2021): *Side scan sonar and
+  swath bathymetry collected along OFOBS profiles PS124_26-7 during
+  POLARSTERN cruise PS124, binned* [dataset]. PANGAEA,
+  <https://doi.org/10.1594/PANGAEA.939172>, In: Hehemann, L et al.
   (2021): *Side scan sonar and swath bathymetry collected along OFOBS
-  profiles PS124_26-7 during POLARSTERN cruise PS124, binned*. PANGAEA,
-  <https://doi.org/10.1594/PANGAEA.939172>; and Hehemann, L.,
-  Boehringer, L., Purser, A., Werner, E., Wenzhöfer, F. (2021): *Seafloor
-  bathymetric maps derived from side scan data collected along OFOBS
-  profiles during POLARSTERN cruise PS124 to the southern Weddell Sea*.
-  PANGAEA, <https://doi.org/10.1594/PANGAEA.939087>. Licensed under
+  profiles during POLARSTERN cruise PS124* [dataset publication series].
+  PANGAEA, <https://doi.org/10.1594/PANGAEA.939322>. The mosaic:
+  Hehemann, Laura; Boehringer, Lilian; Purser, Autun; Werner, Ellen;
+  Wenzhöfer, Frank (2021): *Seafloor bathymetric maps derived from side
+  scan data collected along OFOBS profiles during POLARSTERN cruise PS124
+  to the southern Weddell Sea* [dataset]. PANGAEA,
+  <https://doi.org/10.1594/PANGAEA.939087>. Licensed under
   [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Grand Bay.** Locker, S.D., Forde, A.S., and Smith, C.G., 2018,
   *Subbottom and Sidescan Sonar Data Acquired in 2015 From Grand Bay,

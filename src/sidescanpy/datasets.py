@@ -170,24 +170,30 @@ SOURCES: dict[str, Source] = {
     ),
     "awi_ofobs_ps124": Source(
         title=(
-            "Hehemann, L., Purser, A., Boehringer, L., et al., 2021, Side scan "
-            "sonar and swath bathymetry collected along OFOBS profiles PS124_26-7 "
-            "during POLARSTERN cruise PS124, binned. PANGAEA"
+            "Hehemann, Laura; Purser, Autun; Boehringer, Lilian; Werner, Ellen; "
+            "Wenzhöfer, Frank (2021): Side scan sonar and swath bathymetry "
+            "collected along OFOBS profiles PS124_26-7 during POLARSTERN cruise "
+            "PS124, binned [dataset]. PANGAEA, https://doi.org/10.1594/PANGAEA.939172, "
+            "In: Hehemann, L et al. (2021): Side scan sonar and swath bathymetry "
+            "collected along OFOBS profiles during POLARSTERN cruise PS124 "
+            "[dataset publication series]. PANGAEA, "
+            "https://doi.org/10.1594/PANGAEA.939322"
         ),
         url="https://doi.org/10.1594/PANGAEA.939172",
         licence="Creative Commons Attribution 4.0 International (CC BY 4.0)",
-        attribution="Alfred Wegener Institute; cite the dataset as given.",
+        attribution="Cite the dataset as given in its title.",
     ),
     "awi_ofobs_ps124_maps": Source(
         title=(
-            "Hehemann, L., Boehringer, L., Purser, A., Werner, E., and "
-            "Wenzhöfer, F., 2021, Seafloor bathymetric maps derived from side "
+            "Hehemann, Laura; Boehringer, Lilian; Purser, Autun; Werner, Ellen; "
+            "Wenzhöfer, Frank (2021): Seafloor bathymetric maps derived from side "
             "scan data collected along OFOBS profiles during POLARSTERN cruise "
-            "PS124 to the southern Weddell Sea. PANGAEA"
+            "PS124 to the southern Weddell Sea [dataset]. PANGAEA, "
+            "https://doi.org/10.1594/PANGAEA.939087"
         ),
         url="https://doi.org/10.1594/PANGAEA.939087",
         licence="Creative Commons Attribution 4.0 International (CC BY 4.0)",
-        attribution="Alfred Wegener Institute; cite the dataset as given.",
+        attribution="Cite the dataset as given in its title.",
     ),
     "bgs_london_gateway": Source(
         title=(
