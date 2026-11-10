@@ -58,7 +58,8 @@ walks through this code step by step, with the output of each step.
 
 - **Start here:** [Install](install.md), [Getting started](getting_started.md).
 - **Examples:** [real data, code and results](examples/index.rst), all on
-  openly licensed recordings you can download.
+  openly licensed recordings you can download, plus
+  [target recognition](atr.md) step by step and the [example data](example_data.md).
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
