@@ -26,7 +26,7 @@ v3.0); AWI OFOBS PS124, PANGAEA 939172 and 939087 (CC BY 4.0). These
 are large files (about 830 MB in all, with the Grand Bay mosaic the
 largest); the first run downloads them.
 
-Usage: ``python examples/theory/plot_four_published_chains.py [output_dir]``
+Usage: ``python examples/gallery/plot_four_published_chains.py [output_dir]``
 """
 
 # 2026 rshomberg@uri.edu

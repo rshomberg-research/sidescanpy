@@ -20,7 +20,7 @@ Data: USGS Grand Bay 2015, doi:10.5066/P9374DKQ, public domain (see
 :doc:`/example_data`). The line is 236 MB and the mosaic 715 MB
 (287 MB downloaded); the first run downloads them.
 
-Usage: ``python examples/theory/plot_vendor_chain.py [output_dir]``
+Usage: ``python examples/gallery/plot_vendor_chain.py [output_dir]``
 """
 
 # 2026 rshomberg@uri.edu

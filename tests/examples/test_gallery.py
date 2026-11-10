@@ -1,5 +1,5 @@
 """
-The gallery scripts in ``examples/gallery/`` and ``examples/theory/`` download real recordings,
+The gallery scripts in ``examples/gallery/`` download real recordings,
 so the unit suite doesn't run them (the docs build does, through
 sphinx-gallery). This checks what can be checked offline: each script
 parses, fetches only registered datasets, and starts with the titled
@@ -17,8 +17,7 @@ import pytest
 from sidescanpy import datasets
 
 ROOT = Path(__file__).resolve().parents[2]
-GALLERIES = ("gallery", "theory")
-SCRIPTS = sorted(p for g in GALLERIES for p in (ROOT / "examples" / g).glob("plot_*.py"))
+SCRIPTS = sorted((ROOT / "examples" / "gallery").glob("plot_*.py"))
 
 
 def _fetched_names(script: Path) -> list[str]:
@@ -35,9 +34,8 @@ def _fetched_names(script: Path) -> list[str]:
 
 
 def test_gallery_has_scripts_and_header():
-    for g in GALLERIES:
-        assert list((ROOT / "examples" / g).glob("plot_*.py")), g
-        assert (ROOT / "examples" / g / "GALLERY_HEADER.rst").exists(), g
+    assert SCRIPTS
+    assert (ROOT / "examples" / "gallery" / "GALLERY_HEADER.rst").exists()
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.stem)

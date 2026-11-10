@@ -282,6 +282,5 @@ site/
 # Sphinx build output (generated)
 docs/_build/
 docs/examples/
-docs/theory/
 docs/reference/generated/
 docs/sg_execution_times.rst

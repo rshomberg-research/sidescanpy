@@ -1,6 +1,6 @@
 # Example data
 
-The [examples](examples/index.rst), the [Theory pages](theory/index.rst) and [Getting started](getting_started.md) run on real, openly licensed recordings that anyone can download.
+The [examples](examples/index.rst) and [Getting started](getting_started.md) run on real, openly licensed recordings that anyone can download.
 
 ## The example data
 
@@ -57,11 +57,11 @@ tens of meters from that centre along track.
 
 ### Published products and their recordings
 
-The Theory pages compare sidescanpy with mosaics that other software
+Two examples compare sidescanpy with mosaics that other software
 made from the same recordings, so they also fetch those mosaics and
 whole lines. These files are larger (about 830 MB in all, 640 MB of it
 downloaded for the Grand Bay line and mosaic alone, which unpack to
-950 MB); the examples don't use them.
+950 MB); the other examples don't use them.
 
 | Name | Size | File |
 |---|---|---|
@@ -131,7 +131,7 @@ index 255 in the Grand Bay mosaic and 0 in the two Isis mosaics.
   *Subbottom and Sidescan Sonar Data Acquired in 2015 From Grand Bay,
   Mississippi and Alabama*: U.S. Geological Survey data release,
   <https://doi.org/10.5066/P9374DKQ>. Public domain; the U.S. Geological
-  Survey is the originator of the data. The Theory pages also use the
+  Survey is the originator of the data. Two examples also use the
   release's sidescan mosaic (CleanSweep 3.9, 0.30 m).
 
 The figures on these pages are derived from those recordings under the

@@ -25,7 +25,7 @@ so the plotting, GeoTIFF and docs code is tested too.
 |---|---|
 | `make test` | the unit tests, with `PYTHONPATH` cleared |
 | `make lint` | ruff |
-| `make docs` | this site in `docs/_build/html`, running the example scripts (downloads about 1.3 GB the first time, 1.9 GB on disk; the Theory pages account for most of it); any warning, such as a malformed docstring or a broken cross-reference, fails the build |
+| `make docs` | this site in `docs/_build/html`, running the example scripts (downloads about 1.3 GB the first time, 1.9 GB on disk; the two published-mosaic examples account for most of it); any warning, such as a malformed docstring or a broken cross-reference, fails the build |
 | `make docs-fast` | the same without running the example scripts (no figures) |
 | `make docs-serve` | builds the site, then serves it at <http://127.0.0.1:8000> |
 | `make docs-clean` | removes the build and the generated API and example pages |
