@@ -22,6 +22,7 @@ import xarray as xr
 
 from sidescanpy.core.target import Target
 from sidescanpy.export.windows.levels import (
+    mask_dropouts,
     mask_nadir_gap_with_uncorrected,
     nominal_sample_interval_m,
     with_db_var,
@@ -151,11 +152,13 @@ def load_swath_neighborhood(
     ds_full: xr.Dataset, lo: int, hi: int, fp: int, fs: int, *, with_db: bool, extra_vars: tuple[str, ...] = (),
     skip_vars: tuple[str, ...] = (),
 ) -> xr.Dataset:
-    """Nadir-masked pings ``[lo, hi)``, block-averaged by ``fp`` pings x ``fs`` samples.
+    """Nadir- and dropout-masked pings ``[lo, hi)``, block-averaged by ``fp`` pings x ``fs`` samples.
 
     Loads only :data:`SWATH_LOAD_VARS` (plus ``extra_vars``, minus
     ``skip_vars``) in :data:`SWATH_LOAD_BLOCK_PINGS`-sized pieces, masking
-    each piece at native resolution before averaging. ``sample_rate_hz`` is
+    each piece at native resolution (nadir gap, and dropouts with
+    :func:`~sidescanpy.export.windows.levels.mask_dropouts`) before
+    averaging. ``sample_rate_hz`` is
     divided by ``fs`` so
     :func:`~sidescanpy.export.windows.levels.nominal_sample_interval_m`
     reports the averaged cell size.
@@ -181,7 +184,7 @@ def load_swath_neighborhood(
     step = fp * max(1, SWATH_LOAD_BLOCK_PINGS // fp)
     blocks = []
     for b0 in range(lo, hi, step):
-        blk = mask_nadir_gap_with_uncorrected(ds_full[keep].isel(ping=slice(b0, min(hi, b0 + step))).load())
+        blk = mask_dropouts(mask_nadir_gap_with_uncorrected(ds_full[keep].isel(ping=slice(b0, min(hi, b0 + step))).load()))
         if with_db:
             blk = with_db_var(blk)
         if fp > 1 or fs > 1:
