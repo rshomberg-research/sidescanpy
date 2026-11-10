@@ -524,6 +524,19 @@ class TestUniformExclusionBoundary:
         assert np.all(result == result[0, 0])  # single value everywhere
         assert result[0, 0] == pytest.approx(np.percentile(per_ping, 90.0))
 
+    def test_warns_when_percentile_far_past_median(self, caplog):
+        per_ping = np.full((100, 2), 10.0)
+        per_ping[:15] = 300.0  # a minority of late detections
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.bottom"):
+            uniform_exclusion_boundary(per_ping)
+        assert "times the median boundary" in caplog.text
+
+    def test_no_warning_for_ordinary_spread(self, caplog):
+        per_ping = np.linspace(10.0, 14.0, 200).reshape(100, 2)
+        with caplog.at_level("WARNING", logger="sidescanpy.processing.bottom"):
+            uniform_exclusion_boundary(per_ping)
+        assert "times the median boundary" not in caplog.text
+
     def test_all_nan_input_stays_all_nan(self):
         per_ping = np.full((3, 2), np.nan)
         result = uniform_exclusion_boundary(per_ping)
