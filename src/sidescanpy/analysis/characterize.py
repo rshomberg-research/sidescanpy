@@ -18,6 +18,7 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.analysis._result import ResultMixin
+from sidescanpy.analysis.tvg_fit import TVGFitResult
 
 if TYPE_CHECKING:
     from sidescanpy.analysis.tvg import RangeDecayResult
@@ -87,7 +88,7 @@ class UnitsResult(ResultMixin):
     notes: list[str] = field(default_factory=list)
 
 
-def infer_units(summary: ValueSummary, decay: RangeDecayResult | None = None) -> UnitsResult:
+def infer_units(summary: ValueSummary, decay: TVGFitResult | RangeDecayResult | None = None) -> UnitsResult:
     """Classify likely units from a value-range signature.
 
     - mostly negative, within (-200, 5] → ``"dB"``
@@ -97,9 +98,10 @@ def infer_units(summary: ValueSummary, decay: RangeDecayResult | None = None) ->
       alone)
     - anything else → ``"unknown"``
 
-    When ``decay`` (a :func:`~sidescanpy.analysis.tvg.fit_range_decay`
-    result) has a confident TVG status and a fixed-scale RMSE under
-    3 dB, a supporting note is added.
+    When ``decay`` (a :func:`~sidescanpy.analysis.fit_tvg_models` result,
+    or a deprecated :func:`~sidescanpy.analysis.fit_range_decay` one) has
+    a TVG status and a best-model RMS under 3 dB, a supporting note is
+    added.
     """
     min_v, max_v = summary.minimum, summary.maximum
     pct_neg = summary.pct_negative
@@ -123,12 +125,15 @@ def infer_units(summary: ValueSummary, decay: RangeDecayResult | None = None) ->
     else:
         units = "unknown"
 
+    if isinstance(decay, TVGFitResult):
+        best_rmse = decay.best_model.rms_db if decay.best_model is not None else None
+        best_candidate = decay.best
+    elif decay is not None:
+        best_rmse, best_candidate = decay.best_rmse_db, decay.best_candidate
     if decay is not None and decay.tvg_status not in (None, "ambiguous"):
-        best_rmse = decay.best_rmse_db
-        best_candidate = decay.best_candidate
         if best_rmse is not None and best_rmse < 3.0:
             notes.append(
-                f"The range-decay fit ({best_candidate}, RMSE={best_rmse:.2f}dB) is "
+                f"The TVG fit ({best_candidate}, RMS {best_rmse:.2f} dB) is "
                 f"consistent with genuine physical backscatter amplitude, supporting "
                 f"the {units!r} unit call."
             )

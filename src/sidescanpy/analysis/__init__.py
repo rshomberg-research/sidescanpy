@@ -14,11 +14,18 @@ Each function takes data and returns a result dataclass (with
 - :func:`estimate_beam_geometry` — near/far beam edges
   (:class:`BeamGeometryResult`).
 - :func:`estimate_usable_range` — where signal falls to the noise floor
-  (:class:`UsableRangeResult`).
-- :func:`fit_range_decay` — TVG-status classification from a range-decay
-  fit (:class:`RangeDecayResult`); :func:`fit_tvg_curve`,
-  :func:`compare_before_after`, :func:`bin_by_altitude` are its building
-  blocks.
+  (:class:`UsableRangeResult`); :func:`find_noise_knee` — peak, floor and
+  noise knee of a level profile (:class:`NoiseKnee`).
+- :func:`fit_tvg_models` — the TVG to apply: fixed and free spreading
+  and absorption models fitted to the median level
+  (:class:`TVGFitResult`); :func:`check_tvg` — how flat a TVG recipe
+  leaves the data (:class:`TVGCheckResult`).
+- :func:`compare_before_after`, :func:`bin_by_altitude` — TVG
+  comparison helpers.
+- Deprecated, removed in 0.12: :func:`fit_range_decay`
+  (:class:`RangeDecayResult`), :func:`fit_tvg_curve`
+  (:class:`TVGCandidateFit`, :class:`TVGCandidateFitResult`); use
+  :func:`fit_tvg_models`.
 - :func:`summarize_navigation` — heading convention and nav/attitude
   stats (:class:`NavigationSummary`).
 - :func:`measure_ping_geometry` — ping spacing and resolution
@@ -50,7 +57,21 @@ from sidescanpy.analysis.tvg import (
     fit_range_decay,
     fit_tvg_curve,
 )
-from sidescanpy.analysis.usable_range import UsableRangeResult, estimate_usable_range
+from sidescanpy.analysis.tvg_fit import (
+    TVGCheckResult,
+    TVGFitResult,
+    TVGModelFit,
+    TVGSideFit,
+    check_tvg,
+    fit_tvg_models,
+    tvg_model_name,
+)
+from sidescanpy.analysis.usable_range import (
+    NoiseKnee,
+    UsableRangeResult,
+    estimate_usable_range,
+    find_noise_knee,
+)
 
 __all__ = [
     "characterize_values",
@@ -65,6 +86,15 @@ __all__ = [
     "BeamGeometryResult",
     "estimate_usable_range",
     "UsableRangeResult",
+    "find_noise_knee",
+    "NoiseKnee",
+    "fit_tvg_models",
+    "TVGFitResult",
+    "TVGModelFit",
+    "TVGSideFit",
+    "check_tvg",
+    "TVGCheckResult",
+    "tvg_model_name",
     "fit_range_decay",
     "RangeDecayResult",
     "fit_tvg_curve",
