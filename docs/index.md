@@ -54,6 +54,13 @@ to_geotiff(raster, "MIS11_0_400khz.tif")
 [Install](install.md) covers the install and its extras. [Getting started](getting_started.md)
 walks through this code step by step, with the output of each step.
 
+## Citing
+
+If you use sidescanpy in your work, please cite it:
+Shomberg, R. *sidescanpy: read, correct, grid and export sidescan sonar data*.
+Zenodo. [doi:10.5281/zenodo.24121873](https://doi.org/10.5281/zenodo.24121873). This concept DOI always resolves
+to the latest release; each release on Zenodo also has its own version DOI.
+
 ## Where to go next
 
 - **Start here:** [Install](install.md), [Getting started](getting_started.md).

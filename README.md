@@ -1,5 +1,7 @@
 # sidescanpy
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24121873.svg)](https://doi.org/10.5281/zenodo.24121873)
+
 Read, correct, grid and export sidescan sonar data.
 
 **Documentation:** <https://rshomberg-research.github.io/sidescanpy/>
@@ -201,6 +203,17 @@ Integration tests under `tests/integration/` need real survey files and
 are skipped without them. The public test fixtures are not in the
 repository either; see [`docs/development.md`](docs/development.md#test-data). See [`docs/development.md`](docs/development.md)
 and [`CHANGELOG.md`](CHANGELOG.md).
+
+## Citing
+
+If you use sidescanpy in your work, please cite it. The concept DOI
+[10.5281/zenodo.24121873](https://doi.org/10.5281/zenodo.24121873) always resolves to the latest release;
+each release also has its own version DOI on Zenodo, which pins the exact
+code you used. `CITATION.cff` holds the citation in machine-readable form
+(GitHub's "Cite this repository" button reads it).
+
+> Shomberg, R. sidescanpy: read, correct, grid and export sidescan sonar
+> data. Zenodo. https://doi.org/10.5281/zenodo.24121873
 
 ## License
 

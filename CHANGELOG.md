@@ -7,6 +7,11 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Docs: Citing sections in the README and on the docs home page, a DOI
+  badge, and the Zenodo concept DOI in `CITATION.cff`.
+
 ## [0.10.0] — 2026-11-10
 
 ### Added
