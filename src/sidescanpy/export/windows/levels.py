@@ -20,9 +20,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import numpy as np
 import xarray as xr
 
-from sidescanpy.core.units import linear_to_db
+from sidescanpy.core.units import MIN_LINEAR, linear_to_db
 from sidescanpy.processing.bottom import mask_nadir_gap
 from sidescanpy.processing.inversion import UNCORRECTED_VAR, with_uncorrected_var
 from sidescanpy.processing.sample_axis import (
@@ -52,6 +53,40 @@ def mask_nadir_gap_with_uncorrected(ds: xr.Dataset) -> xr.Dataset:
     same NaN nadir gap.
     """
     return with_uncorrected_var(mask_nadir_gap(ds, value_vars=("backscatter_intensity", UNCORRECTED_VAR)))
+
+
+def mask_dropouts(ds: xr.Dataset) -> xr.Dataset:
+    """Set dropout samples (recorded amplitude exactly zero) to NaN.
+
+    A sample recorded as zero carries no measurement. After TVG it is no
+    longer at the dB floor (the gain for its range is added), so it is found
+    on ``uncorrected`` (every radiometric step undone; at or below
+    :data:`~sidescanpy.core.units.MIN_LINEAR`) and masked in
+    ``backscatter_intensity`` and ``uncorrected``. Resampling then
+    interpolates over it instead of spreading it into a dark spot.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Loaded channel with ``uncorrected``
+        (:func:`mask_nadir_gap_with_uncorrected`).
+
+    Returns
+    -------
+    xr.Dataset
+        ``ds`` itself when nothing is masked, otherwise a copy.
+    """
+    if UNCORRECTED_VAR not in ds:
+        return ds
+    dropout = np.asarray(ds[UNCORRECTED_VAR].values) <= MIN_LINEAR * (1 + 1e-6)
+    if not dropout.any():
+        return ds
+    logger.debug("mask_dropouts: %d of %d samples recorded as zero", int(dropout.sum()), dropout.size)
+    out = ds.copy()
+    for var in ("backscatter_intensity", UNCORRECTED_VAR):
+        if var in out:
+            out[var] = out[var].where(~dropout)
+    return out
 
 
 def with_db_var(ds: xr.Dataset) -> xr.Dataset:

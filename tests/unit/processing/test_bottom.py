@@ -473,6 +473,48 @@ class TestMaskNadirGap:
         assert np.array_equal(default["backscatter_intensity"].values, explicit["backscatter_intensity"].values, equal_nan=True)
 
 
+class TestMaskNadirGapLateOutliers:
+    """A bright far-range return (a reef, a wreck) can set a ping's peak so
+    high that the near seabed never reaches ``threshold_fraction`` of it,
+    and detection lands far out. Runs of such pings defeat the rolling
+    median; they are rejected against the channel's usual boundary."""
+
+    @staticmethod
+    def _dataset(*, patched_pings, n_pings=60, n_samples=1000, geometry=True):
+        arr = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        arr[..., 100:] = 2.0                      # seabed from sample 100
+        arr[patched_pings, 0, 600:800] = 30.0     # bright patch far out on port
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+        return compute_geometric_ranges(ds) if geometry else ds
+
+    # Runs of 9 bad pings out of every 20: a 15-ping window centred in a
+    # run holds a majority of bad pings, so the rolling median keeps them.
+    PATCHED = [p for start in range(0, 60, 20) for p in range(start + 4, start + 13)]
+
+    @pytest.mark.parametrize("geometry", [True, False], ids=["altitude", "no_altitude"])
+    def test_far_patch_does_not_mask_near_seabed(self, geometry):
+        ds = self._dataset(patched_pings=self.PATCHED, geometry=geometry)
+        out = mask_nadir_gap(ds, smooth_window=5)["backscatter_intensity"].values
+        assert np.all(np.isfinite(out[:, 0, 200:590])), "near seabed masked on patched pings"
+        assert np.all(np.isnan(out[:, :, :60]))  # the real nadir gap is still masked
+
+    def test_consistent_far_boundary_is_kept(self):
+        """When every ping's bottom return is far out (deep water, short
+        range), that is the channel's usual boundary, not an outlier."""
+        n_pings, n_samples = 40, 1000
+        arr = np.full((n_pings, 2, n_samples), 0.05, dtype=np.float32)
+        arr[..., 600:] = 5.0
+        ds = _make_raw_dataset(n_pings=n_pings, n_samples=n_samples, backscatter=arr.copy())
+        out = mask_nadir_gap(compute_geometric_ranges(ds), smooth_window=5)["backscatter_intensity"].values
+        assert np.all(np.isnan(out[:, :, :550]))
+        assert np.all(out[:, :, 650:] == 5.0)
+
+    def test_outlier_rejection_can_be_turned_off(self):
+        ds = self._dataset(patched_pings=self.PATCHED)
+        out = mask_nadir_gap(ds, smooth_window=5, max_boundary_factor=None)["backscatter_intensity"].values
+        assert np.any(np.isnan(out[self.PATCHED, 0, 200:590]))
+
+
 class TestUniformExclusionBoundary:
     def test_collapses_to_single_percentile_value(self):
         per_ping = np.array([[10.0, 20.0], [30.0, 40.0], [50.0, 60.0], [70.0, 80.0], [90.0, 100.0]])

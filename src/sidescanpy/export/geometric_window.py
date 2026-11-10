@@ -567,47 +567,79 @@ def extract_geometric_window_griddata(
         )
 
     points = np.column_stack([along_valid, across_valid])
-    if np.isfinite(max_fill_distance_m):
-        # Triangulate only the points near this window, not the whole
-        # loaded neighborhood (the full swath across-track, plus along-
-        # track slack) -- Delaunay cost scales with point count, and a
-        # tight chip can be a few percent of what's loaded (real case:
-        # ~11s per dual-swath window without this).
-        # A margin of 2x max_fill_distance_m keeps every point that can
-        # affect a cell: cells with no point within max_fill_distance_m
-        # are NaN below anyway, and interpolation triangles near the
-        # window edge still get their neighbors.
+    grid_values = interpolate_scattered(points, values_valid, query_points, interp_method=interp_method,
+                                        max_fill_distance_m=max_fill_distance_m)
+    grid = grid_values.reshape(along_size_px, across_size_px)
+    return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
+
+
+
+def interpolate_scattered(
+    points: np.ndarray,
+    values: np.ndarray,
+    query_points: np.ndarray,
+    *,
+    interp_method: str = "linear",
+    max_fill_distance_m: float = np.inf,
+) -> np.ndarray:
+    """Interpolate scattered samples at query points with ``scipy.interpolate.griddata``.
+
+    The resampler behind the ``"griddata"`` windows, geometric and
+    georeferenced. Query points outside the samples' convex hull get the
+    nearest sample's value; query points farther than
+    ``max_fill_distance_m`` from every sample are NaN, so the edge of the
+    recorded swath (and the nadir gap) is not extended into invented
+    seabed. Coordinates are shifted to the query points' centre first, so
+    projected (UTM) coordinates triangulate as accurately as local ones.
+
+    Parameters
+    ----------
+    points : np.ndarray
+        ``(n, 2)`` sample positions in meters (any planar frame).
+    values : np.ndarray
+        ``(n,)`` finite sample values.
+    query_points : np.ndarray
+        ``(m, 2)`` positions to interpolate at, same frame.
+    interp_method : {"linear", "cubic", "nearest"}, default "linear"
+        ``griddata``'s ``method``.
+    max_fill_distance_m : float, default inf
+        See above. Only samples within twice this distance of the query
+        points' bounding box are triangulated, which keeps a small window
+        fast when ``points`` covers a large neighborhood.
+
+    Returns
+    -------
+    np.ndarray
+        ``(m,)`` float64.
+    """
+    # Work relative to the query points' centre: Qhull triangulates badly
+    # when coordinates are large compared with the point spacing (UTM
+    # meters, ~1e6, against samples a few centimeters apart).
+    query_points = np.asarray(query_points, dtype=np.float64)
+    origin = query_points.mean(axis=0) if len(query_points) else np.zeros(2)
+    query_points = query_points - origin
+    points = np.asarray(points, dtype=np.float64) - origin
+    if np.isfinite(max_fill_distance_m) and len(points):
         margin = 2.0 * max_fill_distance_m
-        near = (
-            (along_valid >= along_min - margin) & (along_valid <= along_min + along_size_px * along_resolution_m + margin)
-            & (across_valid >= across_min - margin) & (across_valid <= across_min + across_size_px * across_resolution_m + margin)
-        )
-        points, values_valid = points[near], values_valid[near]
+        q_min, q_max = query_points.min(axis=0) - margin, query_points.max(axis=0) + margin
+        near = np.all((points >= q_min) & (points <= q_max), axis=1)
+        points, values = points[near], values[near]
     if len(points) == 0:
-        grid = np.full((along_size_px, across_size_px), np.nan)
-        return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
+        return np.full(len(query_points), np.nan)
     # TODO(lib): scipy.interpolate.LinearNDInterpolator/NearestNDInterpolator
     # built once per window would avoid griddata re-triangulating for the
     # NaN-fill pass below; parity test: identical grids (same Qhull
     # triangulation of the same points).
-    if len(points) < 3:
-        grid_values = griddata(points, values_valid, query_points, method="nearest")
-    else:
-        grid_values = griddata(points, values_valid, query_points, method=interp_method)
+    method = "nearest" if len(points) < 3 else interp_method
+    grid_values = np.asarray(griddata(points, values, query_points, method=method), dtype=np.float64)
     nan_mask = np.isnan(grid_values)
     if nan_mask.any():
-        # linear/cubic leave NaN outside the real data's convex hull --
-        # fill with nearest-neighbor extrapolation so this function is
-        # gap-free regardless of interp_method (its whole point, per the
-        # real user request this exists to satisfy).
-        grid_values[nan_mask] = griddata(points, values_valid, query_points[nan_mask], method="nearest")
+        # linear/cubic leave NaN outside the samples' convex hull.
+        grid_values[nan_mask] = griddata(points, values, query_points[nan_mask], method="nearest")
     if np.isfinite(max_fill_distance_m):
         dist, _ = cKDTree(points).query(query_points, distance_upper_bound=max_fill_distance_m)
         grid_values[~np.isfinite(dist)] = np.nan
-
-    grid = grid_values.reshape(along_size_px, across_size_px)
-    return grid, _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m)
-
+    return grid_values
 
 def _griddata_meta(center_along_m, center_across_m, along_min, across_min, along_resolution_m, across_resolution_m) -> dict:
     return {

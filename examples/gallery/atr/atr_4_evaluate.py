@@ -139,7 +139,7 @@ for ax, path in zip(axes.ravel(), shown):
     ax.set_title(path.name, fontsize=9)
     ax.set_axis_off()
 (root / "figures").mkdir(exist_ok=True)
-fig.savefig(root / "figures" / "atr_test.png", dpi=80)
+fig.savefig(root / "figures" / "atr_test.png", dpi=150)
 
 # %%
 # Output of a run (30 labelled objects in the test year)::
@@ -149,7 +149,7 @@ fig.savefig(root / "figures" / "atr_test.png", dpi=80)
 #     detector (conf 0.05) + classifier   15 hits,  26 false alarms,  15 misses: precision 0.37, recall 0.50
 #     two-stage, MILCO only               15 hits,  13 false alarms,  13 misses
 #
-# .. image:: /assets/atr/two_stage_test.png
+# .. image:: /assets/atr/two_stage_test.jpg
 #    :alt: Six test images with labelled objects in green and two-stage detections in red and cyan
 #
 # The low threshold finds two thirds of the objects but raises 57 false

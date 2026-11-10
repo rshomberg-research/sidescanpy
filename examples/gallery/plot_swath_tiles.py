@@ -47,9 +47,16 @@ configure_logging("WARNING")
 # Convert and correct. Georeferencing is only needed to give the targets
 # a latitude and longitude at the end; the tiles themselves are cut from
 # the native ping x sample grid.
+#
+# Navigation in this file is sample-and-hold, and each GPS update is logged
+# over two entries (the jump, then a tiny follow-up one entry later).
+# ``merge_window_s`` joins the two into one update; without it every
+# update becomes two fixes 65 ms apart and the interpolated track stalls
+# for one ping in seven. :func:`~sidescanpy.processing.aux_update_events`
+# shows the pattern (changes 1 entry apart, then 6 to 7).
 
 survey = read_and_convert([datasets.fetch("usgs_grand_bay_150602205800.xtf")], fmt="xtf")
-survey = interpolate_aux_onto_pings(survey)
+survey = interpolate_aux_onto_pings(survey, merge_window_s=0.3)
 survey = apply_tvg(survey)
 survey = compute_geometric_ranges(survey)
 survey = compute_georeferencing(survey)
@@ -125,4 +132,4 @@ for box, t in zip(boxes[record.file_name], targets):
     ax.text(box.x, box.y - 8, t.category, color="red")
 ax.set_title(f"{record.file_name}: port mirrored on the left, starboard on the right")
 ax.set_xlabel("pixel (0.1 m)")
-fig.savefig(out / "swath_tiles.png", dpi=100)
+fig.savefig(out / "swath_tiles.png", dpi=150)

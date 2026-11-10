@@ -352,6 +352,54 @@ def uniform_exclusion_boundary(per_ping_boundary: np.ndarray, percentile: float 
     return np.full_like(per_ping_boundary, value)
 
 
+def reject_late_boundaries(
+    boundary: np.ndarray, altitude_sample: np.ndarray | None, *, factor: float = 3.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """NaN out first-return boundaries far beyond their channel's usual one.
+
+    With altitude, a channel's usual boundary is the median ratio of
+    boundary to altitude sample, times each ping's altitude sample; without
+    it, the channel's median boundary. A boundary more than ``factor``
+    times the usual one is rejected. Only late boundaries are rejected: the
+    failure this guards against is a bright far-range return setting the
+    detection threshold, which pushes the boundary out, not in.
+
+    Parameters
+    ----------
+    boundary : np.ndarray
+        ``(ping, channel)`` sample index, NaN where nothing was detected.
+    altitude_sample : np.ndarray or None
+        ``(ping, channel)`` altitude in samples
+        (:func:`altitude_sample_index`), or ``None``.
+    factor : float, default 3.0
+
+    Returns
+    -------
+    boundary : np.ndarray
+        Copy with rejected entries set to NaN.
+    usual : np.ndarray
+        ``(ping, channel)`` usual boundary, NaN where it can't be formed
+        (a channel with no detection, or a ping with no altitude).
+    """
+    boundary = np.asarray(boundary, dtype=np.float64).copy()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN channel -> NaN
+        if altitude_sample is not None:
+            alt = np.where(np.asarray(altitude_sample, dtype=np.float64) > 0, altitude_sample, np.nan)
+            ratio = np.nanmedian(boundary / alt, axis=0)  # per channel
+            usual = ratio[None, :] * alt
+            no_alt = ~np.isfinite(usual)
+            usual = np.where(no_alt, np.nanmedian(boundary, axis=0)[None, :], usual)
+        else:
+            usual = np.broadcast_to(np.nanmedian(boundary, axis=0)[None, :], boundary.shape).copy()
+    late = np.isfinite(boundary) & np.isfinite(usual) & (boundary > factor * usual)
+    if late.any():
+        logger.debug("reject_late_boundaries: %d of %d ping/channel boundaries beyond %gx the usual one",
+                     int(late.sum()), int(np.isfinite(boundary).sum()), factor)
+        boundary[late] = np.nan
+    return boundary, usual
+
+
 def mask_nadir_gap(
     ds: xr.Dataset,
     *,
@@ -365,6 +413,7 @@ def mask_nadir_gap(
     peak_percentile: float = 100.0,
     min_first_bottom_return_sample: float | None = None,
     boundary_smoothing_window: int = 15,
+    max_boundary_factor: float | None = 3.0,
 ) -> xr.Dataset:
     """Return a copy of ``ds`` with the whole nadir gap set to NaN.
 
@@ -390,6 +439,13 @@ def mask_nadir_gap(
         element-wise max.
     boundary_smoothing_window : int, default 15
         :func:`smooth_boundary_across_pings` window; ``<= 1`` disables.
+    max_boundary_factor : float or None, default 3.0
+        Reject a ping's boundary when it lies more than this factor beyond
+        its channel's usual one (see :func:`reject_late_boundaries`), before
+        smoothing. A bright far-range return can set a ping's peak so high
+        that the near seabed never reaches ``threshold_fraction`` of it;
+        runs of such pings are too long for the rolling median alone.
+        ``None`` disables.
 
     Returns
     -------
@@ -416,8 +472,14 @@ def mask_nadir_gap(
         min_sample_buffer=min_sample_buffer,
         peak_percentile=peak_percentile,
     )
+    if max_boundary_factor is not None:
+        boundary, usual = reject_late_boundaries(boundary, altitude_sample, factor=max_boundary_factor)
     if boundary_smoothing_window > 1:
         boundary = smooth_boundary_across_pings(boundary, window=boundary_smoothing_window)
+    if max_boundary_factor is not None:
+        # A ping whose whole smoothing window was rejected falls back to
+        # the channel's usual boundary.
+        boundary = np.where(np.isfinite(boundary), boundary, usual)
     out = ds.copy()
     for var in value_vars:
         if var in out.data_vars:

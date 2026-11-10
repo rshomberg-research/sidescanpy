@@ -244,8 +244,11 @@ def extract_geo_style_window(
     some directional blur), ``"binned"`` (per-cell mean of the samples
     inside it; empty cells stay NaN) or ``"griddata"`` (scipy
     interpolation; no gaps inside coverage, but at a resolution finer than
-    the ping spacing most cells are interpolated). ``georef`` always uses
-    :func:`~sidescanpy.export.georef_window.extract_georef_window`.
+    the ping spacing most cells are interpolated). ``georef`` windows use
+    :func:`~sidescanpy.export.georef_window.extract_georef_window`: with
+    ``"griddata"``, scipy interpolation in the map frame (cells farther
+    than the largest typical ping gap from every sample are NaN); with
+    ``"kdtree"`` or ``"binned"``, the mean within that radius.
 
     Parameters
     ----------
@@ -384,6 +387,7 @@ def extract_geo_style_window(
         raster, meta = extract_georef_window(
             georef_input, size_px, resolution_m=resolution_m, center_lat=jittered_lat, center_lon=jittered_lon,
             max_search_radius_m=geo_search_radius_m, backscatter_var=backscatter_var,
+            interp_method="linear" if resample_method == "griddata" else None,
         )
     except (ValueError, KeyError):
         return None

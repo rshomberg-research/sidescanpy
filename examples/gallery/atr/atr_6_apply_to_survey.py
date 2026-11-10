@@ -48,10 +48,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # %%
 # Convert, correct and tile the line (as in
-# :ref:`sphx_glr_examples_plot_swath_tiles.py`).
+# :ref:`sphx_glr_examples_plot_swath_tiles.py`, including the merge window
+# for this file's two-entry GPS updates).
 
 survey = read_and_convert([datasets.fetch("usgs_grand_bay_150602205800.xtf")], fmt="xtf")
-survey = interpolate_aux_onto_pings(survey)
+survey = interpolate_aux_onto_pings(survey, merge_window_s=0.3)
 survey = apply_tvg(survey)
 survey = compute_geometric_ranges(survey)
 survey = compute_georeferencing(survey)
