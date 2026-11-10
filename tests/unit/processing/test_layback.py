@@ -194,3 +194,16 @@ class TestThroughCorrect:
         ds = correct(_ds(), ["layback", "geometric", "georef"])
         with pytest.raises(ValueError, match="also list 'georef'"):
             correct(ds, ["layback"], force=True)
+
+
+class TestSurveyInput:
+    def test_survey_corrected_per_frequency(self):
+        from sidescanpy.core import SideScanSurvey
+
+        survey = SideScanSurvey(source_files=["a.xtf"], source_format="XTF", survey_name="a")
+        survey.add_frequency("hz_400000", _ds(layback=100.0))
+        out = apply_layback(survey)
+        assert isinstance(out, SideScanSurvey) and out is not survey
+        moved = out.get_frequency("hz_400000").dataset
+        original = survey.get_frequency("hz_400000").dataset
+        assert not np.allclose(moved["longitude"].values, original["longitude"].values)

@@ -52,6 +52,7 @@ from sidescanpy.core.schema import (
     POSITION_TOWFISH,
     POSITION_UNKNOWN,
 )
+from sidescanpy.processing._per_frequency import per_frequency
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ def _per_ping_layback(
     return values, n_recorded, n_cable
 
 
+@per_frequency
 def apply_layback(
     ds: xr.Dataset,
     *,
@@ -97,8 +99,11 @@ def apply_layback(
 
     Parameters
     ----------
-    ds : xr.Dataset
-        Frequency channel dataset.
+    ds : xr.Dataset or SideScanSurvey
+        Frequency channel dataset. A
+        :class:`~sidescanpy.core.survey.SideScanSurvey` is corrected
+        frequency by frequency with the same arguments; a new survey is
+        returned and the input is not modified.
     layback_m : float, optional
         Layback for every ping (m). Default: the ``layback_m`` variable.
     tow_point_aft_m, tow_point_starboard_m : float, optional
@@ -117,8 +122,8 @@ def apply_layback(
 
     Returns
     -------
-    xr.Dataset
-        New dataset. When positions moved: ``latitude`` / ``longitude``
+    xr.Dataset or SideScanSurvey
+        Same type as ``ds``: a new dataset. When positions moved: ``latitude`` / ``longitude``
         at the towfish, the recorded ones in ``latitude_before_layback`` /
         ``longitude_before_layback``, ``position_source`` set to
         ``"towfish"`` and a ``"layback"`` history record. Otherwise the

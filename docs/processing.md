@@ -33,6 +33,7 @@ survey = compute_georeferencing(survey)            # latitude and longitude per 
 | `crop_far_range` | crops far-range noise past a detected cutoff | |
 | `interpolate_aux_onto_pings` | interpolates the survey's navigation and attitude records onto every ping (`interpolate_aux_onto_dataset` for one dataset) | |
 | `altitude_from_bottom_track` | fills missing altitude from the first bottom return | |
+| `apply_layback` | moves ship positions back to the towfish by the recorded layback (only where the file says the positions are the ship's) | navigation on the pings |
 | `apply_tvg` | time-varying gain, linear amplitude to dB | |
 | `compute_geometric_ranges` | slant range, ground range, across- and along-track distance per sample | altitude |
 | `range_correction.apply_empirical_range_correction` | subtracts a fitted range curve | `apply_tvg`, `compute_geometric_ranges` |
