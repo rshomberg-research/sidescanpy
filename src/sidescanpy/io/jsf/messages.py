@@ -125,7 +125,7 @@ class SonarDataMessage(JSFMessage):
 
     # Data format block
     _raw_timestamp_sec: int = field(repr=False)     # seconds since 1970
-    _starting_depth:    int = field(repr=False)     # ???: "starting dep (window offset) in samples"
+    _starting_depth:    int = field(repr=False)     # spec: "starting depth (window offset) in samples"; see starting_depth_samples
     ping_number:        int = field(repr=True)      # sequential ping number, matched for channels
 
     _reserved01:  int = field(repr=False)
@@ -272,7 +272,7 @@ class SonarDataMessage(JSFMessage):
     _raw_water_temp:            int = field(repr=False) # Water temperature convert 1/10 deg C (see validity flags)
     _layback_distance:        float = field(repr=False) # distance to sonar in meters
     _reserved31:                int = field(repr=False)
-    _raw_cable_out:             int = field(repr=False) # ???: cable out (decimeters) (see validity flags)
+    _raw_cable_out:             int = field(repr=False) # cable out (decimeters) (see validity flags)
     _reserved32:                int = field(repr=False)
 
     _raw_trace_data: np.ndarray = field(repr=False)    # Raw data output of trace (int16 array)
@@ -305,12 +305,20 @@ class SonarDataMessage(JSFMessage):
 
     water_temp_C:  Optional[float] = field(init=False, repr=False) # deg C
     cable_out_m:   Optional[float] = field(init=False, repr=False) # meters
+    layback_m:              float = field(init=False, repr=False) # meters, tow point to sonar
+    position_interpolated:   bool = field(init=False, repr=False) # validity bit 13
     pipe_length_km:     Optional[float] = field(init=False, repr=False) # TODO
 
     annotation_string:  Optional[str] = field(init=False, repr=False)
 
     backscatter_intensity:  list[float] = field(init=False, repr=False) # Sonar trace data # ???: dB?
     N_samples:              int = field(init=False)
+    # Window offset of the first sample, in samples (bytes 4-7, "starting
+    # depth (window offset) in samples" in the JSF spec): taken to be the
+    # number of sample intervals between the transmit and the first
+    # recorded sample, so sample i is at slant range
+    # (starting_depth_samples + i) x interval. 0 in every file seen so far.
+    starting_depth_samples: int = field(init=False)
 
     @staticmethod
     def parse_validity_flags(flags: int) -> dict:
@@ -337,6 +345,7 @@ class SonarDataMessage(JSFMessage):
     def __post_init__(self) -> None:
 
         self.channel = self._header.channel
+        self.starting_depth_samples = int(self._starting_depth)
 
         # TODO: clean up timestamp fixes
 
@@ -567,7 +576,16 @@ class SonarDataMessage(JSFMessage):
         self._raw_adc_decimation/1e2 # ???: always 1.0?
 
         self.water_temp_C = self._raw_water_temp / 1e1    # TODO: check validity flags
-        self.cable_out_m = self._raw_cable_out / 1e3      # TODO: check validity flags
+        # Spec: "cable out in decimeters". Public EdgeTech Discover files
+        # with 1300 here record a layback of 125.9 m (130 m of cable at a
+        # 32 m tow depth), so /10. The cable-counter validity bit (11) is
+        # clear in those files although the value is plausible, so it is
+        # kept regardless.
+        self.cable_out_m = self._raw_cable_out / 10.0     # dm -> m
+        self.layback_m = float(self._layback_distance)
+        # Bit 13: the message-80 position is the sonar's (layback applied by
+        # Discover); clear, it is the last nav fix received, layback not applied.
+        self.position_interpolated = bool(self._validity_flags & (1 << 13))
 
         # Handle trace data -- vectorized (see _parse_body's numpy-decode
         # comment); a second full-length Python float list here, on top of

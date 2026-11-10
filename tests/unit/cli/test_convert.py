@@ -42,7 +42,7 @@ class TestRunSurvey:
         (tmp_path / "raw").mkdir()
         (tmp_path / "raw" / "20241017181822.jsf").write_bytes(b"")
         monkeypatch.setattr(convert, "detect_format", lambda paths: "jsf")
-        monkeypatch.setattr(convert, "read_and_convert_segments", lambda path, survey_name=None, min_pings=50: [(path.stem, sample_multi_frequency_survey)])
+        monkeypatch.setattr(convert, "read_and_convert_segments", lambda path, survey_name=None, min_pings=50, nav_crs=None: [(path.stem, sample_multi_frequency_survey)])
 
         assert convert.run_survey(self._args(tmp_path)) == 0
 
@@ -289,6 +289,34 @@ class TestSurveyXtf:
         assert convert.main(args) == 0
         assert (out / "LINE1_seg01.ss.h5").exists()
         assert (out / "LINE1_seg02.ss.h5").stat().st_mtime_ns == mtime
+
+
+    def test_nav_crs_converts_projected_xtf(self, tmp_path):
+        from pyproj import Transformer
+
+        from tests.unit.io.xtf.conftest import (
+            dual_frequency_infos,
+            file_header,
+            ramp,
+            sonar_packet,
+            write_xtf,
+        )
+
+        east, north = Transformer.from_crs(4326, 32619, always_xy=True).transform(-71.4, 41.5)
+        raw = tmp_path / "raw"
+        raw.mkdir()
+        pk = [sonar_packet([(c, ramp(256, "<u2", i + c)) for c in range(4)], ping_number=i,
+                           SensorXcoordinate=east + i, SensorYcoordinate=north)
+              for i in range(20)]
+        write_xtf(raw / "LINE1.XTF", file_header(dual_frequency_infos(), nav_units=0), pk)
+        out = tmp_path / "ss_h5"
+        base = ["survey", "--input-dir", str(raw), "--output-dir", str(out), "--no-crop-farrange"]
+        assert convert.main(base) == 2          # no --nav-crs: that file fails
+        assert not (out / "LINE1.ss.h5").exists()
+        assert convert.main(base + ["--nav-crs", "EPSG:32619"]) == 0
+        ds = read_survey(out / "LINE1.ss.h5").get_frequency("hz_100000").dataset
+        assert ds["longitude"].values[0] == pytest.approx(-71.4, abs=1e-8)
+        assert ds["latitude"].values[0] == pytest.approx(41.5, abs=1e-8)
 
 
 class TestMainDispatch:

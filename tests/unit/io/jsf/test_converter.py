@@ -31,6 +31,7 @@ from tests.unit.io.jsf.conftest import (
     PR_FLAG_PITCH,
     PR_FLAG_ROLL,
     _make_real_pitch_roll_msg,
+    _make_sonar_msg,
 )
 
 # ============================================================
@@ -674,3 +675,88 @@ class TestBuildSensorRecord:
     def test_time_is_datetime64_ns(self, pressure_msgs):
         ds = _build_sensor_record("pressure", pressure_msgs)
         assert ds["time"].dtype == np.dtype("datetime64[ns]")
+
+
+# ============================================================
+# STARTING DEPTH (window offset of the first sample)
+# ============================================================
+
+def _offset_msgs(offsets, n=100):
+    """Paired pings; offsets[i] = (port, starboard) starting depth in samples."""
+    msgs = []
+    for i, (op, os_) in enumerate(offsets):
+        msgs.append(_make_sonar_msg(ping_number=i, channel=0, n_samples=n, starting_depth_samples=op))
+        msgs.append(_make_sonar_msg(ping_number=i, channel=1, n_samples=n, starting_depth_samples=os_))
+        msgs[-2].backscatter_intensity = np.arange(n, dtype=np.float32) + 1
+        msgs[-1].backscatter_intensity = np.arange(n, dtype=np.float32) + 1
+    return msgs
+
+
+@pytest.mark.unit
+class TestStartingDepth:
+    def test_zero_offset_unchanged_and_silent(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="sidescanpy"):
+            ds = _build_frequency_channel(_offset_msgs([(0, 0)] * 3), repair_mode="nan_pad")
+        np.testing.assert_array_equal(ds["sample"].values, np.arange(100))
+        assert "starting depth" not in caplog.text.lower()
+        assert "jsf_starting_depth_min" not in ds.attrs
+
+    def test_constant_offset_shifts_sample_coordinate(self, caplog):
+        from sidescanpy.processing.sample_axis import sample_index, sample_interval_m
+
+        with caplog.at_level(logging.WARNING, logger="sidescanpy"):
+            ds = _build_frequency_channel(_offset_msgs([(40, 40)] * 3), repair_mode="nan_pad")
+        np.testing.assert_array_equal(ds["sample"].values, 40 + np.arange(100))
+        assert ds.sizes["sample"] == 100
+        # Slant range of recorded sample i is (start_depth + i) x interval.
+        rng = sample_index(ds) * sample_interval_m(ds)[0]
+        assert rng[0] == pytest.approx(40 * 1500.0 / (2 * 400_000.0))
+        warnings = [r for r in caplog.records if "starting depth" in r.getMessage().lower()]
+        assert len(warnings) == 1 and warnings[0].levelname == "WARNING"
+        assert ds.attrs["jsf_starting_depth_min"] == 40
+        assert ds.attrs["jsf_starting_depth_max"] == 40
+
+    def test_varying_offset_places_each_ping_at_its_range(self):
+        ds = _build_frequency_channel(_offset_msgs([(10, 10), (30, 20), (10, 10)]), repair_mode="nan_pad")
+        np.testing.assert_array_equal(ds["sample"].values, 10 + np.arange(120))
+        v = ds["backscatter_intensity"].values
+        # Ping 1 port starts 20 samples later than ping 0, starboard 10 later.
+        assert np.isnan(v[1, 0, :20]).all() and v[1, 0, 20] == 1
+        assert np.isnan(v[1, 1, :10]).all() and v[1, 1, 10] == 1
+        assert v[0, 0, 0] == 1 and np.isnan(v[0, 0, 100:]).all()
+
+
+
+@pytest.mark.unit
+class TestLaybackAndPositionSource:
+    def _convert(self, **kw):
+        msgs = [
+            _make_sonar_msg(ping_number=p, channel=c, **kw)
+            for p in range(3) for c in (0, 1)
+        ]
+        survey = convert(msgs, source_files=[Path("test.jsf")])
+        return survey.get_frequency(survey.frequencies[0]).dataset
+
+    def test_layback_and_cable_out_carried_per_ping(self):
+        ds = self._convert(layback_m=125.9, cable_out_m=130.0)
+        np.testing.assert_allclose(ds["layback_m"].values, 125.9, rtol=1e-6)
+        np.testing.assert_allclose(ds["cable_out_m"].values, 130.0)
+        assert ds["layback_m"].attrs["units"] == "m"
+
+    def test_position_source_towfish_when_bit_13_set(self):
+        ds = self._convert(position_interpolated=True)
+        assert ds.attrs["position_source"] == "towfish"
+        assert "bit 13" in ds.attrs["position_source_reason"]
+
+    def test_position_source_ship_when_bit_13_clear(self):
+        ds = self._convert(position_interpolated=False)
+        assert ds.attrs["position_source"] == "ship"
+
+    def test_tow_point_offset_recorded_when_nonzero(self):
+        ds = self._convert(gps_offset_x=1.5, gps_offset_y=-4.0)
+        assert ds.attrs["tow_point_starboard_m"] == pytest.approx(1.5)
+        assert ds.attrs["tow_point_aft_m"] == pytest.approx(-4.0)
+
+    def test_tow_point_offset_absent_when_zero(self):
+        ds = self._convert()
+        assert "tow_point_aft_m" not in ds.attrs

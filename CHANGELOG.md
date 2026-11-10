@@ -21,6 +21,32 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   training dataset with backgrounds; and a target-recognition section
   (detector, classifier, review, evaluation) trained on a public
   labelled image set.
+- `"layback"` correction step (`processing.apply_layback`, `sidescan-correct
+  --layback`, not in `DEFAULT_STEPS`): moves ship positions astern along the
+  heading by the recorded layback plus the antenna-to-tow-point offset, with
+  a Pythagorean cable-out estimate where no layback is recorded. It only
+  moves positions whose new `position_source` attribute is `ship`, so a
+  layback the acquisition software already applied is never applied again.
+  Keeps the recorded positions in `latitude_before_layback` /
+  `longitude_before_layback`; `invert(ds, ["layback"])` restores them.
+- Readers carry per-ping `layback_m` (JSF, XTF) and `cable_out_m` (JSF,
+  XTF, SDF), and set the `position_source` / `position_source_reason`
+  attributes: JSF from validity bit 13, XTF from Sensor vs Ship
+  coordinates (`towfish` or `unknown`, never `ship`; Isis files with no
+  Ship coordinates and a recorded layback are noted in
+  `position_source_reason` as probably the ship), SDF from which position the reader used. JSF also records
+  `tow_point_aft_m` / `tow_point_starboard_m` when set, SDF
+  `sdf_layback_method`.
+- XTF files with projected navigation (`NavUnits` 0, easting/northing in
+  metres) convert when the caller names the projection: `nav_crs` on
+  `io.xtf.convert`, `io.read_and_convert` and `io.read_and_convert_segments`
+  (an EPSG code, a CRS string or a `pyproj.CRS`), and
+  `sidescan-convert survey --nav-crs`. Sensor positions are converted to
+  WGS84 longitude/latitude with pyproj, an easting/northing of exactly
+  (0, 0) becomes NaN, and the CRS is recorded in the `xtf_nav_crs`
+  attribute. Without `nav_crs` such a file raises `ValueError` (it raised
+  `NotImplementedError`); the zone is not guessed. `nav_crs` is ignored
+  for files in degrees (`NavUnits` 3).
 
 ### Fixed
 
@@ -34,8 +60,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 - Dropout samples (recorded amplitude exactly zero) are masked before
   geometric and georeferenced resampling
   (`export.windows.mask_dropouts`), so they no longer spread into dark
-  spots. They are found on the uncorrected values, because TVG moves them
-  off the dB floor.
+  spots. They are found on the uncorrected values, so files corrected
+  before TVG kept them at the dB floor are handled too.
 - `mask_nadir_gap` (and so every geometric or georeferenced chip and swath
   window) no longer blanks most of a side on pings where a bright
   far-range return set the first-return threshold: such boundaries are
@@ -43,6 +69,81 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   (`max_boundary_factor`, new `processing.reject_late_boundaries`). On one
   public Klein line this blanked the near port swath on 86 of 297 pings,
   which showed as black bands in dual-swath chips.
+- `io.jsf`: `SonarDataMessage.cable_out_m` was the raw field / 1000; the
+  field is in decimetres, so it is now / 10 (130 m, not 1.3 m, on a public
+  Discover file with a 125.9 m layback).
+- `processing.geometric.compute_geometric_ranges`: pitch geometry
+  (breaking for pitched data). The old model rotated the ground vector by
+  pitch (`along = ground·sin θ`, `across = ±ground·cos θ`), so the
+  along-track offset grew with range, about 8.7 m at 100 m range and 5°.
+  A pitched fan beam on a flat bottom is now modelled: every seafloor
+  sample of a ping gets `along_track_m = altitude·tan θ` and
+  `across_track_m = ±sqrt(slant² − (altitude / cos θ)²)`, valid where
+  `slant > altitude / cos θ`. `ground_range_m` is unchanged, and so is
+  every output at zero pitch. NaN pitch is now taken as 0 with a WARNING
+  instead of giving NaN geometry. The `geometric` history record gains
+  `pitch_model` and `n_nan_pitch_as_zero`; records without `pitch_model`
+  were made by the old model. **Georeferenced outputs (per-sample
+  latitude/longitude, georeferenced grids, GeoTIFFs, geo windows) from
+  earlier versions of pings with non-zero pitch are wrong and should be
+  regenerated**; swath-frame products use only `across_track_m` and change
+  by a fraction of a percent.
+- `grids.resample_channel_to_grid` accepts `method` as a string
+  (`"mean"`, …) as well as a `ResamplingMethod`, like `grid_channel`; a
+  string raised `AttributeError`. An unknown name raises `ValueError`.
+- `grids.GridDefinition.num_cells_ns` / `num_cells_ew` no longer add a
+  cell when `extent / resolution_m` is a whole number up to float error
+  (a 400.2 m extent at 0.3 m gave 1335 cells instead of 1334). A ratio
+  within `CELL_COUNT_TOLERANCE` (1e-6 cells) of a whole number counts as
+  that number; otherwise the count is still the ceiling. Such grids lose
+  the extra row or column, and their centers are `resolution_m` apart
+  instead of slightly stretched.
+- `processing.correct` now logs a WARNING (it was DEBUG) when it skips
+  the `"interpolate_aux"` step because no `aux=` was given, for example
+  with `DEFAULT_STEPS` on a bare channel dataset: navigation and attitude
+  then stay the per-ping values as recorded. The skip itself is
+  unchanged. It stays at DEBUG when the step was already applied to the
+  dataset. `correct_survey` and `correct_file` supply `aux` and do not log it.
+- `analysis.detect_shadow_proposals` excludes the water column: samples at
+  a slant range up to the ping's `altitude_m` (before the first bottom
+  return) are treated as NaN, so a dark, unblanked water column no longer
+  yields many weak false proposals. Pings with NaN or non-positive
+  altitude are not masked (fill altitude first with the `bottom_track`
+  step). New parameter `mask_water_column` (default True; False keeps the
+  previous behaviour). The input dataset is not modified.
+- `io.xtf`: a ChanInfo `SampleFormat` the XTF specification does not
+  define (outside 0-8; some KleinXlt 3.0 files have 0xFF in the reserved
+  bytes, `SampleFormat` included) no longer raises `ValueError`. It is
+  treated as unset (legacy) and samples are read by `BytesPerSample`, with
+  one WARNING per file. Defined but unsupported formats (IBM float, 4, 6,
+  7) still raise.
+- `io.jsf`: the sonar data message's starting depth (window offset, in
+  samples; new `SonarDataMessage.starting_depth_samples`) is applied to the
+  sample axis instead of ignored: recorded sample `i` gets the `sample`
+  coordinate `starting_depth + i`, so its slant range is
+  `(starting_depth + i) x interval`. Pings or sides with different offsets
+  are placed at their own offsets on a common axis (NaN elsewhere). A
+  nonzero offset logs one WARNING per frequency and is recorded in
+  `jsf_starting_depth_min` / `jsf_starting_depth_max`. Files with offset 0
+  (every file seen so far) are unchanged.
+- `analysis.fit_range_decay(r_fit_min_m="auto")` reports the search it
+  actually ran: the margin is added after the near-field peak search, so
+  the resolved near edge can lie past the search bound (24 m from a search
+  within [0, 20 m]) while the note only named the bound. The note now gives
+  the peak bin's far edge, the bound and the margin, and says when the
+  value lies past the bound; new result fields
+  `r_fit_min_auto_search_max_m` and `r_fit_min_auto_peak_edge_m` (None
+  unless "auto" resolved). The resolved value is unchanged.
+- Floor-clipped samples (exact-zero amplitude, -120 dB) no longer get TVG
+  gain: `processing.apply_tvg` and `apply_tvg_to_amplitude` leave them at
+  exactly `core.units.FLOOR_DB`, and the `range_correction` step leaves
+  them there too, so `core.units.mask_floor_clip` still masks them after
+  correction (they sat near -110 dB before and passed as data). Inversion
+  maps them back to 0 amplitude, for files corrected before and after this
+  change. Every other sample is unchanged.
+- `io.read_and_convert` and `io.detect_format` accept paths as `str` as
+  well as `Path` (a list of str raised `AttributeError` on `.stem`), and a
+  single path as well as a list.
 
 ## [0.9.0] — 2026-11-09
 

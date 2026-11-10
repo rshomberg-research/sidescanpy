@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 STEP_CROP_FARRANGE = "crop_farrange"
 STEP_INTERPOLATE_AUX = "interpolate_aux"
 STEP_BOTTOM_TRACK = "bottom_track"
+STEP_LAYBACK = "layback"
 STEP_TVG = "tvg"
 STEP_GEOMETRIC = "geometric"
 STEP_RANGE_CORRECTION = "range_correction"
@@ -52,6 +53,7 @@ BUILTIN_STEPS: tuple[str, ...] = (
     STEP_CROP_FARRANGE,
     STEP_INTERPOLATE_AUX,
     STEP_BOTTOM_TRACK,
+    STEP_LAYBACK,
     STEP_TVG,
     STEP_GEOMETRIC,
     STEP_RANGE_CORRECTION,
@@ -87,11 +89,12 @@ LEGACY_STEP_NAMES: dict[str, str] = {
 """Step names written to ``processing_history`` by older versions."""
 
 LEVEL_STEPS: tuple[str, ...] = tuple(
-    s for s in BUILTIN_STEPS if s not in (STEP_CROP_FARRANGE, STEP_INTERPOLATE_AUX, STEP_BOTTOM_TRACK)
+    s for s in BUILTIN_STEPS
+    if s not in (STEP_CROP_FARRANGE, STEP_INTERPOLATE_AUX, STEP_BOTTOM_TRACK, STEP_LAYBACK)
 )
 """Built-in steps that define a processing level. Cropping, aux
-interpolation and bottom tracking prepare data but do not correct it, so
-they are not levels."""
+interpolation, bottom tracking and layback prepare data but do not correct
+the backscatter, so they are not levels."""
 
 PROCESSING_LEVELS: tuple[str, ...] = ("raw", *LEVEL_STEPS)
 """Values :func:`processing_level` can return, least to most processed."""

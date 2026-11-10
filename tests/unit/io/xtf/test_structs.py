@@ -109,6 +109,14 @@ class TestSampleDtype:
         with pytest.raises(ValueError, match="Unsupported"):
             sample_dtype(chan_info(1, 100.0, bps, fmt))
 
+    @pytest.mark.parametrize("fmt, bps, expected", [(255, 2, "<u2"), (255, 1, "u1"), (9, 4, "<u4")])
+    def test_unknown_format_falls_back_to_bytes_per_sample(self, fmt, bps, expected):
+        assert sample_dtype(chan_info(1, 100.0, bps, fmt)) == np.dtype(expected)
+
+    def test_unknown_format_with_unsupported_width_raises(self):
+        with pytest.raises(ValueError, match="BytesPerSample 3"):
+            sample_dtype(chan_info(1, 100.0, 3, 255))
+
     def test_format_overrides_disagreeing_bytes_per_sample(self, caplog):
         assert sample_dtype(chan_info(1, 100.0, 2, 8)) == np.dtype("u1")
         assert "disagrees" in caplog.text

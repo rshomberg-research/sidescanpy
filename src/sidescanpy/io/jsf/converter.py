@@ -9,6 +9,20 @@ plus aux records (navigation, attitude, dvl, sensors).
 This module performs no I/O. The reader is responsible for parsing JSF
 bytes into JSFMessage instances and for any cross-file message ordering.
 
+Starting depth
+--------------
+The sonar data message's "starting depth (window offset) in samples"
+(``SonarDataMessage.starting_depth_samples``) is applied to the sample
+axis: it is taken as the number of sample intervals before the first
+recorded sample, so recorded sample ``i`` gets the absolute ``sample``
+coordinate ``starting_depth + i`` and the slant range
+``(starting_depth + i) x interval``. When pings (or sides) differ in
+offset, each trace is placed at its own offset on a common axis starting
+at the smallest one, NaN elsewhere. The offset is 0 in every file seen so
+far; a nonzero one logs one WARNING per frequency, because that reading
+of the field has not been checked against a real file, and is recorded
+in ``jsf_starting_depth_min`` / ``jsf_starting_depth_max``.
+
 2026 rshomberg@uri.edu
 """
 
@@ -22,6 +36,12 @@ import numpy as np
 import xarray as xr
 
 from sidescanpy.core.schema import (
+    OPTIONAL_PER_PING_VARS,
+    POSITION_SHIP,
+    POSITION_SOURCE_ATTR,
+    POSITION_SOURCE_REASON_ATTR,
+    POSITION_TOWFISH,
+    combine_position_sources,
     make_empty_attitude_record,
     make_empty_dvl_record,
     make_empty_navigation_record,
@@ -195,7 +215,16 @@ def _build_frequency_channel(
     n_samples = _determine_n_samples(paired_pings)
 
     n_pings = len(paired_pings)
-    backscatter = np.full((n_pings, 2, n_samples), np.nan, dtype=np.float32)
+    offsets = np.zeros((n_pings, 2), dtype=np.int64)
+    for i, pair in enumerate(paired_pings):
+        for side, msg in enumerate(pair):
+            if msg is not None:
+                offsets[i, side] = int(msg.starting_depth_samples)
+    present = np.array([[m is not None for m in pair] for pair in paired_pings], dtype=bool)
+    off_min = int(offsets[present].min()) if present.any() else 0
+    off_max = int(offsets[present].max()) if present.any() else 0
+    width = n_samples + off_max - off_min
+    backscatter = np.full((n_pings, 2, width), np.nan, dtype=np.float32)
 
     ping_numbers = np.zeros(n_pings, dtype=np.int32)
     timestamps   = np.zeros(n_pings, dtype="int64")  # ns since epoch
@@ -212,6 +241,11 @@ def _build_frequency_channel(
     # heave is not in SonarDataMessage; stays NaN. Real values come later
     # from interpolation against the attitude aux stream.
     heave      = np.full(n_pings, np.nan, dtype=np.float32)
+    layback    = np.full(n_pings, np.nan, dtype=np.float32)
+    cable_out  = np.full(n_pings, np.nan, dtype=np.float32)
+    interpolated = np.zeros(n_pings, dtype=bool)
+    tow_x      = np.full(n_pings, np.nan, dtype=np.float64)
+    tow_y      = np.full(n_pings, np.nan, dtype=np.float64)
 
     for i, (port, stbd) in enumerate(paired_pings):
         anchor: SonarDataMessage = port if port is not None else stbd
@@ -222,10 +256,12 @@ def _build_frequency_channel(
 
         if port is not None:
             assert port.N_samples == n_samples, "n_samples mismatch (port)"
-            backscatter[i, 0, :] = port.backscatter_intensity
+            lo = offsets[i, 0] - off_min
+            backscatter[i, 0, lo:lo + n_samples] = port.backscatter_intensity
         if stbd is not None:
             assert stbd.N_samples == n_samples, "n_samples mismatch (stbd)"
-            backscatter[i, 1, :] = stbd.backscatter_intensity
+            lo = offsets[i, 1] - off_min
+            backscatter[i, 1, lo:lo + n_samples] = stbd.backscatter_intensity
 
         # Per-ping scalars — prefer port, fall back to starboard.
         # NOTE: when nan_pad'd (only one side present), the missing side's nav
@@ -242,6 +278,11 @@ def _build_frequency_channel(
         pitch[i]     = _coerce(scalar_src.pitch_deg)
         altitude[i]  = _coerce(scalar_src.altitude_m)
         sound_vel[i] = _coerce(scalar_src.sound_speed_ms)
+        layback[i]   = _coerce(scalar_src.layback_m)
+        cable_out[i] = _coerce(scalar_src.cable_out_m)
+        interpolated[i] = scalar_src.position_interpolated
+        tow_x[i]     = scalar_src.gps_offset_x
+        tow_y[i]     = scalar_src.gps_offset_y
 
     # File-level attrs taken from the first message (already verified constant)
     first = sonar_msgs[0]
@@ -260,6 +301,17 @@ def _build_frequency_channel(
         "sample_rate_hz":     1.0 / first.sample_interval,
         "processing_history": json.dumps([]),
     }
+    attrs.update(_position_source_attrs(interpolated))
+    attrs.update(_tow_point_attrs(tow_x, tow_y))
+    if off_max > 0:
+        logger.warning(
+            "JSF %d-%d Hz: nonzero starting depth (window offset) of %d-%d samples; "
+            "taken as the samples before the first recorded one, so sample i is at "
+            "slant range (offset + i) x sample interval (not checked on a real file)",
+            int(first.transmit_freq_start), int(first.transmit_freq_end), off_min, off_max,
+        )
+        attrs["jsf_starting_depth_min"] = off_min
+        attrs["jsf_starting_depth_max"] = off_max
 
     ds = xr.Dataset(
         data_vars={
@@ -274,10 +326,13 @@ def _build_frequency_channel(
             "altitude_m":   (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll
             "sound_vel_ms": (["ping"], sound_vel),
             "fathometer_reading_m": (["ping"], altitude),   # FIXME: calculate altitude from DVL or fathometer+pitch+roll)
+            "layback_m":    (["ping"], layback, {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["layback_m"]}),
+            "cable_out_m":  (["ping"], cable_out, {"units": "m", "long_name": OPTIONAL_PER_PING_VARS["cable_out_m"]}),
         },
         coords={
-            # Absolute sample index (0 = first recorded sample of the ping)
-            "sample":      (["sample"], np.arange(n_samples)),
+            # Absolute sample index: 0 = the transmit, so the first recorded
+            # sample is at its starting depth (window offset), normally 0.
+            "sample":      (["sample"], off_min + np.arange(width)),
             "ping_number": (["ping"], ping_numbers),
             "time":        (["ping"], timestamps.astype("datetime64[ns]")),
             "channel_id":  (["channel"], np.array(["port", "starboard"])),
@@ -290,6 +345,39 @@ def _build_frequency_channel(
 # ============================================================
 # FREQUENCY CHANNEL HELPERS
 # ============================================================
+
+def _position_source_attrs(interpolated: np.ndarray) -> dict[str, str]:
+    """Position source from validity bit 13 ("position interpolated").
+
+    Set: the position is the sonar's, laid back by Discover. Clear: it is
+    the last navigation fix Discover received, with no layback applied.
+    """
+    per_ping = np.where(interpolated, POSITION_TOWFISH, POSITION_SHIP)
+    source = combine_position_sources(per_ping)
+    n_set = int(interpolated.sum())
+    reason = (
+        f"JSF validity bit 13 (position interpolated) set on {n_set} of {interpolated.size} pings: "
+        "set = sonar position with layback applied, clear = last nav fix, layback not applied"
+    )
+    return {POSITION_SOURCE_ATTR: source, POSITION_SOURCE_REASON_ATTR: reason}
+
+
+def _tow_point_attrs(tow_x: np.ndarray, tow_y: np.ndarray) -> dict[str, float]:
+    """Antenna-to-tow-point offset (bytes 76-79, starboard and aft positive).
+
+    Recorded only when non-zero; a value that changes within the file logs
+    a WARNING and its median is kept.
+    """
+    out: dict[str, float] = {}
+    for name, values in (("tow_point_starboard_m", tow_x), ("tow_point_aft_m", tow_y)):
+        finite = values[np.isfinite(values)]
+        if not finite.size or not np.any(finite != 0):
+            continue
+        if np.ptp(finite) > 0:
+            logger.warning("JSF antenna-to-tow-point offset %s varies within the file; keeping its median", name)
+        out[name] = float(np.median(finite))
+    return out
+
 
 _FILE_LEVEL_FIELDS = (
     "transmit_freq_start",

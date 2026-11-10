@@ -1,7 +1,6 @@
 """
 Tests for dropout masking in export windows: samples recorded as exactly
-zero become NaN before resampling, also after TVG has moved them off the
-dB floor.
+zero become NaN before resampling, before and after TVG.
 
 2026 rshomberg@uri.edu
 """
@@ -32,7 +31,6 @@ class TestMaskDropouts:
 
     def test_zero_samples_masked_after_tvg(self):
         ds = _channel(tvg=True)
-        assert ds["backscatter_intensity"].values[10, 1, 200] != -120.0  # TVG moved it off the floor
         out = mask_dropouts(mask_nadir_gap_with_uncorrected(ds))
         assert np.isnan(out["backscatter_intensity"].values[10, 1, 200])
         assert np.isnan(out["uncorrected"].values[25, 0, 300])

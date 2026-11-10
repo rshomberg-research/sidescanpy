@@ -418,6 +418,50 @@ class TestNaNInfHandling:
         assert np.all(zero_corrected < -50), "Corrected zeros should be very negative"
 
 
+class TestFloorClipThroughTvg:
+    """Exact-zero amplitude stays at the -120 dB floor after TVG, so
+    mask_floor_clip still finds it, and inversion maps it back to 0."""
+
+    def _ds(self):
+        return TestNaNInfHandling().create_dataset_with_zeros()
+
+    def test_floor_clipped_samples_stay_at_floor_after_tvg(self):
+        from sidescanpy.core.units import FLOOR_DB
+
+        out = apply_tvg(self._ds())["backscatter_intensity"].values
+        assert np.all(out[:, :, :10] == FLOOR_DB)
+        assert out.dtype == np.float32
+
+    def test_mask_floor_clip_catches_them_after_tvg(self):
+        from sidescanpy.core.units import mask_floor_clip
+
+        out = mask_floor_clip(apply_tvg(self._ds())["backscatter_intensity"].values)
+        assert np.isnan(out[:, :, :10]).all()
+        assert np.isfinite(out[:, :, 10:]).all()
+
+    def test_real_samples_still_get_gain(self):
+        ds = self._ds()
+        out = apply_tvg(ds)["backscatter_intensity"].values
+        raw_db = 20 * np.log10(ds["backscatter_intensity"].values[:, :, 10:])
+        assert np.all(out[:, :, 10:] > raw_db)
+
+    def test_inversion_returns_floor_clipped_samples_to_zero(self):
+        from sidescanpy.processing import uncorrected_backscatter
+
+        ds = self._ds()
+        back = uncorrected_backscatter(apply_tvg(ds)).values
+        assert np.all(back[:, :, :10] == 0.0)
+        np.testing.assert_allclose(back[:, :, 10:], ds["backscatter_intensity"].values[:, :, 10:], rtol=1e-4)
+
+    def test_apply_tvg_to_amplitude_keeps_floor(self):
+        from sidescanpy.core.units import FLOOR_DB
+
+        amp = np.array([[0.0, 0.0, 5.0, 5.0]], dtype=np.float32)
+        out = apply_tvg_to_amplitude(amp, meters_per_sample=10.0, freq_hz=455_000.0)
+        assert out[0, 0] == FLOOR_DB and out[0, 1] == FLOOR_DB
+        assert out[0, 3] > 20 * np.log10(5.0)
+
+
 # ============================================================================
 # STEP 6: METADATA TRACKING TESTS
 # ============================================================================

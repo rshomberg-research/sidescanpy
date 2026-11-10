@@ -45,13 +45,15 @@ and that channel's samples.
 | frequency key `hz_<Hz>` | `ChanInfo.Frequency` (kHz) of a port/starboard pair |
 | `backscatter_intensity` (ping, channel, sample) | port (`TypeOfChannel` 1) and starboard (2) samples, float32; sample 0 nearest the sonar on both sides (XTF stores port far -> near, so port is reversed) |
 | `valid_samples` | per-ping `NumSamples`; padding beyond it is NaN |
-| `latitude`, `longitude` | `SensorYcoordinate`, `SensorXcoordinate` (degrees, `NavUnits` 3) |
+| `latitude`, `longitude` | `SensorYcoordinate`, `SensorXcoordinate` (degrees with `NavUnits` 3; northing/easting converted from `nav_crs` with `NavUnits` 0) |
 | `heading_deg`, `pitch_deg`, `roll_deg`, `heave_m` | `SensorHeading`, `SensorPitch` (nose up +), `SensorRoll` (port up +), `Heave` |
 | `depth_m` | `SensorDepth` |
 | `altitude_m`, `fathometer_reading_m` | `SensorPrimaryAltitude`; 0 is NaN |
 | `sound_vel_ms` | `SoundVelocity`, doubled when below 1000 m/s (see below) |
 | `sample_rate_hz` | `NumSamples / TimeDuration` |
 | `time` | `Year` … `Second` + `HSeconds` (10 ms resolution) |
+| `layback_m`, `cable_out_m` | `Layback`, `CableOut` + `CableOutHundredths` / 100 |
+| `position_source` attribute | `towfish` when `SensorX/Y` sit away from `ShipX/Y`; else `unknown`, never `ship` (Isis files with no `ShipX/Y` and a recorded `Layback` are noted in `position_source_reason` as probably the ship) (see processing → Layback) |
 | navigation / attitude records | every ping header (`source = extracted_from_xtf_ping_headers`) |
 
 `pulse_length_us` is not in the XTF headers and is 0.0. Gain codes are
@@ -89,8 +91,15 @@ anomalies.
   four channels. The reader walks channel blocks by the packet byte
   count; those pings are left out of the high frequency (which keeps its
   own ping axis) and counted in `xtf_pings_absent`.
-- **Projected coordinates** (`NavUnits` 0) are not supported and raise
-  `NotImplementedError`.
+- **Projected coordinates** (`NavUnits` 0): `SensorXcoordinate` /
+  `SensorYcoordinate` are easting / northing in metres, and the file does
+  not say in which projection. Pass it as `nav_crs` (an EPSG code such as
+  `32619`, a CRS string, or a `pyproj.CRS`) to `io.xtf.convert`,
+  `io.read_and_convert` or `io.read_and_convert_segments`, or as
+  `sidescan-convert survey --nav-crs EPSG:32619`; positions are converted
+  to WGS84 longitude/latitude, (0, 0) becomes NaN, and the CRS is recorded
+  in `xtf_nav_crs`. Without it such a file raises `ValueError`; the zone
+  is never guessed. `ShipXcoordinate` / `ShipYcoordinate` are not used.
 - **Sample scaling.** Samples are scaled by `2**-Weight` from the channel
   header. Some older files carry meaningless `Weight` values (for example
   -8408), which make every sample unusable. If a converted file's samples

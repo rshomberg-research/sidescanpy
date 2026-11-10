@@ -21,7 +21,7 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
 ``"interpolate_aux"``
     :func:`~sidescanpy.processing.interpolate.interpolate_aux_onto_dataset`;
     needs the survey's aux records (``aux=`` / :func:`correct_survey`);
-    :func:`correct` skips it when no ``aux`` is given.
+    :func:`correct` skips it, with a WARNING, when no ``aux`` is given.
     Params: ``fields, method, extrapolation, drop_invalid, held_values,
     max_hold_s, per_ping_fallback, groups, merge_window_s``.
 ``"bottom_track"``
@@ -31,6 +31,14 @@ callable ``fn(ds, **params) -> ds``. Built-in steps, in canonical order:
     Params: ``replace, max_diff_m, min_altitude_m, min_return_m,
     min_return_fraction, smooth_window,
     threshold_fraction, min_run, smooth_pings``.
+``"layback"``
+    :func:`~sidescanpy.processing.layback.apply_layback`: move ship
+    positions astern to the towfish by the recorded layback (plus tow-point
+    offset), before geometric/georef. Only moves positions whose
+    ``position_source`` is ``"ship"``; otherwise logs a WARNING and changes
+    nothing. Not in :data:`DEFAULT_STEPS`. Params: ``layback_m,
+    tow_point_aft_m, tow_point_starboard_m, position_source, use_cable_out,
+    ellipsoid``.
 ``"tvg"``
     :func:`~sidescanpy.processing.radiometric.apply_tvg`. Params:
     ``spreading_loss_db, absorption_db_per_m, min_range_m, sound_velocity_ms``,
@@ -98,6 +106,7 @@ from sidescanpy.core.history import (
     STEP_GEOMETRIC,
     STEP_GEOREF,
     STEP_INTERPOLATE_AUX,
+    STEP_LAYBACK,
     STEP_RANGE_CORRECTION,
     STEP_TVG,
     append_history,
@@ -114,6 +123,7 @@ from sidescanpy.processing.geometric import compute_geometric_ranges
 from sidescanpy.processing.georeferencing import compute_georeferencing
 from sidescanpy.processing.interpolate import interpolate_aux_onto_dataset
 from sidescanpy.processing.inversion import LEGACY_RAW_VAR, invert
+from sidescanpy.processing.layback import apply_layback
 from sidescanpy.processing.radiometric import TVGParams, apply_tvg, resolve_tvg_params
 from sidescanpy.processing.range_correction import apply_empirical_range_correction
 from sidescanpy.processing.sample_axis import (
@@ -187,6 +197,7 @@ _BUILTIN_FUNCTIONS: dict[str, Callable[..., xr.Dataset]] = {
     STEP_CROP_FARRANGE: crop_far_range,
     STEP_INTERPOLATE_AUX: _interpolate_aux_step,
     STEP_BOTTOM_TRACK: altitude_from_bottom_track,
+    STEP_LAYBACK: apply_layback,
     STEP_TVG: _tvg_step,
     STEP_GEOMETRIC: compute_geometric_ranges,
     STEP_RANGE_CORRECTION: apply_empirical_range_correction,
@@ -346,6 +357,14 @@ def _plan(ds: xr.Dataset, resolved: list[_Resolved], *, force: bool) -> list[_Ac
                     f"also list {missing} in steps so it is re-applied"
                 )
             actions.append(_Action("invert", invert_steps=to_undo))
+        if STEP_LAYBACK in requested and has_step(ds, STEP_LAYBACK):
+            # Re-applying layback starts from the recorded positions; that
+            # drops georef too, so it must be re-applied.
+            if has_step(ds, STEP_GEOREF) and STEP_GEOREF not in requested:
+                raise ValueError(
+                    "force re-applying layback first inverts it, which drops georef; also list 'georef' in steps"
+                )
+            actions.append(_Action("invert", invert_steps=(STEP_LAYBACK,)))
     for r in resolved:
         if not force and has_step(ds, r.name):
             logger.debug("step %r already applied; skipping", r.name)
@@ -399,13 +418,13 @@ def _check_aux(actions: list[_Action], aux: SideScanSurvey | None) -> None:
 # PUBLIC API
 # ============================================================
 
-_NEEDS_AUX = frozenset({STEP_TVG, STEP_GEOMETRIC, STEP_RANGE_CORRECTION, STEP_GEOREF})
+_NEEDS_AUX = frozenset({STEP_LAYBACK, STEP_TVG, STEP_GEOMETRIC, STEP_RANGE_CORRECTION, STEP_GEOREF})
 
 
 def correction_steps(requested: Iterable[str]) -> list[str]:
     """Built-in step names in canonical order, adding ``"interpolate_aux"`` when needed.
 
-    ``"interpolate_aux"`` is added whenever any of tvg / geometric /
+    ``"interpolate_aux"`` is added whenever any of layback / tvg / geometric /
     range_correction / georef is requested, since each reads per-ping
     navigation/attitude fields. Duplicates collapse.
 
@@ -443,8 +462,10 @@ def correct(
         ``{step_name: {param: value}}`` overrides for steps in ``steps``.
     aux : SideScanSurvey, optional
         Supplies navigation/attitude records to ``"interpolate_aux"``. When
-        omitted, that step is skipped (DEBUG log) unless ``params`` gives it
-        parameters, which is an error.
+        omitted, that step is skipped unless ``params`` gives it parameters,
+        which is an error. The skip logs a WARNING (navigation and attitude
+        stay the per-ping values as recorded), or DEBUG when the step was
+        already applied to ``ds``.
     force : bool, default False
         Re-apply steps that were already applied (see module docstring).
 
@@ -469,7 +490,15 @@ def correct(
                 "params were given for step 'interpolate_aux' but no aux: pass aux=survey "
                 "(or use correct_survey / correct_file), or leave the step out"
             )
-        logger.debug("interpolate_aux skipped: no aux given")
+        if force or not has_step(ds, STEP_INTERPOLATE_AUX):
+            # Constant message, so a once-per-channel log filter folds repeats.
+            logger.warning(
+                "interpolate_aux skipped: no aux given, so navigation and attitude stay "
+                "the per-ping values as recorded; pass aux=survey (or use correct_survey "
+                "/ correct_file) to interpolate the survey's aux records onto the pings"
+            )
+        else:
+            logger.debug("interpolate_aux skipped: no aux given (already applied)")
         resolved = [r for r in resolved if r.name != STEP_INTERPOLATE_AUX]
     actions = _plan(ds, resolved, force=force)
     _check_aux(actions, aux)
@@ -519,6 +548,7 @@ _DISK_GROWTH = {
     STEP_CROP_FARRANGE: 0.0,
     STEP_INTERPOLATE_AUX: 0.0,
     STEP_BOTTOM_TRACK: 0.0,
+    STEP_LAYBACK: 0.0,
     STEP_TVG: 2.0,
     STEP_GEOMETRIC: 2.0,
     STEP_RANGE_CORRECTION: 0.0,

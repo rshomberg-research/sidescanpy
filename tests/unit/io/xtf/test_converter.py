@@ -284,9 +284,9 @@ class TestSoundVelocityAndRange:
 
 @pytest.mark.unit
 class TestUnitsAndErrors:
-    def test_projected_nav_units_not_implemented(self, tmp_path):
+    def test_projected_nav_units_without_nav_crs_raises(self, tmp_path):
         path = _dual(tmp_path, [_ping(0)], nav_units=0)
-        with pytest.raises(NotImplementedError, match="projected"):
+        with pytest.raises(ValueError, match="nav_crs"):
             convert(read_xtf(path))
 
     def test_undefined_nav_units_not_implemented(self, tmp_path):
@@ -361,3 +361,157 @@ def test_ss_h5_round_trip(tmp_path):
         )
     xr.testing.assert_identical(loaded.navigation, survey.navigation)
     xr.testing.assert_identical(loaded.attitude, survey.attitude)
+
+
+# ============================================================
+# PROJECTED NAVIGATION (NavUnits 0)
+# ============================================================
+
+# Two positions in UTM zone 19N (EPSG:32619) and their WGS84 lon/lat.
+_UTM19N = 32619
+_LONLAT = [(-71.40, 41.50), (-71.39, 41.501)]
+
+
+def _projected_pings(n=4):
+    from pyproj import Transformer
+
+    fwd = Transformer.from_crs(4326, _UTM19N, always_xy=True)
+    lons = np.linspace(_LONLAT[0][0], _LONLAT[1][0], n)
+    lats = np.linspace(_LONLAT[0][1], _LONLAT[1][1], n)
+    east, north = fwd.transform(lons, lats)
+    pk = [_ping(i, SensorXcoordinate=east[i], SensorYcoordinate=north[i],
+                ShipXcoordinate=east[i] + 5.0, ShipYcoordinate=north[i] - 5.0) for i in range(n)]
+    return pk, lons, lats
+
+
+@pytest.mark.unit
+class TestProjectedNavigation:
+    @pytest.mark.parametrize("crs", [_UTM19N, "EPSG:32619"])
+    def test_nav_crs_converts_easting_northing_to_lonlat(self, tmp_path, crs):
+        pk, lons, lats = _projected_pings()
+        path = _dual(tmp_path, pk, nav_units=0)
+        survey = convert(read_xtf(path), nav_crs=crs)
+        ds = survey.get_frequency(survey.frequencies[0]).dataset
+        np.testing.assert_allclose(ds["longitude"].values, lons, atol=1e-8)
+        np.testing.assert_allclose(ds["latitude"].values, lats, atol=1e-8)
+        np.testing.assert_allclose(survey.navigation["longitude"].values, lons, atol=1e-8)
+        np.testing.assert_allclose(survey.navigation["latitude"].values, lats, atol=1e-8)
+        assert "32619" in ds.attrs["xtf_nav_crs"]
+
+    def test_nav_crs_accepts_pyproj_crs(self, tmp_path):
+        from pyproj import CRS
+
+        pk, lons, _ = _projected_pings()
+        path = _dual(tmp_path, pk, nav_units=0)
+        survey = convert(read_xtf(path), nav_crs=CRS.from_epsg(_UTM19N))
+        ds = survey.get_frequency(survey.frequencies[0]).dataset
+        np.testing.assert_allclose(ds["longitude"].values, lons, atol=1e-8)
+
+    def test_zero_easting_northing_is_nan(self, tmp_path):
+        pk, _, _ = _projected_pings(3)
+        pk.append(_ping(3, SensorXcoordinate=0.0, SensorYcoordinate=0.0))
+        path = _dual(tmp_path, pk, nav_units=0)
+        survey = convert(read_xtf(path), nav_crs=_UTM19N)
+        ds = survey.get_frequency(survey.frequencies[0]).dataset
+        assert np.isnan(ds["latitude"].values[3]) and np.isnan(ds["longitude"].values[3])
+        assert np.isfinite(ds["latitude"].values[:3]).all()
+
+    def test_geographic_nav_crs_rejected(self, tmp_path):
+        pk, _, _ = _projected_pings()
+        path = _dual(tmp_path, pk, nav_units=0)
+        with pytest.raises(ValueError, match="projected"):
+            convert(read_xtf(path), nav_crs=4326)
+
+    def test_nav_crs_ignored_for_latlon_files(self, dual_survey, tmp_path):
+        path, expected = dual_survey
+        survey = convert(read_xtf(path), nav_crs=_UTM19N)
+        fk = expected.frequencies[0]
+        np.testing.assert_array_equal(
+            survey.get_frequency(fk).dataset["latitude"].values,
+            expected.get_frequency(fk).dataset["latitude"].values,
+        )
+        assert "xtf_nav_crs" not in survey.get_frequency(fk).dataset.attrs
+
+    def test_read_and_convert_passes_nav_crs(self, tmp_path):
+        from sidescanpy.io import read_and_convert, read_and_convert_segments
+
+        pk, lons, _ = _projected_pings()
+        path = _dual(tmp_path, pk, nav_units=0)
+        for survey in (read_and_convert([path], "xtf", nav_crs=_UTM19N),
+                       read_and_convert_segments(path, nav_crs=_UTM19N, min_pings=1)[0][1]):
+            ds = survey.get_frequency(survey.frequencies[0]).dataset
+            np.testing.assert_allclose(ds["longitude"].values, lons, atol=1e-8)
+
+
+
+# ============================================================
+# LAYBACK AND POSITION SOURCE
+# ============================================================
+
+def _geo_pings(n=4, ship_offset_deg=None, **kw):
+    """Pings at the default Sensor positions; Ship = Sensor + offset (None: no Ship)."""
+    out = []
+    for i in range(n):
+        fields = dict(kw)
+        if ship_offset_deg is not None:
+            fields["ShipXcoordinate"] = -73.7 + i * 1e-5 + ship_offset_deg
+            fields["ShipYcoordinate"] = -46.3 - i * 1e-5
+        out.append(_ping(i, **fields))
+    return out
+
+
+@pytest.mark.unit
+class TestLaybackAndPositionSource:
+    def _ds(self, tmp_path, pings, **conv):
+        survey = convert(read_xtf(_dual(tmp_path, pings)), **conv)
+        return survey.get_frequency(survey.frequencies[0]).dataset
+
+    def test_layback_and_cable_out_carried_per_ping(self, tmp_path):
+        ds = self._ds(tmp_path, _geo_pings(Layback=29.5, CableOut=30, CableOutHundredths=25))
+        np.testing.assert_allclose(ds["layback_m"].values, 29.5)
+        np.testing.assert_allclose(ds["cable_out_m"].values, 30.25, rtol=1e-6)
+
+    def test_position_source_towfish_when_sensor_away_from_ship(self, tmp_path):
+        # 5e-4 deg of longitude at 46 S is about 39 m
+        ds = self._ds(tmp_path, _geo_pings(ship_offset_deg=5e-4))
+        assert ds.attrs["position_source"] == "towfish"
+        assert "median 38." in ds.attrs["position_source_reason"]
+
+    def test_position_source_unknown_when_ship_equals_sensor(self, tmp_path):
+        ds = self._ds(tmp_path, _geo_pings(ship_offset_deg=0.0, Layback=126.0))
+        assert ds.attrs["position_source"] == "unknown"
+
+    def test_position_source_unknown_without_ship_position(self, tmp_path):
+        ds = self._ds(tmp_path, _geo_pings(Layback=300.0))
+        assert ds.attrs["position_source"] == "unknown"
+
+    def test_isis_with_layback_and_no_ship_hinted_not_assumed(self, tmp_path):
+        path = _dual(tmp_path, _geo_pings(Layback=300.0), RecordingProgramName=b"Isis")
+        ds = convert(read_xtf(path)).get_frequency("hz_100000").dataset
+        assert ds.attrs["position_source"] == "unknown"
+        assert "(Isis)" in ds.attrs["position_source_reason"]
+        assert "probably the ship's position" in ds.attrs["position_source_reason"]
+
+    @pytest.mark.parametrize("pings, program", [
+        (lambda: _geo_pings(), b"Isis"),                                    # no layback recorded
+        (lambda: _geo_pings(ship_offset_deg=0.0, Layback=300.0), b"Isis"),  # Ship written
+        (lambda: _geo_pings(Layback=300.0), b"synth"),                     # other writer
+    ])
+    def test_no_ship_hint_otherwise(self, tmp_path, pings, program):
+        path = _dual(tmp_path, pings(), RecordingProgramName=program)
+        ds = convert(read_xtf(path)).get_frequency("hz_100000").dataset
+        assert ds.attrs["position_source"] == "unknown"
+        assert "probably the ship" not in ds.attrs["position_source_reason"]
+
+    def test_position_source_unknown_when_only_some_pings_apart(self, tmp_path):
+        pk = _geo_pings(n=10, ship_offset_deg=0.0)
+        pk[3] = _ping(3, ShipXcoordinate=-73.7 + 3e-5 + 5e-5, ShipYcoordinate=-46.3 - 3e-5)
+        ds = self._ds(tmp_path, pk)
+        assert ds.attrs["position_source"] == "unknown"
+
+    def test_position_source_projected_compares_in_metres(self, tmp_path):
+        pk, _, _ = _projected_pings()  # Ship 7 m from Sensor
+        survey = convert(read_xtf(_dual(tmp_path, pk, nav_units=0)), nav_crs=_UTM19N)
+        ds = survey.get_frequency(survey.frequencies[0]).dataset
+        assert ds.attrs["position_source"] == "towfish"
+        assert "median 7.07" in ds.attrs["position_source_reason"]

@@ -294,8 +294,10 @@ class SideScanGriddedRaster:
 
         The grid's cell centers are evenly spaced but, because
         ``GridDefinition`` stretches ``ceil(extent / resolution_m)`` cells
-        across the bbox, the spacing is only approximately
-        ``resolution_m``; ``x``/``y`` hold the real centers.
+        across the bbox (a ratio within float error of a whole number
+        counts as that number), the spacing is only approximately
+        ``resolution_m`` (exactly it when the extent is a whole number of
+        cells); ``x``/``y`` hold the real centers.
         """
         src = self.dataset
         ys = src[self.y_coord_name].values[:, 0]

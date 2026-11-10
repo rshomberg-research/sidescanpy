@@ -121,6 +121,21 @@ class TestResampleChannelToGridBasic:
         assert raster.channel_name == "455 kHz"
         assert np.any(np.isfinite(raster.backscatter))
 
+    @pytest.mark.parametrize("method", ["mean", "median", "max", "nearest", "idw"])
+    def test_resample_method_given_as_string(self, channel, grid, method):
+        """A method given as a string works like the enum (as grid_channel)."""
+        raster = resample_channel_to_grid(channel, grid_def=grid, method=method)
+        expected = resample_channel_to_grid(
+            channel, grid_def=grid, method=ResamplingMethod(method)
+        )
+        assert raster.dataset.attrs["resampling_method"] == method
+        np.testing.assert_array_equal(raster.backscatter, expected.backscatter)
+
+    def test_resample_unknown_method_string_raises(self, channel, grid):
+        """An unknown method string raises ValueError."""
+        with pytest.raises(ValueError):
+            resample_channel_to_grid(channel, grid_def=grid, method="mode")
+
     def test_resample_median_basic(self, channel, grid):
         """Resample using median aggregation."""
         raster = resample_channel_to_grid(

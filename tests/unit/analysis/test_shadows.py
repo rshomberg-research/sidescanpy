@@ -171,3 +171,46 @@ class TestPlotShadowProposals:
         x, y = ax2.patches[0].get_xy()
         assert img.shape[1] / 2 <= x < img.shape[1] and 0 <= y < img.shape[0]   # starboard half
         plt.close("all")
+
+
+def _seabed_with_water_column(seed=0, water_db=40.0):
+    """As _seabed, but the water column holds dark speckle (not NaN), as in data that was not blanked."""
+    ds = _seabed(seed=seed)
+    rng = np.random.default_rng(seed + 1)
+    n_wc = int(ALTITUDE / M_PER_SAMPLE)
+    v = ds["backscatter_intensity"].values
+    v[:, :, :n_wc] = water_db + rng.normal(0, 6.0, v[:, :, :n_wc].shape).astype(np.float32)
+    return ds, n_wc
+
+
+class TestShadowWaterColumn:
+    def test_dark_water_column_gives_no_proposals(self):
+        ds, n_wc = _seabed_with_water_column()
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING).proposals
+        assert not (df.shadow_sample_start < n_wc).any()
+        assert not (df.sample_start < n_wc - 10).any()
+
+    def test_object_still_found_with_water_column_masked(self):
+        ds, _ = _seabed_with_water_column()
+        box = _object(ds, channel=1, ping=80, n_pings=6, slant_m=15.0, height_m=0.5)
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING).proposals
+        best = max(df[df.channel == 1].itertuples(), key=lambda row: _iou(row, box))
+        assert _iou(best, box) > 0.6
+        assert best.height_m == pytest.approx(0.5, abs=0.15)
+
+    def test_mask_water_column_false_keeps_old_behaviour(self):
+        ds, n_wc = _seabed_with_water_column()
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING, mask_water_column=False).proposals
+        assert (df.shadow_sample_start < n_wc).any()
+
+    def test_water_column_not_masked_where_altitude_unknown(self):
+        ds, n_wc = _seabed_with_water_column()
+        ds["altitude_m"].values[:] = np.nan
+        df = detect_shadow_proposals(ds, m_per_ping=M_PER_PING).proposals
+        assert (df.shadow_sample_start < n_wc).any()
+
+    def test_input_values_not_modified(self):
+        ds, _ = _seabed_with_water_column()
+        before = ds["backscatter_intensity"].values.copy()
+        detect_shadow_proposals(ds, m_per_ping=M_PER_PING)
+        np.testing.assert_array_equal(ds["backscatter_intensity"].values, before)

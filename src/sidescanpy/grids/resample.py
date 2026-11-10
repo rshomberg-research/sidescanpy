@@ -221,7 +221,7 @@ def _aggregate_cells(
 def resample_channel_to_grid(
     channel: xr.Dataset,
     grid_def: GridDefinition,
-    method: ResamplingMethod = ResamplingMethod.MEAN,
+    method: ResamplingMethod | str = ResamplingMethod.MEAN,
     separate_sides: bool = False,
     max_search_radius_m: Optional[float] = None,
     backscatter_var: str = "backscatter_intensity",
@@ -236,8 +236,9 @@ def resample_channel_to_grid(
         and per-sample coordinates (latitude_per_sample, longitude_per_sample).
     grid_def : GridDefinition
         Target grid definition (bbox, resolution, CRS).
-    method : ResamplingMethod, default "mean"
-        Aggregation method: mean, median, max, nearest, or idw.
+    method : ResamplingMethod or str, default "mean"
+        Aggregation method: mean, median, max, nearest, or idw, as the enum
+        or its string value.
     separate_sides : bool, default False
         If True, output separate port and starboard bands (diagnostic mode).
         If False, merge port and starboard into single backscatter variable.
@@ -275,8 +276,10 @@ def resample_channel_to_grid(
     Raises
     ------
     ValueError
-        If channel is missing required variables or grid bounds don't overlap.
+        If channel is missing required variables, grid bounds don't overlap,
+        or method is not a known resampling method.
     """
+    method = ResamplingMethod(method)
     # Validate input
     _validate_channel_data(channel, backscatter_var)
 

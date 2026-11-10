@@ -113,7 +113,8 @@ def slice_by_samples(
     """Return a new dataset with samples whose index is in ``[start, stop)``.
 
     Selection is by the *absolute* integer ``sample`` coordinate (label
-    based: 0 is the first recorded sample of the ping), so slicing an
+    based, counted from the transmit: 0 is normally the first recorded
+    sample of the ping), so slicing an
     already-sliced dataset keeps meaning the same samples. Datasets with
     no ``sample`` coordinate fall back to positional selection.
 

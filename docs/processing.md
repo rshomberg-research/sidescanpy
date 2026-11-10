@@ -33,6 +33,7 @@ survey = compute_georeferencing(survey)            # latitude and longitude per 
 | `crop_far_range` | crops far-range noise past a detected cutoff | |
 | `interpolate_aux_onto_pings` | interpolates the survey's navigation and attitude records onto every ping (`interpolate_aux_onto_dataset` for one dataset) | |
 | `altitude_from_bottom_track` | fills missing altitude from the first bottom return | |
+| `apply_layback` | moves ship positions back to the towfish by the recorded layback (only where the file says the positions are the ship's) | navigation on the pings |
 | `apply_tvg` | time-varying gain, linear amplitude to dB | |
 | `compute_geometric_ranges` | slant range, ground range, across- and along-track distance per sample | altitude |
 | `range_correction.apply_empirical_range_correction` | subtracts a fitted range curve | `apply_tvg`, `compute_geometric_ranges` |
@@ -77,6 +78,7 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 | `crop_farrange` | `crop_far_range` | `cutoff_sample`, `n_bins`, `min_valid_fraction`, `rise_threshold_db`, `margin_bins` |
 | `interpolate_aux` | `interpolate_aux_onto_dataset` | `fields`, `method`, `extrapolation`, `drop_invalid`, `held_values`, `max_hold_s`, `per_ping_fallback`, `groups`, `merge_window_s` |
 | `bottom_track` | `altitude_from_bottom_track` | `replace`, `max_diff_m`, `min_altitude_m`, `min_return_m`, `min_return_fraction`, `smooth_window`, `threshold_fraction`, `min_run`, `smooth_pings` |
+| `layback` | `apply_layback` | `layback_m`, `tow_point_aft_m`, `tow_point_starboard_m`, `position_source`, `use_cable_out`, `ellipsoid` |
 | `tvg` | `apply_tvg` | `spreading_loss_db`, `absorption_db_per_m`, `min_range_m`, `sound_velocity_ms`, `temperature_c`, `salinity_psu`, `depth_m`, `ph` |
 | `geometric` | `compute_geometric_ranges` | `expose_unmasked_z` |
 | `range_correction` | `apply_empirical_range_correction` | `table` (required) |
@@ -84,7 +86,8 @@ In canonical order. `DEFAULT_STEPS` is `interpolate_aux → tvg → geometric �
 
 Steps run in the order given; respecting dependencies is the caller's job
 (`georef` and `range_correction` need `geometric`; `bottom_track` must run
-before `geometric` to affect it). `bottom_track` is not in `DEFAULT_STEPS`.
+before `geometric` to affect it, and `layback` before `georef`).
+`bottom_track` and `layback` are not in `DEFAULT_STEPS`.
 
 ### Rules
 
@@ -145,8 +148,8 @@ References:
 ### Geometric ranges
 
 `compute_geometric_ranges` adds per-sample `slant_range_m`,
-`ground_range_m`, `across_track_m` (port negative, starboard positive,
-pitch-corrected) and related variables:
+`ground_range_m`, `across_track_m` (port negative, starboard positive),
+`along_track_m` (forward positive) and related variables:
 
 - Slant range: `sample * sound_vel / (2 * sample_rate)`, from the absolute
   `sample` coordinate, so a dataset trimmed of leading samples keeps its
@@ -155,6 +158,19 @@ pitch-corrected) and related variables:
   `slant > altitude`, NaN in the water column. A ping with NaN altitude
   gets NaN ground range (and no georeferenced position); altitude 0 gives
   ground range equal to slant range. Both are logged at WARNING.
+- Pitch (flat bottom, fan beam perpendicular to the body x-axis, pitch θ
+  positive nose up, altitude h): the fan plane tilts forward by θ and
+  meets the seafloor on a line `h·tan θ` ahead of nadir. Every seafloor
+  sample of the ping gets `along_track_m = h·tan θ` and
+  `across_track_m = ±sqrt(slant² − (h / cos θ)²)`; samples with
+  `slant <= h / cos θ` are water column and NaN in both. The horizontal
+  distance from nadir, `sqrt(along² + across²)`, equals `ground_range_m`,
+  which does not depend on pitch. NaN pitch is taken as 0 and logged at
+  WARNING. Pitch shifts a ping forward or aft by a constant; it does not
+  rotate the swath. Files made by 0.9.0 and earlier used
+  `along = ground·sin θ` (an offset growing with range, about 8.7 m at
+  100 m and 5°); their `geometric` history record lacks `pitch_model`.
+  Roll and yaw are not modelled.
 
 ### Altitude from the bottom track
 
@@ -177,6 +193,54 @@ tracked value agreed to within 0.2 m for 90 % of pings. The first return
 comes from the beam's near edge, so on sloping or very shallow seabed the
 tracked value is the slant range to the nearest bottom point, a little
 above the true altitude (+0.6 m at 1.7 m altitude on a Klein 3000 file).
+
+### Layback
+
+A towed sonar sits behind the navigation antenna. Readers record what the
+per-ping `latitude` / `longitude` are the position of in the
+`position_source` attribute, with how they decided in
+`position_source_reason`:
+
+| Format | `towfish` | `ship` | otherwise |
+|---|---|---|---|
+| JSF | validity bit 13 (position interpolated) set: Discover laid it back | bit 13 clear: the last nav fix, no layback | `mixed` |
+| XTF | `SensorX/Y` more than 0.5 m from `ShipX/Y` on 95 % of pings | never inferred (see below) | `unknown` (including Ship equal to Sensor: Discover writes the laid-back position in both fields) |
+| SDF | computed fish position (fields 39/40) set and used | fell back to the ship position (fields 37/38) | `mixed` |
+
+Readers report `ship` or `towfish` only where the format documents it
+(a validity bit, a field the writer fills only when it laid the fish
+back). Anything else is `unknown`, and the layback step leaves it alone:
+whether recorded positions are the ship's is a fact about the system as
+deployed, so it is the user's call. Where a file looks like ship
+positions, the reason says so without acting on it. For example, Triton
+Isis XTF with no `ShipX/Y` and a recorded `Layback`: on a public Isis
+line the georeferenced image lines up with the Isis mosaic only after
+the recorded layback is applied, but nothing documents it. Pass
+`position_source="ship"` when you know.
+
+They also carry per-ping `layback_m` (JSF bytes 228-231, XTF `Layback`)
+and `cable_out_m` (JSF, in decimetres in the file; XTF `CableOut`; SDF
+field 50), and for JSF the antenna-to-tow-point offset as
+`tow_point_aft_m` / `tow_point_starboard_m` when it is set.
+
+`apply_layback` (the `layback` step) moves each ping astern along its
+`heading_deg` by `tow_point_aft_m + layback_m` and to starboard by
+`tow_point_starboard_m`, on the WGS84 ellipsoid: a fixed offset astern
+from the recorded layback and lever arms, as MB-System applies it. Where
+`layback_m` is NaN it falls back to `sqrt(cable_out_m² − depth_m²)`
+(`use_cable_out`). It moves positions only when `position_source` is
+`ship`; for `towfish`, `mixed` or `unknown` it changes nothing and logs a
+WARNING, so a layback is never applied twice. A caller who knows the
+positions are the ship's passes `position_source="ship"`. The recorded
+positions are kept in `latitude_before_layback` /
+`longitude_before_layback`, and `invert(ds, ["layback"])` restores them
+(it also drops `georef`, which was computed from the moved positions).
+`apply_layback` refuses a dataset that is already georeferenced.
+
+Not modelled: course made good (the heading is used), the fish lagging
+the ship's track in turns (the tractrix model of Swath), tow-point height,
+and the `navigation` aux record (only per-ping positions move; run
+`interpolate_aux` before `layback`, as the canonical order does).
 
 ### Georeferencing
 

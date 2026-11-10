@@ -22,7 +22,8 @@ ends the read.
 A sonar packet (header type 0) is a 256-byte ping header followed, for
 each channel, by a 64-byte channel header and ``NumSamples`` samples.
 The sample type comes from the file header's ``ChanInfo`` entry for that
-channel (``SampleFormat``, else ``BytesPerSample``).
+channel (``SampleFormat``, else ``BytesPerSample``; a ``SampleFormat``
+the specification does not define, such as 255, counts as unset).
 
 Channel blocks are walked using the packet byte count
 ------------------------------------------------------
@@ -95,6 +96,7 @@ from sidescanpy.io.xtf.structs import (
     FILE_HEADER_DTYPE,
     HEADER_TYPE_NAMES,
     HEADER_TYPE_SONAR,
+    KNOWN_SAMPLE_FORMATS,
     PACKET_MAGIC,
     PACKET_START_DTYPE,
     PING_CHAN_HEADER_DTYPE,
@@ -768,6 +770,13 @@ def read_xtf_pings(path: str | Path) -> XtfPingData:
     header = read_xtf_header(path)
     chan_info = header.chan_info
     dtypes: list[np.dtype | None] = []
+    unknown_formats = sorted({int(ci["SampleFormat"]) for ci in chan_info} - KNOWN_SAMPLE_FORMATS)
+    if unknown_formats:
+        logger.warning(
+            "%s: ChanInfo SampleFormat %s is not an XTF sample format; treated as unset "
+            "(legacy), so samples are read by BytesPerSample",
+            path.name, ", ".join(map(str, unknown_formats)),
+        )
     for ci in chan_info:
         try:
             dtypes.append(sample_dtype(ci))

@@ -104,7 +104,7 @@ class TestReadAndConvert:
         def fake_read_xtf(p):
             return f"pings-from-{p.name}"
 
-        def fake_xtf_convert(pings, *, source_files, survey_name):
+        def fake_xtf_convert(pings, *, source_files, survey_name, nav_crs=None):
             return {"pings": pings, "source_files": source_files, "survey_name": survey_name}
 
         monkeypatch.setattr("sidescanpy.io.dispatch.read_xtf", fake_read_xtf)
@@ -133,6 +133,35 @@ class TestReadAndConvert:
         assert survey.source_format == "xtf"
         assert survey.frequencies == ["hz_100000", "hz_400000"]
         assert load_survey(path).frequencies == survey.frequencies
+
+    @pytest.mark.parametrize("as_list", [True, False])
+    def test_str_paths_accepted(self, tmp_path, as_list):
+        from tests.unit.io.xtf.conftest import (
+            dual_frequency_infos,
+            file_header,
+            ramp,
+            sonar_packet,
+            write_xtf,
+        )
+
+        pk = [sonar_packet([(c, ramp(32, "<u2", i + c)) for c in range(4)], ping_number=i)
+              for i in range(3)]
+        path = str(write_xtf(tmp_path / "LINE.XTF", file_header(dual_frequency_infos()), pk))
+        arg = [path] if as_list else path
+        survey = read_and_convert(arg, detect_format(arg))
+        assert survey.survey_name == "LINE"
+        assert survey.source_files == [Path(path)]
+        assert survey.frequencies == ["hz_100000", "hz_400000"]
+
+    def test_str_paths_for_jsf_and_sdf(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr("sidescanpy.io.dispatch.read_jsf", lambda p: seen.setdefault("jsf", p) and [])
+        monkeypatch.setattr("sidescanpy.io.dispatch.read_sdf", lambda p: seen.setdefault("sdf", p) and [])
+        monkeypatch.setattr("sidescanpy.io.dispatch.jsf_convert", lambda m, *, source_files, survey_name: survey_name)
+        monkeypatch.setattr("sidescanpy.io.dispatch.sdf_convert", lambda m, *, source_files, survey_name: survey_name)
+        assert read_and_convert(["dir/a.jsf"], "jsf") == "a"
+        assert read_and_convert(["dir/b.sdf"], "sdf") == "b"
+        assert seen == {"jsf": Path("dir/a.jsf"), "sdf": Path("dir/b.sdf")}
 
     def test_unknown_format_raises(self):
         with pytest.raises(ValueError, match="Unknown format"):

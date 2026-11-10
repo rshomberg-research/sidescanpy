@@ -133,6 +133,11 @@ SAMPLE_FORMAT_DTYPES = {
     5: np.dtype("<f4"),
     8: np.dtype("u1"),
 }
+#: ``SampleFormat`` values the XTF specification defines (0-8). Any other
+#: value is treated as unset, i.e. as 0 (legacy, ``BytesPerSample``): some
+#: KleinXlt 3.0 files have 0xFF in the ChanInfo reserved bytes, which
+#: include ``SampleFormat``.
+KNOWN_SAMPLE_FORMATS = frozenset(range(9))
 #: ``BytesPerSample`` to sample dtype for legacy (``SampleFormat`` 0) data.
 #: Samples are read as unsigned integers, as pyxtf does.
 LEGACY_SAMPLE_DTYPES = {
@@ -344,7 +349,10 @@ def sample_dtype(chan_info: np.void) -> np.dtype:
 
     ``SampleFormat`` (X41 and later) takes precedence; format 0 (legacy)
     falls back to ``BytesPerSample``. A format that disagrees with
-    ``BytesPerSample`` is used as given.
+    ``BytesPerSample`` is used as given. A value outside
+    :data:`KNOWN_SAMPLE_FORMATS` (such as 255) is treated as unset, like 0;
+    this logs at DEBUG only, and :func:`~sidescanpy.io.xtf.read_xtf_pings`
+    warns once per file.
 
     Parameters
     ----------
@@ -359,10 +367,13 @@ def sample_dtype(chan_info: np.void) -> np.dtype:
     ------
     ValueError
         If the sample format or byte width is not supported (IBM float,
-        reserved formats, or a legacy width other than 1, 2 or 4 bytes).
+        formats 4, 6 and 7, or a legacy width other than 1, 2 or 4 bytes).
     """
     fmt = int(chan_info["SampleFormat"])
     bps = int(chan_info["BytesPerSample"])
+    if fmt not in KNOWN_SAMPLE_FORMATS:
+        logger.debug("XTF ChanInfo SampleFormat %d is not defined; using BytesPerSample %d", fmt, bps)
+        fmt = 0
     if fmt in SAMPLE_FORMAT_DTYPES:
         dt = SAMPLE_FORMAT_DTYPES[fmt]
         if bps and bps != dt.itemsize:
@@ -375,5 +386,5 @@ def sample_dtype(chan_info: np.void) -> np.dtype:
     if fmt == 0:
         if bps in LEGACY_SAMPLE_DTYPES:
             return LEGACY_SAMPLE_DTYPES[bps]
-        raise ValueError(f"Unsupported XTF BytesPerSample {bps} (SampleFormat 0)")
+        raise ValueError(f"Unsupported XTF BytesPerSample {bps} (legacy SampleFormat)")
     raise ValueError(f"Unsupported XTF SampleFormat {fmt}")
