@@ -27,7 +27,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from sidescanpy import datasets
-from sidescanpy.core.units import linear_to_db
 from sidescanpy.io import read_and_convert
 from sidescanpy.log import configure_logging
 from sidescanpy.processing import (
@@ -65,14 +64,21 @@ print(f"altitude from bottom track: {float(corrected['altitude_m'].median()):.1f
 # time-varying gain (spreading and absorption losses) and slant-to-ground
 # range, against across-track and along-track distance in metres. The
 # water column is gone, and the far range is no longer darker than the
-# near range. After TVG most of the seabed sits within a few dB, so the
-# colour scale stretches over the 10th to 99.5th percentile.
+# near range. ``apply_tvg`` returns ``backscatter_intensity`` in dB, so the
+# corrected panel plots it as it is. Both panels average samples down to
+# about 1000 per side first, close to the figure's resolution, so fine
+# texture is averaged rather than skipped.
+
+
+def for_display(ds):
+    """Average samples down to about 1000 per side."""
+    return ds.coarsen(sample=max(1, ds.sizes["sample"] // 1000), boundary="trim").mean()
+
 
 fig, (ax_raw, ax_cor) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-plot_waterfall(raw, x_axis="slant_range", gamma=0.5, ax=ax_raw, title="Raw (slant range)")
-corrected = corrected.assign(backscatter_db=linear_to_db(corrected["backscatter_intensity"]))
-plot_waterfall(corrected, x_axis="across_track", y_axis="along_track", value_var="backscatter_db",
-               vmin_pct=10, vmax_pct=99.5, ax=ax_cor, title="Bottom track + TVG + ground range (dB)")
+plot_waterfall(for_display(raw), x_axis="slant_range", gamma=0.5, ax=ax_raw, title="Raw (slant range)")
+plot_waterfall(for_display(corrected), x_axis="across_track", y_axis="along_track",
+               vmin_pct=2, vmax_pct=99.5, ax=ax_cor, title="Bottom track + TVG + ground range (dB)")
 fig.savefig(out / "correct_a_line.png", dpi=110)
 
 # %%

@@ -130,6 +130,28 @@ class TestPlotWaterfallExcludesFloorClipFromColorScale:
             plt.close(fig)
 
 
+class TestPlotWaterfallColorScaleUsesDrawnSamples:
+    def test_vmin_ignores_samples_without_ground_range(self):
+        n_pings, n_samples = 20, 50
+        ds = make_minimal_sidescan_dataset(n_pings=n_pings, n_samples=n_samples)
+        # Water-column samples (no ground range, so not drawn) are dark;
+        # the seabed is uniform in [10, 20).
+        values = np.random.uniform(10.0, 20.0, size=(n_pings, 2, n_samples)).astype(np.float32)
+        values[:, :, : n_samples // 2] = -50.0
+        ds["backscatter_intensity"].values[...] = values
+        gr = np.broadcast_to(np.arange(n_samples, dtype=np.float64), (n_pings, 2, n_samples)).copy()
+        gr[:, :, : n_samples // 2] = np.nan
+        ds["ground_range_m"] = (("ping", "channel", "sample"), gr)
+
+        fig, ax = plt.subplots()
+        try:
+            plot_waterfall(ds, x_axis="ground_range", ax=ax)
+            vmin, _ = ax.collections[0].get_clim()
+            assert vmin >= 9.0
+        finally:
+            plt.close(fig)
+
+
 class TestPlotWaterfallGamma:
     """gamma is a display-only PowerNorm applied to the color mapping —
     the plotted array and colorbar stay real dB, never renormalized to

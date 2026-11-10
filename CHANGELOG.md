@@ -57,6 +57,8 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
   with that course instead of the recorded heading.
 - `SurveyTrack.scan_nadir_lat` / `scan_nadir_lon`: nadir position at
   each rung, filled by `build_survey_track`.
+- `datasets`: `jncc_mid_irish_sea_MIS15_2.xtf` (bedforms) and
+  `usgs_grand_bay_150602133300.xtf` (a sharp seabed edge).
 
 ### Changed
 
@@ -68,6 +70,14 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Fixed
 
+- `viz.plot_waterfall`: the automatic colour range (`vmin_pct` /
+  `vmax_pct`) is taken from the samples that are drawn. In ground-range and
+  across-track modes the water column (no ground range) is not drawn but
+  still set `vmin`, which washed out corrected waterfalls.
+- Gallery examples converted corrected data to dB a second time
+  (`apply_tvg` already returns dB), which compressed the images into a
+  few dB. They now plot it as is and average samples to screen
+  resolution.
 - `io.xtf`: blocks whose `Weight` lies beyond ±30 (garbage in some older
   KleinXlt/GeoDAS files, e.g. -8408) are left unscaled with a WARNING and
   counted in `xtf_weight_ignored`; 2**-Weight used to overflow every

@@ -158,11 +158,23 @@ REGISTRY: dict[str, RemoteFile] = {
         sha256="32a1073ab2819da79bc393d759a327b21048480de0eae9cc02a1dec51b68f412",
         description="XTF (Isis 7.0.41), Benthos SIS-1624, a short line",
     ),
+    "jncc_mid_irish_sea_MIS15_2.xtf": RemoteFile(
+        source="jncc_mid_irish_sea", archive_url=_JNCC_MIS,
+        member="MIS15_2.XTF", size=54380544,
+        sha256="0d29aea61f61ab83cb01bb3f9224ad3074a6e001003f9b4d959014b28c816c4d",
+        description="XTF (Isis 7.0.41), Benthos SIS-1624, 100 + 400 kHz, bedforms",
+    ),
     "usgs_grand_bay_150602205800.xtf": RemoteFile(
         source="usgs_grand_bay", archive_url=_USGS_GB,
         member="15CCT03_SSS_153_150602205800.xtf", size=5228224,
         sha256="c6acb314bae7f20896d5a890f312332350b6b77262d6c249cdb1fe0b1de1f27a",
         description="XTF (KleinXlt 4.0 / SonarPro 12), Klein, shallow estuary",
+    ),
+    "usgs_grand_bay_150602133300.xtf": RemoteFile(
+        source="usgs_grand_bay", archive_url=_USGS_GB,
+        member="15CCT03_SSS_150602133300.xtf", size=16245824,
+        sha256="d055ecc68e441340a0c3765187099025ef6d6b072fa07b6264f9e2d86ac8ee00",
+        description="XTF (SonarPro), Klein, a sharp seabed edge; recorded altitude unusable",
     ),
     "usgs_grand_bay_150531200100.xtf": RemoteFile(
         source="usgs_grand_bay", archive_url=_USGS_GB,
