@@ -2,8 +2,9 @@
 Plot a gridded raster (:class:`~sidescanpy.grids.SideScanGriddedRaster`).
 
 :func:`plot_gridded_raster` draws one raster on one Axes and returns
-``(fig, ax)``. Multi-raster comparisons and coverage views are recipes in
-``examples/figures/``.
+``(fig, ax)``; :func:`plot_grid_coverage` draws the same raster with each
+cell's opacity set by how many samples fell in it. Comparisons of several
+rasters are the caller's layout (see the *Grid to a map* example).
 
 2026 rshomberg@uri.edu
 """
@@ -237,4 +238,98 @@ def plot_gridded_raster(
             from sidescanpy.viz.scalebar import add_scale_bar
             add_scale_bar(ax, meters_per_data_unit=1.0)
 
+    return fig, ax
+
+
+def plot_grid_coverage(
+    raster: SideScanGriddedRaster,
+    fig: Optional[plt.Figure] = None,
+    ax: Optional[plt.Axes] = None,
+    cmap: str = "viridis",
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    vmin_pct: float = 1.0,
+    vmax_pct: float = 99.0,
+    full_opacity_count: Optional[float] = None,
+    title: Optional[str] = None,
+) -> Tuple[plt.Figure, plt.Axes]:
+    """
+    Plot a gridded raster with each cell's opacity set by its sample count.
+
+    The color is the backscatter, as in :func:`plot_gridded_raster`; the
+    opacity is ``n_contributing_samples`` divided by
+    ``full_opacity_count`` (capped at 1), so cells built from few samples
+    fade into the background. A diagnostic
+    view, not a data product: at resolutions finer than the ping spacing
+    it shows thin streaks fanning out from the track, which are the normal
+    variation of samples per cell, not misplaced data.
+
+    Parameters
+    ----------
+    raster : SideScanGriddedRaster
+        Gridded raster. Without an ``n_contributing_samples`` variable
+        (e.g. a raster read back from a GeoTIFF), every finite cell is
+        opaque and every empty one transparent.
+    fig : matplotlib.figure.Figure, optional
+        Existing figure. If None, create new.
+    ax : matplotlib.axes.Axes, optional
+        Existing axes. If None, create new.
+    cmap : str, default "viridis"
+        Colormap name.
+    vmin, vmax : float, optional
+        Color range. If None, the ``vmin_pct``/``vmax_pct`` percentiles of
+        the finite, non-floor-clipped cells.
+    vmin_pct, vmax_pct : float, default 1.0 and 99.0
+        Percentiles for the automatic color range.
+    full_opacity_count : float, optional
+        Sample count drawn fully opaque. If None, the 95th percentile of
+        the counts of cells with data, so a few very busy cells do not
+        make every other cell faint.
+    title : str, optional
+        Plot title. If None, the channel name and the share of cells with
+        data.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    ax : matplotlib.axes.Axes
+    """
+    if fig is None or ax is None:
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+    backscatter = mask_floor_clip(raster.backscatter)
+    if "n_contributing_samples" in raster.dataset.data_vars:
+        counts = np.nan_to_num(raster.dataset["n_contributing_samples"].values.astype(float))
+    else:
+        logger.debug("plot_grid_coverage: raster has no n_contributing_samples; opacity is data/no data")
+        counts = np.isfinite(backscatter).astype(float)
+
+    finite = backscatter[np.isfinite(backscatter)]
+    if vmin is None:
+        vmin = float(np.percentile(finite, vmin_pct)) if finite.size else 0.0
+    if vmax is None:
+        vmax = float(np.percentile(finite, vmax_pct)) if finite.size else 1.0
+
+    rgba = resolve_cmap(cmap)(mcolors.Normalize(vmin=vmin, vmax=vmax)(np.ma.masked_invalid(backscatter)))
+    if full_opacity_count is None:
+        nonzero = counts[counts > 0]
+        full_opacity_count = float(np.percentile(nonzero, 95)) if nonzero.size else 1.0
+    rgba[..., 3] = np.clip(counts / max(full_opacity_count, 1e-12), 0.0, 1.0)
+
+    xs, ys = raster.x_values, raster.y_values
+    if ys.ndim == 2:  # cell-center meshes, (ns, ew)
+        xs, ys = xs[0, :], ys[:, 0]
+    if ys.size > 1 and ys[0] > ys[-1]:  # row 0 at the top: flip so the image's first row is the southernmost
+        rgba, ys = rgba[::-1], ys[::-1]
+    dx = abs(xs[1] - xs[0]) / 2 if xs.size > 1 else 0.5
+    dy = abs(ys[1] - ys[0]) / 2 if ys.size > 1 else 0.5
+    ax.imshow(rgba, extent=[xs.min() - dx, xs.max() + dx, ys.min() - dy, ys.max() + dy], origin="lower",
+              interpolation="nearest")
+
+    xlabel, ylabel = _axis_labels(raster)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title if title is not None
+                 else f"{raster.channel_name} (cells with data: {raster.data_coverage:.1%})")
+    ax.set_aspect("equal")
     return fig, ax

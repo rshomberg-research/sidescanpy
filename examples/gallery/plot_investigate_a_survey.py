@@ -11,8 +11,7 @@ returns a result you can print, save and compare between surveys, and
 each has a plot in :mod:`sidescanpy.viz.analysis`.
 
 ``sidescan-analyze investigate`` runs the same steps from the command
-line, and ``examples/investigate_dataset.py`` writes them all to a
-folder with a ``metrics.json``.
+line and writes every plot and a ``metrics.json`` to a folder.
 
 Data: JNCC Wight-Barfleur Reef, EdgeTech JSF, Open Government Licence
 v3.0 (see :doc:`/example_data`).
@@ -22,6 +21,7 @@ Usage: ``python examples/gallery/plot_investigate_a_survey.py [output_dir]``
 
 # 2026 rshomberg@uri.edu
 
+import json
 import sys
 from pathlib import Path
 
@@ -140,6 +140,19 @@ thumb.subplots_adjust(0.08, 0.08, 0.98, 0.98)
 thumb.savefig(out / "thumb_investigate_a_survey.png", dpi=100)
 plt.close(thumb)
 # sphinx_gallery_end_ignore
+
+# %%
+# Keeping the numbers
+# -------------------
+# Every result has a ``to_dict()``, so one JSON file holds the whole
+# investigation, to compare with the next survey or a later run.
+
+results = {"values": values, "nadir": nadirs["hz_218740"], "usable_range": usable["hz_218740"],
+           "tvg_fit": fits["hz_218740"], "tvg_check": checks["hz_218740"], "units": units}
+metrics = {"freq_key": "hz_218740", **{k: r.to_dict() for k, r in results.items()}}
+(out / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str))
+print(f"metrics.json: {len(metrics) - 1} results, best TVG {metrics['tvg_fit']['best']}, "
+      f"usable range {metrics['usable_range']['usable_range_m']:.0f} m")
 
 # %%
 # The answer

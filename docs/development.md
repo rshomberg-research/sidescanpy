@@ -27,6 +27,7 @@ so the plotting, GeoTIFF and docs code is tested too.
 | `make lint` | ruff |
 | `make docs` | this site in `docs/_build/html`, running the example scripts (downloads about 1.3 GB the first time, 1.9 GB on disk; the two published-mosaic examples account for most of it); any warning, such as a malformed docstring or a broken cross-reference, fails the build |
 | `make docs-fast` | the same without running the example scripts (no figures) |
+| `make docs-code` | runs the Python blocks of [Getting started](getting_started.md) and the quickstart on the home page, and checks the output Getting started shows (downloads the 41 MB recording they use if needed; CI runs it after `make docs`) |
 | `make docs-serve` | builds the site, then serves it at <http://127.0.0.1:8000> |
 | `make docs-clean` | removes the build and the generated API and example pages |
 
@@ -81,10 +82,10 @@ The repository holds code only, no survey data.
 
 - **Examples.** The [worked examples](examples/index.rst) download public
   recordings with `sidescanpy.datasets.fetch()`; see
-  [Example data](example_data.md). The other scripts in `examples/` run
-  on synthetic data. The gallery scripts run during `make docs` (locally
-  and in CI), and the unit suite checks offline that every dataset name
-  a script fetches is registered.
+  [Example data](example_data.md). `examples/project_template/` runs on
+  synthetic data in `tests/examples`. The gallery and Theory scripts run
+  during `make docs` (locally and in CI), and the unit suite checks
+  offline that every dataset name a script fetches is registered.
 - **Public fixtures.** `tests/unit/io/test_public_fixtures.py` runs on
   small cuts of openly licensed recordings (EdgeTech JSF, and XTF from
   three writers), listed with source, licence and checksum in

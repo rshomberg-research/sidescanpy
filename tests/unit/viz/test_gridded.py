@@ -373,3 +373,58 @@ class TestBasemapIntegration:
         fig, ax = plot_gridded_raster(sample_raster)
         assert len(ax.child_axes) == 0
         plt.close(fig)
+
+
+class TestPlotGridCoverage:
+    """plot_grid_coverage: backscatter color, opacity from samples per cell."""
+
+    def test_title_reports_coverage(self, sample_raster):
+        from sidescanpy.viz import plot_grid_coverage
+
+        fig, ax = plot_grid_coverage(sample_raster)
+        assert "cells with data" in ax.get_title()
+        plt.close(fig)
+
+    def test_alpha_follows_sample_count(self, sample_raster):
+        from sidescanpy.viz import plot_grid_coverage
+
+        counts = sample_raster.dataset["n_contributing_samples"].values
+        fig, ax = plot_grid_coverage(sample_raster, full_opacity_count=counts.max())
+        rgba = ax.images[0].get_array()
+        ys = sample_raster.y_values
+        if ys.ndim == 2:
+            ys = ys[:, 0]
+        if ys[0] > ys[-1]:
+            counts = counts[::-1]
+        np.testing.assert_allclose(rgba[..., 3], counts / counts.max())
+        plt.close(fig)
+
+    def test_default_full_opacity_is_95th_percentile(self, sample_raster):
+        from sidescanpy.viz import plot_grid_coverage
+
+        counts = sample_raster.dataset["n_contributing_samples"].values
+        fig, ax = plot_grid_coverage(sample_raster)
+        alpha = ax.images[0].get_array()[..., 3]
+        assert alpha.max() == 1.0
+        np.testing.assert_allclose(np.mean(alpha == 1.0), np.mean(counts >= np.percentile(counts, 95)), atol=0.02)
+        plt.close(fig)
+
+    def test_raster_without_counts_is_opaque_where_finite(self):
+        from sidescanpy.viz import plot_grid_coverage
+
+        grid = GridDefinition(bbox=(39.0, -71.0, 40.0, -70.0), resolution_m=5000.0)
+        backscatter = np.full((grid.num_cells_ns, grid.num_cells_ew), np.nan)
+        backscatter.ravel()[::10] = 1.0
+        fig, ax = plot_grid_coverage(SideScanGriddedRaster(grid_def=grid, backscatter=backscatter))
+        alpha = ax.images[0].get_array()[..., 3]
+        assert set(np.unique(alpha)) == {0.0, 1.0}
+        plt.close(fig)
+
+    def test_draws_on_given_axes_with_crs_labels(self, utm_raster):
+        from sidescanpy.viz import plot_grid_coverage
+
+        fig, ax = plt.subplots()
+        out_fig, out_ax = plot_grid_coverage(utm_raster, fig=fig, ax=ax, title="t")
+        assert out_ax is ax and out_fig is fig
+        assert ax.get_xlabel() == "Easting (m)" and ax.get_title() == "t"
+        plt.close(fig)

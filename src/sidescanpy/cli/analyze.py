@@ -40,8 +40,8 @@
   (``sidescanpy.cli._investigate``) and writes the full plot set plus
   ``metrics.json`` per frequency, and ``summary.json`` -- the occasional
   full-report use case; not the day-to-day way to iterate on one value
-  (see the four subcommands above). ``examples/investigate_dataset.py``
-  is the same flow as a readable script.
+  (see the four subcommands above). The *Investigating an unknown
+  survey* example is the same flow as a readable script.
 - ``tvg-fit`` — the TVG model fit (``fit_tvg_models``): the median
   level of raw backscatter in slant-range bins (the axis ``apply_tvg()``
   uses), fitted from ``--start-margin-m`` past the profile peak to the

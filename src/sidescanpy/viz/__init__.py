@@ -5,7 +5,7 @@ Each function renders one result onto a matplotlib Axes (creating a figure
 when none is given) and returns the Axes or ``(Figure, Axes)`` so callers
 can compose or customize it. Nothing here saves files or runs
 corrections: saving, multi-panel layouts and workflow belong to the
-caller (see ``examples/`` and ``examples/figures/``). Requires the
+caller (see the examples in ``examples/``). Requires the
 ``viz`` extra (matplotlib).
 
 Public functions
@@ -19,6 +19,8 @@ Public functions
   (strided ping axis) with optional break markers at caller-supplied
   ping indices, e.g. file boundaries in a multi-file concatenated survey.
 - :func:`plot_gridded_raster` — 2D heatmap of one gridded raster.
+- :func:`plot_grid_coverage` — the same raster, each cell's opacity set
+  by how many samples fell in it.
 - :func:`plot_track_and_scanlines` — full-survey nadir track plus
   periodic port/starboard scan-line rungs, in a projected (UTM by
   default) coordinate system. Geometry/coverage only, no backscatter.
@@ -59,7 +61,7 @@ from sidescanpy.viz.analysis import (
     plot_value_histograms,
 )
 from sidescanpy.viz.contact_sheet import contact_sheet, render_target_context
-from sidescanpy.viz.gridded import plot_gridded_raster
+from sidescanpy.viz.gridded import plot_grid_coverage, plot_gridded_raster
 from sidescanpy.viz.targets import plot_target_position_scatter, plot_track_with_targets
 from sidescanpy.viz.track import plot_track_and_scanlines
 from sidescanpy.viz.tvg import (
@@ -84,6 +86,7 @@ __all__ = [
     "plot_waterfall",
     "plot_survey_overview",
     "resolve_waterfall_axes",
+    "plot_grid_coverage",
     "plot_gridded_raster",
     "plot_track_and_scanlines",
     "plot_track_with_targets",

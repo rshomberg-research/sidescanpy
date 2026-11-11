@@ -3,9 +3,10 @@
 `sidescanpy.analysis` measures a dataset. Each function takes data and
 returns a dataclass with a `to_dict()`; none of them writes files, plots
 or decides what to do next. Plots for each result are in
-`sidescanpy.viz` ([Visualization](viz.md)); `sidescan-analyze investigate`
-and `examples/investigate_dataset.py` run them all on one file and write
-a report.
+`sidescanpy.viz` ([Visualization](viz.md)). `sidescan-analyze investigate`
+runs them all on one file and writes a report, and
+[Investigating an unknown survey](examples/plot_investigate_a_survey.rst)
+walks through them on a public recording.
 
 | Function | Answers |
 |---|---|

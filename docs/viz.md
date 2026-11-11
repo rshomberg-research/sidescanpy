@@ -32,7 +32,8 @@ power-law display stretch without changing the colorbar's units. The
 default colormap is `copper`; NaN cells render in a neutral colour.
 
 Also: `plot_survey_overview` (whole survey compressed),
-`plot_gridded_raster`, `plot_track_and_scanlines`,
+`plot_gridded_raster`, `plot_grid_coverage` (cell opacity set by samples
+per cell), `plot_track_and_scanlines`,
 `plot_track_with_targets`, `plot_target_position_scatter`,
 `contact_sheet`, `render_target_context`. Basemaps behind georeferenced
 plots need the `[maps]` extra.
@@ -50,4 +51,5 @@ result). Deprecated, removed in 0.12: `plot_candidate_fit`,
 `plot_range_decay_fit`, `plot_range_decay_residuals`,
 `set_fit_window_limits`.
 
-Multi-panel figure layouts are in `examples/figures/`.
+Multi-panel figure layouts are the caller's; the
+[Examples](examples/index.rst) build them from these functions.

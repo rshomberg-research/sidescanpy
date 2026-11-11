@@ -17,6 +17,36 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 - Docs: Citing sections in the README and on the docs home page, a DOI
   badge, and the Zenodo concept DOI in `CITATION.cff`.
+- `viz.plot_grid_coverage`: a gridded raster with each cell's opacity
+  set by its sample count (`n_contributing_samples`), full at the 95th
+  percentile by default (`full_opacity_count`).
+- Examples: *Does an object look the same from every pass?* scores
+  slant- and ground-range chips of one wreck from four passes against
+  each other and against plain seabed. *Correct a line* follows one
+  patch through every step; *Grid to a map* compares the resampling
+  methods and shows samples per cell; *Investigating an unknown survey*
+  saves its results to `metrics.json`; *A training dataset* round-trips
+  its `DatasetSpec` through YAML.
+- `make docs-code` (run by the docs workflow after the build) runs the
+  code blocks of Getting started and the home-page quickstart and checks
+  the output Getting started shows.
+
+### Changed
+
+- `examples/` holds only `gallery/`, `theory/`, `atr/` and
+  `project_template/`. Removed, as the gallery covers them:
+  `quickstart.py`, `gridding_and_geotiff.py`, `investigate_dataset.py`,
+  `build_yolo_dataset.py`, `tvg_calibration.py`, the figure recipes in
+  `examples/figures/` (the grid-coverage plot is now
+  `viz.plot_grid_coverage`) and `look_consistency.py` (now a gallery
+  page, without its detection, clustering and registration options).
+
+### Fixed
+
+- Getting started: the per-frequency TVG block applied the wrong terms
+  (absorption stayed on at 100 kHz and spreading went off at 400 kHz);
+  it now applies each fit's `tvg_params`. The gridded raster's shown
+  shape and coverage match the current output.
 
 ## [0.10.0] — 2026-11-10
 

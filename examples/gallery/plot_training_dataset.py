@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import yaml
 from PIL import Image
 
 from sidescanpy import datasets
@@ -80,6 +81,9 @@ spec = DatasetSpec(
     layout="ultralytics", seed=0,
 )
 result = build_target_dataset(ss_dir, catalog, spec, out / "dataset")
+# The spec round-trips through YAML, so a project can keep it in its config.
+(out / "dataset_spec.yaml").write_text(yaml.safe_dump(spec.to_dict()))
+assert DatasetSpec.from_yaml(out / "dataset_spec.yaml") == spec
 chip = result.styles["chip"]
 print(f"{chip.n_target_images} target and {chip.n_background_images} background images, "
       f"{chip.n_annotations} boxes, split {chip.split_counts}")

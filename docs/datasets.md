@@ -70,5 +70,6 @@ quantization (`to_uint8`, `to_uint16`, `from_uint8`), and
 `export.ml.write_coco` / `write_yolo`.
 
 `sidescan-export chip` is a thin command-line wrapper over
-`build_target_dataset`; `examples/build_yolo_dataset.py` runs end to end
-on a synthetic survey.
+`build_target_dataset`;
+[A training dataset with background images](examples/plot_training_dataset.rst)
+runs it end to end on a public recording.
