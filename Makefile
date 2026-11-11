@@ -1,4 +1,4 @@
-.PHONY: test test-v test-cov lint docs docs-fast docs-serve docs-clean readme-images
+.PHONY: test test-v test-cov lint docs docs-fast docs-code docs-serve docs-clean readme-images
 
 # ROS2 injects PYTHONPATH system-wide; clear it so uv run sees only the venv.
 # Long-term fix: conda env for ROS, uv for this project.
@@ -27,6 +27,12 @@ docs:
 
 docs-fast:
 	$(SPHINX) -D plot_gallery=0
+
+# Run the Python blocks of docs/getting_started.md and the quickstart on
+# docs/index.md (tests/examples/test_docs_code.py), downloading the
+# recording they use if it is not cached yet.
+docs-code:
+	SIDESCANPY_DOCS_CODE=1 uv run --all-extras pytest tests/examples/test_docs_code.py -q -p no:randomly
 
 docs-serve: docs
 	uv run --all-extras python -m http.server -d docs/_build/html 8000

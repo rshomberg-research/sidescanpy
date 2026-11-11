@@ -93,9 +93,10 @@ absorption) to the median level against range:
 ```python
 from sidescanpy.analysis import fit_tvg_models
 
+fits = {}
 for key in sorted(survey.frequencies):
     ds = compute_geometric_ranges(survey.get_frequency(key).dataset)
-    fit = fit_tvg_models(ds)
+    fits[key] = fit = fit_tvg_models(ds)
     print(key, fit.best, fit.tvg_status)
 ```
 
@@ -142,22 +143,26 @@ write_survey(survey, "MIS11_0.corrected.ss.h5")
 ```
 
 Leave a call out to skip that correction. To follow the gain check above
-instead, start again from the converted file and turn off the terms the
-recorder already applied, per frequency (a term set to 0 is not
-applied):
+instead, start again from the converted file and apply the model each
+fit found, per frequency: `fit.tvg_params` holds its spreading and
+absorption terms, and a term of 0 is not applied. Here that is no TVG at
+100 kHz and 20 log R without absorption at 400 kHz:
 
 ```python
 from sidescanpy.io.hdf5 import read_survey
 
 survey = interpolate_aux_onto_pings(read_survey("MIS11_0.ss.h5"))
-tvg = {
-    "hz_100000": {"spreading_loss_db": 0.0},
-    "hz_400000": {"spreading_loss_db": 0.0, "absorption_db_per_m": 0.0},
-}
-for freq_key, terms in tvg.items():
+for freq_key, fit in fits.items():
+    params = fit.tvg_params
+    print(freq_key, params.spreading_loss_db, params.absorption_db_per_m)
     ds = survey.get_frequency(freq_key).dataset
-    survey.add_frequency(freq_key, apply_tvg(ds, **terms))
+    survey.add_frequency(freq_key, apply_tvg(ds, params))
 survey = compute_georeferencing(compute_geometric_ranges(survey))
+```
+
+```
+hz_100000 0.0 0.0
+hz_400000 20.0 0.0
 ```
 
 `apply_tvg` refuses to run twice on the same data, so gains never stack;
@@ -179,7 +184,7 @@ to_geotiff(raster, "MIS11_0_400khz.tif")
 ```
 
 ```
-SideScanGriddedRaster(channel_name='400 kHz', shape=(1048, 544), coverage=55.9%, crs=32630)
+SideScanGriddedRaster(channel_name='400 kHz', shape=(1057, 545), coverage=55.6%, crs=32630)
 ```
 
 `grid_channel` picks the UTM zone of the data (zone 30N here, EPSG:32630)

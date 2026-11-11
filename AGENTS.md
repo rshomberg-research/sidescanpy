@@ -125,6 +125,7 @@ make test                     # unit tests; clears PYTHONPATH (see below)
 make lint                     # ruff
 make docs                     # Sphinx -W -n, runs the gallery (~1.3 GB download first time)
 make docs-fast                # same, gallery not executed
+make docs-code                # run the code blocks of getting_started.md and index.md
 PYTHONPATH="" uv run pytest tests/unit/grids/test_resample.py -v
 PYTHONPATH="" uv run pytest tests/examples -q   # example smoke runs
 ```
