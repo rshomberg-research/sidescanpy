@@ -12,9 +12,9 @@ open licence, the "File format problem" issue template says how.
 
 ## Changing the code
 
-- Setup, commands and conventions: [`docs/development.md`](docs/development.md).
+- Setup, commands and conventions: [`docs/development.md`](../docs/development.md).
 - Architecture rules, the layering the tests enforce, and known issues:
-  [`AGENTS.md`](AGENTS.md). It is written for coding agents but is the
+  [`AGENTS.md`](../AGENTS.md). It is written for coding agents but is the
   shortest complete guide for people too.
 - Add tests for new behaviour, on synthetic data with realistic shapes
   (`tests/unit/synthetic.py`). Never commit survey data.

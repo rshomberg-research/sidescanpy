@@ -7,6 +7,12 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Repository root tidied: `CONTRIBUTING.md`, `SECURITY.md` and
+  `CODE_OF_CONDUCT.md` moved to `.github/`; the stale `.readthedocs.yaml`
+  (mkdocs) and `data/README.md` removed; `.gitignore` rewritten.
+
 ### Added
 
 - Docs: Citing sections in the README and on the docs home page, a DOI
