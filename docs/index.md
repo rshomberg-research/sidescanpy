@@ -72,6 +72,9 @@ to the latest release; each release on Zenodo also has its own version DOI.
 - **Example data:** [every public recording](example_data.md) the
   Examples and Theory pages use, with its source, size and licence, and how
   `sidescanpy.datasets.fetch` downloads it.
+- **Public datasets:** [openly published sidescan archives](public_datasets.md)
+  and whether sidescanpy reads them, with a sample figure for each one
+  it does.
 - **Guide:** [Building a workflow](workflow.md), [Data model](core.md), [Processing](processing.md),
   [Gridding](grids.md), [Targets and datasets](datasets.md),
   [Analysis](analysis.md), [Visualization](viz.md),
@@ -92,6 +95,7 @@ Getting started <getting_started>
 Examples <examples/index>
 Theory <theory/index>
 Example data <example_data>
+Public datasets <public_datasets>
 Guide <guide>
 Data format <format/index>
 Source formats <sources/index>
