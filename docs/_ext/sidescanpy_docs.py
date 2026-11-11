@@ -49,6 +49,7 @@ GALLERY_ORDER = [
     "plot_grid_to_a_map",
     "plot_wreck_gallery",
     "plot_four_passes",
+    "plot_look_consistency",
     "plot_swath_tiles",
     "plot_target_chips",
     "plot_training_dataset",
@@ -72,7 +73,8 @@ GALLERY_ORDER = [
 
 #: Gallery pages whose goal image is not their last figure: script stem ->
 #: figure number (1-based, as in ``sphx_glr_<stem>_001.png``).
-GOAL_IMAGE: dict[str, int] = {"plot_common_artifacts": 1, "plot_correct_a_line": 1, "plot_grid_to_a_map": 1}
+GOAL_IMAGE: dict[str, int] = {"plot_common_artifacts": 1, "plot_correct_a_line": 1, "plot_grid_to_a_map": 1,
+                               "plot_look_consistency": 2}
 
 _GALLERY_DOCS = ("examples/plot_", "theory/plot_")
 _IMAGE_BLOCK = re.compile(r"^\.\. image-sg:: \S+\n(?:[ \t]+\S.*\n)*", re.M)
