@@ -97,9 +97,11 @@ src/sidescanpy/
 ├── cli/         sidescan-convert / -correct / -export / -analyze
 ├── datasets.py  fetch() public example recordings (stdlib only, any layer may use)
 └── log.py       configure_logging, log_timing
-examples/        runnable scripts, smoke-tested in tests/examples;
-                 gallery/ (Examples) and theory/ (Theory) plot_*.py run on fetched
-                 public data by sphinx-gallery during `make docs` (and in CI)
+examples/        gallery/ (Examples) and theory/ (Theory): plot_*.py run on fetched
+                 public data by sphinx-gallery during `make docs` (and in CI);
+                 atr/ (target-recognition scripts, shown on the Target
+                 recognition pages); project_template/ (per-step workflow,
+                 smoke-tested on synthetic data in tests/examples)
 docs/            Sphinx site: MyST guide pages, conf.py, _ext/ (API page
                  generator, cross-reference fallback)
 ```
@@ -171,7 +173,7 @@ set `SIDESCANPY_PUBLIC_DATA` to their directory to run
 | `test_gates.py` | no "stage" wording in `src/` |
 | `test_import_all.py` | every module imports |
 | `test_optional_matplotlib.py` | non-viz layers and convert/correct run without matplotlib |
-| `tests/examples/` | every example runs on synthetic data |
+| `tests/examples/` | the project template runs on synthetic data; gallery scripts fetch only registered data; docs code blocks run (with data) |
 
 ---
 
