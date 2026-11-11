@@ -6,24 +6,20 @@ which ship wheels for the common platforms. The test suite runs on Linux
 with Python 3.12; other platforms are expected to work but are not yet
 tested in CI.
 
-<!-- TODO(release): replace the git installs below with
-     `pip install "sidescanpy[viz]"` once it is on PyPI. -->
-
-sidescanpy is not on PyPI yet. Until it is, install from the GitHub
-repository, pinned to a release tag:
+Install from [PyPI](https://pypi.org/p/sidescanpy):
 
 ```bash
-pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
+pip install "sidescanpy[viz]"
 ```
 
 With [uv](https://docs.astral.sh/uv/), in a project:
 
 ```bash
-uv add "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
+uv add "sidescanpy[viz]"
 ```
 
-`uv add` records the pin in `pyproject.toml` and `uv.lock`. Use `@main`
-in place of the tag for the latest fixes.
+For unreleased fixes, install from the repository instead:
+`pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@main"`.
 
 ## Extras
 

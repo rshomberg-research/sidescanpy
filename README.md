@@ -45,12 +45,11 @@ step (see [`docs/workflow.md`](docs/workflow.md)).
 
 ## Install
 
-Python 3.12 or newer. sidescanpy is not on PyPI yet; install it from
-this repository, pinned to a release tag:
+Python 3.12 or newer, from [PyPI](https://pypi.org/p/sidescanpy):
 
 ```bash
-pip install "sidescanpy[viz] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
-pip install "sidescanpy[viz,maps,geo] @ git+https://github.com/rshomberg-research/sidescanpy.git@v0.10.0"
+pip install "sidescanpy[viz]"
+pip install "sidescanpy[viz,maps,geo]"
 ```
 
 `uv pip install` and `uv add` take the same argument. The second line adds basemaps
