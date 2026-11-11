@@ -32,7 +32,9 @@ so the plotting, GeoTIFF and docs code is tested too.
 
 `uv run pytest tests/integration --slow` runs the integration tests,
 which need real survey files that are not in the repository and skip
-without them. The public test fixtures are listed in
+without them: put a JSF file at `tests/data/jsf/sample.jsf` and a Klein
+SDF file at `tests/data/sdf/sample.sdf`. A local `data/` folder for
+survey files is ignored by git; the library never reads from it. The public test fixtures are listed in
 `tests/data/public/SOURCES.md`; set `SIDESCANPY_PUBLIC_DATA` to the
 folder holding them to run `tests/unit/io/test_public_fixtures.py`.
 
