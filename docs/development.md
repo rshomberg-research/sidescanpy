@@ -79,10 +79,10 @@ The repository holds code only, no survey data.
 
 - **Examples.** The [worked examples](examples/index.rst) download public
   recordings with `sidescanpy.datasets.fetch()`; see
-  [Example data](example_data.md). The other scripts in `examples/` run
-  on synthetic data. The gallery scripts run during `make docs` (locally
-  and in CI), and the unit suite checks offline that every dataset name
-  a script fetches is registered.
+  [Example data](example_data.md). `examples/project_template/` runs on
+  synthetic data in `tests/examples`. The gallery and Theory scripts run
+  during `make docs` (locally and in CI), and the unit suite checks
+  offline that every dataset name a script fetches is registered.
 - **Public fixtures.** `tests/unit/io/test_public_fixtures.py` runs on
   small cuts of openly licensed recordings (EdgeTech JSF, and XTF from
   three writers), listed with source, licence and checksum in

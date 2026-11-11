@@ -4,9 +4,9 @@ Run-everything driver behind ``sidescan-analyze investigate``.
 Loads one frequency channel, runs every analysis in
 :mod:`sidescanpy.analysis` on it, and writes ``metrics.json`` plus (unless
 ``plots=False``) one PNG per plot. This is a run-everything workflow, so it
-lives with the CLI, not in the library; ``examples/investigate_dataset.py``
-walks through the same flow as a readable script. Only :func:`save_figures`
-needs matplotlib.
+lives with the CLI, not in the library; the *Investigating an unknown
+survey* example walks through the same flow as a readable script. Only
+:func:`save_figures` needs matplotlib.
 
 2026 rshomberg@uri.edu
 """

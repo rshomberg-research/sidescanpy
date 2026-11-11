@@ -161,10 +161,12 @@ command with `--help` for its options.
 
 ## Examples
 
-The [documentation site](https://rshomberg-research.github.io/sidescanpy/examples/)
-has worked examples on openly licensed public recordings, each with its
-code and the figure it makes. The scripts are in
-[`examples/gallery/`](examples/gallery/); `sidescanpy.datasets.fetch()`
+The documentation site has [worked examples](https://rshomberg-research.github.io/sidescanpy/examples/)
+and [Theory pages](https://rshomberg-research.github.io/sidescanpy/theory/)
+(the physics behind each processing step) on openly licensed public
+recordings, each with its code and the figures it makes. Their scripts
+are in [`examples/gallery/`](examples/gallery/) and
+[`examples/theory/`](examples/theory/); `sidescanpy.datasets.fetch()`
 downloads the data they use.
 
 ![The same code on EdgeTech JSF, Benthos XTF and Klein XTF recordings](docs/assets/gallery/three_formats.png)
@@ -173,10 +175,11 @@ downloads the data they use.
 EdgeTech JSF, Benthos XTF (UK JNCC, Open Government Licence) and Klein
 XTF (USGS, public domain).*
 
-[`examples/`](examples/) also holds runnable scripts, each smoke-tested on
-synthetic data: `project_template/` (a full per-step workflow), `quickstart.py`, `tvg_calibration.py`,
-`gridding_and_geotiff.py`, `build_yolo_dataset.py`,
-`investigate_dataset.py`, and figure recipes in `examples/figures/`.
+[`examples/`](examples/) also holds
+[`project_template/`](examples/project_template/), a full per-step
+workflow (convert, analyze, correct, export, dataset) smoke-tested on
+synthetic data, and [`atr/`](examples/atr/), the target-recognition
+scripts.
 
 ## Logging
 
