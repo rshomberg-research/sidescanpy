@@ -7,6 +7,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-11-11
+
+First release on PyPI: `pip install sidescanpy`.
+
 ### Changed
 
 - Repository root tidied: `CONTRIBUTING.md`, `SECURITY.md` and
@@ -15,6 +19,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- Docs: a Public datasets page cataloguing openly published sidescan
+  archives, whether sidescanpy reads them, and a sample figure for eight
+  of them made by one processing chain.
 - Release workflow (`.github/workflows/release.yml`): publishing a GitHub
   release builds the sdist and wheel, checks them, smoke-tests the wheel
   in a clean environment and publishes to TestPyPI, then PyPI, with
