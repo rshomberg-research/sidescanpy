@@ -72,7 +72,7 @@ GALLERY_ORDER = [
 
 #: Gallery pages whose goal image is not their last figure: script stem ->
 #: figure number (1-based, as in ``sphx_glr_<stem>_001.png``).
-GOAL_IMAGE: dict[str, int] = {"plot_common_artifacts": 1}
+GOAL_IMAGE: dict[str, int] = {"plot_common_artifacts": 1, "plot_correct_a_line": 1, "plot_grid_to_a_map": 1}
 
 _GALLERY_DOCS = ("examples/plot_", "theory/plot_")
 _IMAGE_BLOCK = re.compile(r"^\.\. image-sg:: \S+\n(?:[ \t]+\S.*\n)*", re.M)
