@@ -1,6 +1,9 @@
 # Example data
 
 The [examples](examples/index.rst) and [Getting started](getting_started.md) run on real, openly licensed recordings that anyone can download.
+[Public datasets](public_datasets.md) lists the archives these come
+from alongside others sidescanpy reads or may read, with a sample
+figure for each.
 
 ## The example data
 
