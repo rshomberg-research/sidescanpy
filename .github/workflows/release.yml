@@ -1,0 +1,85 @@
+# Publish to PyPI when a GitHub release is published.
+#
+# Trusted Publishing (OIDC): no API tokens are stored in the repo. Each
+# index needs a matching publisher set up once by the maintainer:
+#   PyPI / TestPyPI -> "Publishing" -> add a (pending) GitHub publisher
+#   owner rshomberg-research, repo sidescanpy, workflow release.yml,
+#   environment pypi (or testpypi).
+# The same GitHub release also triggers the Zenodo integration (DOI).
+#
+# Order: build + checks -> TestPyPI -> install test from TestPyPI -> PyPI.
+
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:        # manual dry run: build, check, TestPyPI only
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tag matches the package version
+        if: github.event_name == 'release'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "tag=$tag version=$ver"
+          test "$tag" = "$ver"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          twine check --strict dist/*
+      - name: Smoke-test the wheel in a clean venv
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install "$(ls dist/*.whl)[viz]"
+          cd /tmp && /tmp/smoke/bin/python -c "import sidescanpy, sidescanpy.viz, sidescanpy.processing, sidescanpy.grids, sidescanpy.export; print(sidescanpy.__version__)"
+          /tmp/smoke/bin/sidescan-convert --help > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/sidescanpy
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  pypi:
+    needs: testpypi
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sidescanpy
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

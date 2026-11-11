@@ -15,6 +15,10 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Added
 
+- Release workflow (`.github/workflows/release.yml`): publishing a GitHub
+  release builds the sdist and wheel, checks them, smoke-tests the wheel
+  in a clean environment and publishes to TestPyPI, then PyPI, with
+  Trusted Publishing (no stored tokens).
 - Docs: Citing sections in the README and on the docs home page, a DOI
   badge, and the Zenodo concept DOI in `CITATION.cff`.
 - `viz.plot_grid_coverage`: a gridded raster with each cell's opacity
