@@ -49,30 +49,35 @@ to the archive and cite it.
 
 ## Sample outputs
 
-Every figure below comes from one script,
-`docs/_scripts/public_datasets_figures.py`, with the same chain and the
-same layout; only the file, the format and a navigation CRS the archive
-leaves unstated change. The chain:
+Each dataset below gets the same three panels, all over the same stretch
+of pings, made by one script,
+[`docs/_scripts/public_datasets_figures.py`](https://github.com/rshomberg-research/sidescanpy/blob/main/docs/_scripts/public_datasets_figures.py)
+(`--only <name>` remakes one):
 
-1. read, navigation onto the pings, 20 s navigation smoothing
-   ({func}`~sidescanpy.processing.smooth_navigation`)
-2. `bottom_track`, `tvg` (library defaults), `geometric` (flat seabed)
-3. `range_correction` fitted on the same line, which flattens the level
-   against range that TVG leaves (a recorder's own TVG, beam pattern)
-4. `georef`
+- **As stored:** the samples exactly as the file holds them (units
+  inferred by {func}`~sidescanpy.analysis.characterize.infer_units`),
+  against slant range, linear 2–98 % stretch.
+- **Corrected:** the same pings after the library chain: navigation
+  smoothing, altitude from bottom track, TVG, flat-seabed slant to
+  ground range, and a range correction fitted on the line. dB, against
+  across-track ground range.
+- **Georeferenced:** the same pings gridded on UTM, north up, at the
+  finest useful cell ({func}`~sidescanpy.grids.recommend_resolution`:
+  half the finer native spacing, at least 5 cm).
 
-Left: a ground-range waterfall one swath width long, from the stretch
-of the line with the steadiest positions. Right: three swath widths
-around it, gridded on UTM (about 300 cells across the swath,
-inverse-distance weighting), north up. Both in dB, copper colormap,
-2 to 98 % stretch, highest frequency in the file. Nothing is tuned per
-dataset, so the panels show what the default chain gives, not the best
-each dataset can look; the [examples](examples/index.rst) tune the
-chain for several of them.
+The stretch is picked to show something: centred on a catalogued target
+where the record has one, otherwise the most textured straight stretch
+with no navigation jumps. The line under each figure lists the exact
+corrections and parameters, read from the processing history. Nothing
+is tuned per dataset, so the panels show what the default chain gives;
+the [examples](examples/index.rst) tune the chain for several of them.
 
 ### BGS London Gateway
 
-![BGS London Gateway, Klein 400 kHz, waterfall and grid](assets/datasets/bgs_london_gateway.png)
+![BGS London Gateway, Klein 400 kHz, raw, corrected and georeferenced](assets/datasets/bgs_london_gateway.png)
+
+```{include} assets/datasets/bgs_london_gateway_caption.md
+```
 
 - **Provider:** British Geological Survey, National Geoscience Data
   Centre, item 140325,
@@ -96,7 +101,10 @@ chain for several of them.
 
 ### USGS Grand Bay
 
-![USGS Grand Bay, Klein 100 kHz, waterfall and grid](assets/datasets/usgs_grand_bay.png)
+![USGS Grand Bay, Klein 100 kHz, raw, corrected and georeferenced](assets/datasets/usgs_grand_bay.png)
+
+```{include} assets/datasets/usgs_grand_bay_caption.md
+```
 
 - **Provider:** U.S. Geological Survey data release,
   [doi:10.5066/P9374DKQ](https://doi.org/10.5066/P9374DKQ).
@@ -117,7 +125,10 @@ chain for several of them.
 
 ### JNCC Wight-Barfleur Reef
 
-![JNCC Wight-Barfleur Reef, EdgeTech 521 kHz, waterfall and grid](assets/datasets/jncc_wight_barfleur.png)
+![JNCC Wight-Barfleur Reef, EdgeTech 521 kHz, raw, corrected and georeferenced](assets/datasets/jncc_wight_barfleur.png)
+
+```{include} assets/datasets/jncc_wight_barfleur_caption.md
+```
 
 - **Provider:** Joint Nature Conservation Committee, *Raw side scan sonar
   data from Wight-Barfleur Reef SCI* (CEND 03/13, 2013),
@@ -133,7 +144,10 @@ chain for several of them.
 
 ### JNCC mid-Irish Sea
 
-![JNCC mid-Irish Sea, Benthos 400 kHz, waterfall and grid](assets/datasets/jncc_mid_irish_sea.png)
+![JNCC mid-Irish Sea, Benthos 400 kHz, raw, corrected and georeferenced](assets/datasets/jncc_mid_irish_sea.png)
+
+```{include} assets/datasets/jncc_mid_irish_sea_caption.md
+```
 
 - **Provider:** JNCC, *Raw sidescan sonar data from Submarine structures
   in the mid-Irish Sea Area of Search* (CEND 11/08, 2008),
@@ -149,7 +163,10 @@ chain for several of them.
 
 ### JNCC Solan Bank
 
-![JNCC Solan Bank, Benthos 200 kHz, waterfall and grid](assets/datasets/jncc_solan_bank.png)
+![JNCC Solan Bank, Benthos 200 kHz, raw, corrected and georeferenced](assets/datasets/jncc_solan_bank.png)
+
+```{include} assets/datasets/jncc_solan_bank_caption.md
+```
 
 - **Provider:** JNCC, *Raw sidescan sonar data from Solan Bank Area of
   Search* (CEND 11/08, 2008),
@@ -169,7 +186,10 @@ chain for several of them.
 
 ### JNCC East Rockall Bank
 
-![JNCC East Rockall Bank, EdgeTech 410 kHz, waterfall and grid](assets/datasets/jncc_east_rockall.png)
+![JNCC East Rockall Bank, EdgeTech 410 kHz, raw, corrected and georeferenced](assets/datasets/jncc_east_rockall.png)
+
+```{include} assets/datasets/jncc_east_rockall_caption.md
+```
 
 - **Provider:** JNCC, *Raw side scan data from Anton Dohrn and East
   Rockall Bank* (MV Franklin, 2009),
@@ -190,7 +210,10 @@ chain for several of them.
 
 ### AWI OFOBS, PS124
 
-![AWI OFOBS PS124, EdgeTech 2205 488 kHz, waterfall and grid](assets/datasets/awi_ofobs_ps124.png)
+![AWI OFOBS PS124, EdgeTech 2205 488 kHz, raw, corrected and georeferenced](assets/datasets/awi_ofobs_ps124.png)
+
+```{include} assets/datasets/awi_ofobs_ps124_caption.md
+```
 
 - **Provider:** PANGAEA,
   [doi:10.1594/PANGAEA.939172](https://doi.org/10.1594/PANGAEA.939172)
@@ -213,7 +236,10 @@ chain for several of them.
 
 ### BenthiCat-Raw
 
-![BenthiCat-Raw, Klein 3000H, waterfall and grid](assets/datasets/benthicat.png)
+![BenthiCat-Raw, Klein 3000H, raw, corrected and georeferenced](assets/datasets/benthicat.png)
+
+```{include} assets/datasets/benthicat_caption.md
+```
 
 - **Provider:** University of Girona, Harvard Dataverse,
   [doi:10.7910/DVN/UMABNT](https://doi.org/10.7910/DVN/UMABNT); collection
@@ -236,7 +262,7 @@ chain for several of them.
   recorded; the release does not say whether they are the towfish's.
   Not registered in `datasets.fetch`: the archive cannot be read one
   file at a time.
-- **Figure:** `N01/N01_05_220731124500_xtf-CH12.xtf`.
+- **Figure:** `N02/N02_SS_04_220807105300_xtf-CH12.xtf`.
 - **Cite:** Rajani, H. (2026). *BenthiCat - Raw*. Harvard Dataverse, V1.1,
   <https://doi.org/10.7910/DVN/UMABNT>; and Rajani, H., et al. (2025).
   *BenthiCat: An opti-acoustic dataset for advancing benthic
