@@ -43,6 +43,7 @@ exclude_patterns = [
     "examples/*.md5",
     "examples/*.zip",
     "examples/*.codeobj.json",
+    "assets/datasets/*_caption.md",  # included by public_datasets.md
 ]
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 root_doc = "index"
