@@ -7,7 +7,7 @@ or caller that wants "just give me a survey from these files" without
 hand-rolling the .jsf/.sdf/.xtf branch itself.
 
 - :func:`detect_format`, :func:`read_and_convert` -- raw ``.jsf``/``.sdf``/
-  ``.xtf``.
+  ``.xtf``, and Humminbird recordings by their ``.DAT`` file.
 - :func:`read_and_convert_segments` -- one raw file into one or more
   surveys, each with its output stem (XTF files are split at
   range-setting changes).
@@ -27,6 +27,8 @@ from pathlib import Path
 from sidescanpy.core.survey import SideScanSurvey
 from sidescanpy.core.target import Target
 from sidescanpy.io.hdf5 import read_survey
+from sidescanpy.io.humminbird import convert as humminbird_convert
+from sidescanpy.io.humminbird import read_humminbird
 from sidescanpy.io.jsf import convert as jsf_convert
 from sidescanpy.io.jsf import read_jsf
 from sidescanpy.io.jsf.targets import read_discover_targets
@@ -51,7 +53,9 @@ def _as_paths(input_paths: str | os.PathLike | Iterable[str | os.PathLike]) -> l
 def detect_format(input_paths: str | os.PathLike | Iterable[str | os.PathLike]) -> str:
     """Detect sonar file format from extension; raise on mixed extensions.
 
-    Extensions are compared case-insensitively (``.XTF`` is ``"xtf"``).
+    Extensions are compared case-insensitively (``.XTF`` is ``"xtf"``). A
+    ``.DAT`` file is a Humminbird recording (``"humminbird"``): the
+    header next to a directory of ``.SON`` files.
 
     Parameters
     ----------
@@ -64,7 +68,7 @@ def detect_format(input_paths: str | os.PathLike | Iterable[str | os.PathLike]) 
     Returns
     -------
     str
-        One of: "jsf", "sdf", "xtf".
+        One of: "jsf", "sdf", "xtf", "humminbird".
 
     Raises
     ------
@@ -85,8 +89,10 @@ def detect_format(input_paths: str | os.PathLike | Iterable[str | os.PathLike]) 
         return "sdf"
     if ext == ".xtf":
         return "xtf"
+    if ext == ".dat":
+        return "humminbird"
     raise ValueError(
-        f"Unsupported format: '{ext}'. Supported: .jsf, .sdf, .xtf"
+        f"Unsupported format: '{ext}'. Supported: .jsf, .sdf, .xtf, .dat (Humminbird)"
     )
 
 
@@ -102,10 +108,10 @@ def read_and_convert(
     Parameters
     ----------
     input_paths : path or list of paths
-        Paths (str or Path) to .jsf, .sdf or .xtf files (all same format);
-        a single path is one file.
+        Paths (str or Path) to .jsf, .sdf or .xtf files, or Humminbird
+        .DAT files (all same format); a single path is one file.
     fmt : str
-        "jsf", "sdf" or "xtf".
+        "jsf", "sdf", "xtf" or "humminbird".
     survey_name : str, optional
         Survey name. Defaults to first input file's stem.
     nav_crs : int, str or pyproj.CRS, optional
@@ -153,6 +159,17 @@ def read_and_convert(
             nav_crs=nav_crs,
         )
 
+    if fmt == "humminbird":
+        recordings = []
+        for p in input_paths:
+            logger.debug(f"  Reading Humminbird: {p}")
+            recordings.append(read_humminbird(p))
+        return humminbird_convert(
+            recordings,
+            source_files=input_paths,
+            survey_name=survey_name or input_paths[0].stem,
+        )
+
     raise ValueError(f"Unknown format: {fmt}")
 
 
@@ -176,7 +193,8 @@ def read_and_convert_segments(
 ) -> list[tuple[str, SideScanSurvey]]:
     """Read one raw sonar file into one survey per constant-range segment.
 
-    A ``.jsf`` file gives one survey, exactly as :func:`read_and_convert`.
+    A ``.jsf`` file or a Humminbird ``.DAT`` recording gives one survey,
+    exactly as :func:`read_and_convert`.
     ``.xtf`` and ``.sdf`` files are split at sample-rate (range-setting)
     changes (:func:`~sidescanpy.io.xtf.split_by_sample_rate`,
     :func:`~sidescanpy.io.sdf.split.split_by_sample_rate`) and each kept
@@ -188,7 +206,7 @@ def read_and_convert_segments(
     Parameters
     ----------
     path : Path
-        One ``.jsf``, ``.sdf`` or ``.xtf`` file.
+        One ``.jsf``, ``.sdf`` or ``.xtf`` file, or a Humminbird ``.DAT``.
     survey_name : str, optional
         Base name; defaults to ``path.stem``.
     min_pings : int, default 50
@@ -239,7 +257,7 @@ def read_and_convert_segments(
     return out
 
 
-SONAR_FORMATS: tuple[str, ...] = ("jsf", "sdf", "xtf")
+SONAR_FORMATS: tuple[str, ...] = ("jsf", "sdf", "xtf", "humminbird")
 """Raw formats :func:`read_and_convert` reads."""
 
 CATALOG_JSF_DISCOVER = "jsf_discover"
@@ -255,10 +273,12 @@ def find_sonar_files(input_dir: Path | str, input_format: str = "auto") -> list[
     ----------
     input_dir : path
         Directory to search.
-    input_format : {"auto", "jsf", "sdf", "xtf"}, default "auto"
-        ``"auto"`` returns ``*.jsf``, ``*.sdf`` and ``*.xtf`` files.
-        ``.xtf`` matches in any letter case (``.XTF`` is common);
-        ``.jsf`` and ``.sdf`` match lower case only.
+    input_format : {"auto", "jsf", "sdf", "xtf", "humminbird"}, default "auto"
+        ``"auto"`` returns ``*.jsf``, ``*.sdf`` and ``*.xtf`` files and
+        Humminbird ``.DAT`` files. ``.xtf`` and ``.dat`` match in any
+        letter case (``.XTF`` and ``.DAT`` are common); ``.jsf`` and
+        ``.sdf`` match lower case only. A ``.DAT`` file counts only when
+        a directory of the same name (its ``.SON`` files) sits next to it.
 
     Raises
     ------
@@ -278,6 +298,12 @@ def find_sonar_files(input_dir: Path | str, input_format: str = "auto") -> list[
             found.update(
                 p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() == ".xtf"
             )
+        elif fmt == "humminbird":
+            dirs = {p.name.lower() for p in input_dir.iterdir() if p.is_dir()}
+            found.update(
+                p for p in input_dir.iterdir()
+                if p.is_file() and p.suffix.lower() == ".dat" and p.stem.lower() in dirs
+            )
         else:
             found.update(input_dir.glob(f"*.{fmt}"))
     return sorted(found)
@@ -288,7 +314,7 @@ def load_survey(path: Path | str, *, chunks: dict | None = None) -> SideScanSurv
 
     A ``.ss.h5`` (or ``.h5``/``.hdf5``) file is read with
     :func:`~sidescanpy.io.hdf5.read_survey` (``chunks`` passed through);
-    a raw ``.jsf``/``.sdf``/``.xtf`` file is converted in memory with
+    a raw ``.jsf``/``.sdf``/``.xtf`` file or Humminbird ``.DAT`` is converted in memory with
     :func:`read_and_convert` (``chunks`` ignored).
     """
     path = Path(path)

@@ -3,7 +3,7 @@ IO for SideScan sonar surveys.
 
 Format-specific readers/converters live in submodules
 (``sidescanpy.io.jsf``, ``sidescanpy.io.sdf``, ``sidescanpy.io.xtf``,
-``sidescanpy.io.hdf5``,
+``sidescanpy.io.humminbird``, ``sidescanpy.io.hdf5``,
 ``sidescanpy.io.netcdf``). This top-level package additionally exposes
 format-dispatching helpers for callers that have file paths and don't
 want to branch on extension themselves.
@@ -11,7 +11,7 @@ want to branch on extension themselves.
 Public entry points
 --------------------
 - :func:`detect_format` — extension-based format dispatch (``.jsf`` /
-  ``.sdf`` / ``.xtf``).
+  ``.sdf`` / ``.xtf`` / Humminbird ``.DAT``).
 - :func:`read_and_convert` — read + convert a list of same-format
   sonar files into a validated :class:`~sidescanpy.core.survey.SideScanSurvey`.
 - :func:`read_and_convert_segments` — one raw file into ``(output_stem,

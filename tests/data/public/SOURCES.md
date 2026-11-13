@@ -6,8 +6,10 @@ Small cuts of openly licensed sidescan recordings, used by
 repo; a public archive with a DOI is planned). Put them in one directory
 and set `SIDESCANPY_PUBLIC_DATA` to it; without it those tests skip. They
 can be rebuilt from the public archives below. Each file was made with
-`sidescanpy.io.jsf.write_subset` or `sidescanpy.io.xtf.write_subset`,
-which copy the file header and a run of pings unchanged, byte for byte.
+`sidescanpy.io.jsf.write_subset`, `sidescanpy.io.xtf.write_subset` or
+`sidescanpy.io.humminbird.write_subset`, which copy the file header and a
+run of pings unchanged, byte for byte (a Humminbird cut is the `.DAT` and
+a directory of the same name holding the side imaging `.SON` files).
 The ping range is part of each file name (`p<first>-<last>`, zero-based
 in the source file).
 
@@ -22,6 +24,7 @@ fails on an unlisted or changed file.
 | `jncc_wight_barfleur_20130321174522L_p100-107.xtf` | `BoxB2/20130321174522L.xtf` | XTF, Discover 7.22 (same pings as the JSF) | EdgeTech, low frequency | OGL v3 |
 | `jncc_mid_irish_sea_MIS13_2_p0-29.xtf` | `MIS13_2.XTF` | XTF, Isis 7.0.41 | Benthos SIS-1624, 100 + 400 kHz | OGL v3 |
 | `usgs_grand_bay_15CCT03_SSS_153_150602205800_p0-59.xtf` | `15CCT03_SSS_153_150602205800.xtf` | XTF, KleinXlt 4.0 / SonarPro 12 | Klein (file header: "Klein 3000"; the data release says Klein 3900) | U.S. public domain |
+| `usfws_chena_R00013_p3000-3059.DAT` + `usfws_chena_R00013_p3000-3059/B002.SON`, `B003.SON` | `R00013.DAT`, `R00013/B002.SON`, `R00013/B003.SON` | Humminbird DAT/SON | Humminbird Helix 15, 405 kHz side imaging | U.S. public domain |
 
 ## Sources and attribution
 
@@ -47,6 +50,12 @@ Mississippi and Alabama*: U.S. Geological Survey data release,
 domain; the U.S. Geological Survey asks to be acknowledged as originator
 of the data.
 
+**Chena River.** U.S. Fish and Wildlife Service, *Raw side-scan sonar
+data relating to Chena River habitat mapping in 2022*, ServCat reference
+178459, <https://iris.fws.gov/APPS/ServCat/Reference/Profile/178459>,
+archive `Raw_SideScanSonar_data.zip`. A federal agency's work, U.S.
+public domain (the record states no licence).
+
 ## Checksums (SHA-256)
 
 ```
@@ -55,4 +64,7 @@ fbfe2a3f5581d0a60051de8111957d667a9167b30d98a2f0284a5a240225b7c7  jncc_wight_bar
 f4495e81d30ccdde0a601efe4bee80ab53f69cda7b3c8f6b5f5ea4aa6bce1f27  jncc_wight_barfleur_20130321174522L_p100-107.xtf
 a51f6d1f336bb753b13d8f5097b034d5458dbdae545bb0b0992d8459d3b59d39  jncc_mid_irish_sea_MIS13_2_p0-29.xtf
 a4262b37898fbb589f7e77d95a7ff91e7de9bf20e793926b02bb639e44b7fa5b  usgs_grand_bay_15CCT03_SSS_153_150602205800_p0-59.xtf
+a31a72a81197b1e7cac13e23ef6304e7e16b8dca47d14e10c6fe4439d4244bb0  usfws_chena_R00013_p3000-3059.DAT
+02e652693b83a0d1d26144507c1b437a13a9baff5e3caa067b7f02224887019e  usfws_chena_R00013_p3000-3059/B002.SON
+57b24d9878536ea7decdc7a5c96d9f5210a785c21def8f6f0fe4df81697d6a08  usfws_chena_R00013_p3000-3059/B003.SON
 ```

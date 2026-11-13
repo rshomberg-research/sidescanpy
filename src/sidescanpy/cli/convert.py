@@ -4,7 +4,8 @@ the format-agnostic standard model.
 
 Two subcommands:
 
-- ``survey`` — ``.jsf``/``.sdf``/``.xtf`` -> ``.ss.h5``, one output file per input
+- ``survey`` — ``.jsf``/``.sdf``/``.xtf`` and Humminbird ``.DAT`` (with
+  its ``.SON`` directory) -> ``.ss.h5``, one output file per input
   file, except that an ``.xtf`` file whose range setting changes is split
   into one ``<stem>_seg01.ss.h5``, ``<stem>_seg02.ss.h5``, ... per run of
   constant range (:func:`sidescanpy.io.read_and_convert_segments`; runs
@@ -255,10 +256,11 @@ def build_parser() -> tuple[CLIParser, Any]:
     parser = CLIParser(prog="sidescan-convert", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    p = subparsers.add_parser("survey", help="Convert raw .jsf/.sdf/.xtf files to .ss.h5")
-    p.add_argument("--input-dir", required=True, type=str, help="Directory of .jsf/.sdf/.xtf files (non-recursive)")
+    p = subparsers.add_parser("survey", help="Convert raw .jsf/.sdf/.xtf files and Humminbird .DAT recordings to .ss.h5")
+    p.add_argument("--input-dir", required=True, type=str,
+                   help="Directory of .jsf/.sdf/.xtf files or Humminbird .DAT recordings (non-recursive)")
     p.add_argument("--output-dir", required=True, type=str, help="Where .ss.h5 files are written")
-    p.add_argument("--input-format", choices=["jsf", "sdf", "xtf", "auto"], default="auto")
+    p.add_argument("--input-format", choices=["jsf", "sdf", "xtf", "humminbird", "auto"], default="auto")
     p.add_argument("--force", action="store_true", help="Reprocess even if output exists")
     p.add_argument(
         "--crop-farrange", action=argparse.BooleanOptionalAction, default=True,

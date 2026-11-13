@@ -49,6 +49,10 @@ class TestDetectFormat:
         assert detect_format([Path("survey.xtf")]) == "xtf"
         assert detect_format([Path("A.XTF"), Path("b.Xtf")]) == "xtf"
 
+    def test_humminbird_dat_any_case(self):
+        assert detect_format([Path("R00013.DAT")]) == "humminbird"
+        assert detect_format([Path("Rec00001.dat")]) == "humminbird"
+
     def test_unsupported_extension_raises(self):
         with pytest.raises(ValueError, match=r"Unsupported format.*\.xtf"):
             detect_format([Path("survey.s7k")])
@@ -163,6 +167,18 @@ class TestReadAndConvert:
         assert read_and_convert(["dir/b.sdf"], "sdf") == "b"
         assert seen == {"jsf": Path("dir/a.jsf"), "sdf": Path("dir/b.sdf")}
 
+    def test_humminbird_end_to_end_on_synthetic_recording(self, tmp_path):
+        from tests.unit.io.humminbird.conftest import write_recording
+
+        dat = write_recording(tmp_path, "R00007")
+        survey = read_and_convert(dat, "humminbird")
+        assert survey.source_format == "humminbird"
+        assert survey.survey_name == "R00007"
+        assert survey.frequencies == ["hz_455000"]
+        assert load_survey(dat).frequencies == ["hz_455000"]
+        [(stem, seg)] = read_and_convert_segments(dat)
+        assert stem == "R00007" and seg.frequencies == ["hz_455000"]
+
     def test_unknown_format_raises(self):
         with pytest.raises(ValueError, match="Unknown format"):
             read_and_convert([Path("a.jsf")], "s7k")
@@ -245,6 +261,14 @@ class TestFindSonarFiles:
             (tmp_path / name).write_bytes(b"")
         (tmp_path / "dir.xtf").mkdir()
         assert [p.name for p in find_sonar_files(tmp_path, "xtf")] == ["a.XTF", "b.xtf", "c.Xtf"]
+
+    def test_humminbird_dat_needs_its_son_directory(self, tmp_path):
+        for name in ("R00001.DAT", "R00002.dat", "config.dat", "a.jsf"):
+            (tmp_path / name).write_bytes(b"")
+        (tmp_path / "R00001").mkdir()
+        (tmp_path / "r00002").mkdir()
+        assert [p.name for p in find_sonar_files(tmp_path, "humminbird")] == ["R00001.DAT", "R00002.dat"]
+        assert [p.name for p in find_sonar_files(tmp_path)] == ["R00001.DAT", "R00002.dat", "a.jsf"]
 
     def test_single_format(self, tmp_path):
         for name in ("b.sdf", "a.jsf"):
