@@ -2,7 +2,8 @@
 
 What sidescanpy does not do yet, and what is not settled. Each item says
 what to do in the meantime. Format-specific quirks are on the
-[JSF](sources/jsf.md), [SDF](sources/sdf.md) and [XTF](sources/xtf.md) pages.
+[JSF](sources/jsf.md), [SDF](sources/sdf.md), [XTF](sources/xtf.md) and
+[Humminbird](sources/humminbird.md) pages.
 
 ## Radiometric correction
 

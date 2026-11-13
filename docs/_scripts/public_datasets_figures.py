@@ -78,6 +78,8 @@ LINES = {
                           "JNCC East Rockall, EdgeTech 4200, XTF (Isis)"),
     "awi_ofobs_ps124": (["awi_ofobs_ps124_20210217004957.jsf"], "jsf", {},
                         "AWI OFOBS PS124, EdgeTech 2205, JSF (Discover)"),
+    "usfws_chena": (["usfws_chena_R00013.DAT"], "humminbird", {},
+                    "USFWS Chena River, Humminbird Helix 15, DAT/SON"),
     "benthicat": (None, "xtf", {}, "BenthiCat-Raw, Klein 3000H, XTF (SonarWiz)"),
 }
 

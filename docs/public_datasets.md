@@ -33,6 +33,7 @@ to the archive and cite it.
 | [JNCC East Rockall Bank](#jncc-east-rockall-bank) | XTF (Isis) | EdgeTech 4200, 120 + 410 kHz | OGL v3 | reads with caveats |
 | [AWI OFOBS, PS124](#awi-ofobs-ps124) | JSF (Discover) | EdgeTech 2205 | CC BY 4.0 | reads |
 | [BenthiCat-Raw](#benthicat-raw) | XTF (SonarWiz) | Klein 3000H | CC BY 4.0 | reads with caveats |
+| [USFWS Chena River](#usfws-chena-river) | DAT/SON (Humminbird) | Humminbird Helix 15, 405 kHz | U.S. public domain | reads with caveats |
 | [NPS Gateway NRA](#not-yet-tried) | JSF (Discover) | EdgeTech 4125, 400 + 900 kHz | U.S. government, none stated | not yet tried |
 | [MGDS REMUS 600, FK170825](#not-yet-tried) | JSF | EdgeTech 2205 | CC BY-NC-SA 4.0 | not yet tried |
 | [MGDS MBARI Mapping AUV](#not-yet-tried) | JSF, nav separate | EdgeTech 2205 | CC BY-NC-SA 3.0 (check each) | not yet tried |
@@ -44,7 +45,7 @@ to the archive and cite it.
 | [AURORA, Autosub 6000](#not-yet-tried) | XTF | not named | open access, IEEE login | not yet tried |
 | [NOAA NOS hydrographic surveys](#not-yet-tried) | mosaics + BAG online; raw on request | various | U.S. public domain | not yet tried |
 | [NOAA OCM Hudson River](#format-not-supported) | XTF converted from HSX | GeoSwath (interferometric) | U.S. government | not yet tried |
-| [Humminbird, Lowrance](#format-not-supported) | DAT/SON/IDX, SL2/SL3 | recreational | various | format not supported |
+| [Lowrance](#format-not-supported) | SL2/SL3 | recreational | various | format not supported |
 | [ML image datasets](#image-datasets) | PNG/JPG + labels | various | various | format not supported |
 
 ## Sample outputs
@@ -242,6 +243,33 @@ chain for several of them.
   *BenthiCat: An opti-acoustic dataset for advancing benthic
   classification and habitat mapping*. arXiv:2510.04876.
 
+### USFWS Chena River
+
+![USFWS Chena River, Humminbird 405 kHz, waterfall and grid](assets/datasets/usfws_chena.png)
+
+- **Provider:** U.S. Fish and Wildlife Service, "Raw side-scan sonar
+  data relating to Chena River habitat mapping in 2022",
+  [ServCat 178459](https://iris.fws.gov/APPS/ServCat/Reference/Profile/178459)
+  (listed on data.gov).
+- **Licence:** U.S. public domain (a federal agency's work; the record
+  states no licence).
+- **Sonar, format:** Humminbird Helix 15; `.DAT` header + `.SON` per
+  beam (side imaging 405 kHz, 2D sonar
+  200 kHz, down imaging).
+- **Size, area:** 3.1 GB zip, 23 recordings (one per day of scanning,
+  July and August 2022). Lower Chena River, Fairbanks, Alaska; 1 to 5 m
+  deep.
+- **Notable:** the release also has a substrate habitat map made from
+  these recordings in SonarTRX, and the track lines.
+- **sidescanpy:** reads with caveats: the files record no sample
+  interval (the reader assumes one, see
+  [Humminbird](sources/humminbird.md)), no attitude and no sound
+  velocity, and the unit's own gain is unknown.
+- **Figure:** `usfws_chena_R00013.DAT`, a 6-minute recording.
+- **Cite:** U.S. Fish and Wildlife Service, *Raw side-scan sonar data
+  relating to Chena River habitat mapping in 2022*, ServCat reference
+  178459, <https://iris.fws.gov/APPS/ServCat/Reference/Profile/178459>.
+
 ## Not yet tried
 
 Raw data in formats sidescanpy reads, not yet opened.
@@ -300,9 +328,8 @@ Raw data in formats sidescanpy reads, not yet opened.
   from an interferometric system; not yet tried.
 - **HYPACK HSX.** The second most common format in NOAA NCEI's sidescan
   holdings; not read.
-- **Humminbird DAT/SON/IDX** (e.g. USFWS Chena River 2022 on
-  data.gov; PING-Mapper reads it) and **Lowrance SL2/SL3** (sonarlight's
-  example files). Recreational sonars; not read.
+- **Lowrance SL2/SL3** (sonarlight's example files). Recreational
+  sonar; not read.
 
 ### Image datasets
 

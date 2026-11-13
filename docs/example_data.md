@@ -40,6 +40,7 @@ going online.
 | `bgs_london_gateway_aisha_05.xtf` | 28 MB | Klein 400 kHz, XTF (SonarPro, 2008): the Aisha wreck |
 | `bgs_london_gateway_aisha_15.xtf`, `_16` | 12 and 8 MB | the same 2008 survey: towfish motion stripes, and a turn |
 | `bgs_london_gateway_ash_34.xtf` | 16 MB | Klein 400 kHz, XTF (GeoDAS, 2007): data dropouts on port |
+| `usfws_chena_R00013.DAT` | 17 MB with its two `.SON` files | Humminbird Helix 15, 405 kHz side imaging, a river 1 to 5 m deep (USFWS, U.S. public domain) |
 
 The 2007 London Gateway files (GeoDAS) store navigation as UTM zone 31N
 easting and northing without saying so: convert them with
@@ -57,6 +58,13 @@ Dynamo passes together.
 `datasets.BGS_LONDON_GATEWAY_WRECKS` holds the catalogued centre of each
 wreck from the BGS record (UTM 31N meters); a line can show its wreck
 tens of meters from that centre along track.
+
+A Humminbird recording is a `.DAT` header and a directory of `.SON`
+files. Fetching `usfws_chena_R00013.DAT` also fetches
+`usfws_chena_R00013/B002.SON` and `B003.SON` (the two side imaging
+beams) into the directory beside it, which is where the reader looks;
+pass the `.DAT` path to `read_and_convert(..., fmt="humminbird")`. The
+files record no sample interval: see [Humminbird](sources/humminbird.md).
 
 ### Published products and their recordings
 
