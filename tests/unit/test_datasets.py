@@ -144,6 +144,39 @@ class TestFetch:
 
 
 @pytest.mark.unit
+class TestRequires:
+    """A recording made of several files (Humminbird .DAT + .SON)."""
+
+    @pytest.fixture
+    def recording(self, monkeypatch, tmp_path):
+        payloads = {"rec.DAT": b"header" * 10, "rec/B002.SON": b"port" * 100, "rec/B003.SON": b"stbd" * 100}
+        archive = tmp_path / "rec.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for member, data in payloads.items():
+                zf.writestr(member, data)
+        for member, data in payloads.items():
+            monkeypatch.setitem(datasets.REGISTRY, f"test_{member}", RemoteFile(
+                source="usfws_chena", archive_url="https://example.invalid/rec.zip",
+                member=member, size=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                description="test",
+                requires=("test_rec/B002.SON", "test_rec/B003.SON") if member == "rec.DAT" else (),
+            ))
+        monkeypatch.setattr(datasets, "_open_remote_zip", lambda url: zipfile.ZipFile(archive))
+        return payloads
+
+    def test_fetch_also_fetches_required_files_beside_it(self, recording, tmp_path):
+        path = datasets.fetch("test_rec.DAT", directory=tmp_path / "cache")
+        assert path == tmp_path / "cache" / "test_rec.DAT"
+        assert path.read_bytes() == recording["rec.DAT"]
+        assert (tmp_path / "cache" / "test_rec" / "B002.SON").read_bytes() == recording["rec/B002.SON"]
+        assert (tmp_path / "cache" / "test_rec" / "B003.SON").read_bytes() == recording["rec/B003.SON"]
+
+    def test_every_required_name_is_registered(self):
+        for entry in datasets.REGISTRY.values():
+            assert set(entry.requires) <= set(datasets.REGISTRY)
+
+
+@pytest.mark.unit
 class TestDirectFile:
     """Archives that serve each file on its own URL (``member=None``)."""
 
@@ -201,15 +234,45 @@ class _RangeHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
+class _OpenEndedRangeHandler(_RangeHandler):
+    """Honours the start of a range but sends everything to the end of the
+    file, as some archive servers do."""
+
+    def do_GET(self):
+        data = self.server.data
+        start = int(self.headers["Range"].removeprefix("bytes=").split("-")[0])
+        chunk = data[start:]
+        self.send_response(206)
+        self.send_header("Content-Length", str(len(chunk)))
+        self.send_header("Content-Range", f"bytes {start}-{len(data) - 1}/{len(data)}")
+        self.end_headers()
+        try:
+            self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+def _serve(handler, data):
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.data = data
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}/archive.zip"
+
+
 @pytest.mark.unit
 class TestRangeReader:
     def test_remote_zip_reads_member_through_ranges(self, archive):
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RangeHandler)
-        server.data = archive.read_bytes()
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        server, url = _serve(_RangeHandler, archive.read_bytes())
         try:
-            url = f"http://127.0.0.1:{server.server_address[1]}/archive.zip"
+            with datasets._open_remote_zip(url) as zf:
+                assert zf.read(MEMBER) == PAYLOAD
+        finally:
+            server.shutdown()
+
+    def test_remote_zip_reads_member_when_server_ignores_range_end(self, archive, monkeypatch):
+        monkeypatch.setattr(datasets, "_RANGE_BUFFER", 4096)  # smaller than the archive
+        server, url = _serve(_OpenEndedRangeHandler, archive.read_bytes())
+        try:
             with datasets._open_remote_zip(url) as zf:
                 assert zf.read(MEMBER) == PAYLOAD
         finally:
