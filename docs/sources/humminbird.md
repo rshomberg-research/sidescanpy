@@ -88,14 +88,17 @@ and resyncs.
 ## Conventions and caveats
 
 - **Sample interval is assumed.** The files record neither the range
-  nor the sample interval. Humminbird samples at a fixed rate: on the
-  recordings checked, the first bottom return sits at the same
-  depth-to-sample ratio (about 1.9 cm per sample) whatever a ping's
-  sample count. `sample_rate_hz` defaults to `HUMMINBIRD_SAMPLE_RATE_HZ`
+  nor the sample interval. Humminbird samples at a fixed rate whatever
+  the range setting, which only changes how many samples a ping holds.
+  Two checks on real Helix files agree: the first bottom return sits at
+  about 1.9 cm per sample of recorded depth, and the time between pings
+  grows by 26.3 µs per sample (a straight line, r = 1.000, over range
+  settings from 1168 to 3058 samples), which is a sample rate of about
+  38 050 Hz. `sample_rate_hz` defaults to `HUMMINBIRD_SAMPLE_RATE_HZ`
   = 38 594 Hz, the rate implied by the pixel size PyHum and PING-Mapper
   use (`2 asin(c / (L f)) / π` with `L` = 0.108 m, `f` = 455 kHz, which
   is `c / (2 fs)` with `fs = π L f / 4`). At 1500 m/s that is 1.94 cm
-  per sample, within 2 % of the first-bottom estimate. Pass
+  per sample, within 2 % of both estimates. Pass
   `sample_rate_hz=` to `io.humminbird.convert` to use another value;
   `humminbird_sample_rate_source` records the choice.
 - **Port and starboard pairing.** The unit writes both sides of a ping
@@ -114,6 +117,12 @@ and resyncs.
   own gain and contrast settings, which are not recorded. Measure what
   the unit applied with `analysis.fit_tvg_models` before correcting
   ([Limitations](../limitations.md#radiometric-correction)).
+- **Recorded depth can be wrong.** The depth comes from the unit's own
+  sounder and is not checked. One public recording reads 8 to 18 m for
+  its first few thousand pings in a river 1 to 5 m deep; those pings get
+  the wrong slant-to-ground conversion. Plot the depth over a waterfall
+  first, and use the `bottom_track` step where it does not follow the
+  first bottom return.
 - **Heading** is the GPS course over ground unless a compass is
   connected to the unit; the file does not say which.
 - **Down-looking beams** (2D sonar, down imaging) have one channel each

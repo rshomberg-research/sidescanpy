@@ -27,14 +27,15 @@ XTF ones:
 Sample rate
 -----------
 The files do not record the sample interval or range. The samples are
-taken at a fixed rate: on real Helix files the first bottom return sits
-at the same depth-to-sample ratio (about 0.019 m per sample) whatever
-the ping's sample count. ``sample_rate_hz`` defaults to
+taken at a fixed rate whatever the range setting: on real Helix files
+the first bottom return sits at about 0.019 m per sample of recorded
+depth, and the ping interval grows by 26.3 us per sample (about
+38 050 Hz) over settings from 1168 to 3058 samples. ``sample_rate_hz`` defaults to
 :data:`HUMMINBIRD_SAMPLE_RATE_HZ`, the rate implied by the pixel size
 PyHum and PING-Mapper use (``2 * asin(c / (L f)) / pi`` metres with
 ``L`` = 0.108 m and ``f`` = 455 kHz, which is ``c / (2 * fs)`` with
 ``fs = pi L f / 4``). At 1500 m/s that is 0.0194 m per sample, within
-2 % of the first-bottom estimate. Pass ``sample_rate_hz`` to override it;
+2 % of both estimates. Pass ``sample_rate_hz`` to override it;
 ``humminbird_sample_rate_source`` records which was used.
 
 Per-ping fields
