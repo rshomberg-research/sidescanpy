@@ -7,6 +7,29 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Humminbird reader (`io.humminbird`): a recording's `.DAT` header and
+  its side imaging `.SON` files (beams 2 and 3) convert to a survey like
+  any other source, through `read_and_convert(..., fmt="humminbird")`,
+  `load_survey` and `sidescan-convert survey`. The files record no sample
+  interval; `sample_rate_hz` defaults to 38 594 Hz (the PyHum /
+  PING-Mapper pixel size, 1.94 cm per sample at 1500 m/s), checked
+  against the recorded depth on real Helix files, and can be overridden.
+  Down-looking beams are skipped. `write_subset` cuts test fixtures.
+- `datasets`: a public Humminbird Helix 15 recording (USFWS Chena River,
+  U.S. public domain), `usfws_chena_R00013.DAT`; a registered file can
+  name the files it needs (`RemoteFile.requires`), which `fetch` gets too.
+- Examples: *Read a Humminbird recording*. Docs: a Humminbird source
+  page, and the Chena River release on the Public datasets page.
+
+### Fixed
+
+- `datasets.fetch` failed on archive servers that honour the start of a
+  range request but send everything to the end of the file (USFWS
+  ServCat); the range reader now reads only the bytes it asked for and
+  checks `Content-Range`.
+
 ## [0.10.1] — 2026-11-11
 
 First release on PyPI: `pip install sidescanpy`.

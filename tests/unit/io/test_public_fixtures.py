@@ -33,12 +33,14 @@ WIGHT_XTF_HIGH = PUBLIC / "jncc_wight_barfleur_20130321174522H_p100-107.xtf"
 WIGHT_XTF_LOW = PUBLIC / "jncc_wight_barfleur_20130321174522L_p100-107.xtf"
 BENTHOS_XTF = PUBLIC / "jncc_mid_irish_sea_MIS13_2_p0-29.xtf"
 KLEIN_XTF = PUBLIC / "usgs_grand_bay_15CCT03_SSS_153_150602205800_p0-59.xtf"
+HUMMINBIRD = PUBLIC / "usfws_chena_R00013_p3000-3059.DAT"
 
-ALL = [WIGHT_JSF, WIGHT_XTF_HIGH, WIGHT_XTF_LOW, BENTHOS_XTF, KLEIN_XTF]
+ALL = [WIGHT_JSF, WIGHT_XTF_HIGH, WIGHT_XTF_LOW, BENTHOS_XTF, KLEIN_XTF, HUMMINBIRD]
 
 
 def _read(path):
-    return read_and_convert([path], fmt=path.suffix[1:])
+    fmt = "humminbird" if path.suffix.lower() == ".dat" else path.suffix[1:]
+    return read_and_convert([path], fmt=fmt)
 
 
 def _only(survey):
@@ -57,7 +59,10 @@ class TestFixtureFiles:
             (name, digest)
             for digest, name in re.findall(r"^([0-9a-f]{64})  (\S+)$", MANIFEST.read_text(), re.M)
         )
-        on_disk = {p.name for p in PUBLIC.iterdir() if p.suffix in (".jsf", ".xtf")}
+        on_disk = {
+            p.relative_to(PUBLIC).as_posix() for p in PUBLIC.rglob("*")
+            if p.suffix in (".jsf", ".xtf", ".DAT", ".SON")
+        }
         assert on_disk == set(listed)
         for name, digest in listed.items():
             assert hashlib.sha256((PUBLIC / name).read_bytes()).hexdigest() == digest, name
@@ -70,6 +75,7 @@ class TestReadEachWriter:
         (WIGHT_XTF_LOW, ["hz_230240"], 8, [11568]),
         (BENTHOS_XTF, ["hz_100000", "hz_400000"], 30, [4096, 4096]),
         (KLEIN_XTF, ["hz_100000"], 60, [4096]),
+        (HUMMINBIRD, ["hz_405000"], 60, [1184]),
     ])
     def test_frequencies_and_shape(self, path, keys, n_pings, n_samples):
         survey = _read(path)
@@ -121,6 +127,15 @@ class TestBottomTrackOnRecordedAltitude:
             recorded = ds["altitude_m"].values.astype(float)
             tracked = altitude_from_bottom_track(ds, replace="all")["altitude_m"].values.astype(float)
             assert np.median(np.abs(tracked - recorded)) < 0.3, key
+
+    def test_humminbird_depth_matches_bottom_track_with_assumed_sample_rate(self):
+        # The files record no sample interval; the default sample rate must
+        # put the first bottom return where the unit's depth sounder found it.
+        ds = _only(_read(HUMMINBIRD))
+        assert ds.attrs["humminbird_sample_rate_source"].startswith("assumed")
+        recorded = ds["altitude_m"].values.astype(float)
+        tracked = altitude_from_bottom_track(ds, replace="all")["altitude_m"].values.astype(float)
+        assert np.median(np.abs(tracked - recorded)) < 0.15
 
     def test_discover_files_have_no_altitude(self, wight_jsf):
         # The reason the bottom_track step exists: 0 in the JSF, nothing in the XTF.

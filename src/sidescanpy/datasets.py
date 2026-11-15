@@ -63,7 +63,10 @@ class RemoteFile:
     """One file in a source archive.
 
     ``member`` is the file's path inside the zip at ``archive_url``; when
-    it is ``None``, ``archive_url`` is the file itself.
+    it is ``None``, ``archive_url`` is the file itself. ``requires`` names
+    other registered files that :func:`fetch` downloads with this one,
+    for recordings made of several files (a Humminbird ``.DAT`` and its
+    ``.SON`` files).
     """
 
     source: str
@@ -72,6 +75,7 @@ class RemoteFile:
     size: int
     sha256: str
     description: str
+    requires: tuple[str, ...] = ()
 
 
 SOURCES: dict[str, Source] = {
@@ -205,6 +209,15 @@ SOURCES: dict[str, Source] = {
         licence="Open Government Licence v3.0",
         attribution="Contains data supplied by UKRI.",
     ),
+    "usfws_chena": Source(
+        title=(
+            "U.S. Fish and Wildlife Service, Raw side-scan sonar data relating to "
+            "Chena River habitat mapping in 2022 (ServCat reference 178459)"
+        ),
+        url="https://iris.fws.gov/APPS/ServCat/Reference/Profile/178459",
+        licence="U.S. public domain",
+        attribution="U.S. Fish and Wildlife Service, originator of the data.",
+    ),
 }
 
 _JNCC_WB = (
@@ -235,6 +248,7 @@ _PANGAEA_PS124_MAPS = "https://download.pangaea.de/dataset/939087/files/"
 _BGS_LG = "https://webservices.bgs.ac.uk/accessions/download/140325?fileName="
 _BGS_LG_2007 = _BGS_LG + "88635_61207_LG_2007_SSS_Wrecks.zip"
 _BGS_LG_2008 = _BGS_LG + "88635_61208_LG_2008_SSS_Wrecks_Aisha_WK_5057.zip"
+_USFWS_CHENA = "https://iris.fws.gov/APPS/ServCat/DownloadFile/267350?Reference=178459"
 
 REGISTRY: dict[str, RemoteFile] = {
     "jncc_wight_barfleur_20130321174522.jsf": RemoteFile(
@@ -492,6 +506,26 @@ REGISTRY: dict[str, RemoteFile] = {
         description="XTF (Klein, GeoDAS), 400 kHz, 2007, near the Ash (WK 5013) wreck; data dropouts on port; "
                     "projected navigation (nav_crs='EPSG:32631'), no heading, recorder TVG applied",
     ),
+    "usfws_chena_R00013.DAT": RemoteFile(
+        source="usfws_chena", archive_url=_USFWS_CHENA,
+        member="R00013.DAT", size=64,
+        sha256="a31a72a81197b1e7cac13e23ef6304e7e16b8dca47d14e10c6fe4439d4244bb0",
+        description="Humminbird (Helix 15) recording header; fetching it also fetches the two "
+                    "side imaging SON files: 405 kHz, 6559 pings, 1-5 m deep river",
+        requires=("usfws_chena_R00013/B002.SON", "usfws_chena_R00013/B003.SON"),
+    ),
+    "usfws_chena_R00013/B002.SON": RemoteFile(
+        source="usfws_chena", archive_url=_USFWS_CHENA,
+        member="R00013/B002.SON", size=8427108,
+        sha256="016481672d568ddd83ad478187595652652dbc39e5dfc69cf076c26e2be4bb97",
+        description="Humminbird side imaging, port beam of usfws_chena_R00013.DAT",
+    ),
+    "usfws_chena_R00013/B003.SON": RemoteFile(
+        source="usfws_chena", archive_url=_USFWS_CHENA,
+        member="R00013/B003.SON", size=8427108,
+        sha256="58e237f5f99ed642ff78f3fe2bbdea52c43a72dcc0708094c8c2f2d5d8040b91",
+        description="Humminbird side imaging, starboard beam of usfws_chena_R00013.DAT",
+    ),
 }
 
 BGS_LONDON_GATEWAY_WRECKS: dict[str, tuple[float, float]] = {
@@ -550,7 +584,9 @@ def fetch(name: str, *, directory: str | Path | None = None) -> Path:
     Returns
     -------
     Path
-        The verified local file.
+        The verified local file. Files it needs (a Humminbird ``.DAT``'s
+        ``.SON`` files) are fetched too, at their own names in the same
+        directory.
 
     Raises
     ------
@@ -562,6 +598,8 @@ def fetch(name: str, *, directory: str | Path | None = None) -> Path:
         apart, each logged as a WARNING). The partial file is removed.
     """
     entry = _entry(name)
+    for required in entry.requires:
+        fetch(required, directory=directory)
     root = Path(directory).expanduser() if directory is not None else data_dir()
     path = root / name
     if path.exists():
@@ -570,7 +608,7 @@ def fetch(name: str, *, directory: str | Path | None = None) -> Path:
             return path
         logger.warning("Cached %s has the wrong checksum; downloading it again", path)
 
-    root.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     delays = (*_RETRY_DELAYS_S, None)
     for attempt, delay in enumerate(delays, start=1):
         try:
@@ -660,7 +698,15 @@ class _HttpRangeReader(io.RawIOBase):
         with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
             if resp.status != 206:
                 raise OSError(f"{self.url} ignored the range request (HTTP {resp.status})")
-            data = resp.read()
+            content_range = resp.headers.get("Content-Range", "")
+            if content_range.startswith("bytes "):
+                start = int(content_range.removeprefix("bytes ").split("-")[0])
+                if start != self.pos:
+                    raise OSError(f"{self.url} answered range {content_range!r} "
+                                  f"for a request starting at byte {self.pos}")
+            # Some servers honour the start of a range but send everything to
+            # the end of the file; read only what was asked for.
+            data = resp.read(n)
         buffer[: len(data)] = data
         self.pos += len(data)
         return len(data)

@@ -46,6 +46,7 @@ GALLERY_ORDER = [
     "plot_investigate_a_survey",
     "plot_correct_a_line",
     "plot_compare_sonars_and_formats",
+    "plot_read_a_humminbird_recording",
     "plot_grid_to_a_map",
     "plot_wreck_gallery",
     "plot_four_passes",

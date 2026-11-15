@@ -11,7 +11,7 @@ records on their own time axes.
 ```python
 from sidescanpy.io import read_and_convert, read_and_convert_segments
 
-survey = read_and_convert(["line_001.xtf"], fmt="xtf")        # "jsf", "sdf" or "xtf"
+survey = read_and_convert(["line_001.xtf"], fmt="xtf")        # "jsf", "sdf", "xtf" or "humminbird"
 for stem, survey in read_and_convert_segments("line_001.xtf"):  # split at range changes
     ...
 ```
@@ -23,6 +23,7 @@ for stem, survey in read_and_convert_segments("line_001.xtf"):  # split at range
 | [EdgeTech JSF](jsf.md) (`.jsf`) | `io.jsf` | EdgeTech towfish recorded by Discover, low and high frequency (public file: 219 + 521 kHz) | sonar (message 80) with its embedded per-ping values, NMEA position, attitude (2020), pressure (2060), DVL (2080) |
 | [Klein SDF](sdf.md) (`.sdf`) | `io.sdf` | Klein 4900 | sonar pages 3501 and 3502 (UUV-3500 layout), each carrying its own navigation and attitude |
 | [XTF](xtf.md) (`.xtf`) | `io.xtf` | EdgeTech Discover 7.22; Isis 7.0.41 (Benthos SIS-1624); Isis (EdgeTech 4200); KleinXlt 4.0 / SonarPro 12 (Klein 3000/3900); GeoDAS (Klein 3000) | sonar packets, each carrying its own navigation and attitude |
+| [Humminbird](humminbird.md) (`.DAT` + `.SON`) | `io.humminbird` | Helix (public file: Helix 15, 405 kHz side imaging) | side imaging beams, each frame carrying its own GPS position, heading and depth; sample interval assumed |
 
 "Tested with" means real files from that source have been converted and
 inspected. The public EdgeTech line was written by Discover both as JSF
@@ -59,12 +60,14 @@ Both become a list of source-independent `Target` objects, saved as
 ## Not read yet
 
 Teledyne/Reson `.s7k`, HYPACK `.hsx`/`.hs2`, Marine Sonic `.mst`/`.sds`,
-Lowrance `.sl2`/`.sl3`, Humminbird, Imagenex and interferometric or
+Lowrance `.sl2`/`.sl3`, Garmin, Imagenex and interferometric or
 synthetic-aperture products. Within the sources read:
 
 - XTF bathymetry, subbottom and other non-sonar packets are skipped.
 - Klein System 3000 SDF pages (versions 3000 and 3001) are recognized
   but not converted.
+- Humminbird 2D sonar and down imaging beams (one channel each), and
+  Onix units' XML `.DAT` headers, are not converted.
 - JSF messages other than sonar data, NMEA, attitude, pressure and DVL
   (system information, situation, cable counter and others) are parsed
   or skipped but not converted.
@@ -79,5 +82,6 @@ source sidescanpy does not read. To add a reader, see
 EdgeTech JSF <jsf>
 Klein SDF <sdf>
 XTF <xtf>
+Humminbird <humminbird>
 Adding a source format <new_source>
 ```

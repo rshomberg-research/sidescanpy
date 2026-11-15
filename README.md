@@ -17,7 +17,7 @@ Read, correct, grid and export sidescan sonar data.
 the left and after the bottom-track, TVG and slant-to-ground-range steps
 on the right.*
 
-sidescanpy converts EdgeTech JSF, Klein SDF and XTF surveys into one
+sidescanpy converts EdgeTech JSF, Klein SDF, XTF and Humminbird surveys into one
 `xarray`-based model, stored as a grouped HDF5 file (`.ss.h5`). On top of
 that model it provides:
 
@@ -144,7 +144,7 @@ keeps one config file per dataset.
 
 | Command | What it does |
 |---|---|
-| `sidescan-convert survey` | JSF/SDF/XTF files to `.ss.h5` |
+| `sidescan-convert survey` | JSF/SDF/XTF files and Humminbird recordings to `.ss.h5` |
 | `sidescan-convert targets` | read a target catalog to `targets.json`/`.csv` |
 | `sidescan-correct` | apply correction steps to `.ss.h5` files in place |
 | `sidescan-export waterfall` / `grid` / `track` | images and rasters |
