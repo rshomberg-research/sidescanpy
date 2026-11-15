@@ -271,7 +271,10 @@ the [examples](examples/index.rst) tune the chain for several of them.
 
 ### USFWS Chena River
 
-![USFWS Chena River, Humminbird 405 kHz, waterfall and grid](assets/datasets/usfws_chena.png)
+![USFWS Chena River, Humminbird 405 kHz, raw, corrected and georeferenced](assets/datasets/usfws_chena.png)
+
+```{include} assets/datasets/usfws_chena_caption.md
+```
 
 - **Provider:** U.S. Fish and Wildlife Service, "Raw side-scan sonar
   data relating to Chena River habitat mapping in 2022",

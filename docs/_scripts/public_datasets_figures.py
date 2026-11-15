@@ -100,8 +100,10 @@ LINES = {
                           "JNCC East Rockall, EdgeTech 4200, XTF (Isis)"),
     "awi_ofobs_ps124": (["awi_ofobs_ps124_20210217004957.jsf"], "jsf", {},
                         "AWI OFOBS PS124, EdgeTech 2205, JSF (Discover)"),
+    # Pinned: the most textured window crosses a range-setting change.
     "usfws_chena": (["usfws_chena_R00013.DAT"], "humminbird", {},
-                    "USFWS Chena River, Humminbird Helix 15, DAT/SON"),
+                    "USFWS Chena River, Humminbird Helix 15, DAT/SON",
+                    ("EPSG:32606", 456541.9, 7186662.9, "river bank of the Humminbird example")),
     "benthicat": (None, "xtf", {}, "BenthiCat-Raw, Klein 3000H, XTF (SonarWiz)"),
 }
 
