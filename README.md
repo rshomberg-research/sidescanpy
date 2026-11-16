@@ -189,8 +189,7 @@ Call `sidescanpy.log.configure_logging("INFO")` in a script, or pass
 ## Documentation
 
 <https://rshomberg-research.github.io/sidescanpy/>: guide, worked
-examples and API reference. The site is public; the repository is not
-yet.
+examples and API reference.
 
 ## Development
 
