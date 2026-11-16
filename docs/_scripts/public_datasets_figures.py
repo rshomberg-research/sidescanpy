@@ -29,7 +29,9 @@ The figure, same pings in every panel:
 - Corrected: after steps 2-5, dB, against across-track ground range.
 - Georeferenced: the section gridded on UTM at
   :func:`sidescanpy.grids.recommend_resolution` (half the finer native
-  spacing, at least 5 cm), north up.
+  spacing, at least 5 cm) by linear interpolation between the samples
+  (``scipy.interpolate.griddata``), north up, averaged down to the
+  panel's resolution for drawing.
 
 For each dataset it also writes ``<name>_caption.md``, the compact list
 of corrections and parameters taken from the processing history, which
@@ -66,7 +68,14 @@ from sidescanpy.analysis import measure_ping_geometry  # noqa: E402
 from sidescanpy.analysis.characterize import characterize_values, infer_units  # noqa: E402
 from sidescanpy.core.history import read_history  # noqa: E402
 from sidescanpy.core.units import FLOOR_DB  # noqa: E402
-from sidescanpy.grids import grid_channel, recommend_resolution  # noqa: E402
+from sidescanpy.export.geometric_window import interpolate_scattered  # noqa: E402
+from sidescanpy.grids import (  # noqa: E402
+    GridDefinition,
+    SideScanGriddedRaster,
+    bbox_from_channel_dataset,
+    recommend_resolution,
+    utm_grid_from_wgs84_bbox,
+)
 from sidescanpy.io import read_and_convert  # noqa: E402
 from sidescanpy.log import configure_logging  # noqa: E402
 from sidescanpy.processing import (  # noqa: E402
@@ -211,6 +220,52 @@ def pick_section(ds, swath_m, target=None):
     return slice(int(sel[0]), int(sel[-1]) + 1), how
 
 
+def grid_linear(part, cell, max_fill_m):
+    """Grid a section on UTM by linear interpolation between its samples.
+
+    ``scipy.interpolate.griddata`` (through
+    :func:`sidescanpy.export.geometric_window.interpolate_scattered`), so
+    each cell takes its value from the samples around it without
+    averaging them, which keeps the detail at cells finer than the ping
+    spacing. Cells farther than ``max_fill_m`` from every sample are NaN.
+    """
+    grid_def = utm_grid_from_wgs84_bbox(bbox_from_channel_dataset(part), resolution_m=cell)
+    values = part["backscatter_intensity"].values.astype(np.float64).ravel()
+    lat = part["latitude_per_sample"].values.astype(np.float64).ravel()
+    lon = part["longitude_per_sample"].values.astype(np.float64).ravel()
+    ok = np.isfinite(values) & np.isfinite(lat) & np.isfinite(lon)
+    easting, northing = pyproj.Transformer.from_crs("EPSG:4326", grid_def.crs, always_xy=True).transform(
+        lon[ok], lat[ok])
+    ys, xs = grid_def.get_grid_centers()
+    grid = interpolate_scattered(np.column_stack([northing, easting]), values[ok],
+                                 np.column_stack([ys.ravel(), xs.ravel()]), interp_method="linear",
+                                 max_fill_distance_m=max_fill_m).reshape(ys.shape)
+    return SideScanGriddedRaster(grid_def=grid_def, backscatter=grid, units="dB")
+
+
+def for_display(raster, max_cells=800):
+    """Average a fine grid down to about ``max_cells`` across, for drawing.
+
+    A 5 cm grid of a 400 m swath is 8000 cells across; drawn into a panel
+    a few hundred pixels wide, matplotlib shows one cell in twenty and the
+    texture aliases into speckle. Block means (NaN ignored) keep it, as
+    the waterfall panels' coarsening does.
+    """
+    grid = np.asarray(raster.backscatter)
+    k = int(np.ceil(max(grid.shape) / max_cells))
+    if k <= 1:
+        return raster
+    rows, cols = grid.shape[0] // k, grid.shape[1] // k
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # all-NaN blocks off the swath
+        means = np.nanmean(grid[:rows * k, :cols * k].reshape(rows, k, cols, k), axis=(1, 3))
+    south, west, _, _ = raster.grid_def.bbox            # projected; row 0 is the south edge
+    res = raster.grid_def.resolution_m * k
+    grid_def = GridDefinition((south, west, south + rows * res, west + cols * res), res,
+                              crs=raster.grid_def.crs)
+    return SideScanGriddedRaster(grid_def=grid_def, backscatter=means, units="dB")
+
+
 def cell_size(part):
     """Finest useful cell: half the finer native spacing, 5 cm to 1 m."""
     r = recommend_resolution(part)
@@ -239,7 +294,7 @@ def caption(ds, section, raw_units, cell, utm, how, name):
     pings = f"pings {section.start}-{section.stop - 1} of {ds.sizes['ping']}"
     return (f"**Raw:** {raw_units}, as stored, slant range. "
             f"**Corrected:** {'; '.join(steps)}. "
-            f"**Georeferenced:** {utm}, {cell * 100:.0f} cm cells. "
+            f"**Georeferenced:** {utm}, {cell * 100:.0f} cm cells, linear interpolation. "
             f"**Section:** {pings}, {how}. "
             f"**Code:** [`public_datasets_figures.py`]({CODE_URL}) `--only {name}`.\n")
 
@@ -253,9 +308,10 @@ def figure(name, raw, ds, freq, label, out, target=None):
     rawview = part.copy()
     rawview["backscatter_intensity"] = raw.isel(ping=narrow)
     cell = cell_size(part)
-    # The search radius has to bridge the widest ordinary gap between pings
-    # (they fan out on turns and with range), so use the 95th-percentile
-    # ping step, not the median.
+    # Cells farther than this from every sample stay empty. It has to bridge
+    # the widest ordinary gap between pings, which is wider at far range
+    # than on the track (they fan out with any change of heading), so use
+    # twice the 95th-percentile ping step on the track, not the median.
     _, steps = along_track(part)
     steps = steps[np.isfinite(steps) & (steps > 0)]
     spacing = float(np.percentile(steps, 95)) if steps.size else (
@@ -263,8 +319,7 @@ def figure(name, raw, ds, freq, label, out, target=None):
     factors = {"ping": max(1, part.sizes["ping"] // 500), "sample": max(1, part.sizes["sample"] // 500)}
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
-        raster = grid_channel(part, resolution_m=cell, method="idw",
-                              max_search_radius_m=max(spacing, 2 * cell))
+        raster = grid_linear(part, cell, max_fill_m=max(2 * spacing, 2 * cell))
     # Map footprint aspect (north-up). A wide footprint gets its own row.
     rows, cols = np.nonzero(np.isfinite(np.asarray(raster.backscatter)))
     aspect = (np.ptp(cols) + 1) / max(np.ptp(rows) + 1, 1) if rows.size else 1.0
@@ -283,7 +338,7 @@ def figure(name, raw, ds, freq, label, out, target=None):
                        title=f"As stored: {raw_units}, slant range")
         plot_waterfall(part.coarsen(factors, boundary="trim").mean(), x_axis="across_track",
                        y_axis="along_track", ax=ax_c, **STRETCH, title="Corrected (dB), ground range")
-    plot_gridded_raster(raster, fig=fig, ax=ax_g, cmap="copper", **STRETCH, show_colorbar=False,
+    plot_gridded_raster(for_display(raster), fig=fig, ax=ax_g, cmap="copper", **STRETCH, show_colorbar=False,
                         title=f"Georeferenced, {cell * 100:.0f} cm UTM grid, north up")
     ax_g.set_xticks([])
     ax_g.set_yticks([])
